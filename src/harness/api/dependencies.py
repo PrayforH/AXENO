@@ -9,6 +9,7 @@ from fastapi import Header, HTTPException, Request
 
 from harness.adapters.memory import (
     InMemoryAgentRegistry,
+    InMemoryApprovalRepository,
     InMemoryEventBus,
     InMemoryEventRepository,
     InMemoryRunRepository,
@@ -16,6 +17,7 @@ from harness.adapters.memory import (
     InMemoryTaskQueue,
 )
 from harness.application.agents import AgentService
+from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
@@ -32,6 +34,7 @@ class ApiContainer:
     agents: AgentService
     sessions: SessionService
     runs: RunService
+    approvals: ApprovalService
     events: InMemoryEventRepository
 
 
@@ -39,6 +42,7 @@ def build_memory_container() -> ApiContainer:
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
+    approvals = InMemoryApprovalRepository()
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
     queue = InMemoryTaskQueue()
@@ -58,6 +62,13 @@ def build_memory_container() -> ApiContainer:
             runs,
             queue,
             event_service,
+            clock=clock,
+            id_generator=id_generator,
+        ),
+        approvals=ApprovalService(
+            runs=runs,
+            approvals=approvals,
+            events=event_service,
             clock=clock,
             id_generator=id_generator,
         ),

@@ -5,7 +5,14 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict
 
 from harness.core.events import RunEvent
-from harness.core.models import AgentVersion, Run, RunStatus, Session
+from harness.core.models import (
+    AgentVersion,
+    ApprovalRequest,
+    ApprovalStatus,
+    Run,
+    RunStatus,
+    Session,
+)
 
 
 class StoredObject(BaseModel):
@@ -40,6 +47,20 @@ class RunRepository(Protocol):
     async def compare_and_set(self, expected_status: RunStatus, updated: Run) -> bool: ...
 
 
+class ApprovalRepository(Protocol):
+    async def add(self, approval: ApprovalRequest) -> None: ...
+
+    async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest: ...
+
+    async def find_by_tool_call(
+        self, tenant_id: str, run_id: str, tool_call_id: str
+    ) -> ApprovalRequest | None: ...
+
+    async def compare_and_set(
+        self, expected_status: ApprovalStatus, updated: ApprovalRequest
+    ) -> bool: ...
+
+
 class EventRepository(Protocol):
     async def append(self, event: RunEvent) -> None: ...
 
@@ -66,4 +87,3 @@ class TaskQueue(Protocol):
     async def enqueue(self, run_id: str) -> None: ...
 
     async def dequeue(self) -> str | None: ...
-

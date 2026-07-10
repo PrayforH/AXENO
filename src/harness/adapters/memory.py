@@ -6,7 +6,14 @@ from collections import defaultdict, deque
 
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.events import RunEvent
-from harness.core.models import AgentVersion, Run, RunStatus, Session
+from harness.core.models import (
+    AgentVersion,
+    ApprovalRequest,
+    ApprovalStatus,
+    Run,
+    RunStatus,
+    Session,
+)
 from harness.core.ports import StoredObject
 
 
@@ -89,6 +96,47 @@ class InMemoryRunRepository:
             return True
 
 
+class InMemoryApprovalRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], ApprovalRequest] = {}
+        self._by_tool: dict[tuple[str, str, str], str] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, approval: ApprovalRequest) -> None:
+        key = (approval.tenant_id, approval.approval_id)
+        tool_key = (approval.tenant_id, approval.run_id, approval.tool_call_id)
+        async with self._lock:
+            if key in self._items or tool_key in self._by_tool:
+                raise ConflictError(f"approval already exists: {approval.approval_id}")
+            self._items[key] = approval
+            self._by_tool[tool_key] = approval.approval_id
+
+    async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
+        try:
+            return self._items[(tenant_id, approval_id)]
+        except KeyError as error:
+            raise NotFoundError(f"approval not found: {approval_id}") from error
+
+    async def find_by_tool_call(
+        self, tenant_id: str, run_id: str, tool_call_id: str
+    ) -> ApprovalRequest | None:
+        approval_id = self._by_tool.get((tenant_id, run_id, tool_call_id))
+        return None if approval_id is None else self._items[(tenant_id, approval_id)]
+
+    async def compare_and_set(
+        self, expected_status: ApprovalStatus, updated: ApprovalRequest
+    ) -> bool:
+        key = (updated.tenant_id, updated.approval_id)
+        async with self._lock:
+            current = self._items.get(key)
+            if current is None:
+                raise NotFoundError(f"approval not found: {updated.approval_id}")
+            if current.status is not expected_status:
+                return False
+            self._items[key] = updated
+            return True
+
+
 class InMemoryEventRepository:
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], list[RunEvent]] = defaultdict(list)
@@ -113,13 +161,9 @@ class InMemoryEventRepository:
             self._items[key].append(event)
             self._by_id[event.event_id] = event
 
-    async def list_after(
-        self, tenant_id: str, run_id: str, after_sequence: int
-    ) -> list[RunEvent]:
+    async def list_after(self, tenant_id: str, run_id: str, after_sequence: int) -> list[RunEvent]:
         return [
-            event
-            for event in self._items[(tenant_id, run_id)]
-            if event.sequence > after_sequence
+            event for event in self._items[(tenant_id, run_id)] if event.sequence > after_sequence
         ]
 
 
@@ -132,13 +176,9 @@ class InMemoryEventBus:
         if all(existing.event_id != event.event_id for existing in events):
             events.append(event)
 
-    async def read(
-        self, tenant_id: str, run_id: str, after_sequence: int = 0
-    ) -> list[RunEvent]:
+    async def read(self, tenant_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
         return [
-            event
-            for event in self._items[(tenant_id, run_id)]
-            if event.sequence > after_sequence
+            event for event in self._items[(tenant_id, run_id)] if event.sequence > after_sequence
         ]
 
 

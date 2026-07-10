@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from harness.core.models import ApprovalStatus
+
 
 class PublishAgentRequest(BaseModel):
     path: str = Field(min_length=1)
@@ -14,3 +16,7 @@ class CreateSessionRequest(BaseModel):
 
 class CreateRunRequest(BaseModel):
     prompt: str = Field(min_length=1)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: ApprovalStatus
