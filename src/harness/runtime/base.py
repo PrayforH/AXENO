@@ -26,4 +26,3 @@ class RuntimeEvent(BaseModel):
 
 class AgentRuntime(Protocol):
     def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]: ...
-

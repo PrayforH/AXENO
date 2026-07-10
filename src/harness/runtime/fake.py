@@ -18,4 +18,3 @@ class FakeRuntime:
         yield RuntimeEvent(type="message.start", payload={"role": "assistant"})
         yield RuntimeEvent(type="message.delta", payload={"text": f"Echo: {prompt}"})
         yield RuntimeEvent(type="message.completed", payload={"role": "assistant"})
-
