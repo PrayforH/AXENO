@@ -10,6 +10,7 @@ from harness.core.errors import ConflictError
 from harness.core.models import Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
+from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
 from harness.runtime.base import AgentRuntime, RuntimeContext
@@ -29,6 +30,7 @@ class RunOrchestrator:
         policy: PolicyEngine | None = None,
         approvals: ApprovalService | None = None,
         workspaces: WorkspaceService | None = None,
+        observability: Observability | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -39,6 +41,7 @@ class RunOrchestrator:
         self._policy = policy
         self._approvals = approvals
         self._workspaces = workspaces
+        self._observability = observability
 
     async def _move(
         self,
@@ -69,6 +72,17 @@ class RunOrchestrator:
         return updated
 
     async def execute(self, tenant_id: str, run_id: str) -> Run:
+        if self._observability is None:
+            return await self._execute(tenant_id, run_id)
+        run = await self._runs.get(tenant_id, run_id)
+        with self._observability.span(
+            "harness.worker.run",
+            carrier=run.trace_context,
+            attributes={"run.id": run_id, "tenant.id": tenant_id},
+        ):
+            return await self._execute(tenant_id, run_id)
+
+    async def _execute(self, tenant_id: str, run_id: str) -> Run:
         run = await self._runs.get(tenant_id, run_id)
         if run.status.is_terminal:
             return run

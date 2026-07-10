@@ -36,3 +36,5 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
 
     otlp_endpoint: str = ""
+    otlp_headers: SecretStr = SecretStr("")
+    otel_service_name: str = "claude-agent-harness"

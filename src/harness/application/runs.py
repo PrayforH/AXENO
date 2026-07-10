@@ -6,6 +6,7 @@ from harness.core.errors import ConflictError
 from harness.core.models import Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository, TaskQueue
 from harness.core.state_machine import transition
+from harness.observability.provider import Observability
 
 
 class RunService:
@@ -18,6 +19,7 @@ class RunService:
         *,
         clock: Clock,
         id_generator: IdGenerator,
+        observability: Observability | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -25,6 +27,7 @@ class RunService:
         self._events = events
         self._clock = clock
         self._id_generator = id_generator
+        self._observability = observability
 
     async def create(
         self,
@@ -48,6 +51,7 @@ class RunService:
             created_at=timestamp,
             updated_at=timestamp,
             input=input or {},
+            trace_context=(self._observability.inject() if self._observability is not None else {}),
         )
         await self._runs.add(run)
         await self._events.append(

@@ -2,6 +2,8 @@
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, runs, sessions
@@ -37,9 +39,19 @@ async def _manifest_error(_request: Request, error: Exception) -> JSONResponse:
     )
 
 
+async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    container: ApiContainer = request.app.state.container
+    with container.observability.span(
+        "harness.api.request",
+        attributes={"http.method": request.method, "http.route": request.url.path},
+    ):
+        return await call_next(request)
+
+
 def create_app(container: ApiContainer) -> FastAPI:
     app = FastAPI(title="Claude Agent Harness", version="0.1.0")
     app.state.container = container
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_trace_request)
 
     app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(HarnessDomainError, _domain_error)

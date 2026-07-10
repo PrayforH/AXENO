@@ -24,6 +24,8 @@ from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
+from harness.config import Settings
+from harness.observability.provider import Observability, build_observability
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,7 @@ class ApiContainer:
     approvals: ApprovalService
     artifacts: ArtifactService
     events: InMemoryEventRepository
+    observability: Observability
 
 
 def build_memory_container() -> ApiContainer:
@@ -52,6 +55,7 @@ def build_memory_container() -> ApiContainer:
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
     queue = InMemoryTaskQueue()
+    observability = build_observability(Settings())
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -70,6 +74,7 @@ def build_memory_container() -> ApiContainer:
             event_service,
             clock=clock,
             id_generator=id_generator,
+            observability=observability,
         ),
         approvals=ApprovalService(
             runs=runs,
@@ -85,6 +90,7 @@ def build_memory_container() -> ApiContainer:
             id_generator=id_generator,
         ),
         events=events,
+        observability=observability,
     )
 
 

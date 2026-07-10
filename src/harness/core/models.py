@@ -100,6 +100,7 @@ class Run(FrozenModel):
     fencing_token: int = 0
     error_code: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
+    trace_context: dict[str, str] = Field(default_factory=dict)
 
 
 class Message(FrozenModel):

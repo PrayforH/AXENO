@@ -1,0 +1,30 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch: {}
+
+exporters:
+  otlphttp/langfuse:
+    # Include /api/public/otel; Langfuse currently supports OTLP/HTTP, not gRPC.
+    endpoint: ${env:LANGFUSE_OTLP_ENDPOINT}
+    headers:
+      Authorization: ${env:LANGFUSE_AUTHORIZATION}
+      x-langfuse-ingestion-version: "4"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/langfuse]
+
