@@ -9,6 +9,7 @@ description = "Production-shaped harness for Claude Agent SDK applications"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic-settings>=2.10,<3",
+    "pyyaml>=6.0,<7",
 ]
 
 [dependency-groups]
@@ -17,6 +18,7 @@ dev = [
     "pytest>=8.4",
     "pytest-asyncio>=1.0",
     "ruff>=0.12",
+    "types-pyyaml>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -38,4 +40,3 @@ select = ["B", "E", "F", "I", "N", "UP"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 include = ["src", "tests"]
-

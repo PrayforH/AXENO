@@ -1,0 +1,36 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: echo-agent
+  version: 0.1.0
+  labels:
+    purpose: test
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: new-api-default
+    model: claude-sonnet-4-6
+    fallbackRoute: anthropic-official
+    fallbackModel: claude-sonnet-4-6
+    requiredCapabilities:
+      - streaming
+      - tool_use
+  prompt:
+    system: prompts/system.md
+  skills: []
+  tools:
+    - builtin: Read
+  subagents:
+    - ref: helper@1.0.0
+  hooks: []
+  permissions:
+    policy: local-standard
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 5
+    timeoutSeconds: 300
+    maxBudgetUsd: 1
+
