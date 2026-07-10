@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, status
 from fastapi.responses import StreamingResponse
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
@@ -20,16 +20,20 @@ router = APIRouter(tags=["runs"])
 async def create_run(
     session_id: str,
     body: CreateRunRequest,
+    background_tasks: BackgroundTasks,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Run:
-    return await container.runs.create(
+    run = await container.runs.create(
         identity.tenant_id,
         session_id,
         idempotency_key,
         input={"prompt": body.prompt},
     )
+    if container.auto_execute:
+        background_tasks.add_task(container.worker.execute, identity.tenant_id, run.run_id)
+    return run
 
 
 @router.get("/runs/{run_id}", response_model=Run)

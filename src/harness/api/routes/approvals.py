@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
 from harness.api.schemas import ApprovalDecisionRequest
@@ -13,11 +13,15 @@ router = APIRouter(prefix="/approvals", tags=["approvals"])
 async def decide_approval(
     approval_id: str,
     body: ApprovalDecisionRequest,
+    background_tasks: BackgroundTasks,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> ApprovalRequest:
-    return await container.approvals.decide(
+    approval = await container.approvals.decide(
         tenant_id=identity.tenant_id,
         approval_id=approval_id,
         decision=body.decision,
     )
+    if container.auto_execute and body.decision.value == "approved":
+        background_tasks.add_task(container.worker.execute, identity.tenant_id, approval.run_id)
+    return approval

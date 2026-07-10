@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     environment: Literal["local", "test", "production"] = "local"
     runtime: Literal["fake", "claude-sdk"] = "fake"
     otel_enabled: bool = False
+    local_auto_execute: bool = False
 
     database_url: str = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
     redis_url: str = "redis://localhost:6379/0"

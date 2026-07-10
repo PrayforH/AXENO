@@ -67,3 +67,22 @@ async def test_identity_headers_are_required_and_errors_are_structured() -> None
             "message": "X-Tenant-ID and X-User-ID headers are required",
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_local_console_origin_is_allowed() -> None:
+    app = create_memory_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.options(
+            "/v1/agents",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "x-tenant-id,x-user-id",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

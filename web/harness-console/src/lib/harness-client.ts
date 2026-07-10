@@ -59,7 +59,18 @@ export class HarnessClient {
     });
   }
   artifacts(runId: string) { return this.json<Artifact[]>(`/v1/runs/${runId}/artifacts`); }
-  artifactUrl(artifactId: string) { return `${this.baseUrl}/v1/artifacts/${artifactId}/content`; }
+  async downloadArtifact(artifact: Artifact) {
+    const response = await fetch(`${this.baseUrl}/v1/artifacts/${artifact.artifact_id}/content`, {
+      headers: this.headers(),
+    });
+    if (!response.ok) throw new Error(`Artifact download failed: ${response.status}`);
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = artifact.name;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
 
   async events(runId: string, lastEventId: string | undefined, onEvent: (id: string | undefined, event: AguiEvent) => void) {
     const response = await fetch(`${this.baseUrl}/v1/agui/runs/${runId}/events`, {
@@ -68,4 +79,3 @@ export class HarnessClient {
     await streamAgui(response, onEvent);
   }
 }
-

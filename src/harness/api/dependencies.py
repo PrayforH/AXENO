@@ -24,8 +24,13 @@ from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
+from harness.application.workspaces import WorkspaceService
 from harness.config import Settings
 from harness.observability.provider import Observability, build_observability
+from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.runtime.fake import FakeRuntime
+from harness.sandbox.local import LocalSandboxProvider
+from harness.worker.orchestrator import RunOrchestrator
 
 
 @dataclass(frozen=True)
@@ -43,9 +48,11 @@ class ApiContainer:
     artifacts: ArtifactService
     events: InMemoryEventRepository
     observability: Observability
+    worker: RunOrchestrator
+    auto_execute: bool
 
 
-def build_memory_container() -> ApiContainer:
+def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -64,33 +71,51 @@ def build_memory_container() -> ApiContainer:
         return f"{prefix}_{uuid4().hex}"
 
     event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
+    run_service = RunService(
+        sessions,
+        runs,
+        queue,
+        event_service,
+        clock=clock,
+        id_generator=id_generator,
+        observability=observability,
+    )
+    approval_service = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    artifact_service = ArtifactService(
+        runs=runs,
+        repository=artifact_repository,
+        store=artifact_store,
+        id_generator=id_generator,
+    )
+    worker = RunOrchestrator(
+        sessions=sessions,
+        runs=runs,
+        events=event_service,
+        runtime=FakeRuntime(),
+        sandbox=LocalSandboxProvider(),
+        clock=clock,
+        policy=PolicyEngine(default_policy_rules()),
+        approvals=approval_service,
+        workspaces=WorkspaceService(artifact_store),
+        observability=observability,
+        artifacts=artifact_service,
+    )
     return ApiContainer(
         agents=AgentService(registry, clock=clock),
         sessions=SessionService(registry, sessions, clock=clock, id_generator=id_generator),
-        runs=RunService(
-            sessions,
-            runs,
-            queue,
-            event_service,
-            clock=clock,
-            id_generator=id_generator,
-            observability=observability,
-        ),
-        approvals=ApprovalService(
-            runs=runs,
-            approvals=approvals,
-            events=event_service,
-            clock=clock,
-            id_generator=id_generator,
-        ),
-        artifacts=ArtifactService(
-            runs=runs,
-            repository=artifact_repository,
-            store=artifact_store,
-            id_generator=id_generator,
-        ),
+        runs=run_service,
+        approvals=approval_service,
+        artifacts=artifact_service,
         events=events,
         observability=observability,
+        worker=worker,
+        auto_execute=auto_execute,
     )
 
 

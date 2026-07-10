@@ -3,6 +3,7 @@
 from typing import Any, cast
 
 from harness.application.approvals import ApprovalService
+from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.types import Clock
 from harness.application.workspaces import WorkspaceService
@@ -31,6 +32,7 @@ class RunOrchestrator:
         approvals: ApprovalService | None = None,
         workspaces: WorkspaceService | None = None,
         observability: Observability | None = None,
+        artifacts: ArtifactService | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -42,6 +44,7 @@ class RunOrchestrator:
         self._approvals = approvals
         self._workspaces = workspaces
         self._observability = observability
+        self._artifacts = artifacts
 
     async def _move(
         self,
@@ -88,17 +91,49 @@ class RunOrchestrator:
             return run
         if run.status is RunStatus.CANCELLING:
             return await self._move(run, RunStatus.CANCELLED)
-        if run.status is not RunStatus.QUEUED:
+        is_resume = run.status is RunStatus.RUNNING
+        if run.status is not RunStatus.QUEUED and not is_resume:
             raise ConflictError(f"run is already owned or paused: {run_id} ({run.status.value})")
 
         handle: SandboxHandle | None = None
         try:
-            run = await self._move(run, RunStatus.PROVISIONING)
+            if not is_resume:
+                run = await self._move(run, RunStatus.PROVISIONING)
             handle = await self._sandbox.provision(run)
             session = await self._sessions.get(tenant_id, run.session_id)
-            run = await self._move(run, RunStatus.RUNNING)
+            if not is_resume:
+                run = await self._move(run, RunStatus.RUNNING)
+            else:
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=run.session_id,
+                    event_type="run.resumed",
+                )
             context = RuntimeContext(run=run, session=session, workspace=handle.path)
             async for runtime_event in self._runtime.execute(context):
+                if runtime_event.type == "artifact.output" and self._artifacts is not None:
+                    relative_path = str(runtime_event.payload.get("path", ""))
+                    artifact_path = (handle.path / relative_path).resolve()
+                    if not artifact_path.is_relative_to(handle.path.resolve()):
+                        raise ValueError("runtime artifact path escaped the workspace")
+                    artifact = await self._artifacts.upload(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        name=str(runtime_event.payload.get("name", artifact_path.name)),
+                        media_type=str(
+                            runtime_event.payload.get("media_type", "application/octet-stream")
+                        ),
+                        content=artifact_path.read_bytes(),
+                    )
+                    await self._events.append(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        session_id=run.session_id,
+                        event_type="artifact.ready",
+                        payload=artifact.model_dump(mode="json"),
+                    )
+                    continue
                 if runtime_event.type == "tool.request" and self._policy is not None:
                     tool_name = str(runtime_event.payload.get("name", ""))
                     tool_call_id = str(runtime_event.payload.get("tool_call_id", ""))

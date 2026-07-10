@@ -1,6 +1,7 @@
 """FastAPI application factory."""
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -8,6 +9,7 @@ from starlette.responses import Response
 from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, runs, sessions
+from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
 
@@ -52,6 +54,12 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
 def create_app(container: ApiContainer) -> FastAPI:
     app = FastAPI(title="Claude Agent Harness", version="0.1.0")
     app.state.container = container
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.add_middleware(BaseHTTPMiddleware, dispatch=_trace_request)
 
     app.add_exception_handler(HTTPException, _http_error)
@@ -70,8 +78,8 @@ def create_app(container: ApiContainer) -> FastAPI:
     return app
 
 
-def create_memory_app() -> FastAPI:
-    return create_app(build_memory_container())
+def create_memory_app(*, auto_execute: bool = False) -> FastAPI:
+    return create_app(build_memory_container(auto_execute=auto_execute))
 
 
-app = create_memory_app()
+app = create_memory_app(auto_execute=Settings().local_auto_execute)
