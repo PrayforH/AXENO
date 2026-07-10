@@ -26,11 +26,16 @@ class RunService:
         self._clock = clock
         self._id_generator = id_generator
 
-    async def create(self, tenant_id: str, session_id: str, idempotency_key: str) -> Run:
+    async def create(
+        self,
+        tenant_id: str,
+        session_id: str,
+        idempotency_key: str,
+        *,
+        input: dict[str, object] | None = None,
+    ) -> Run:
         await self._sessions.get(tenant_id, session_id)
-        existing = await self._runs.find_by_idempotency_key(
-            tenant_id, session_id, idempotency_key
-        )
+        existing = await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
         if existing is not None:
             return existing
         timestamp = self._clock()
@@ -42,6 +47,7 @@ class RunService:
             idempotency_key=idempotency_key,
             created_at=timestamp,
             updated_at=timestamp,
+            input=input or {},
         )
         await self._runs.add(run)
         await self._events.append(
@@ -71,4 +77,3 @@ class RunService:
             event_type="run.cancelling",
         )
         return updated
-
