@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, runs, sessions
 from harness.core.errors import HarnessDomainError, NotFoundError
@@ -63,6 +64,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         runs.router,
         approvals.router,
         artifacts.router,
+        agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")
     return app

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Production-shaped harness for Claude Agent SDK applications"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "ag-ui-protocol>=0.1,<1",
     "alembic>=1.16,<2",
     "asyncpg>=0.30,<1",
     "claude-agent-sdk>=0.1,<1",
