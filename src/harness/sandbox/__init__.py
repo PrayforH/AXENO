@@ -1,2 +1,1 @@
 """Sandbox provider adapters."""
-

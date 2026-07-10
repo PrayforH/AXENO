@@ -43,4 +43,3 @@ class SessionService:
 
     async def get(self, tenant_id: str, session_id: str) -> Session:
         return await self._sessions.get(tenant_id, session_id)
-

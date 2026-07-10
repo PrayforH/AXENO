@@ -10,6 +10,7 @@ from harness.core.models import (
     AgentVersion,
     ApprovalRequest,
     ApprovalStatus,
+    Artifact,
     Run,
     RunStatus,
     Session,
@@ -199,6 +200,39 @@ class InMemoryArtifactStore:
             return self._items[(tenant_id, artifact_id)]
         except KeyError as error:
             raise NotFoundError(f"artifact not found: {artifact_id}") from error
+
+
+class InMemoryArtifactRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], Artifact] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, artifact: Artifact) -> None:
+        key = (artifact.tenant_id, artifact.artifact_id)
+        async with self._lock:
+            if key in self._items:
+                raise ConflictError(f"artifact already exists: {artifact.artifact_id}")
+            self._items[key] = artifact
+
+    async def get(self, tenant_id: str, artifact_id: str) -> Artifact:
+        try:
+            return self._items[(tenant_id, artifact_id)]
+        except KeyError as error:
+            raise NotFoundError(f"artifact not found: {artifact_id}") from error
+
+    async def update(self, artifact: Artifact) -> None:
+        key = (artifact.tenant_id, artifact.artifact_id)
+        async with self._lock:
+            if key not in self._items:
+                raise NotFoundError(f"artifact not found: {artifact.artifact_id}")
+            self._items[key] = artifact
+
+    async def list_for_run(self, tenant_id: str, run_id: str) -> list[Artifact]:
+        return [
+            artifact
+            for (item_tenant, _), artifact in self._items.items()
+            if item_tenant == tenant_id and artifact.run_id == run_id
+        ]
 
 
 class InMemoryTaskQueue:

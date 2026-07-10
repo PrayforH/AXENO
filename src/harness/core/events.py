@@ -22,4 +22,3 @@ class RunEvent(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     trace_id: str | None = None
     span_id: str | None = None
-

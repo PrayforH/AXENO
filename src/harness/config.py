@@ -36,4 +36,3 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
 
     otlp_endpoint: str = ""
-

@@ -5,4 +5,3 @@ from datetime import datetime
 
 Clock = Callable[[], datetime]
 IdGenerator = Callable[[str], str]
-

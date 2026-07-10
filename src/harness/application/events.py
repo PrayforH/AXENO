@@ -45,4 +45,3 @@ class EventService:
         await self._repository.append(event)
         await self._bus.publish(event)
         return event
-

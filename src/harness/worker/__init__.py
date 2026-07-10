@@ -1,2 +1,1 @@
 """Asynchronous Run worker."""
-

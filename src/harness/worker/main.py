@@ -8,4 +8,3 @@ async def run_once(orchestrator: RunOrchestrator, tenant_id: str, run_id: str) -
     """Execute one already-dequeued Run."""
 
     return await orchestrator.execute(tenant_id, run_id)
-

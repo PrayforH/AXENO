@@ -42,4 +42,3 @@ class AgentService:
         )
         await self._registry.add(version)
         return version
-

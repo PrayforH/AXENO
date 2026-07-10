@@ -5,6 +5,7 @@ from typing import Any, cast
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.application.types import Clock
+from harness.application.workspaces import WorkspaceService
 from harness.core.errors import ConflictError
 from harness.core.models import Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository
@@ -27,6 +28,7 @@ class RunOrchestrator:
         clock: Clock,
         policy: PolicyEngine | None = None,
         approvals: ApprovalService | None = None,
+        workspaces: WorkspaceService | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -36,6 +38,7 @@ class RunOrchestrator:
         self._clock = clock
         self._policy = policy
         self._approvals = approvals
+        self._workspaces = workspaces
 
     async def _move(
         self,
@@ -138,6 +141,19 @@ class RunOrchestrator:
                     session_id=run.session_id,
                     event_type=runtime_event.type,
                     payload=runtime_event.payload,
+                )
+            if self._workspaces is not None:
+                snapshot = await self._workspaces.archive(
+                    tenant_id=tenant_id,
+                    session_id=run.session_id,
+                    workspace=handle.path,
+                )
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=run.session_id,
+                    event_type="workspace.archived",
+                    payload=snapshot.model_dump(mode="json"),
                 )
             return await self._move(run, RunStatus.SUCCEEDED)
         except Exception as error:  # noqa: BLE001 - boundary converts failures to Run state
