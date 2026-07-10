@@ -1,0 +1,119 @@
+"""PostgreSQL implementations of authoritative Run and Event ports."""
+
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, select, update
+from sqlalchemy.exc import IntegrityError
+
+from harness.core.errors import ConflictError, NotFoundError
+from harness.core.events import RunEvent
+from harness.core.models import Run, RunStatus
+from harness.storage.database import SessionFactory
+from harness.storage.models import EventRow, RunRow
+
+
+class PostgresRunRepository:
+    def __init__(self, sessions: SessionFactory) -> None:
+        self._sessions = sessions
+
+    async def add(self, run: Run) -> None:
+        async with self._sessions() as session:
+            session.add(
+                RunRow(
+                    tenant_id=run.tenant_id,
+                    run_id=run.run_id,
+                    session_id=run.session_id,
+                    idempotency_key=run.idempotency_key,
+                    status=run.status.value,
+                    fencing_token=run.fencing_token,
+                    payload=run.model_dump(mode="json"),
+                )
+            )
+            try:
+                await session.commit()
+            except IntegrityError as error:
+                await session.rollback()
+                raise ConflictError(f"run already exists: {run.run_id}") from error
+
+    async def get(self, tenant_id: str, run_id: str) -> Run:
+        async with self._sessions() as session:
+            row = await session.get(RunRow, (tenant_id, run_id))
+            if row is None:
+                raise NotFoundError(f"run not found: {run_id}")
+            return Run.model_validate(row.payload)
+
+    async def find_by_idempotency_key(
+        self, tenant_id: str, session_id: str, idempotency_key: str
+    ) -> Run | None:
+        statement = select(RunRow).where(
+            RunRow.tenant_id == tenant_id,
+            RunRow.session_id == session_id,
+            RunRow.idempotency_key == idempotency_key,
+        )
+        async with self._sessions() as session:
+            row = (await session.execute(statement)).scalar_one_or_none()
+            return None if row is None else Run.model_validate(row.payload)
+
+    async def compare_and_set(self, expected_status: RunStatus, updated: Run) -> bool:
+        statement = (
+            update(RunRow)
+            .where(
+                RunRow.tenant_id == updated.tenant_id,
+                RunRow.run_id == updated.run_id,
+                RunRow.status == expected_status.value,
+            )
+            .values(
+                status=updated.status.value,
+                fencing_token=updated.fencing_token,
+                payload=updated.model_dump(mode="json"),
+            )
+        )
+        async with self._sessions() as session:
+            result = await session.execute(statement)
+            await session.commit()
+            cursor = cast(CursorResult[Any], result)
+            return bool(cursor.rowcount)
+
+
+class PostgresEventRepository:
+    def __init__(self, sessions: SessionFactory) -> None:
+        self._sessions = sessions
+
+    async def append(self, event: RunEvent) -> None:
+        async with self._sessions() as session:
+            existing = await session.get(EventRow, event.event_id)
+            if existing is not None:
+                if RunEvent.model_validate(existing.payload) != event:
+                    raise ConflictError(
+                        f"event id already contains different data: {event.event_id}"
+                    )
+                return
+            session.add(
+                EventRow(
+                    event_id=event.event_id,
+                    tenant_id=event.tenant_id,
+                    run_id=event.run_id,
+                    sequence=event.sequence,
+                    timestamp=event.timestamp,
+                    payload=event.model_dump(mode="json"),
+                )
+            )
+            try:
+                await session.commit()
+            except IntegrityError as error:
+                await session.rollback()
+                raise ConflictError(f"event sequence already exists: {event.sequence}") from error
+
+    async def list_after(self, tenant_id: str, run_id: str, after_sequence: int) -> list[RunEvent]:
+        statement = (
+            select(EventRow)
+            .where(
+                EventRow.tenant_id == tenant_id,
+                EventRow.run_id == run_id,
+                EventRow.sequence > after_sequence,
+            )
+            .order_by(EventRow.sequence)
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).scalars().all()
+            return [RunEvent.model_validate(row.payload) for row in rows]

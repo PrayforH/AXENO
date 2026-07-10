@@ -8,9 +8,14 @@ version = "0.1.0"
 description = "Production-shaped harness for Claude Agent SDK applications"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "alembic>=1.16,<2",
+    "asyncpg>=0.30,<1",
     "fastapi>=0.116,<1",
+    "minio>=7.2,<8",
     "pydantic-settings>=2.10,<3",
     "pyyaml>=6.0,<7",
+    "redis>=6.2,<7",
+    "sqlalchemy[asyncio]>=2.0.41,<3",
     "uvicorn[standard]>=0.35,<1",
 ]
 
