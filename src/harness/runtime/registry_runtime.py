@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import ModelCompatibility, ModelRoute
+from harness.core.models import AgentVersion, ModelCompatibility, ModelRoute
 from harness.core.ports import AgentRegistry
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
@@ -31,6 +31,18 @@ class RegistryClaudeRuntime:
         )
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         route_id = snapshot.manifest.spec.model.route
+        subagent_versions: dict[str, AgentVersion] = {}
+        for subagent in snapshot.manifest.spec.subagents:
+            name, separator, version = subagent.ref.rpartition("@")
+            if not separator or not name or not version:
+                raise ValueError(
+                    f"subagent reference requires name@version: {subagent.ref}"
+                )
+            subagent_versions[name] = await self._registry.get(
+                session.tenant_id,
+                name,
+                version,
+            )
         route = ModelRoute(
             route_id=route_id,
             provider=self._config.provider,
@@ -45,12 +57,14 @@ class RegistryClaudeRuntime:
                 agent_version=agent_version,
                 routes=[route],
                 route_secrets=route_secrets,
+                subagent_versions=subagent_versions,
             )
         else:
             runtime = ClaudeSdkRuntime(
                 agent_version=agent_version,
                 routes=[route],
                 route_secrets=route_secrets,
+                subagent_versions=subagent_versions,
                 query_factory=self._query_factory,
             )
         async for event in runtime.execute(context):

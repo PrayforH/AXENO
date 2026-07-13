@@ -1,17 +1,15 @@
 apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
-  name: echo-agent
-  version: 0.1.0
+  name: helper
+  version: 1.0.0
   labels:
-    purpose: test
+    purpose: delegated-review
 spec:
   runtime: claude-agent-sdk
   model:
     route: new-api-default
     model: claude-sonnet-4-6
-    fallbackRoute: anthropic-official
-    fallbackModel: claude-sonnet-4-6
     requiredCapabilities:
       - streaming
       - tool_use
@@ -20,9 +18,7 @@ spec:
   skills: []
   tools:
     - builtin: Read
-    - builtin: Task
-  subagents:
-    - ref: helper@1.0.0
+  subagents: []
   hooks: []
   permissions:
     policy: local-standard
@@ -31,6 +27,6 @@ spec:
     restoreSession: true
     archiveOnComplete: true
   limits:
-    maxTurns: 5
-    timeoutSeconds: 300
-    maxBudgetUsd: 1
+    maxTurns: 4
+    timeoutSeconds: 180
+    maxBudgetUsd: 0.5

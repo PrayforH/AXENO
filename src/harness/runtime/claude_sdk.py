@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import cast
 
 from claude_agent_sdk import (
+    AgentDefinition,
     AssistantMessage,
     ClaudeAgentOptions,
     SessionStore,
@@ -34,6 +35,7 @@ class ClaudeSdkRuntime:
         agent_version: AgentVersion,
         routes: list[ModelRoute],
         route_secrets: dict[str, str],
+        subagent_versions: dict[str, AgentVersion] | None = None,
         query_factory: QueryFactory = _default_query,
         session_store: object | None = None,
     ) -> None:
@@ -41,6 +43,7 @@ class ClaudeSdkRuntime:
         self._snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         self._router = ModelRouter(routes)
         self._route_secrets = route_secrets
+        self._subagent_versions = subagent_versions or {}
         self._query = query_factory
         self._session_store = session_store
 
@@ -58,6 +61,22 @@ class ClaudeSdkRuntime:
         else:
             environment["ANTHROPIC_API_KEY"] = secret
         tools = [tool.builtin for tool in manifest.spec.tools if tool.builtin is not None]
+        agents: dict[str, AgentDefinition] = {}
+        for name, version in self._subagent_versions.items():
+            snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+            subagent_manifest = snapshot.manifest
+            subagent_tools = [
+                tool.builtin
+                for tool in subagent_manifest.spec.tools
+                if tool.builtin is not None
+            ]
+            agents[name] = AgentDefinition(
+                description=f"Delegated {name} agent",
+                prompt=snapshot.system_prompt,
+                tools=subagent_tools,
+                model="inherit",
+                maxTurns=subagent_manifest.spec.limits.max_turns,
+            )
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
         return ClaudeAgentOptions(
             tools=tools,
@@ -70,6 +89,7 @@ class ClaudeSdkRuntime:
             permission_mode="dontAsk",
             include_partial_messages=True,
             strict_mcp_config=True,
+            agents=agents or None,
             skills=list(manifest.spec.skills),
             env=environment,
             session_store=store,

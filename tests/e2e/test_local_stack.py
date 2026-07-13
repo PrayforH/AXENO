@@ -4,7 +4,11 @@ from httpx import ASGITransport, AsyncClient
 from harness.api.app import create_memory_app
 from harness.api.dependencies import build_memory_container
 from harness.core.models import ApprovalStatus, RunStatus
-from scripts.bootstrap_local_agent import bootstrap_local_agent, local_client_options
+from scripts.bootstrap_local_agent import (
+    bootstrap_local_agent,
+    bootstrap_local_agents,
+    local_client_options,
+)
 from scripts.e2e_fake_runtime import run_fake_e2e
 
 
@@ -39,6 +43,20 @@ async def test_local_bootstrap_publishes_default_agent_for_agui() -> None:
 
     assert response.status_code == 200
     assert '"type":"RUN_FINISHED"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_local_bootstrap_publishes_referenced_helper_agent() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await bootstrap_local_agents(client)
+        response = await client.post(
+            "/v1/sessions",
+            headers={"X-Tenant-ID": "local", "X-User-ID": "developer"},
+            json={"agent_name": "helper", "agent_version": "1.0.0"},
+        )
+
+    assert response.status_code == 201
 
 
 def test_local_bootstrap_does_not_route_loopback_through_system_proxy() -> None:

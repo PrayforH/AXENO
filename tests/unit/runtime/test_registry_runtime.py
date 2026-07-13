@@ -17,6 +17,7 @@ from harness.runtime.registry_runtime import RegistryClaudeRuntime
 @pytest.mark.asyncio
 async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path) -> None:
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    helper_snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     registry = InMemoryAgentRegistry()
     await registry.add(
         AgentVersion(
@@ -26,6 +27,17 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
             status=AgentVersionStatus.PUBLISHED,
             manifest_hash=snapshot.content_hash,
             snapshot=snapshot.model_dump(mode="json"),
+            created_at=datetime.now(UTC),
+        )
+    )
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="helper",
+            version="1.0.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=helper_snapshot.content_hash,
+            snapshot=helper_snapshot.model_dump(mode="json"),
             created_at=datetime.now(UTC),
         )
     )
@@ -82,6 +94,13 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert captured[0][1].model == "cc-switch-model"
     assert captured[0][1].env["ANTHROPIC_BASE_URL"] == "https://gateway.example"
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
+    assert captured[0][1].agents is not None
+    helper = captured[0][1].agents["helper"]
+    assert helper.prompt == helper_snapshot.system_prompt
+    assert helper.tools == ["Read"]
+    assert helper.model == "inherit"
+    assert isinstance(captured[0][1].tools, list)
+    assert "Task" in captured[0][1].tools
     assert [event.type for event in events] == [
         "model.route.selected",
         "message.start",
