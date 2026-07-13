@@ -5,12 +5,19 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from harness.application.file_catalog import FileCatalogService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError, NotFoundError
-from harness.core.models import ArtifactStatus, InputArtifact
+from harness.core.models import (
+    ArtifactStatus,
+    ExecutionIdentity,
+    InputArtifact,
+    ProcessingStatus,
+)
 from harness.core.ports import ArtifactStore, InputArtifactRepository
+from harness.inputs.base import InputProcessingResult, InputProcessor
 
 
 class StagedInputArtifact(BaseModel):
@@ -21,6 +28,7 @@ class StagedInputArtifact(BaseModel):
     media_type: str
     size_bytes: int
     path: str
+    processed_paths: tuple[str, ...] = Field(default=(), exclude=True)
 
 
 class InputArtifactService:
@@ -34,6 +42,8 @@ class InputArtifactService:
         max_file_bytes: int = 25 * 1024 * 1024,
         max_files_per_run: int = 10,
         max_total_bytes: int = 100 * 1024 * 1024,
+        processor: InputProcessor | None = None,
+        file_catalog: FileCatalogService | None = None,
     ) -> None:
         self._repository = repository
         self._store = store
@@ -42,6 +52,8 @@ class InputArtifactService:
         self.max_file_bytes = max_file_bytes
         self.max_files_per_run = max_files_per_run
         self.max_total_bytes = max_total_bytes
+        self._processor = processor
+        self._file_catalog = file_catalog
 
     async def upload(
         self,
@@ -133,6 +145,7 @@ class InputArtifactService:
         user_id: str,
         input_artifact_ids: Sequence[str],
         workspace: Path,
+        identity: ExecutionIdentity | None = None,
     ) -> list[StagedInputArtifact]:
         artifacts = await self.resolve_for_run(
             tenant_id=tenant_id,
@@ -146,12 +159,71 @@ class InputArtifactService:
             content = await self._store.get(tenant_id, artifact.input_artifact_id)
             name = _safe_filename(artifact.name)
             stable_id = re.sub(r"[^A-Za-z0-9_-]", "_", artifact.input_artifact_id)[-32:]
-            target = inputs_root / f"{stable_id}-{name}"
+            if self._processor is None:
+                target = inputs_root / f"{stable_id}-{name}"
+            else:
+                target = inputs_root / "original" / f"{stable_id}-{name}"
+                await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
             root = workspace.resolve()
             if not target.resolve().is_relative_to(root):
                 raise ValueError("input artifact path escaped the workspace")
             await asyncio.to_thread(target.write_bytes, content)
             await asyncio.to_thread(target.chmod, 0o444)
+            processed_paths: list[str] = []
+            if self._processor is not None:
+                if identity is None or self._file_catalog is None:
+                    raise RuntimeError(
+                        "input identity and file catalog are required for processing"
+                    )
+                try:
+                    result = await asyncio.to_thread(
+                        self._processor.process,
+                        name=name,
+                        media_type=artifact.media_type,
+                        content=content,
+                    )
+                except Exception as error:
+                    result = InputProcessingResult(
+                        status=ProcessingStatus.FAILED,
+                        processor="failed",
+                        error_code=type(error).__name__,
+                    )
+                original = await self._file_catalog.record_original(
+                    identity=identity,
+                    input_artifact_id=artifact.input_artifact_id,
+                    name=name,
+                    media_type=artifact.media_type,
+                    path=target.relative_to(workspace).as_posix(),
+                    metadata={
+                        "processing_status": result.status.value,
+                        "processor": result.processor,
+                        "processing_error_code": result.error_code,
+                        **result.metadata,
+                    },
+                )
+                processed_root = inputs_root / "processed" / stable_id
+                for derived in result.derived:
+                    relative = Path(derived.relative_path)
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise ValueError("processed input path escaped its root")
+                    derived_target = processed_root / relative
+                    if not derived_target.resolve().is_relative_to(root):
+                        raise ValueError("processed input path escaped the workspace")
+                    await asyncio.to_thread(
+                        derived_target.parent.mkdir, parents=True, exist_ok=True
+                    )
+                    await asyncio.to_thread(derived_target.write_bytes, derived.content)
+                    await asyncio.to_thread(derived_target.chmod, 0o444)
+                    derived_path = derived_target.relative_to(workspace).as_posix()
+                    processed_paths.append(derived_path)
+                    await self._file_catalog.record_derived(
+                        identity=identity,
+                        parent=original,
+                        name=relative.name,
+                        media_type=derived.media_type,
+                        path=derived_path,
+                        metadata=derived.metadata,
+                    )
             staged.append(
                 StagedInputArtifact(
                     input_artifact_id=artifact.input_artifact_id,
@@ -159,6 +231,7 @@ class InputArtifactService:
                     media_type=artifact.media_type,
                     size_bytes=len(content),
                     path=target.relative_to(workspace).as_posix(),
+                    processed_paths=tuple(processed_paths),
                 )
             )
         return staged

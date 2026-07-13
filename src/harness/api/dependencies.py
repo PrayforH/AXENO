@@ -18,6 +18,7 @@ from harness.adapters.memory import (
     InMemoryRunRepository,
     InMemorySessionRepository,
     InMemoryTaskQueue,
+    InMemoryThreadFileRepository,
     InMemoryUserMemoryRepository,
 )
 from harness.agui.service import AguiRunService
@@ -25,12 +26,14 @@ from harness.application.agents import AgentService
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
+from harness.application.file_catalog import FileCatalogService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspaceService
 from harness.config import Settings
+from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import AgentRuntime
@@ -56,6 +59,7 @@ class ApiContainer:
     approvals: ApprovalService
     artifacts: ArtifactService
     input_artifacts: InputArtifactService
+    file_catalog: FileCatalogService
     memory: UserMemoryService
     events: InMemoryEventRepository
     observability: Observability
@@ -78,6 +82,7 @@ def build_memory_container(
     artifact_repository = InMemoryArtifactRepository()
     input_artifact_repository = InMemoryInputArtifactRepository()
     memory_repository = InMemoryUserMemoryRepository()
+    thread_file_repository = InMemoryThreadFileRepository()
     artifact_store = InMemoryArtifactStore()
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
@@ -116,11 +121,18 @@ def build_memory_container(
         store=artifact_store,
         id_generator=id_generator,
     )
+    file_catalog_service = FileCatalogService(
+        thread_file_repository,
+        clock=clock,
+        id_generator=id_generator,
+    )
     input_artifact_service = InputArtifactService(
         repository=input_artifact_repository,
         store=artifact_store,
         id_generator=id_generator,
         clock=clock,
+        processor=DefaultInputProcessor(),
+        file_catalog=file_catalog_service,
     )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     policy = PolicyEngine(default_policy_rules())
@@ -166,6 +178,7 @@ def build_memory_container(
         approvals=approval_service,
         artifacts=artifact_service,
         input_artifacts=input_artifact_service,
+        file_catalog=file_catalog_service,
         memory=memory_service,
         events=events,
         observability=observability,

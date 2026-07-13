@@ -147,6 +147,7 @@ class RunOrchestrator:
                     user_id=session.user_id,
                     input_artifact_ids=input_artifact_ids,
                     workspace=handle.path,
+                    identity=identity,
                 )
                 if self._input_artifacts is not None
                 else []
@@ -177,9 +178,16 @@ class RunOrchestrator:
                 run=run,
                 session=session,
                 workspace=handle.path,
-                input_files=tuple(item.path for item in staged_inputs),
+                input_files=tuple(
+                    path
+                    for item in staged_inputs
+                    for path in (item.path, *item.processed_paths)
+                ),
                 identity=identity,
                 memory_projection=memory_projection,
+                processed_input_paths=tuple(
+                    path for item in staged_inputs for path in item.processed_paths
+                ),
             )
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):

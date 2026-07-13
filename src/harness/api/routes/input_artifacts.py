@@ -4,9 +4,24 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
-from harness.core.models import InputArtifact
+from harness.core.errors import NotFoundError
+from harness.core.models import InputArtifact, ThreadFile
 
 router = APIRouter(tags=["input-artifacts"])
+
+
+@router.get("/threads/{session_id}/files", response_model=list[ThreadFile])
+async def list_thread_files(
+    session_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[ThreadFile]:
+    session = await container.sessions.get(identity.tenant_id, session_id)
+    if session.user_id != identity.user_id:
+        raise NotFoundError(f"session not found: {session_id}")
+    return await container.file_catalog.list_scope(
+        identity.tenant_id, identity.user_id, session_id
+    )
 
 
 @router.post(
