@@ -21,6 +21,14 @@ class EventService:
         self._clock = clock
         self._id_generator = id_generator
 
+    async def list_after(
+        self,
+        tenant_id: str,
+        run_id: str,
+        after_sequence: int,
+    ) -> list[RunEvent]:
+        return await self._repository.list_after(tenant_id, run_id, after_sequence)
+
     async def append(
         self,
         *,

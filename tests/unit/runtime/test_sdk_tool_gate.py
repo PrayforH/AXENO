@@ -131,6 +131,29 @@ async def test_allows_read_before_tool_execution_and_emits_ordered_events(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_staged_input_read_persists_only_safe_path_and_marker(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    relative_path = "inputs/facts.txt"
+    staged = tmp_path / relative_path
+    staged.parent.mkdir()
+    staged.write_text("private fact")
+    context = context.model_copy(update={"input_files": (relative_path,)})
+
+    output = await _invoke(
+        gate,
+        context,
+        _input("Read", {"file_path": str(staged)}, "tool-input-read"),
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    request = emitted[0]
+    assert request.payload["arguments"] == {"file_path": relative_path}
+    assert request.payload["staged_input_read"] is True
+    assert str(tmp_path) not in repr(emitted)
+
+
+@pytest.mark.asyncio
 async def test_denies_destructive_bash_before_tool_execution(tmp_path: Path) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
 

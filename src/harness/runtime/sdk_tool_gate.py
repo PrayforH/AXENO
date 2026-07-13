@@ -20,6 +20,11 @@ from harness.core.models import ApprovalStatus
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
 from harness.runtime.base import RuntimeContext
+from harness.runtime.input_redaction import (
+    STAGED_INPUT_READ_MARKER,
+    staged_input_paths,
+    staged_read_path,
+)
 
 
 class ToolGate(Protocol):
@@ -82,6 +87,16 @@ class SdkToolGate:
             "arguments": arguments,
             "policy_checked": True,
         }
+        relative_input_path = staged_read_path(
+            request_payload,
+            workspace=context.workspace,
+            staged_paths=staged_input_paths(context.workspace, context.input_files),
+        )
+        if relative_input_path is not None:
+            safe_arguments = dict(arguments)
+            safe_arguments["file_path"] = relative_input_path
+            request_payload["arguments"] = safe_arguments
+            request_payload[STAGED_INPUT_READ_MARKER] = True
         agent_id = hook_input.get("agent_id")
         if agent_id:
             request_payload["agent_id"] = agent_id

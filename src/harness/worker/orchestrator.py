@@ -17,6 +17,13 @@ from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
 from harness.runtime.base import AgentRuntime, RuntimeContext
+from harness.runtime.input_redaction import (
+    INPUT_CONTENT_REDACTION,
+    STAGED_INPUT_READ_MARKER,
+    redact_workspace_paths,
+    staged_input_paths,
+    staged_read_path,
+)
 from harness.sandbox.base import SandboxHandle, SandboxProvider
 
 
@@ -135,6 +142,11 @@ class RunOrchestrator:
                     event_type="input.staged",
                     payload=staged.model_dump(mode="json"),
                 )
+            input_paths = staged_input_paths(
+                handle.path,
+                tuple(staged.path for staged in staged_inputs),
+            )
+            staged_read_tool_calls: set[str] = set()
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
             else:
@@ -156,6 +168,58 @@ class RunOrchestrator:
                 if latest.status is RunStatus.CANCELLING:
                     return await self._move(latest, RunStatus.CANCELLED)
                 payload = dict(runtime_event.payload)
+                original_tool_arguments: dict[str, Any] | None = None
+                if runtime_event.type == "tool.request":
+                    raw_arguments = payload.get("arguments")
+                    if isinstance(raw_arguments, dict):
+                        original_tool_arguments = dict(
+                            cast(dict[str, Any], raw_arguments)
+                        )
+                    relative_input_path = staged_read_path(
+                        payload,
+                        workspace=handle.path,
+                        staged_paths=input_paths,
+                    )
+                    if relative_input_path is not None:
+                        tool_call_id = str(payload.get("tool_call_id", ""))
+                        if tool_call_id:
+                            staged_read_tool_calls.add(tool_call_id)
+                        sanitized_arguments = dict(original_tool_arguments or {})
+                        sanitized_arguments["file_path"] = relative_input_path
+                        payload["arguments"] = sanitized_arguments
+                        payload[STAGED_INPUT_READ_MARKER] = True
+                elif runtime_event.type == "tool.result":
+                    tool_call_id = str(payload.get("tool_call_id", ""))
+                    redact_result = tool_call_id in staged_read_tool_calls
+                    if not redact_result and tool_call_id:
+                        prior_events = await self._events.list_after(
+                            tenant_id,
+                            run_id,
+                            0,
+                        )
+                        matching_request = next(
+                            (
+                                event
+                                for event in reversed(prior_events)
+                                if event.type == "tool.request"
+                                and str(event.payload.get("tool_call_id", ""))
+                                == tool_call_id
+                            ),
+                            None,
+                        )
+                        redact_result = bool(
+                            matching_request
+                            and matching_request.payload.get(
+                                STAGED_INPUT_READ_MARKER
+                            )
+                        )
+                    if redact_result:
+                        payload["content"] = INPUT_CONTENT_REDACTION
+                        payload["redacted"] = True
+                payload = cast(
+                    dict[str, Any],
+                    redact_workspace_paths(payload, handle.path),
+                )
                 if runtime_event.type == "message.start":
                     active_message_id = str(
                         payload.get("message_id")
@@ -199,7 +263,9 @@ class RunOrchestrator:
                 if runtime_event.type == "tool.request" and self._policy is not None:
                     tool_name = str(payload.get("name", ""))
                     tool_call_id = str(payload.get("tool_call_id", ""))
-                    arguments = payload.get("arguments", {})
+                    arguments = original_tool_arguments
+                    if arguments is None:
+                        arguments = payload.get("arguments", {})
                     if not isinstance(arguments, dict):
                         arguments = {}
                     typed_arguments = cast(dict[str, Any], arguments)
