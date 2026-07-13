@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from harness.sandbox.base import SandboxIsolation
+
 
 class PolicyDecision(StrEnum):
     ALLOW = "allow"
@@ -19,6 +21,7 @@ class PolicyContext(BaseModel):
     agent_name: str
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
+    sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE
 
 
 class PolicyRule(BaseModel):
@@ -31,6 +34,7 @@ class PolicyRule(BaseModel):
     tool: str | None = None
     path_glob: str | None = None
     command_contains: str | None = None
+    sandbox_isolation: SandboxIsolation | None = None
     priority: int = 0
 
 

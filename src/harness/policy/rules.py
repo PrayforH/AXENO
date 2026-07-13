@@ -3,6 +3,7 @@
 from fnmatch import fnmatch
 
 from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult, PolicyRule
+from harness.sandbox.base import SandboxIsolation
 
 _DECISION_PRECEDENCE = {
     PolicyDecision.ALLOW: 0,
@@ -23,6 +24,11 @@ def _matches(rule: PolicyRule, context: PolicyContext) -> bool:
         return False
     if rule.tool is not None and rule.tool != context.tool_name:
         return False
+    if (
+        rule.sandbox_isolation is not None
+        and rule.sandbox_isolation is not context.sandbox_isolation
+    ):
+        return False
     if rule.path_glob is not None and not fnmatch(_path(context), rule.path_glob):
         return False
     if rule.command_contains is not None:
@@ -41,6 +47,7 @@ def _specificity(rule: PolicyRule) -> int:
             rule.tool,
             rule.path_glob,
             rule.command_contains,
+            rule.sandbox_isolation,
         )
     )
 
@@ -76,6 +83,8 @@ class PolicyEngine:
 def default_policy_rules() -> list[PolicyRule]:
     return [
         PolicyRule(name="read", tool="Read", decision=PolicyDecision.ALLOW),
+        PolicyRule(name="glob", tool="Glob", decision=PolicyDecision.ALLOW),
+        PolicyRule(name="grep", tool="Grep", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate", tool="Task", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate-agent", tool="Agent", decision=PolicyDecision.ALLOW),
         PolicyRule(
@@ -89,10 +98,24 @@ def default_policy_rules() -> list[PolicyRule]:
             decision=PolicyDecision.ALLOW,
         ),
         PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),
+        PolicyRule(name="edit-review", tool="Edit", decision=PolicyDecision.ASK),
+        PolicyRule(
+            name="container-write",
+            tool="Write",
+            sandbox_isolation=SandboxIsolation.CONTAINER,
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="container-edit",
+            tool="Edit",
+            sandbox_isolation=SandboxIsolation.CONTAINER,
+            decision=PolicyDecision.ALLOW,
+        ),
         PolicyRule(
             name="destructive-rm",
             tool="Bash",
             command_contains="rm ",
+            sandbox_isolation=SandboxIsolation.WORKSPACE,
             decision=PolicyDecision.DENY,
         ),
         PolicyRule(name="bash-review", tool="Bash", decision=PolicyDecision.ASK),
