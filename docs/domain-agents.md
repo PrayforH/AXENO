@@ -30,10 +30,14 @@ agents/invoice-reviewer/
 ```yaml
 tools:
   - builtin: Read
-  - builtin: Task
+  - builtin: Glob
+  - builtin: Grep
+  - builtin: Write
+  - builtin: Edit
+  - builtin: Bash
 ```
 
-只声明完成任务必需的工具。工具名会原样进入 SDK，权限仍由 Harness 策略控制。
+只声明完成任务必需的工具。工具名会原样进入 SDK，Manifest 是 Agent 能力上限；Harness 不会因为运行在 Daytona 就注入未声明工具。执行权限再由服务端可信的 Sandbox 隔离级别控制：本地 `Write/Edit/Bash` 进入审批，Daytona `Write/Edit` 自动允许，Daytona `Bash` 仍审批。这样领域包不能通过修改 Manifest 自行声明“已隔离”来提权。
 
 ### Python 领域工具
 
@@ -133,4 +137,5 @@ curl -sS http://127.0.0.1:8000/v1/agents \
 - 主 Agent 支持 builtin、Python 和已注册 MCP；subagent 暂只支持 builtin，声明自定义工具会显式失败。
 - MCP Registry 与 allowlist 属于服务端部署配置，Manifest 无权自行提升权限。
 - 真实 SDK 模式已使用 catch-all `PreToolUse` Hook，在执行前完成 allow/deny/ask。Phase 1 的 inline 审批 waiter 只适用于单 API 进程；生产多副本需要用 Redis/PostgreSQL 通知或队列 continuation 替换本地 Future。
+- Sandbox Provider 生成不可伪造的 `workspace/container` 隔离事实。Daytona 保护宿主机，但模型网关凭据仍存在于 Claude CLI 运行环境，因此 `Bash` 在短期凭据或网络出口隔离完成前不会自动放行。
 - 工具参数会进入耐久事件用于审计。领域工具不得把 Token、密码或不必要的个人数据放进参数；字段级 schema 脱敏仍需在生产化阶段补齐。

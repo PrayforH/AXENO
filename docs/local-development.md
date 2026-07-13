@@ -21,7 +21,7 @@ make dev-up-cc-switch
 
 真实模式在 API 启动时读取 `~/.claude/settings.json` 中的 Anthropic endpoint、model 和 credential。凭据不会复制到仓库文件或日志；cc-switch 切换 Provider 后执行 `make dev-down && make dev-up-cc-switch`。
 
-`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布 `echo-agent@0.1.0`。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
+`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布正式验证包 `echo-agent@0.2.0`。测试目录中的 deterministic echo Manifest 只供自动化测试使用，不会发布给网页。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
 
 如果本机 Docker 配置引用了缺失的 `docker-credential-osxkeychain`，脚本只对本次公共镜像拉取临时使用仓库内的匿名 helper，不修改全局 Docker 配置。
 
@@ -52,13 +52,33 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 请简要说明这个 Harness
 ```
 
-真实 `claude-sdk` 模式下验证工具与子 Agent：
+真实 `claude-sdk` 模式下验证文件工具与审批：
 
 ```text
-必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
+在当前工作区创建 outputs/hello.md，写入一段中文说明，然后读取文件确认内容。
 ```
 
-预期出现 `Agent` 子 Agent 卡片、`subagent.started/completed` 时间线，以及成功终态；子 Agent 的部分文本不会混入主 Agent 的流式消息。SDK 内部协调字段（如 `agentId`、`output_file`）不会进入界面。
+本地模式下预期出现 `Write` 审批卡片。点击批准后，同一次 SDK 调用继续执行并可用 `Read` 核验文件；拒绝或超时则不执行写入。验证 Agent 只会在用户明确要求时修改文件，也不会对“你好”输出固定的 SDK 自我介绍。
+
+## Sandbox development permissions
+
+Manifest 决定 Agent 能看到哪些工具，实际 `SandboxHandle` 决定策略是否放行。该隔离事实由服务端 Provider 生成，网页、模型输入和 Manifest 都不能覆盖。
+
+| 工具 | local workspace | Daytona container |
+|---|---|---|
+| `Read/Glob/Grep` | 自动允许 | 自动允许 |
+| `Write/Edit` | 网页审批 | 自动允许 |
+| `Bash` | 网页审批；`rm ` 默认拒绝 | 网页审批 |
+
+要让本地真实模型运行在 Daytona，在仓库根目录的忽略文件 `.env` 中配置：
+
+```dotenv
+HARNESS_SANDBOX_PROVIDER=daytona
+HARNESS_DAYTONA_API_URL=https://app.daytona.io/api
+HARNESS_DAYTONA_API_KEY=dtn_replace_me
+```
+
+随后执行 `make dev-down && make dev-up-cc-switch`。Daytona provisioning 失败时运行会失败，不会降级到 local 后继续使用容器权限。
 
 验证停止生成与后端取消：
 
@@ -99,8 +119,12 @@ Collector 环境变量示例：
 
 ```dotenv
 LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
-LANGFUSE_AUTHORIZATION=Basic <base64(public-key:secret-key)>
+LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
+LANGFUSE_SECRET_KEY=sk-lf-replace-me
+LANGFUSE_ENVIRONMENT=development
 ```
+
+Collector 使用 Basic Auth extension 从公钥和私钥生成认证头，并设置 Langfuse ingestion v4 Header；应用进程不会收到这两个密钥。
 
 ## Common commands
 

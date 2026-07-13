@@ -61,7 +61,7 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
-Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以紧凑执行时间线呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper@1.0.0` 与 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
+Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以紧凑执行时间线呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布测试用 `helper@1.0.0` 与正式验证包 `echo-agent@0.2.0`，不会再把 deterministic test fixture 发布给网页。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程
@@ -71,11 +71,13 @@ Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markd
 
 点击“＋ 文件”上传本地文件后，Next.js 同源 BFF 会创建 InputArtifact；消息发送时只携带服务端 ID。Worker 校验归属后将文件以只读方式挂载到本次 Run 的 `inputs/`，Claude Agent SDK 可使用 `Read` 读取。浏览器路径、内联字节和伪造 URL 不会被信任为工作区输入。
 
-真实模式可用下列问题验证子 Agent：
+真实模式可用下列问题验证工作区写入与网页审批：
 
 ```text
-必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
+在当前工作区创建 outputs/hello.md，写入一段中文说明，然后读取文件确认内容。
 ```
+
+`echo-agent@0.2.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash`。本地 workspace 不是真正安全隔离，因此 `Write/Edit/Bash` 会进入网页审批；Daytona 容器中 `Write/Edit` 自动允许，`Bash` 因模型网关凭据和网络出口风险仍需审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
 
 输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、同源 AG-UI BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 
@@ -92,4 +94,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-当前仓库已经具备持久化生产组合根和单机 Docker 部署基线，但不是最终控制平面：公网认证/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成策略与审批；subagent 自定义工具、字段级工具参数脱敏和多进程持久化审批 continuation 仍是明确的后续边界。
+当前仓库已经具备持久化生产组合根和单机 Docker 部署基线，但不是最终控制平面：公网认证/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成基于可信 Sandbox 隔离级别的策略与审批；subagent 自定义工具、字段级工具参数脱敏、Daytona 网络出口控制和多进程持久化审批 continuation 仍是明确的后续边界。

@@ -76,7 +76,9 @@ make docker-e2e
 ```dotenv
 HARNESS_OTEL_ENABLED=true
 LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
-LANGFUSE_AUTHORIZATION=Basic <base64(public-key:secret-key)>
+LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
+LANGFUSE_SECRET_KEY=sk-lf-replace-me
+LANGFUSE_ENVIRONMENT=production
 ```
 
 然后启动 observability profile：
@@ -85,7 +87,9 @@ LANGFUSE_AUTHORIZATION=Basic <base64(public-key:secret-key)>
 make docker-up-observability
 ```
 
-应用只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 转发到 Langfuse。Trace 属性会经过 Harness 脱敏，不记录模型密钥和原始上传内容。
+应用只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 的 Basic Auth extension 将公钥和私钥转成认证头，并携带 `x-langfuse-ingestion-version: 4` 转发到 Langfuse。应用容器不会收到 Langfuse 密钥。Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse 实例的 `/api/public/otel` 基础入口，Exporter 会追加 `/v1/traces`。自托管实例需要支持该 OTel 入口。Trace Resource 使用 `LANGFUSE_ENVIRONMENT` 写入 `deployment.environment.name`，内容仍经过 Harness 脱敏，不记录模型密钥和原始上传内容。
+
+未启用 `observability` profile 时 Collector 不启动，`make docker-up` 不要求任何 Langfuse 配置。宿主机 OTLP 端口只绑定 `127.0.0.1`。
 
 ## 6. 停止与数据
 
@@ -105,3 +109,14 @@ docker compose \
 ## 生产边界
 
 Compose 是单机生产形态与集成验证基线，不等于完整公网部署方案。正式环境仍应在反向代理或 API Gateway 中完成身份认证、TLS、限流和可信身份头注入；运行不受信任 Agent 时应把 `HARNESS_SANDBOX_PROVIDER` 切换为 Daytona 等隔离执行环境，而不是使用容器内 local workspace。
+
+Daytona 配置通过环境变量注入：
+
+```dotenv
+HARNESS_SANDBOX_PROVIDER=daytona
+HARNESS_DAYTONA_API_URL=https://app.daytona.io/api
+HARNESS_DAYTONA_API_KEY=dtn_replace_me
+HARNESS_DAYTONA_SNAPSHOT=your-approved-snapshot
+```
+
+Daytona 容器是 Harness 的强隔离边界：Manifest 已声明的 `Write/Edit` 自动允许，`Bash` 仍需审批。本地 workspace 中 `Write/Edit/Bash` 均需审批。隔离级别来自实际 provision 结果；不得从用户请求或 Agent Manifest 接受该字段。
