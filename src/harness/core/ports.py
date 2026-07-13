@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 from harness.core.events import RunEvent
 from harness.core.models import (
     AgentVersion,
+    AguiThreadBinding,
     ApprovalRequest,
     ApprovalStatus,
     Artifact,
@@ -14,6 +15,9 @@ from harness.core.models import (
     Run,
     RunStatus,
     Session,
+    ThreadFile,
+    UserMemory,
+    WorkspaceSnapshot,
 )
 
 
@@ -101,6 +105,50 @@ class InputArtifactRepository(Protocol):
     async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact: ...
 
     async def update(self, artifact: InputArtifact) -> None: ...
+
+
+class UserMemoryRepository(Protocol):
+    async def add(self, memory: UserMemory) -> None: ...
+
+    async def get(
+        self, tenant_id: str, user_id: str, agent_name: str
+    ) -> UserMemory | None: ...
+
+    async def compare_and_set(self, expected_version: int, updated: UserMemory) -> bool: ...
+
+    async def delete(self, tenant_id: str, user_id: str, agent_name: str) -> None: ...
+
+
+class ThreadFileRepository(Protocol):
+    async def add(self, file: ThreadFile) -> None: ...
+
+    async def get(self, tenant_id: str, file_id: str) -> ThreadFile: ...
+
+    async def list_for_session(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> list[ThreadFile]: ...
+
+    async def list_children(self, tenant_id: str, parent_file_id: str) -> list[ThreadFile]: ...
+
+
+class WorkspaceSnapshotRepository(Protocol):
+    async def add(self, snapshot: WorkspaceSnapshot) -> None: ...
+
+    async def get(self, tenant_id: str, snapshot_id: str) -> WorkspaceSnapshot: ...
+
+    async def latest(self, tenant_id: str, session_id: str) -> WorkspaceSnapshot | None: ...
+
+
+class AguiThreadBindingRepository(Protocol):
+    async def add(self, binding: AguiThreadBinding) -> None: ...
+
+    async def get_by_thread(
+        self, tenant_id: str, user_id: str, thread_id: str
+    ) -> AguiThreadBinding: ...
+
+    async def get_by_session(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> AguiThreadBinding: ...
 
 
 class TaskQueue(Protocol):

@@ -1,21 +1,52 @@
 """Runtime contract independent from a specific Agent SDK."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from harness.core.models import Run, Session
+from harness.core.models import ExecutionIdentity, Run, Session
+
+RuntimeTransportFactory = Callable[[], object]
 
 
 class RuntimeContext(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     run: Run
     session: Session
     workspace: Path
     input_files: tuple[str, ...] = ()
+    identity: ExecutionIdentity | None = None
+    memory_projection: str = Field(default="", exclude=True, repr=False)
+    processed_input_paths: tuple[str, ...] = ()
+    runtime_transport_factory: RuntimeTransportFactory | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    @model_validator(mode="after")
+    def derive_identity(self) -> "RuntimeContext":
+        if self.identity is None:
+            object.__setattr__(
+                self,
+                "identity",
+                ExecutionIdentity(
+                    tenant_id=self.session.tenant_id,
+                    user_id=self.session.user_id,
+                    project_id=self.session.agent_name,
+                    session_id=self.session.session_id,
+                    run_id=self.run.run_id,
+                    agent_name=self.session.agent_name,
+                    agent_version=self.session.agent_version,
+                ),
+            )
+        assert self.identity is not None
+        if self.identity.tenant_id != self.run.tenant_id:
+            raise ValueError("execution identity tenant does not match run")
+        if self.identity.session_id != self.run.session_id:
+            raise ValueError("execution identity session does not match run")
+        return self
 
 
 class RuntimeEvent(BaseModel):

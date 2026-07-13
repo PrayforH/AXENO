@@ -62,10 +62,34 @@ class ArtifactStatus(StrEnum):
     FAILED = "failed"
 
 
+class ThreadFileKind(StrEnum):
+    ORIGINAL = "original"
+    DERIVED = "derived"
+    GENERATED = "generated"
+
+
+class ProcessingStatus(StrEnum):
+    PROCESSED = "processed"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
+
+
 class ModelCompatibility(StrEnum):
     FULL = "full"
     DEGRADED = "degraded"
     UNSUPPORTED = "unsupported"
+
+
+class ExecutionIdentity(FrozenModel):
+    """Non-secret scope used to resolve all request-specific capabilities."""
+
+    tenant_id: str
+    user_id: str
+    project_id: str
+    session_id: str
+    run_id: str
+    agent_name: str
+    agent_version: str
 
 
 class AgentVersion(FrozenModel):
@@ -155,6 +179,50 @@ class InputArtifact(FrozenModel):
     created_at: datetime
     sha256: str | None = None
     size_bytes: int | None = None
+
+
+class UserMemory(FrozenModel):
+    tenant_id: str
+    user_id: str
+    agent_name: str
+    content: str
+    version: int = Field(ge=1)
+    updated_at: datetime
+
+
+class ThreadFile(FrozenModel):
+    file_id: str
+    tenant_id: str
+    user_id: str
+    session_id: str
+    run_id: str
+    kind: ThreadFileKind
+    name: str
+    media_type: str
+    path: str
+    created_at: datetime
+    input_artifact_id: str | None = None
+    artifact_id: str | None = None
+    parent_file_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProcessedInput(FrozenModel):
+    source_file_id: str
+    status: ProcessingStatus
+    derived_file_ids: tuple[str, ...] = ()
+    processor: str
+    error_code: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AguiThreadBinding(FrozenModel):
+    tenant_id: str
+    user_id: str
+    thread_id: str
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class WorkspaceSnapshot(FrozenModel):

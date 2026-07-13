@@ -8,6 +8,7 @@ from harness.core.errors import ConflictError, NotFoundError
 from harness.core.events import RunEvent
 from harness.core.models import (
     AgentVersion,
+    AguiThreadBinding,
     ApprovalRequest,
     ApprovalStatus,
     Artifact,
@@ -15,6 +16,9 @@ from harness.core.models import (
     Run,
     RunStatus,
     Session,
+    ThreadFile,
+    UserMemory,
+    WorkspaceSnapshot,
 )
 from harness.core.ports import StoredObject
 
@@ -266,6 +270,140 @@ class InMemoryInputArtifactRepository:
                     f"input artifact not found: {artifact.input_artifact_id}"
                 )
             self._items[key] = artifact
+
+
+class InMemoryUserMemoryRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str, str], UserMemory] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, memory: UserMemory) -> None:
+        key = (memory.tenant_id, memory.user_id, memory.agent_name)
+        async with self._lock:
+            if key in self._items:
+                raise ConflictError("user memory already exists")
+            self._items[key] = memory
+
+    async def get(self, tenant_id: str, user_id: str, agent_name: str) -> UserMemory | None:
+        return self._items.get((tenant_id, user_id, agent_name))
+
+    async def compare_and_set(self, expected_version: int, updated: UserMemory) -> bool:
+        key = (updated.tenant_id, updated.user_id, updated.agent_name)
+        async with self._lock:
+            current = self._items.get(key)
+            if current is None:
+                raise NotFoundError("user memory not found")
+            if current.version != expected_version:
+                return False
+            if updated.version != expected_version + 1:
+                raise ConflictError("user memory version must increment by one")
+            self._items[key] = updated
+            return True
+
+    async def delete(self, tenant_id: str, user_id: str, agent_name: str) -> None:
+        self._items.pop((tenant_id, user_id, agent_name), None)
+
+
+class InMemoryThreadFileRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], ThreadFile] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, file: ThreadFile) -> None:
+        key = (file.tenant_id, file.file_id)
+        async with self._lock:
+            if key in self._items:
+                raise ConflictError(f"thread file already exists: {file.file_id}")
+            if file.parent_file_id is not None:
+                parent = self._items.get((file.tenant_id, file.parent_file_id))
+                if parent is None:
+                    raise NotFoundError(f"parent thread file not found: {file.parent_file_id}")
+                if (parent.user_id, parent.session_id) != (file.user_id, file.session_id):
+                    raise ConflictError("derived file must share its parent's thread scope")
+            self._items[key] = file
+
+    async def get(self, tenant_id: str, file_id: str) -> ThreadFile:
+        try:
+            return self._items[(tenant_id, file_id)]
+        except KeyError as error:
+            raise NotFoundError(f"thread file not found: {file_id}") from error
+
+    async def list_for_session(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> list[ThreadFile]:
+        return [
+            file
+            for (item_tenant, _), file in self._items.items()
+            if item_tenant == tenant_id
+            and file.user_id == user_id
+            and file.session_id == session_id
+        ]
+
+    async def list_children(self, tenant_id: str, parent_file_id: str) -> list[ThreadFile]:
+        return [
+            file
+            for (item_tenant, _), file in self._items.items()
+            if item_tenant == tenant_id and file.parent_file_id == parent_file_id
+        ]
+
+
+class InMemoryWorkspaceSnapshotRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], WorkspaceSnapshot] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, snapshot: WorkspaceSnapshot) -> None:
+        key = (snapshot.tenant_id, snapshot.snapshot_id)
+        async with self._lock:
+            if key in self._items:
+                raise ConflictError(f"workspace snapshot already exists: {snapshot.snapshot_id}")
+            self._items[key] = snapshot
+
+    async def get(self, tenant_id: str, snapshot_id: str) -> WorkspaceSnapshot:
+        try:
+            return self._items[(tenant_id, snapshot_id)]
+        except KeyError as error:
+            raise NotFoundError(f"workspace snapshot not found: {snapshot_id}") from error
+
+    async def latest(self, tenant_id: str, session_id: str) -> WorkspaceSnapshot | None:
+        matches = [
+            snapshot
+            for (item_tenant, _), snapshot in self._items.items()
+            if item_tenant == tenant_id and snapshot.session_id == session_id
+        ]
+        return max(matches, key=lambda item: item.created_at, default=None)
+
+
+class InMemoryAguiThreadBindingRepository:
+    def __init__(self) -> None:
+        self._by_thread: dict[tuple[str, str, str], AguiThreadBinding] = {}
+        self._by_session: dict[tuple[str, str, str], AguiThreadBinding] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, binding: AguiThreadBinding) -> None:
+        thread_key = (binding.tenant_id, binding.user_id, binding.thread_id)
+        session_key = (binding.tenant_id, binding.user_id, binding.session_id)
+        async with self._lock:
+            if thread_key in self._by_thread or session_key in self._by_session:
+                raise ConflictError("AG-UI thread binding already exists")
+            self._by_thread[thread_key] = binding
+            self._by_session[session_key] = binding
+
+    async def get_by_thread(
+        self, tenant_id: str, user_id: str, thread_id: str
+    ) -> AguiThreadBinding:
+        try:
+            return self._by_thread[(tenant_id, user_id, thread_id)]
+        except KeyError as error:
+            raise NotFoundError(f"AG-UI thread binding not found: {thread_id}") from error
+
+    async def get_by_session(
+        self, tenant_id: str, user_id: str, session_id: str
+    ) -> AguiThreadBinding:
+        try:
+            return self._by_session[(tenant_id, user_id, session_id)]
+        except KeyError as error:
+            raise NotFoundError(f"AG-UI session binding not found: {session_id}") from error
 
 
 class InMemoryTaskQueue:
