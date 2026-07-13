@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     environment: Literal["local", "test", "production"] = "local"
     runtime: Literal["fake", "claude-sdk"] = "fake"
+    cc_switch_settings_path: str = "~/.claude/settings.json"
     otel_enabled: bool = False
     local_auto_execute: bool = False
 

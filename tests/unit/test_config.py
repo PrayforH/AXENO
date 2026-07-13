@@ -7,3 +7,4 @@ def test_local_defaults_disable_external_model_and_otel() -> None:
     assert settings.environment == "local"
     assert settings.runtime == "fake"
     assert settings.otel_enabled is False
+    assert settings.cc_switch_settings_path == "~/.claude/settings.json"
