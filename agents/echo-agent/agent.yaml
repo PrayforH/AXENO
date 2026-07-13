@@ -2,7 +2,7 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: echo-agent
-  version: 0.2.0
+  version: 0.3.0
   labels:
     purpose: local-validation
 spec:
@@ -23,6 +23,7 @@ spec:
     - builtin: Write
     - builtin: Edit
     - builtin: Bash
+    - mcp: tavily-readonly
   subagents: []
   hooks: []
   permissions:

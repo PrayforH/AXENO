@@ -21,12 +21,27 @@ from harness.sandbox.base import SandboxIsolation
             {"path": "outputs/report.md"},
             PolicyDecision.ALLOW,
         ),
+        (
+            "mcp__tavily__tavily-search",
+            {"query": "current release"},
+            PolicyDecision.ALLOW,
+        ),
+        (
+            "mcp__tavily__tavily-extract",
+            {"urls": ["https://example.test/source"]},
+            PolicyDecision.ALLOW,
+        ),
+        (
+            "mcp__tavily__tavily-crawl",
+            {"url": "https://example.test"},
+            PolicyDecision.DENY,
+        ),
         ("Write", {"file_path": "/workspace/result.txt"}, PolicyDecision.ASK),
         ("Bash", {"command": "rm -rf /workspace/data"}, PolicyDecision.DENY),
     ],
 )
 def test_default_policy_classifies_builtin_tools(
-    tool: str, arguments: dict[str, str], expected: PolicyDecision
+    tool: str, arguments: dict[str, object], expected: PolicyDecision
 ) -> None:
     engine = PolicyEngine(default_policy_rules())
 

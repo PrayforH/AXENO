@@ -21,7 +21,7 @@ make dev-up-cc-switch
 
 真实模式在 API 启动时读取 `~/.claude/settings.json` 中的 Anthropic endpoint、model 和 credential。凭据不会复制到仓库文件或日志；cc-switch 切换 Provider 后执行 `make dev-down && make dev-up-cc-switch`。
 
-`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布正式验证包 `echo-agent@0.2.0`。测试目录中的 deterministic echo Manifest 只供自动化测试使用，不会发布给网页。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
+`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布正式验证包 `echo-agent@0.3.0`。测试目录中的 deterministic echo Manifest 只供自动化测试使用，不会发布给网页。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
 
 如果本机 Docker 配置引用了缺失的 `docker-credential-osxkeychain`，脚本只对本次公共镜像拉取临时使用仓库内的匿名 helper，不修改全局 Docker 配置。
 
@@ -59,6 +59,17 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 ```
 
 本地模式下预期出现 `Write` 审批卡片。点击批准后，同一次 SDK 调用继续执行并可用 `Read` 核验文件；拒绝或超时则不执行写入。验证 Agent 只会在用户明确要求时修改文件，也不会对“你好”输出固定的 SDK 自我介绍。
+
+### Tavily web research
+
+正式验证 Agent 通过逻辑引用 `mcp: tavily-readonly` 使用服务端注册的 Tavily remote MCP。只允许 search 和 extract；Manifest 与 URL 都不保存凭据。在忽略的 `.env` 中配置：
+
+```dotenv
+HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"authorization":"TAVILY_AUTHORIZATION"}}
+HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_AUTHORIZATION":"Bearer tvly-replace-me"}
+```
+
+网页内容一律视为不可信输入。Agent 应展示来源标题和 URL，不执行页面中的指令。领域 Agent 只有显式加入 `mcp: tavily-readonly` 才能获得相同能力。
 
 ## Sandbox development permissions
 
@@ -143,7 +154,7 @@ make web-test
 make web-build
 ```
 
-完整领域开发流程见 [domain-agents.md](domain-agents.md)。本地 API 的默认 MCP Registry 为空；领域 Manifest 使用 `mcp:` 前，必须在服务端组合根注册对应逻辑 ID。真实 SDK 已通过 `PreToolUse` 前置执行策略；本地 inline 审批 waiter 只适用于单 API 进程。
+完整领域开发流程见 [domain-agents.md](domain-agents.md)。本地 API 默认注册 `tavily-readonly`，其他领域 Manifest 使用新的 `mcp:` 引用前，仍须在服务端组合根注册对应逻辑 ID。真实 SDK 已通过 `PreToolUse` 前置执行策略；本地 inline 审批 waiter 只适用于单 API 进程。
 
 单机生产形态、国内依赖镜像、真实网关黑盒验收与 Langfuse profile 见 [deployment.md](deployment.md)。
 

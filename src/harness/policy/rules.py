@@ -97,6 +97,16 @@ def default_policy_rules() -> list[PolicyRule]:
             tool="mcp__harness-artifacts__publish_artifact",
             decision=PolicyDecision.ALLOW,
         ),
+        PolicyRule(
+            name="tavily-search",
+            tool="mcp__tavily__tavily-search",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="tavily-extract",
+            tool="mcp__tavily__tavily-extract",
+            decision=PolicyDecision.ALLOW,
+        ),
         PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),
         PolicyRule(name="edit-review", tool="Edit", decision=PolicyDecision.ASK),
         PolicyRule(
