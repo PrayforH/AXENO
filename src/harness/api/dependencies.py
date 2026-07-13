@@ -43,6 +43,11 @@ from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
+from harness.sandbox.base import SandboxProvider
+from harness.sandbox.daytona import (
+    DaytonaSandboxProvider,
+    SdkDaytonaClient,
+)
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
 
@@ -152,6 +157,23 @@ def build_memory_container(
             archive_on_complete=manifest.spec.workspace.archive_on_complete,
         )
     policy = PolicyEngine(default_policy_rules())
+    if resolved_settings.sandbox_provider == "daytona":
+        daytona_api_key = resolved_settings.daytona_api_key.get_secret_value()
+        if not daytona_api_key:
+            raise ValueError("HARNESS_DAYTONA_API_KEY is required for Daytona")
+        sandbox: SandboxProvider = DaytonaSandboxProvider(
+            client=SdkDaytonaClient.from_config(
+                api_key=daytona_api_key,
+                api_url=resolved_settings.daytona_api_url or None,
+                target=resolved_settings.daytona_target or None,
+            ),
+            snapshot=resolved_settings.daytona_snapshot or None,
+            remote_workspace_root=resolved_settings.daytona_remote_workspace_root,
+            cli_version=resolved_settings.daytona_claude_cli_version,
+            delete_on_destroy=resolved_settings.daytona_delete_on_destroy,
+        )
+    else:
+        sandbox = LocalSandboxProvider()
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
     else:
@@ -172,7 +194,7 @@ def build_memory_container(
         runs=runs,
         events=event_service,
         runtime=runtime,
-        sandbox=LocalSandboxProvider(),
+        sandbox=sandbox,
         clock=clock,
         policy=policy,
         approvals=approval_service,

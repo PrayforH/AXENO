@@ -111,7 +111,7 @@ def test_runtime_context_derives_identity_and_hides_sensitive_runtime_state(
         created_at=NOW,
         updated_at=NOW,
     )
-    def transport_factory() -> object:
+    def transport_factory(_options: object) -> object:
         return object()
 
     context = RuntimeContext(

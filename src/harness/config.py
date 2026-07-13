@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     environment: Literal["local", "test", "production"] = "local"
     runtime: Literal["fake", "claude-sdk"] = "fake"
+    sandbox_provider: Literal["local", "daytona"] = "local"
     cc_switch_settings_path: str = "~/.claude/settings.json"
     otel_enabled: bool = False
     local_auto_execute: bool = False
@@ -36,6 +37,14 @@ class Settings(BaseSettings):
 
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_api_key: SecretStr = SecretStr("")
+
+    daytona_api_key: SecretStr = SecretStr("")
+    daytona_api_url: str = "https://app.daytona.io/api"
+    daytona_target: str = ""
+    daytona_snapshot: str = ""
+    daytona_remote_workspace_root: str = "/workspace/harness"
+    daytona_claude_cli_version: str = "2.1.206"
+    daytona_delete_on_destroy: bool = False
 
     mcp_secret_references_json: str = "{}"
     mcp_server_secrets_json: SecretStr = SecretStr("{}")

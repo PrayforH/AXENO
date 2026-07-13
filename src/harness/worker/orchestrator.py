@@ -191,6 +191,7 @@ class RunOrchestrator:
                 handle.path,
                 tuple(staged.path for staged in staged_inputs),
             )
+            await self._sandbox.prepare(handle)
             staged_read_tool_calls: set[str] = set()
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
@@ -215,6 +216,7 @@ class RunOrchestrator:
                 processed_input_paths=tuple(
                     path for item in staged_inputs for path in item.processed_paths
                 ),
+                runtime_transport_factory=handle.runtime_transport_factory,
             )
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):
@@ -290,6 +292,8 @@ class RunOrchestrator:
                 elif runtime_event.type == "tool.request" and active_message_id is not None:
                     payload["message_id"] = active_message_id
                 if runtime_event.type == "artifact.output" and self._artifacts is not None:
+                    if handle.provider == "daytona":
+                        await self._sandbox.collect(handle)
                     relative_path = str(payload.get("path", ""))
                     artifact_path = (handle.path / relative_path).resolve()
                     if not artifact_path.is_relative_to(handle.path.resolve()):
@@ -393,6 +397,7 @@ class RunOrchestrator:
                 )
                 if runtime_event.type == "message.completed":
                     active_message_id = None
+            await self._sandbox.collect(handle)
             if self._workspaces is not None and workspace_policy.archive_on_complete:
                 snapshot = await self._workspaces.archive(
                     tenant_id=tenant_id,

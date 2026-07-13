@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.core.models import ExecutionIdentity, Run, Session
 
-RuntimeTransportFactory = Callable[[], object]
+RuntimeTransportFactory = Callable[[object], object]
 
 
 class RuntimeContext(BaseModel):

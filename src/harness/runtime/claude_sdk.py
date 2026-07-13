@@ -10,6 +10,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     SessionStore,
     StreamEvent,
+    Transport,
     query,
 )
 
@@ -175,7 +176,18 @@ class ClaudeSdkRuntime:
             else nullcontext()
         )
         with execution_context:
-            async for message in self._query(prompt, options):
+            if context.runtime_transport_factory is None:
+                query_messages = self._query(prompt, options)
+            else:
+                transport = context.runtime_transport_factory(options)
+                if not isinstance(transport, Transport):
+                    raise TypeError("runtime transport factory did not return an SDK Transport")
+                query_messages = query(
+                    prompt=prompt,
+                    options=options,
+                    transport=transport,
+                )
+            async for message in query_messages:
                 mapped = [
                     self._redact_event(event, resolved_tools)
                     for event in map_sdk_message(message)

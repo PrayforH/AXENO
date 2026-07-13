@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr
 
 from harness.api.dependencies import build_memory_container
 from harness.config import Settings
@@ -50,5 +51,14 @@ def test_claude_sdk_composition_fails_instead_of_falling_back(tmp_path: Path) ->
             settings=Settings(
                 runtime="claude-sdk",
                 cc_switch_settings_path=str(missing_path),
+            )
+        )
+
+
+def test_daytona_composition_requires_explicit_credentials() -> None:
+    with pytest.raises(ValueError, match="HARNESS_DAYTONA_API_KEY"):
+        build_memory_container(
+            settings=Settings(
+                sandbox_provider="daytona", daytona_api_key=SecretStr("")
             )
         )

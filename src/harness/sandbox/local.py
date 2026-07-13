@@ -20,3 +20,9 @@ class LocalSandboxProvider:
 
     async def destroy(self, handle: SandboxHandle) -> None:
         shutil.rmtree(handle.path, ignore_errors=True)
+
+    async def prepare(self, handle: SandboxHandle) -> None:
+        del handle
+
+    async def collect(self, handle: SandboxHandle) -> None:
+        del handle
