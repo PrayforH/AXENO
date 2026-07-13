@@ -40,7 +40,9 @@ def _domain_tool(
         ToolCallStartEvent(
             tool_call_id=tool_call_id,
             tool_call_name=name,
-            parent_message_id=f"assistant-{event.run_id}",
+            parent_message_id=str(
+                event.payload.get("message_id", f"assistant-{event.run_id}")
+            ),
         ),
         ToolCallArgsEvent(
             tool_call_id=tool_call_id,

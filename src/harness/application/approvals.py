@@ -49,6 +49,7 @@ class ApprovalService:
         run_id: str,
         tool_call_id: str,
         reason: str,
+        message_id: str | None = None,
     ) -> ApprovalRequest:
         existing = await self._approvals.find_by_tool_call(tenant_id, run_id, tool_call_id)
         if existing is not None:
@@ -68,12 +69,15 @@ class ApprovalService:
             created_at=now,
         )
         await self._approvals.add(approval)
+        payload = approval.model_dump(mode="json")
+        if message_id is not None:
+            payload["message_id"] = message_id
         await self._events.append(
             tenant_id=tenant_id,
             run_id=run_id,
             session_id=run.session_id,
             event_type="approval.requested",
-            payload=approval.model_dump(mode="json"),
+            payload=payload,
         )
         await self._move(run, RunStatus.WAITING_APPROVAL)
         return approval

@@ -3,11 +3,22 @@
 import asyncio
 import os
 from pathlib import Path
+from typing import TypedDict
 
 from httpx import AsyncClient
 
 DEFAULT_MANIFEST = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 HEADERS = {"X-Tenant-ID": "local", "X-User-ID": "developer"}
+
+
+class LocalClientOptions(TypedDict):
+    base_url: str
+    timeout: int
+    trust_env: bool
+
+
+def local_client_options(api_url: str) -> LocalClientOptions:
+    return {"base_url": api_url, "timeout": 10, "trust_env": False}
 
 
 async def bootstrap_local_agent(
@@ -25,7 +36,7 @@ async def bootstrap_local_agent(
 
 async def main() -> None:
     api_url = os.getenv("HARNESS_API_URL", "http://127.0.0.1:8000")
-    async with AsyncClient(base_url=api_url, timeout=10) as client:
+    async with AsyncClient(**local_client_options(api_url)) as client:
         await bootstrap_local_agent(client)
     print("Local Agent: echo-agent@0.1.0 ready")
 

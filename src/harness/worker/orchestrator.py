@@ -1,6 +1,7 @@
 """Coordinates one Run across repositories, Sandbox and Agent runtime."""
 
 from typing import Any, cast
+from uuid import uuid4
 
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
@@ -111,33 +112,51 @@ class RunOrchestrator:
                     event_type="run.resumed",
                 )
             context = RuntimeContext(run=run, session=session, workspace=handle.path)
+            active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):
+                payload = dict(runtime_event.payload)
+                if runtime_event.type == "message.start":
+                    active_message_id = str(
+                        payload.get("message_id")
+                        or f"assistant-{run_id}-{uuid4().hex}"
+                    )
+                    payload["message_id"] = active_message_id
+                elif runtime_event.type in {"message.delta", "message.completed"}:
+                    active_message_id = str(
+                        payload.get("message_id")
+                        or active_message_id
+                        or f"assistant-{run_id}-{uuid4().hex}"
+                    )
+                    payload["message_id"] = active_message_id
                 if runtime_event.type == "artifact.output" and self._artifacts is not None:
-                    relative_path = str(runtime_event.payload.get("path", ""))
+                    relative_path = str(payload.get("path", ""))
                     artifact_path = (handle.path / relative_path).resolve()
                     if not artifact_path.is_relative_to(handle.path.resolve()):
                         raise ValueError("runtime artifact path escaped the workspace")
                     artifact = await self._artifacts.upload(
                         tenant_id=tenant_id,
                         run_id=run_id,
-                        name=str(runtime_event.payload.get("name", artifact_path.name)),
+                        name=str(payload.get("name", artifact_path.name)),
                         media_type=str(
-                            runtime_event.payload.get("media_type", "application/octet-stream")
+                            payload.get("media_type", "application/octet-stream")
                         ),
                         content=artifact_path.read_bytes(),
                     )
+                    artifact_payload = artifact.model_dump(mode="json")
+                    if active_message_id is not None:
+                        artifact_payload["message_id"] = active_message_id
                     await self._events.append(
                         tenant_id=tenant_id,
                         run_id=run_id,
                         session_id=run.session_id,
                         event_type="artifact.ready",
-                        payload=artifact.model_dump(mode="json"),
+                        payload=artifact_payload,
                     )
                     continue
                 if runtime_event.type == "tool.request" and self._policy is not None:
-                    tool_name = str(runtime_event.payload.get("name", ""))
-                    tool_call_id = str(runtime_event.payload.get("tool_call_id", ""))
-                    arguments = runtime_event.payload.get("arguments", {})
+                    tool_name = str(payload.get("name", ""))
+                    tool_call_id = str(payload.get("tool_call_id", ""))
+                    arguments = payload.get("arguments", {})
                     if not isinstance(arguments, dict):
                         arguments = {}
                     typed_arguments = cast(dict[str, Any], arguments)
@@ -173,8 +192,17 @@ class RunOrchestrator:
                             run_id=run_id,
                             tool_call_id=tool_call_id,
                             reason=result.reason,
+                            message_id=active_message_id,
                         )
                         if approval.status.value == "pending":
+                            if active_message_id is not None:
+                                await self._events.append(
+                                    tenant_id=tenant_id,
+                                    run_id=run_id,
+                                    session_id=run.session_id,
+                                    event_type="message.completed",
+                                    payload={"message_id": active_message_id},
+                                )
                             return await self._runs.get(tenant_id, run_id)
                     await self._events.append(
                         tenant_id=tenant_id,
@@ -189,8 +217,10 @@ class RunOrchestrator:
                     run_id=run_id,
                     session_id=run.session_id,
                     event_type=runtime_event.type,
-                    payload=runtime_event.payload,
+                    payload=payload,
                 )
+                if runtime_event.type == "message.completed":
+                    active_message_id = None
             if self._workspaces is not None:
                 snapshot = await self._workspaces.archive(
                     tenant_id=tenant_id,

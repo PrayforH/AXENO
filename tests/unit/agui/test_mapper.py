@@ -48,6 +48,7 @@ def test_maps_tool_and_domain_events_to_tool_calls() -> None:
                 "approval_id": "approval-1",
                 "tool_call_id": "tool-1",
                 "reason": "Write requires approval",
+                "message_id": "assistant-approval-segment",
             },
         )
     )
@@ -75,6 +76,9 @@ def test_maps_tool_and_domain_events_to_tool_calls() -> None:
     ]
     assert approval[0].model_dump(by_alias=True)["toolCallName"] == (
         "harness_request_approval"
+    )
+    assert approval[0].model_dump(by_alias=True)["parentMessageId"] == (
+        "assistant-approval-segment"
     )
     assert json.loads(approval[1].model_dump(by_alias=True)["delta"]) == {
         "approval_id": "approval-1",

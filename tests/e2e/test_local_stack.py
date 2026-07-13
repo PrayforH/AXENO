@@ -2,7 +2,9 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_memory_app
-from scripts.bootstrap_local_agent import bootstrap_local_agent
+from harness.api.dependencies import build_memory_container
+from harness.core.models import ApprovalStatus, RunStatus
+from scripts.bootstrap_local_agent import bootstrap_local_agent, local_client_options
 from scripts.e2e_fake_runtime import run_fake_e2e
 
 
@@ -37,3 +39,51 @@ async def test_local_bootstrap_publishes_default_agent_for_agui() -> None:
 
     assert response.status_code == 200
     assert '"type":"RUN_FINISHED"' in response.text
+
+
+def test_local_bootstrap_does_not_route_loopback_through_system_proxy() -> None:
+    assert local_client_options("http://127.0.0.1:8000") == {
+        "base_url": "http://127.0.0.1:8000",
+        "timeout": 10,
+        "trust_env": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> None:
+    container = build_memory_container()
+    await container.agents.publish("local", "tests/fixtures/agents/echo-agent/agent.yaml")
+    session = await container.sessions.create(
+        "local", "developer", "echo-agent", "0.1.0"
+    )
+    run = await container.runs.create(
+        "local",
+        session.session_id,
+        "approval-message-lifecycle",
+        input={"prompt": "[approval] [artifact] verify"},
+    )
+
+    paused = await container.worker.execute("local", run.run_id)
+    assert paused.status is RunStatus.WAITING_APPROVAL
+    paused_events = await container.events.list_after("local", run.run_id, 0)
+    assert paused_events[-1].type == "message.completed"
+
+    approval_event = next(
+        item for item in paused_events if item.type == "approval.requested"
+    )
+    await container.approvals.decide(
+        tenant_id="local",
+        approval_id=str(approval_event.payload["approval_id"]),
+        decision=ApprovalStatus.APPROVED,
+    )
+    completed = await container.worker.execute("local", run.run_id)
+    assert completed.status is RunStatus.SUCCEEDED
+
+    all_events = await container.events.list_after("local", run.run_id, 0)
+    message_ids = [
+        str(item.payload["message_id"])
+        for item in all_events
+        if item.type == "message.start"
+    ]
+    assert len(message_ids) == 2
+    assert len(set(message_ids)) == 2
