@@ -6,6 +6,12 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+extensions:
+  basicauth/client:
+    client_auth:
+      username: ${env:LANGFUSE_PUBLIC_KEY}
+      password: ${env:LANGFUSE_SECRET_KEY}
+
 processors:
   memory_limiter:
     check_interval: 5s
@@ -17,14 +23,15 @@ exporters:
   otlphttp/langfuse:
     # Include /api/public/otel; Langfuse currently supports OTLP/HTTP, not gRPC.
     endpoint: ${env:LANGFUSE_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/client
     headers:
-      Authorization: ${env:LANGFUSE_AUTHORIZATION}
       x-langfuse-ingestion-version: "4"
 
 service:
+  extensions: [basicauth/client]
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlphttp/langfuse]
-

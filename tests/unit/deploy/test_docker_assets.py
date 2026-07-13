@@ -5,6 +5,7 @@ import yaml
 
 ROOT = Path(__file__).parents[3]
 COMPOSE_PATH = ROOT / "deploy/docker-compose/compose.yaml"
+COLLECTOR_PATH = ROOT / "deploy/otel-collector/collector.yaml"
 
 
 def compose() -> dict[str, Any]:
@@ -65,7 +66,48 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "HARNESS_NEW_API_BASE_URL=" in values
     assert "MINIO_ROOT_PASSWORD=" in values
     assert "LANGFUSE_OTLP_ENDPOINT=" in values
-    assert "LANGFUSE_AUTHORIZATION=" in values
+    assert "LANGFUSE_PUBLIC_KEY=" in values
+    assert "LANGFUSE_SECRET_KEY=" in values
+    assert "LANGFUSE_ENVIRONMENT=" in values
+    assert "LANGFUSE_AUTHORIZATION=" not in values
+
+
+def test_external_langfuse_collector_uses_basic_auth() -> None:
+    collector = cast(dict[str, Any], yaml.safe_load(COLLECTOR_PATH.read_text()))
+
+    assert collector["extensions"]["basicauth/client"]["client_auth"] == {
+        "username": "${env:LANGFUSE_PUBLIC_KEY}",
+        "password": "${env:LANGFUSE_SECRET_KEY}",
+    }
+    exporter = collector["exporters"]["otlphttp/langfuse"]
+    assert exporter["auth"]["authenticator"] == "basicauth/client"
+    assert exporter["headers"]["x-langfuse-ingestion-version"] == "4"
+    assert "Authorization" not in exporter["headers"]
+    assert collector["service"]["extensions"] == ["basicauth/client"]
+
+
+def test_observability_profile_scopes_external_langfuse_secrets() -> None:
+    services = cast(dict[str, Any], compose()["services"])
+    collector = cast(dict[str, Any], services["otel-collector"])
+    environment = cast(dict[str, Any], collector["environment"])
+
+    assert collector["profiles"] == ["observability"]
+    assert environment == {
+        "LANGFUSE_OTLP_ENDPOINT": "${LANGFUSE_OTLP_ENDPOINT:-}",
+        "LANGFUSE_PUBLIC_KEY": "${LANGFUSE_PUBLIC_KEY:-}",
+        "LANGFUSE_SECRET_KEY": "${LANGFUSE_SECRET_KEY:-}",
+    }
+    assert collector["ports"] == [
+        "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317",
+        "127.0.0.1:${OTEL_HTTP_PORT:-4318}:4318",
+    ]
+    for name in ("api", "worker"):
+        service_environment = cast(dict[str, Any], services[name]["environment"])
+        assert service_environment["HARNESS_OTEL_ENVIRONMENT"] == (
+            "${LANGFUSE_ENVIRONMENT:-production}"
+        )
+        assert "LANGFUSE_PUBLIC_KEY" not in service_environment
+        assert "LANGFUSE_SECRET_KEY" not in service_environment
 
 
 def test_dockerignore_excludes_secrets_and_build_outputs() -> None:
