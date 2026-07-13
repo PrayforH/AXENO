@@ -3,7 +3,13 @@
 from collections.abc import AsyncIterator, Callable
 from typing import cast
 
-from claude_agent_sdk import ClaudeAgentOptions, SessionStore, query
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    SessionStore,
+    StreamEvent,
+    query,
+)
 
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
@@ -81,6 +87,45 @@ class ClaudeSdkRuntime:
         yield RuntimeEvent(type="model.route.selected", payload=decision.event_payload)
         prompt = str(context.run.input.get("prompt", ""))
         options = self._options(context, decision.route)
+        partial_text_seen = False
+        stream_message_open = False
         async for message in self._query(prompt, options):
-            for event in map_sdk_message(message):
+            mapped = map_sdk_message(message)
+            if isinstance(message, StreamEvent):
+                for event in mapped:
+                    if event.type == "message.start":
+                        if not stream_message_open:
+                            stream_message_open = True
+                            yield event
+                    elif event.type == "message.delta":
+                        partial_text_seen = True
+                        if not stream_message_open:
+                            stream_message_open = True
+                            yield RuntimeEvent(type="message.start")
+                        yield event
+                    elif event.type == "message.completed":
+                        if stream_message_open:
+                            stream_message_open = False
+                            yield event
+                    else:
+                        yield event
+                continue
+            if isinstance(message, AssistantMessage):
+                if partial_text_seen:
+                    for event in mapped:
+                        if event.type != "message.delta":
+                            yield event
+                    partial_text_seen = False
+                    continue
+                contains_text = any(event.type == "message.delta" for event in mapped)
+                if contains_text:
+                    yield RuntimeEvent(type="message.start")
+                for event in mapped:
+                    yield event
+                if contains_text:
+                    yield RuntimeEvent(type="message.completed")
+                continue
+            for event in mapped:
                 yield event
+        if stream_message_open:
+            yield RuntimeEvent(type="message.completed")

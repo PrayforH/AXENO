@@ -43,6 +43,24 @@ def test_maps_partial_text_and_subagent_lifecycle() -> None:
     assert events[0].payload["parent_tool_use_id"] == "agent-tool-1"
 
 
+def test_maps_stream_message_lifecycle() -> None:
+    started = StreamEvent(
+        uuid="event-start",
+        session_id="session-1",
+        parent_tool_use_id=None,
+        event={"type": "message_start", "message": {}},
+    )
+    stopped = StreamEvent(
+        uuid="event-stop",
+        session_id="session-1",
+        parent_tool_use_id=None,
+        event={"type": "message_stop"},
+    )
+
+    assert [event.type for event in map_sdk_message(started)] == ["message.start"]
+    assert [event.type for event in map_sdk_message(stopped)] == ["message.completed"]
+
+
 def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
     result = ResultMessage(
         subtype="success",

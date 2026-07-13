@@ -84,7 +84,9 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
     assert [event.type for event in events] == [
         "model.route.selected",
+        "message.start",
         "message.delta",
+        "message.completed",
         "runtime.result",
     ]
     assert "registry-secret" not in repr(events)

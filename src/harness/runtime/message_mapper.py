@@ -56,6 +56,11 @@ def _map_stream(message: StreamEvent) -> list[RuntimeEvent]:
             )
         )
     event = message.event
+    event_type = event.get("type")
+    if event_type == "message_start":
+        events.append(RuntimeEvent(type="message.start"))
+    elif event_type == "message_stop":
+        events.append(RuntimeEvent(type="message.completed"))
     delta = event.get("delta", {})
     if isinstance(delta, dict):
         typed_delta = cast(dict[str, Any], delta)
