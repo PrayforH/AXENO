@@ -19,6 +19,7 @@ from ag_ui.core import (
     ToolCallStartEvent,
 )
 
+from harness.agui.activity import activity_projection
 from harness.core.events import RunEvent
 
 
@@ -62,7 +63,7 @@ def _domain_tool(
     return projected
 
 
-def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
+def _map_standard_event(event: RunEvent) -> Sequence[BaseEvent]:
     message_id = str(event.payload.get("message_id", f"assistant-{event.run_id}"))
     if event.type == "run.queued":
         return [RunStartedEvent(thread_id=event.session_id, run_id=event.run_id)]
@@ -160,3 +161,16 @@ def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
             )
         ]
     return []
+
+
+def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
+    standard = list(_map_standard_event(event))
+    activity = activity_projection(event)
+    if event.type in {
+        "run.succeeded",
+        "run.failed",
+        "run.rejected",
+        "run.timed_out",
+    }:
+        return [*activity, *standard]
+    return [*standard, *activity]

@@ -23,7 +23,10 @@ def test_maps_run_and_text_lifecycle_to_standard_events() -> None:
     text = map_harness_event(event("message.delta", {"text": "hello"}, 2))
     finished = map_harness_event(event("run.succeeded", sequence=3))
 
-    assert started[0].model_dump(by_alias=True)["type"] == "RUN_STARTED"
+    assert [item.model_dump(by_alias=True)["type"] for item in started] == [
+        "RUN_STARTED",
+        "ACTIVITY_SNAPSHOT",
+    ]
     assert text[0].model_dump(by_alias=True) == {
         "type": "TEXT_MESSAGE_CONTENT",
         "timestamp": None,
@@ -31,7 +34,10 @@ def test_maps_run_and_text_lifecycle_to_standard_events() -> None:
         "messageId": "assistant-run-1",
         "delta": "hello",
     }
-    assert finished[0].model_dump(by_alias=True)["type"] == "RUN_FINISHED"
+    assert [item.model_dump(by_alias=True)["type"] for item in finished] == [
+        "ACTIVITY_DELTA",
+        "RUN_FINISHED",
+    ]
 
 
 def test_maps_tool_and_domain_events_to_tool_calls() -> None:
@@ -68,11 +74,13 @@ def test_maps_tool_and_domain_events_to_tool_calls() -> None:
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
+        "ACTIVITY_DELTA",
     ]
     assert [item.model_dump(by_alias=True)["type"] for item in approval] == [
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
+        "ACTIVITY_DELTA",
     ]
     assert approval[0].model_dump(by_alias=True)["toolCallName"] == (
         "harness_request_approval"
@@ -102,6 +110,7 @@ def test_keeps_subagent_events_as_versioned_activity() -> None:
     activity = map_harness_event(event("subagent.started", {"name": "researcher"}))
 
     assert activity[0].model_dump(by_alias=True)["name"] == "harness.subagent.v1"
+    assert activity[1].model_dump(by_alias=True)["type"] == "ACTIVITY_DELTA"
 
 
 def test_maps_approval_decision_to_matching_tool_result() -> None:
@@ -119,6 +128,7 @@ def test_maps_approval_decision_to_matching_tool_result() -> None:
     assert approved[0].model_dump(by_alias=True)["toolCallId"] == (
         "harness-approval-approval-1"
     )
+    assert approved[1].model_dump(by_alias=True)["type"] == "ACTIVITY_DELTA"
 
 
 def test_artifact_projection_completes_its_tool_call() -> None:
@@ -131,7 +141,8 @@ def test_artifact_projection_completes_its_tool_call() -> None:
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
         "TOOL_CALL_RESULT",
+        "ACTIVITY_DELTA",
     ]
-    assert projected[-1].model_dump(by_alias=True)["toolCallId"] == (
+    assert projected[-2].model_dump(by_alias=True)["toolCallId"] == (
         "harness-artifact-artifact-1"
     )

@@ -59,6 +59,8 @@ async def test_post_agui_runs_agent_and_streams_standard_events() -> None:
         and event.get("delta") == "Echo: hello"
         for event in events
     )
+    assert sum(event.get("type") == "ACTIVITY_SNAPSHOT" for event in events) == 1
+    assert any(event.get("type") == "ACTIVITY_DELTA" for event in events)
     assert events[-1] == {
         "type": "RUN_FINISHED",
         "threadId": "thread-a",

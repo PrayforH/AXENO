@@ -33,6 +33,8 @@ async def test_agui_stream_preserves_harness_event_id_for_reconnect() -> None:
         )
 
     assert response.status_code == 200
-    assert "id: 2\n" in response.text
+    assert "id: 2:1\n" in response.text
+    assert "id: 2:2\n" in response.text
     assert '"type":"STATE_SNAPSHOT"' in response.text
+    assert '"type":"ACTIVITY_DELTA"' in response.text
     assert "id: 1\n" not in response.text
