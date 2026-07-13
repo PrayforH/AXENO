@@ -42,6 +42,26 @@ def test_trace_context_propagates_api_to_worker_runtime() -> None:
     assert by_name["runtime.execute"].parent is not None
 
 
+def test_trace_resource_labels_the_deployment_environment() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(
+            otel_enabled=True,
+            otlp_endpoint="http://unused/v1/traces",
+            otel_environment="staging",
+        ),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+
+    with observability.span("environment.check"):
+        pass
+
+    resource = exporter.get_finished_spans()[0].resource
+    assert resource.attributes["service.name"] == "claude-agent-harness"
+    assert resource.attributes["deployment.environment.name"] == "staging"
+
+
 def test_span_records_failure_without_exporting_sensitive_attributes() -> None:
     exporter = InMemorySpanExporter()
     observability = build_observability(

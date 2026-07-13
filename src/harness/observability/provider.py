@@ -94,9 +94,10 @@ def build_observability(
             endpoint=settings.otlp_endpoint,
             headers=_parse_headers(settings.otlp_headers.get_secret_value()),
         )
-    provider = TracerProvider(
-        resource=Resource.create({"service.name": settings.otel_service_name})
-    )
+    resource_attributes = {"service.name": settings.otel_service_name}
+    if settings.otel_environment:
+        resource_attributes["deployment.environment.name"] = settings.otel_environment
+    provider = TracerProvider(resource=Resource.create(resource_attributes))
     provider.add_span_processor(processor_factory(selected_exporter))
     return Observability(
         enabled=True,

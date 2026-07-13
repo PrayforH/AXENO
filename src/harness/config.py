@@ -55,3 +55,4 @@ class Settings(BaseSettings):
     otlp_endpoint: str = ""
     otlp_headers: SecretStr = SecretStr("")
     otel_service_name: str = "claude-agent-harness"
+    otel_environment: str = ""
