@@ -20,6 +20,7 @@ from harness.core.models import ApprovalStatus, Run, RunStatus, Session
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext
 from harness.runtime.sdk_tool_gate import SdkToolGate
+from harness.sandbox.base import SandboxIsolation
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
@@ -35,7 +36,11 @@ def _ids() -> Callable[[str], str]:
     return generate
 
 
-async def _arrange(tmp_path: Path):
+async def _arrange(
+    tmp_path: Path,
+    *,
+    sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE,
+):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
     event_repository = InMemoryEventRepository()
@@ -79,6 +84,12 @@ async def _arrange(tmp_path: Path):
             created_at=NOW,
         ),
         workspace=tmp_path,
+        sandbox_provider=(
+            "daytona"
+            if sandbox_isolation is SandboxIsolation.CONTAINER
+            else "local"
+        ),
+        sandbox_isolation=sandbox_isolation,
     )
     return gate, approval_service, runs, event_repository, context
 
@@ -193,3 +204,72 @@ async def test_ask_waits_inline_and_continues_only_after_approval(tmp_path: Path
     assert (await runs.get("tenant-a", "run-sdk")).status is RunStatus.RUNNING
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     assert emitted[-1].type == "tool.allowed"
+
+
+@pytest.mark.asyncio
+async def test_container_write_uses_trusted_context_without_approval(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(
+        tmp_path,
+        sandbox_isolation=SandboxIsolation.CONTAINER,
+    )
+
+    output = await asyncio.wait_for(
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Write",
+                {
+                    "file_path": "result.txt",
+                    "content": "done",
+                    "sandbox_isolation": "workspace",
+                },
+                "tool-container-write",
+            ),
+        ),
+        timeout=0.1,
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+    assert emitted[0].payload["sandbox"] == {
+        "provider": "daytona",
+        "isolation": "container",
+    }
+    assert not any(event.type == "approval.requested" for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
+    gate, approvals, _, events, context = await _arrange(tmp_path)
+    task = asyncio.create_task(
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Write",
+                {"file_path": "result.txt", "content": "done"},
+                "tool-local-write",
+            ),
+        )
+    )
+    requested = []
+    for _ in range(20):
+        emitted = await events.list_after("tenant-a", "run-sdk", 0)
+        requested = [event for event in emitted if event.type == "approval.requested"]
+        if requested:
+            break
+        await asyncio.sleep(0)
+    assert requested
+    approval_id = str(requested[0].payload["approval_id"])
+
+    await approvals.decide(
+        tenant_id="tenant-a",
+        approval_id=approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+
+    assert _decision(await task) == "allow"

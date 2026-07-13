@@ -86,6 +86,10 @@ class SdkToolGate:
             "tool_call_id": tool_call_id,
             "arguments": arguments,
             "policy_checked": True,
+            "sandbox": {
+                "provider": context.sandbox_provider,
+                "isolation": context.sandbox_isolation.value,
+            },
         }
         relative_input_path = staged_read_path(
             request_payload,
@@ -113,6 +117,7 @@ class SdkToolGate:
                 agent_name=context.session.agent_name,
                 tool_name=tool_name,
                 arguments=arguments,
+                sandbox_isolation=context.sandbox_isolation,
             )
         )
 

@@ -264,6 +264,8 @@ class RunOrchestrator:
                 run=run,
                 session=session,
                 workspace=handle.path,
+                sandbox_provider=handle.provider,
+                sandbox_isolation=handle.isolation_level,
                 input_files=tuple(
                     path
                     for item in staged_inputs

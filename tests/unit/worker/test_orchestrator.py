@@ -21,6 +21,7 @@ from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.fake import FakeRuntime
 from harness.sandbox.local import LocalSandboxProvider
+from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
@@ -55,6 +56,28 @@ class ToolRuntime(FakeRuntime):
         yield RuntimeEvent(type="message.completed")
 
 
+class CapturingRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[RuntimeContext] = []
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        self.contexts.append(context)
+        async for event in super().execute(context):
+            yield event
+
+
+class ContainerSandboxProvider(LocalSandboxProvider):
+    async def provision(self, run: Run) -> SandboxHandle:
+        handle = await super().provision(run)
+        return handle.model_copy(
+            update={
+                "provider": "daytona",
+                "isolation_level": SandboxIsolation.CONTAINER,
+            }
+        )
+
+
 async def arrange(
     tmp_path: Path,
     *,
@@ -62,12 +85,13 @@ async def arrange(
     runtime_override: FakeRuntime | None = None,
     policy: PolicyEngine | None = None,
     observability: Observability | None = None,
+    sandbox_override: SandboxProvider | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     event_repository = InMemoryEventRepository()
     runtime = runtime_override or FakeRuntime(fail=fail_runtime)
-    sandbox = LocalSandboxProvider(root=tmp_path)
+    sandbox = sandbox_override or LocalSandboxProvider(root=tmp_path)
     session = Session(
         session_id="session-1",
         tenant_id="tenant-a",
@@ -125,6 +149,22 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
         "run.succeeded",
     ]
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_passes_provisioned_sandbox_facts_to_runtime(tmp_path: Path) -> None:
+    runtime = CapturingRuntime()
+    orchestrator, _, _, _ = await arrange(
+        tmp_path,
+        runtime_override=runtime,
+        sandbox_override=ContainerSandboxProvider(root=tmp_path),
+    )
+
+    await orchestrator.execute("tenant-a", "run-1")
+
+    assert len(runtime.contexts) == 1
+    assert runtime.contexts[0].sandbox_provider == "daytona"
+    assert runtime.contexts[0].sandbox_isolation is SandboxIsolation.CONTAINER
 
 
 @pytest.mark.asyncio
