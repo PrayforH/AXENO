@@ -3,8 +3,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from harness.config import Settings
 from harness.core.models import Artifact, ArtifactStatus
+from harness.observability.provider import Observability, build_observability
 from harness.runtime.artifact_tools import (
     ArtifactPublisher,
     artifact_execution_context,
@@ -42,7 +46,10 @@ class FakeEvents:
 
 
 def publisher(
-    workspace: Path, *, limit: int = 32
+    workspace: Path,
+    *,
+    limit: int = 32,
+    observability: Observability | None = None,
 ) -> tuple[ArtifactPublisher, FakeArtifacts, FakeEvents, list[str]]:
     artifacts = FakeArtifacts()
     events = FakeEvents()
@@ -61,6 +68,7 @@ def publisher(
             events=events,
             sync_workspace=sync,
             max_file_bytes=limit,
+            observability=observability,
         ),
         artifacts,
         events,
@@ -85,6 +93,26 @@ async def test_publish_artifact_stores_file_then_emits_authoritative_event(
     assert result.artifact_id == "artifact-1"
     assert events.appended[0]["event_type"] == "artifact.ready"
     assert events.appended[0]["payload"]["sha256"] == hashlib.sha256(b"verified").hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_publish_artifact_emits_stage_trace_without_file_content(
+    tmp_path: Path,
+) -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    (tmp_path / "private.txt").write_bytes(b"private artifact body")
+    service, _, _, _ = publisher(tmp_path, observability=observability)
+
+    await service.publish(path="private.txt")
+
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["harness.artifact.publish"]
+    assert "private artifact body" not in repr(spans)
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from harness.adapters.memory import (
     InMemoryEventBus,
@@ -12,7 +14,9 @@ from harness.adapters.memory import (
     InMemorySessionRepository,
 )
 from harness.application.events import EventService
+from harness.config import Settings
 from harness.core.models import Run, RunStatus, Session
+from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.fake import FakeRuntime
@@ -57,6 +61,7 @@ async def arrange(
     fail_runtime: bool = False,
     runtime_override: FakeRuntime | None = None,
     policy: PolicyEngine | None = None,
+    observability: Observability | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -96,6 +101,7 @@ async def arrange(
         sandbox=sandbox,
         clock=lambda: NOW,
         policy=policy,
+        observability=observability,
     )
     return orchestrator, runtime, runs, event_repository
 
@@ -119,6 +125,32 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
         "run.succeeded",
     ]
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    orchestrator, _, _, _ = await arrange(
+        tmp_path, observability=observability
+    )
+
+    await orchestrator.execute("tenant-a", "run-1")
+
+    assert {span.name for span in exporter.get_finished_spans()} >= {
+        "harness.worker.run",
+        "harness.sandbox.provision",
+        "harness.memory.load",
+        "harness.input.process",
+        "harness.sandbox.prepare",
+        "harness.runtime.execute",
+        "harness.sandbox.collect",
+        "harness.sandbox.destroy",
+    }
 
 
 @pytest.mark.asyncio

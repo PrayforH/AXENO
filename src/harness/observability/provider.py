@@ -2,15 +2,17 @@
 
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
+from typing import cast
 
 from opentelemetry import propagate
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.trace import NoOpTracerProvider, Tracer
+from opentelemetry.trace import NoOpTracerProvider, Status, StatusCode, Tracer
 
 from harness.config import Settings
+from harness.observability.redaction import redact
 
 ProcessorFactory = Callable[[SpanExporter], SpanProcessor]
 
@@ -41,10 +43,24 @@ class Observability:
         attributes: Mapping[str, str | bool | int | float] | None = None,
     ) -> Generator[None]:
         context = propagate.extract(dict(carrier)) if carrier else None
+        safe_attributes = cast(
+            dict[str, str | bool | int | float],
+            redact(dict(attributes or {})),
+        )
         with self.tracer.start_as_current_span(
-            name, context=context, attributes=dict(attributes or {})
-        ):
-            yield
+            name,
+            context=context,
+            attributes=safe_attributes,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            try:
+                yield
+            except BaseException as error:
+                error_type = type(error).__name__
+                span.add_event("exception", {"exception.type": error_type})
+                span.set_status(Status(StatusCode.ERROR, error_type))
+                raise
 
 
 def _parse_headers(value: str) -> dict[str, str]:

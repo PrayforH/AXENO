@@ -192,6 +192,7 @@ def build_memory_container(
                 events=event_service,
             ),
             memory_service=memory_service,
+            observability=observability,
         )
     worker = RunOrchestrator(
         sessions=sessions,

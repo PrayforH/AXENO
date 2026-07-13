@@ -1,7 +1,7 @@
 """Claude Agent SDK runtime adapter with explicit gateway routing."""
 
 from collections.abc import AsyncIterator, Callable
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from typing import Any, cast
 
 from claude_agent_sdk import (
@@ -18,6 +18,7 @@ from harness.application.memory import UserMemoryService
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelRoute
+from harness.observability.provider import Observability
 from harness.runtime.artifact_tools import (
     artifact_execution_context,
     create_artifact_mcp_server,
@@ -52,6 +53,7 @@ class ClaudeSdkRuntime:
         tool_resolver: ToolResolver | None = None,
         tool_gate: ToolGate | None = None,
         memory_service: UserMemoryService | None = None,
+        observability: Observability | None = None,
     ) -> None:
         self._agent_version = agent_version
         self._snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
@@ -63,6 +65,27 @@ class ClaudeSdkRuntime:
         self._tool_resolver = tool_resolver or ToolResolver()
         self._tool_gate = tool_gate
         self._memory_service = memory_service
+        self._observability = observability
+
+    def _span(
+        self,
+        name: str,
+        *,
+        run_id: str,
+    ) -> AbstractContextManager[None]:
+        if self._observability is None:
+            return nullcontext()
+        return self._observability.span(name, attributes={"run.id": run_id})
+
+    async def _model_messages(
+        self,
+        messages: AsyncIterator[object],
+        *,
+        run_id: str,
+    ) -> AsyncIterator[object]:
+        with self._span("harness.model.run", run_id=run_id):
+            async for message in messages:
+                yield message
 
     async def _options(
         self, context: RuntimeContext, route: ModelRoute
@@ -174,7 +197,8 @@ class ClaudeSdkRuntime:
                 f"{inventory}\n"
                 "Use the available file tools to inspect them when relevant."
             )
-        options, resolved_tools = await self._options(context, decision.route)
+        with self._span("harness.mcp.resolve", run_id=context.run.run_id):
+            options, resolved_tools = await self._options(context, decision.route)
         partial_text_seen = False
         stream_message_open = False
         with ExitStack() as execution_context:
@@ -197,7 +221,9 @@ class ClaudeSdkRuntime:
                     options=options,
                     transport=transport,
                 )
-            async for message in query_messages:
+            async for message in self._model_messages(
+                query_messages, run_id=context.run.run_id
+            ):
                 mapped = [
                     self._redact_event(event, resolved_tools)
                     for event in map_sdk_message(message)

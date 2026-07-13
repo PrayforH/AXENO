@@ -6,6 +6,7 @@ from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelCompatibility, ModelRoute
 from harness.core.ports import AgentRegistry
+from harness.observability.provider import Observability
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.claude_sdk import ClaudeSdkRuntime, QueryFactory
@@ -26,6 +27,7 @@ class RegistryClaudeRuntime:
         tool_gate: ToolGate | None = None,
         memory_service: UserMemoryService | None = None,
         session_store_factory: Callable[[str], object] | None = None,
+        observability: Observability | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
@@ -36,6 +38,7 @@ class RegistryClaudeRuntime:
         self._tool_gate = tool_gate
         self._memory_service = memory_service
         self._session_store_factory = session_store_factory
+        self._observability = observability
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
@@ -76,6 +79,7 @@ class RegistryClaudeRuntime:
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
                 memory_service=self._memory_service,
+                observability=self._observability,
                 session_store=(
                     self._session_store_factory(session.tenant_id)
                     if self._session_store_factory is not None
@@ -92,6 +96,7 @@ class RegistryClaudeRuntime:
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
                 memory_service=self._memory_service,
+                observability=self._observability,
                 session_store=(
                     self._session_store_factory(session.tenant_id)
                     if self._session_store_factory is not None

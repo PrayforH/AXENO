@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server
 
 from harness.core.models import Artifact
+from harness.observability.provider import Observability
 
 
 class ArtifactUploader(Protocol):
@@ -53,6 +54,7 @@ class ArtifactPublisher:
         events: ArtifactEventWriter,
         sync_workspace: Callable[[], Awaitable[None]],
         max_file_bytes: int,
+        observability: Observability | None = None,
     ) -> None:
         if max_file_bytes < 1:
             raise ValueError("artifact size limit must be positive")
@@ -64,6 +66,7 @@ class ArtifactPublisher:
         self._events = events
         self._sync_workspace = sync_workspace
         self._max_file_bytes = max_file_bytes
+        self._observability = observability
 
     async def publish(
         self,
@@ -71,6 +74,21 @@ class ArtifactPublisher:
         path: str,
         name: str | None = None,
         media_type: str | None = None,
+    ) -> Artifact:
+        if self._observability is None:
+            return await self._publish(path=path, name=name, media_type=media_type)
+        with self._observability.span(
+            "harness.artifact.publish",
+            attributes={"run.id": self._run_id},
+        ):
+            return await self._publish(path=path, name=name, media_type=media_type)
+
+    async def _publish(
+        self,
+        *,
+        path: str,
+        name: str | None,
+        media_type: str | None,
     ) -> Artifact:
         relative = PurePosixPath(path)
         if not path.strip() or relative.is_absolute() or ".." in relative.parts:

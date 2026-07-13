@@ -1,5 +1,6 @@
 """Conservative recursive redaction before telemetry export."""
 
+import hashlib
 from typing import Any, cast
 
 _SENSITIVE_MARKERS = (
@@ -7,11 +8,22 @@ _SENSITIVE_MARKERS = (
     "apikey",
     "authorization",
     "auth_token",
+    "file.content",
+    "file_content",
+    "input.content",
+    "input_content",
+    "memory",
     "password",
     "prompt",
     "secret",
     "token",
 )
+
+
+def correlation_hash(value: str) -> str:
+    """Return a stable, non-reversible short identity correlation value."""
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def redact(value: Any) -> Any:

@@ -14,8 +14,11 @@ from claude_agent_sdk import (
     TextBlock,
 )
 from claude_agent_sdk.types import HookEvent
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 
+from harness.config import Settings
 from harness.core.manifest import ToolSpec, load_manifest
 from harness.core.models import (
     AgentVersion,
@@ -26,6 +29,7 @@ from harness.core.models import (
     RunStatus,
     Session,
 )
+from harness.observability.provider import build_observability
 from harness.runtime.base import RuntimeContext
 from harness.runtime.claude_sdk import ClaudeSdkRuntime
 from harness.runtime.mcp_credentials import RequestMcpCredentialProvider
@@ -82,12 +86,19 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
         )
 
     gate = RecordingToolGate()
+    trace_exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=trace_exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
     runtime = ClaudeSdkRuntime(
         agent_version=version,
         routes=[route],
         route_secrets={"new-api-default": "super-secret"},
         query_factory=fake_query,
         tool_gate=gate,
+        observability=observability,
     )
     now = datetime.now(UTC)
     context = RuntimeContext(
@@ -131,6 +142,10 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
         "runtime.result",
     ]
     assert "super-secret" not in repr(events)
+    assert {span.name for span in trace_exporter.get_finished_spans()} >= {
+        "harness.mcp.resolve",
+        "harness.model.run",
+    }
 
 
 @pytest.mark.asyncio

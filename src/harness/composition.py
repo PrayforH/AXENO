@@ -210,6 +210,7 @@ def build_production_container(settings: Settings) -> ApiContainer:
         session_store_factory=lambda tenant_id: PostgresSessionStore(
             sessions, tenant_id=tenant_id
         ),
+        observability=observability,
     )
     worker = RunOrchestrator(
         sessions=session_repository,

@@ -1,5 +1,7 @@
 """Coordinates one Run across repositories, Sandbox and Agent runtime."""
 
+from collections.abc import AsyncIterator, Mapping
+from contextlib import AbstractContextManager, nullcontext
 from typing import Any, cast
 from uuid import uuid4
 
@@ -19,6 +21,7 @@ from harness.core.models import ExecutionIdentity, Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
+from harness.observability.redaction import correlation_hash
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
 from harness.runtime.artifact_tools import ArtifactPublisher
@@ -69,6 +72,29 @@ class RunOrchestrator:
         self._workspace_policy_resolver = workspace_policy_resolver
         self._output_artifact_max_bytes = output_artifact_max_bytes
 
+    def _stage(
+        self,
+        name: str,
+        attributes: Mapping[str, str | bool | int | float] | None = None,
+    ) -> AbstractContextManager[None]:
+        if self._observability is None:
+            return nullcontext()
+        return self._observability.span(name, attributes=attributes)
+
+    async def _runtime_events(
+        self, context: RuntimeContext
+    ) -> AsyncIterator[Any]:
+        with self._stage(
+            "harness.runtime.execute",
+            {
+                "run.id": context.run.run_id,
+                "agent.name": context.session.agent_name,
+                "agent.version": context.session.agent_version,
+            },
+        ):
+            async for event in self._runtime.execute(context):
+                yield event
+
     async def _move(
         self,
         current: Run,
@@ -104,7 +130,10 @@ class RunOrchestrator:
         with self._observability.span(
             "harness.worker.run",
             carrier=run.trace_context,
-            attributes={"run.id": run_id, "tenant.id": tenant_id},
+            attributes={
+                "run.id": run_id,
+                "tenant.hash": correlation_hash(tenant_id),
+            },
         ):
             return await self._execute(tenant_id, run_id)
 
@@ -122,7 +151,8 @@ class RunOrchestrator:
         try:
             if not is_resume:
                 run = await self._move(run, RunStatus.PROVISIONING)
-            handle = await self._sandbox.provision(run)
+            with self._stage("harness.sandbox.provision", {"run.id": run_id}):
+                handle = await self._sandbox.provision(run)
             session = await self._sessions.get(tenant_id, run.session_id)
             workspace_policy = (
                 await self._workspace_policy_resolver(
@@ -132,11 +162,12 @@ class RunOrchestrator:
                 else WorkspacePolicy()
             )
             if self._workspaces is not None and workspace_policy.restore_session:
-                restored = await self._workspaces.restore_latest(
-                    tenant_id=tenant_id,
-                    session_id=session.session_id,
-                    workspace=handle.path,
-                )
+                with self._stage("harness.workspace.restore", {"run.id": run_id}):
+                    restored = await self._workspaces.restore_latest(
+                        tenant_id=tenant_id,
+                        session_id=session.session_id,
+                        workspace=handle.path,
+                    )
                 if restored is not None:
                     await self._events.append(
                         tenant_id=tenant_id,
@@ -154,11 +185,12 @@ class RunOrchestrator:
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
             )
-            memory_projection = (
-                await self._memory.projection(identity)
-                if self._memory is not None
-                else ""
-            )
+            with self._stage("harness.memory.load", {"run.id": run_id}):
+                memory_projection = (
+                    await self._memory.projection(identity)
+                    if self._memory is not None
+                    else ""
+                )
             raw_input_artifact_ids: object = run.input.get("input_artifact_ids", [])
             if not isinstance(raw_input_artifact_ids, list):
                 raise ValueError("run input_artifact_ids must be a list of strings")
@@ -171,17 +203,21 @@ class RunOrchestrator:
                 input_artifact_ids.append(item)
             if input_artifact_ids and self._input_artifacts is None:
                 raise RuntimeError("input artifact service is not configured")
-            staged_inputs = (
-                await self._input_artifacts.stage_for_run(
-                    tenant_id=tenant_id,
-                    user_id=session.user_id,
-                    input_artifact_ids=input_artifact_ids,
-                    workspace=handle.path,
-                    identity=identity,
+            with self._stage(
+                "harness.input.process",
+                {"run.id": run_id, "input.count": len(input_artifact_ids)},
+            ):
+                staged_inputs = (
+                    await self._input_artifacts.stage_for_run(
+                        tenant_id=tenant_id,
+                        user_id=session.user_id,
+                        input_artifact_ids=input_artifact_ids,
+                        workspace=handle.path,
+                        identity=identity,
+                    )
+                    if self._input_artifacts is not None
+                    else []
                 )
-                if self._input_artifacts is not None
-                else []
-            )
             for staged in staged_inputs:
                 await self._events.append(
                     tenant_id=tenant_id,
@@ -194,7 +230,8 @@ class RunOrchestrator:
                 handle.path,
                 tuple(staged.path for staged in staged_inputs),
             )
-            await self._sandbox.prepare(handle)
+            with self._stage("harness.sandbox.prepare", {"run.id": run_id}):
+                await self._sandbox.prepare(handle)
             staged_read_tool_calls: set[str] = set()
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
@@ -218,6 +255,7 @@ class RunOrchestrator:
                     events=self._events,
                     sync_workspace=sync_workspace,
                     max_file_bytes=self._output_artifact_max_bytes,
+                    observability=self._observability,
                 )
                 if self._artifacts is not None
                 else None
@@ -240,7 +278,7 @@ class RunOrchestrator:
                 artifact_publisher=artifact_publisher,
             )
             active_message_id: str | None = None
-            async for runtime_event in self._runtime.execute(context):
+            async for runtime_event in self._runtime_events(context):
                 latest = await self._runs.get(tenant_id, run_id)
                 if latest.status is RunStatus.CANCELLING:
                     return await self._move(latest, RunStatus.CANCELLED)
@@ -319,15 +357,18 @@ class RunOrchestrator:
                     artifact_path = (handle.path / relative_path).resolve()
                     if not artifact_path.is_relative_to(handle.path.resolve()):
                         raise ValueError("runtime artifact path escaped the workspace")
-                    artifact = await self._artifacts.upload(
-                        tenant_id=tenant_id,
-                        run_id=run_id,
-                        name=str(payload.get("name", artifact_path.name)),
-                        media_type=str(
-                            payload.get("media_type", "application/octet-stream")
-                        ),
-                        content=artifact_path.read_bytes(),
-                    )
+                    with self._stage(
+                        "harness.artifact.publish", {"run.id": run_id}
+                    ):
+                        artifact = await self._artifacts.upload(
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            name=str(payload.get("name", artifact_path.name)),
+                            media_type=str(
+                                payload.get("media_type", "application/octet-stream")
+                            ),
+                            content=artifact_path.read_bytes(),
+                        )
                     artifact_payload = artifact.model_dump(mode="json")
                     if active_message_id is not None:
                         artifact_payload["message_id"] = active_message_id
@@ -418,13 +459,15 @@ class RunOrchestrator:
                 )
                 if runtime_event.type == "message.completed":
                     active_message_id = None
-            await self._sandbox.collect(handle)
+            with self._stage("harness.sandbox.collect", {"run.id": run_id}):
+                await self._sandbox.collect(handle)
             if self._workspaces is not None and workspace_policy.archive_on_complete:
-                snapshot = await self._workspaces.archive(
-                    tenant_id=tenant_id,
-                    session_id=run.session_id,
-                    workspace=handle.path,
-                )
+                with self._stage("harness.workspace.archive", {"run.id": run_id}):
+                    snapshot = await self._workspaces.archive(
+                        tenant_id=tenant_id,
+                        session_id=run.session_id,
+                        workspace=handle.path,
+                    )
                 await self._events.append(
                     tenant_id=tenant_id,
                     run_id=run_id,
@@ -445,4 +488,5 @@ class RunOrchestrator:
             )
         finally:
             if handle is not None:
-                await self._sandbox.destroy(handle)
+                with self._stage("harness.sandbox.destroy", {"run.id": run_id}):
+                    await self._sandbox.destroy(handle)
