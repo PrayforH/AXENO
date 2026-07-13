@@ -99,6 +99,24 @@ workspace facade, and apply stop/archive/delete policies.
 Daytona is intentionally not emulated inside Compose. The deployment contains the
 Harness services and supplies Daytona connection settings for production.
 
+### Claude SDK execution inside Daytona
+
+The Claude Agent SDK default transport launches Claude Code on the Worker host and treats
+`cwd` as a local path. Merely synchronizing a Daytona workspace to a local directory would
+therefore leave Read, Bash, and other builtin tools running outside the advertised sandbox.
+
+The Daytona implementation instead provides a custom Claude SDK `Transport` that launches
+the pinned Claude Code CLI inside the Daytona sandbox. It uses a Daytona long-running
+process session, streams the CLI NDJSON stdout back to the SDK, sends control protocol and
+prompt input through the session command stdin API, and performs bounded termination in
+`close()`. The Daytona snapshot must contain the pinned Claude Code CLI and the declared
+runtime tools.
+
+The local provider continues to use the SDK's default subprocess transport. A contract
+test pins the low-level `Transport` interface because the SDK documents it as an unstable
+extension point. No provider may report a remote sandbox while executing builtin tools on
+the Worker filesystem.
+
 ### Workspace restore
 
 Before input staging, the orchestrator restores the most recent session workspace
@@ -216,6 +234,8 @@ Automated verification must cover:
 - BFF upload and SDK read of the fixture's unique marker;
 - credential isolation across concurrent users and redaction from events;
 - Local and mocked Daytona sandbox contract behavior;
+- Daytona transport stdin, NDJSON framing, termination, and remote working-directory
+  behavior without host-side tool execution;
 - workspace archive followed by restore in a later run;
 - cross-session memory injection and concurrent update protection;
 - fixtures for DOCX, XLSX, PPTX, PDF, text, and image processing;
@@ -226,4 +246,3 @@ Automated verification must cover:
 
 Optional external smoke tests cover a real Daytona service, real new-api model gateway,
 and a real Langfuse endpoint when credentials are supplied.
-
