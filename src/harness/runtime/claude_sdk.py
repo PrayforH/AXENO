@@ -1,7 +1,7 @@
 """Claude Agent SDK runtime adapter with explicit gateway routing."""
 
 from collections.abc import AsyncIterator, Callable
-from typing import cast
+from typing import Any, cast
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -17,10 +17,11 @@ from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelRoute
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.hooks import discard_sdk_stderr
+from harness.runtime.mcp_credentials import redact_mcp_credentials
 from harness.runtime.message_mapper import map_sdk_message
 from harness.runtime.model_router import ModelRouter
 from harness.runtime.sdk_tool_gate import ToolGate
-from harness.runtime.tools import ToolResolutionError, ToolResolver
+from harness.runtime.tools import ResolvedTools, ToolResolutionError, ToolResolver
 
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
 
@@ -53,7 +54,9 @@ class ClaudeSdkRuntime:
         self._tool_resolver = tool_resolver or ToolResolver()
         self._tool_gate = tool_gate
 
-    def _options(self, context: RuntimeContext, route: ModelRoute) -> ClaudeAgentOptions:
+    async def _options(
+        self, context: RuntimeContext, route: ModelRoute
+    ) -> tuple[ClaudeAgentOptions, ResolvedTools]:
         manifest = self._snapshot.manifest
         secret = self._route_secrets.get(route.route_id)
         if not secret:
@@ -66,7 +69,7 @@ class ClaudeSdkRuntime:
             environment["ANTHROPIC_AUTH_TOKEN"] = secret
         else:
             environment["ANTHROPIC_API_KEY"] = secret
-        resolved_tools = self._tool_resolver.resolve(manifest)
+        resolved_tools = await self._tool_resolver.resolve(manifest, context.identity)
         agents: dict[str, AgentDefinition] = {}
         for name, version in self._subagent_versions.items():
             snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
@@ -88,7 +91,7 @@ class ClaudeSdkRuntime:
                 maxTurns=subagent_manifest.spec.limits.max_turns,
             )
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
-        return ClaudeAgentOptions(
+        options = ClaudeAgentOptions(
             tools=list(resolved_tools.builtin_tools),
             allowed_tools=list(resolved_tools.allowed_tools),
             mcp_servers=dict(resolved_tools.mcp_servers),
@@ -109,6 +112,21 @@ class ClaudeSdkRuntime:
             resume=context.session.claude_session_id,
             stderr=discard_sdk_stderr,
         )
+        return options, resolved_tools
+
+    @staticmethod
+    def _redact_event(event: RuntimeEvent, resolved_tools: ResolvedTools) -> RuntimeEvent:
+        if not resolved_tools.sensitive_names and not resolved_tools.sensitive_values:
+            return event
+        payload = cast(
+            dict[str, Any],
+            redact_mcp_credentials(
+                event.payload,
+                sensitive_names=resolved_tools.sensitive_names,
+                sensitive_values=resolved_tools.sensitive_values,
+            ),
+        )
+        return event.model_copy(update={"payload": payload})
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         model = self._snapshot.manifest.spec.model
@@ -127,11 +145,14 @@ class ClaudeSdkRuntime:
                 f"{inventory}\n"
                 "Use the available file tools to inspect them when relevant."
             )
-        options = self._options(context, decision.route)
+        options, resolved_tools = await self._options(context, decision.route)
         partial_text_seen = False
         stream_message_open = False
         async for message in self._query(prompt, options):
-            mapped = map_sdk_message(message)
+            mapped = [
+                self._redact_event(event, resolved_tools)
+                for event in map_sdk_message(message)
+            ]
             if self._tool_gate is not None:
                 mapped = [event for event in mapped if event.type != "tool.request"]
             if isinstance(message, StreamEvent):

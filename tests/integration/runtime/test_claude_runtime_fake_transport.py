@@ -14,6 +14,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 from claude_agent_sdk.types import HookEvent
+from pydantic import SecretStr
 
 from harness.core.manifest import ToolSpec, load_manifest
 from harness.core.models import (
@@ -27,6 +28,7 @@ from harness.core.models import (
 )
 from harness.runtime.base import RuntimeContext
 from harness.runtime.claude_sdk import ClaudeSdkRuntime
+from harness.runtime.mcp_credentials import RequestMcpCredentialProvider
 from harness.runtime.tools import (
     McpServerRegistration,
     ToolResolutionError,
@@ -271,8 +273,16 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
                 server_name="crm-prod",
                 config=mcp_config,
                 allowed_tools=("mcp__crm-prod__search",),
+                credential_headers=(("Authorization", "access_token"),),
             )
-        }
+        },
+        credential_provider=RequestMcpCredentialProvider(
+            {
+                ("tenant-a", "user-1", "echo-agent", "run-tools"): {
+                    "crm": {"access_token": SecretStr("crm-token")}
+                }
+            }
+        ),
     )
     captured: list[ClaudeAgentOptions] = []
 
@@ -281,6 +291,10 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
         options: ClaudeAgentOptions,
     ) -> AsyncIterator[object]:
         captured.append(options)
+        yield AssistantMessage(
+            content=[TextBlock(text="credential crm-token")],
+            model="gateway-model",
+        )
         yield ResultMessage(
             subtype="success",
             duration_ms=1,
@@ -327,6 +341,10 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
     assert isinstance(options.mcp_servers, dict)
     assert set(options.mcp_servers) == {"harness-python", "crm-prod"}
     assert options.allowed_tools == ["mcp__crm-prod__search"]
+    crm = cast(dict[str, object], options.mcp_servers["crm-prod"])
+    assert crm["headers"] == {"Authorization": "crm-token"}
+    assert "crm-token" not in repr(_events)
+    assert any(event.payload.get("text") == "credential [REDACTED]" for event in _events)
 
 
 @pytest.mark.asyncio

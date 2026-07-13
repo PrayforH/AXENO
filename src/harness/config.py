@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_api_key: SecretStr = SecretStr("")
 
+    mcp_secret_references_json: str = "{}"
+    mcp_server_secrets_json: SecretStr = SecretStr("{}")
+
     otlp_endpoint: str = ""
     otlp_headers: SecretStr = SecretStr("")
     otel_service_name: str = "claude-agent-harness"

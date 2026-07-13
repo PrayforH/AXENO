@@ -7,7 +7,7 @@ from harness.core.manifest import AgentManifest
 from harness.runtime.tools import McpServerRegistration, ToolResolutionError, ToolResolver
 
 
-def _manifest(*tools: dict[str, str]) -> AgentManifest:
+def manifest_fixture(*tools: dict[str, str]) -> AgentManifest:
     return AgentManifest.model_validate(
         {
             "apiVersion": "harness/v1alpha1",
@@ -24,9 +24,10 @@ def _manifest(*tools: dict[str, str]) -> AgentManifest:
     )
 
 
-def test_preserves_unique_builtin_tools_in_declaration_order() -> None:
-    resolved = ToolResolver().resolve(
-        _manifest({"builtin": "Read"}, {"builtin": "Bash"}, {"builtin": "Read"})
+@pytest.mark.asyncio
+async def test_preserves_unique_builtin_tools_in_declaration_order() -> None:
+    resolved = await ToolResolver().resolve(
+        manifest_fixture({"builtin": "Read"}, {"builtin": "Bash"}, {"builtin": "Read"})
     )
 
     assert resolved.builtin_tools == ("Read", "Bash")
@@ -34,9 +35,10 @@ def test_preserves_unique_builtin_tools_in_declaration_order() -> None:
     assert resolved.allowed_tools == ()
 
 
-def test_wraps_python_sdk_tools_in_one_in_process_server() -> None:
-    resolved = ToolResolver().resolve(
-        _manifest({"python": "tests.fixtures.runtime.domain_tools:tool_list"})
+@pytest.mark.asyncio
+async def test_wraps_python_sdk_tools_in_one_in_process_server() -> None:
+    resolved = await ToolResolver().resolve(
+        manifest_fixture({"python": "tests.fixtures.runtime.domain_tools:tool_list"})
     )
 
     server = cast(McpSdkServerConfig, resolved.mcp_servers["harness-python"])
@@ -45,10 +47,11 @@ def test_wraps_python_sdk_tools_in_one_in_process_server() -> None:
     assert resolved.allowed_tools == ()
 
 
-def test_resolves_external_mcp_from_server_owned_registry() -> None:
+@pytest.mark.asyncio
+async def test_resolves_external_mcp_from_server_owned_registry() -> None:
     config = cast(
         McpServerConfig,
-        {"type": "http", "url": "https://mcp.example.test", "headers": {"X-Key": "secret"}},
+        {"type": "http", "url": "https://mcp.example.test"},
     )
     resolver = ToolResolver(
         mcp_registry={
@@ -60,7 +63,7 @@ def test_resolves_external_mcp_from_server_owned_registry() -> None:
         }
     )
 
-    resolved = resolver.resolve(_manifest({"mcp": "crm"}))
+    resolved = await resolver.resolve(manifest_fixture({"mcp": "crm"}))
 
     assert resolved.mcp_servers == {"crm-prod": config}
     assert resolved.allowed_tools == ("mcp__crm-prod__search",)
@@ -81,38 +84,34 @@ def test_resolves_external_mcp_from_server_owned_registry() -> None:
         ),
     ],
 )
-def test_rejects_unresolvable_tool_references(reference: str, message: str) -> None:
+@pytest.mark.asyncio
+async def test_rejects_unresolvable_tool_references(reference: str, message: str) -> None:
     key = "mcp" if reference == "missing" else "python"
 
     with pytest.raises(ToolResolutionError, match=message):
-        ToolResolver().resolve(_manifest({key: reference}))
+        await ToolResolver().resolve(manifest_fixture({key: reference}))
 
 
-def test_rejects_duplicate_python_tool_names() -> None:
+@pytest.mark.asyncio
+async def test_rejects_duplicate_python_tool_names() -> None:
     with pytest.raises(
         ToolResolutionError,
         match="duplicate python tool name: lookup_customer",
     ):
-        ToolResolver().resolve(
-            _manifest({"python": "tests.fixtures.runtime.domain_tools:duplicate_tools"})
+        await ToolResolver().resolve(
+            manifest_fixture({"python": "tests.fixtures.runtime.domain_tools:duplicate_tools"})
         )
 
 
-def test_errors_do_not_include_registry_secrets() -> None:
+@pytest.mark.asyncio
+async def test_rejects_inline_registry_secrets() -> None:
     secret = "registry-super-secret"
     config = cast(
         McpServerConfig,
         {"type": "http", "url": "https://mcp.example.test", "headers": {"X-Key": secret}},
     )
-    resolver = ToolResolver(
-        mcp_registry={
-            "first": McpServerRegistration(server_name="same", config=config),
-            "second": McpServerRegistration(server_name="same", config=config),
-        }
-    )
-
     with pytest.raises(ToolResolutionError) as captured:
-        resolver.resolve(_manifest({"mcp": "first"}, {"mcp": "second"}))
+        McpServerRegistration(server_name="same", config=config)
 
-    assert str(captured.value) == "duplicate MCP server name: same"
+    assert str(captured.value) == "MCP registrations cannot contain inline headers or environment"
     assert secret not in repr(captured.value)

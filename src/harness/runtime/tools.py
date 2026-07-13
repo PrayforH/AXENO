@@ -15,6 +15,12 @@ from claude_agent_sdk import (
 )
 
 from harness.core.manifest import AgentManifest
+from harness.core.models import ExecutionIdentity
+from harness.runtime.mcp_credentials import (
+    DynamicMcpCredentialProvider,
+    EmptyMcpCredentialProvider,
+    McpCredentialError,
+)
 
 
 class ToolResolutionError(ValueError):
@@ -28,6 +34,19 @@ class McpServerRegistration:
     server_name: str
     config: McpServerConfig
     allowed_tools: tuple[str, ...] = ()
+    credential_headers: tuple[tuple[str, str], ...] = ()
+    credential_environment: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        public_config = cast(dict[str, object], self.config)
+        if public_config.get("headers") or public_config.get("env"):
+            raise ToolResolutionError(
+                "MCP registrations cannot contain inline headers or environment"
+            )
+        targets = [name for name, _ in self.credential_headers]
+        targets.extend(name for name, _ in self.credential_environment)
+        if len(targets) != len(set(targets)):
+            raise ToolResolutionError("duplicate MCP credential target")
 
 
 @dataclass(frozen=True)
@@ -37,6 +56,8 @@ class ResolvedTools:
     builtin_tools: tuple[str, ...]
     mcp_servers: Mapping[str, McpServerConfig]
     allowed_tools: tuple[str, ...]
+    sensitive_names: frozenset[str] = frozenset()
+    sensitive_values: frozenset[str] = frozenset()
 
 
 class ToolResolver:
@@ -46,14 +67,22 @@ class ToolResolver:
         self,
         *,
         mcp_registry: Mapping[str, McpServerRegistration] | None = None,
+        credential_provider: DynamicMcpCredentialProvider | None = None,
     ) -> None:
         self._mcp_registry = MappingProxyType(dict(mcp_registry or {}))
+        self._credential_provider = credential_provider or EmptyMcpCredentialProvider()
 
-    def resolve(self, manifest: AgentManifest) -> ResolvedTools:
+    async def resolve(
+        self,
+        manifest: AgentManifest,
+        identity: ExecutionIdentity | None = None,
+    ) -> ResolvedTools:
         builtins: list[str] = []
         python_tools: list[SdkMcpTool[Any]] = []
         mcp_servers: dict[str, McpServerConfig] = {}
         allowed_tools: list[str] = []
+        sensitive_names: set[str] = set()
+        sensitive_values: set[str] = set()
 
         for tool_spec in manifest.spec.tools:
             if tool_spec.builtin is not None:
@@ -74,7 +103,45 @@ class ToolResolver:
                 raise ToolResolutionError(
                     f"duplicate MCP server name: {registration.server_name}"
                 )
-            mcp_servers[registration.server_name] = registration.config
+            bindings = registration.credential_headers + registration.credential_environment
+            required_keys = frozenset(key for _, key in bindings)
+            if required_keys and identity is None:
+                raise McpCredentialError(
+                    f"execution identity is required for MCP credentials: {reference}"
+                )
+            credentials = await self._credential_provider.resolve(
+                reference,
+                identity
+                if identity is not None
+                else ExecutionIdentity(
+                    tenant_id="none",
+                    user_id="none",
+                    project_id="none",
+                    session_id="none",
+                    run_id="none",
+                    agent_name=manifest.metadata.name,
+                    agent_version=manifest.metadata.version,
+                ),
+                required_keys,
+            )
+            config = dict(cast(dict[str, object], registration.config))
+            if registration.credential_headers:
+                headers = {
+                    target: credentials[key].get_secret_value()
+                    for target, key in registration.credential_headers
+                }
+                config["headers"] = headers
+                sensitive_names.update(headers)
+                sensitive_values.update(headers.values())
+            if registration.credential_environment:
+                environment = {
+                    target: credentials[key].get_secret_value()
+                    for target, key in registration.credential_environment
+                }
+                config["env"] = environment
+                sensitive_names.update(environment)
+                sensitive_values.update(environment.values())
+            mcp_servers[registration.server_name] = cast(McpServerConfig, config)
             for allowed_tool in registration.allowed_tools:
                 if allowed_tool not in allowed_tools:
                     allowed_tools.append(allowed_tool)
@@ -93,6 +160,8 @@ class ToolResolver:
             builtin_tools=tuple(builtins),
             mcp_servers=MappingProxyType(mcp_servers),
             allowed_tools=tuple(allowed_tools),
+            sensitive_names=frozenset(sensitive_names),
+            sensitive_values=frozenset(sensitive_values),
         )
 
     @staticmethod
