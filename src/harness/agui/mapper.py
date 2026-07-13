@@ -30,12 +30,13 @@ def _domain_tool(
     event: RunEvent,
     *,
     name: str,
+    tool_call_id: str,
     fields: tuple[str, ...],
+    complete: bool = False,
 ) -> Sequence[BaseEvent]:
-    tool_call_id = f"harness-domain-{event.event_id}"
     arguments = {key: event.payload[key] for key in fields if key in event.payload}
     arguments["run_id"] = event.run_id
-    return [
+    projected: list[BaseEvent] = [
         ToolCallStartEvent(
             tool_call_id=tool_call_id,
             tool_call_name=name,
@@ -47,6 +48,16 @@ def _domain_tool(
         ),
         ToolCallEndEvent(tool_call_id=tool_call_id),
     ]
+    if complete:
+        projected.append(
+            ToolCallResultEvent(
+                message_id=f"tool-result-{event.event_id}",
+                tool_call_id=tool_call_id,
+                content=json.dumps({"status": "ready"}, separators=(",", ":")),
+                role="tool",
+            )
+        )
+    return projected
 
 
 def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
@@ -93,17 +104,34 @@ def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
             )
         ]
     if event.type == "approval.requested":
+        approval_id = str(event.payload.get("approval_id", event.event_id))
         return _domain_tool(
             event,
             name="harness_request_approval",
+            tool_call_id=f"harness-approval-{approval_id}",
             fields=("approval_id", "tool_call_id", "reason", "expires_at", "status"),
         )
+    if event.type in {"approval.approved", "approval.rejected"}:
+        approval_id = str(event.payload.get("approval_id", event.event_id))
+        return [
+            ToolCallResultEvent(
+                message_id=f"tool-result-{event.event_id}",
+                tool_call_id=f"harness-approval-{approval_id}",
+                content=json.dumps(
+                    {"decision": event.type.removeprefix("approval.")},
+                    separators=(",", ":"),
+                ),
+                role="tool",
+            )
+        ]
     if event.type.startswith("subagent."):
         return _custom(event, "harness.subagent.v1")
     if event.type == "artifact.ready":
+        artifact_id = str(event.payload.get("artifact_id", event.event_id))
         return _domain_tool(
             event,
             name="harness_present_artifact",
+            tool_call_id=f"harness-artifact-{artifact_id}",
             fields=(
                 "artifact_id",
                 "name",
@@ -112,6 +140,7 @@ def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
                 "sha256",
                 "status",
             ),
+            complete=True,
         )
     if event.type.startswith("artifact.") or event.type == "workspace.archived":
         return _custom(event, "harness.artifact.v1")

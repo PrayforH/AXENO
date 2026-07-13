@@ -98,3 +98,36 @@ def test_keeps_subagent_events_as_versioned_activity() -> None:
     activity = map_harness_event(event("subagent.started", {"name": "researcher"}))
 
     assert activity[0].model_dump(by_alias=True)["name"] == "harness.subagent.v1"
+
+
+def test_maps_approval_decision_to_matching_tool_result() -> None:
+    requested = map_harness_event(
+        event("approval.requested", {"approval_id": "approval-1"}, sequence=2)
+    )
+    approved = map_harness_event(
+        event("approval.approved", {"approval_id": "approval-1"}, sequence=3)
+    )
+
+    assert requested[0].model_dump(by_alias=True)["toolCallId"] == (
+        "harness-approval-approval-1"
+    )
+    assert approved[0].model_dump(by_alias=True)["type"] == "TOOL_CALL_RESULT"
+    assert approved[0].model_dump(by_alias=True)["toolCallId"] == (
+        "harness-approval-approval-1"
+    )
+
+
+def test_artifact_projection_completes_its_tool_call() -> None:
+    projected = map_harness_event(
+        event("artifact.ready", {"artifact_id": "artifact-1", "name": "result.txt"})
+    )
+
+    assert [item.model_dump(by_alias=True)["type"] for item in projected] == [
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+    ]
+    assert projected[-1].model_dump(by_alias=True)["toolCallId"] == (
+        "harness-artifact-artifact-1"
+    )
