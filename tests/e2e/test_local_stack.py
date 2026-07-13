@@ -78,6 +78,29 @@ def test_dev_up_routes_web_to_published_validation_agent_version() -> None:
     assert "Local Agent: echo-agent@0.2.0" in script
 
 
+@pytest.mark.parametrize("script_name", ["dev_up.sh", "dev_down.sh"])
+def test_local_lifecycle_supplies_non_production_compose_defaults(
+    script_name: str,
+) -> None:
+    script = Path("scripts", script_name).read_text()
+
+    for assignment in (
+        'POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-harness}"',
+        'MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"',
+        'MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"',
+        'HARNESS_NEW_API_BASE_URL="${HARNESS_NEW_API_BASE_URL:-http://127.0.0.1:1}"',
+        'HARNESS_NEW_API_KEY="${HARNESS_NEW_API_KEY:-local-placeholder}"',
+        'HARNESS_NEW_API_MODEL="${HARNESS_NEW_API_MODEL:-local-placeholder}"',
+    ):
+        assert assignment in script
+
+
+def test_dev_up_starts_only_local_infrastructure_from_production_compose() -> None:
+    script = Path("scripts/dev_up.sh").read_text()
+
+    assert "up -d postgres redis minio minio-init" in script
+
+
 @pytest.mark.asyncio
 async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> None:
     container = build_memory_container()
