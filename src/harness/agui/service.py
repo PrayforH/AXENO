@@ -7,6 +7,7 @@ from typing import cast
 from ag_ui.core import (
     BinaryInputContent,
     DocumentInputContent,
+    InputContentDataSource,
     RunAgentInput,
     TextInputContent,
 )
@@ -155,6 +156,15 @@ def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
                     input_artifact_id = metadata.get(
                         "inputArtifactId", metadata.get("input_artifact_id")
                     )
+                if (
+                    input_artifact_id is None
+                    and isinstance(item.source, InputContentDataSource)
+                    and item.source.value.startswith("input_artifact_")
+                ):
+                    # @assistant-ui/react-ag-ui converts a completed file
+                    # attachment to a document data source. The value is an
+                    # opaque server-issued ID, never the browser file bytes.
+                    input_artifact_id = item.source.value
             if isinstance(input_artifact_id, str) and input_artifact_id:
                 input_artifact_ids.append(input_artifact_id)
         return text, input_artifact_ids

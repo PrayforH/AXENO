@@ -76,7 +76,9 @@ describe("Codex-style activity UI", () => {
   });
 
   it("summarizes model, tools, and subagents without raw event JSON", () => {
-    const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
+    const html = renderToStaticMarkup(
+      <ActivitySummary activity={runActivitySchema.parse(activity)} />,
+    );
     expect(html).toContain("执行进度");
     expect(html).toContain("Read");
     expect(html).toContain("子 Agent");

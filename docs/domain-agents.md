@@ -116,7 +116,7 @@ curl -sS http://127.0.0.1:8000/v1/agents \
   -d '{"path":"agents/invoice-reviewer/agent.yaml"}'
 ```
 
-然后创建绑定固定版本的 Session，再通过 REST Run 或 AG-UI/CopilotKit 发起任务。生产迭代不要修改已发布版本；提升 `metadata.version` 后重新校验、发布，并让新 Session 使用新版本。
+然后创建绑定固定版本的 Session，再通过 REST Run 或 AG-UI/assistant-ui 发起任务。生产迭代不要修改已发布版本；提升 `metadata.version` 后重新校验、发布，并让新 Session 使用新版本。
 
 ## 5. 用评测而不是聊天感觉验收
 

@@ -228,3 +228,46 @@ async def test_agui_run_does_not_trust_inline_data_urls_or_cross_user_ids() -> N
             agent_version="0.1.0",
             request=RunAgentInput.model_validate(forged),
         )
+
+
+@pytest.mark.asyncio
+async def test_agui_run_accepts_assistant_ui_document_transport_envelope() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        uploaded = await client.post(
+            "/v1/input-artifacts",
+            files={"file": ("report.pdf", b"fake pdf", "application/pdf")},
+            headers=HEADERS,
+        )
+        input_artifact_id = uploaded.json()["input_artifact_id"]
+
+    body = _request(thread_id="thread-document", run_id="document", prompt="Read")
+    body["messages"] = [
+        {
+            "id": "message-document",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read"},
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "data",
+                        "value": input_artifact_id,
+                        "mimeType": "application/pdf",
+                    },
+                    "metadata": {"filename": "report.pdf"},
+                },
+            ],
+        }
+    ]
+
+    run = await app.state.container.agui.create_run(
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="0.1.0",
+        request=RunAgentInput.model_validate(body),
+    )
+
+    assert run.input["input_artifact_ids"] == [input_artifact_id]

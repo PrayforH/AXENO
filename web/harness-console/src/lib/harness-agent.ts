@@ -1,11 +1,23 @@
 import {
+  type AgentSubscriber,
   HttpAgent,
   type HttpAgentConfig,
+  type RunAgentParameters,
   type RunAgentInput,
+  type RunAgentResult,
 } from "@ag-ui/client";
+import { runActivitySchema } from "./activity-schema";
+import {
+  type ActivityPatchOperation,
+  activityStore,
+} from "./activity-store";
 
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
   cancelFetch?: typeof fetch;
+}
+
+interface AssistantUiRunOptions {
+  signal?: AbortSignal;
 }
 
 export class HarnessHttpAgent extends HttpAgent {
@@ -14,7 +26,7 @@ export class HarnessHttpAgent extends HttpAgent {
 
   constructor(config: HarnessHttpAgentConfig) {
     super(config);
-    this.cancelFetch = config.cancelFetch ?? fetch;
+    this.cancelFetch = config.cancelFetch ?? globalThis.fetch.bind(globalThis);
   }
 
   override run(input: RunAgentInput) {
@@ -22,21 +34,76 @@ export class HarnessHttpAgent extends HttpAgent {
     return super.run(input);
   }
 
-  override abortRun(): void {
-    if (this.activeInput) {
-      const url = new URL(this.url);
-      url.search = "";
-      url.pathname = `${url.pathname.replace(/\/$/, "")}/threads/${encodeURIComponent(
-        this.activeInput.threadId,
-      )}/runs/${encodeURIComponent(this.activeInput.runId)}/cancel`;
-      void this.cancelFetch(url.toString(), {
-        method: "POST",
-        headers: this.headers,
-      }).catch((error: unknown) => {
-        console.error("[Harness Console] Failed to cancel Harness run", error);
-      });
-      this.activeInput = undefined;
+  override runAgent(
+    parameters?: RunAgentParameters,
+    subscriber?: AgentSubscriber,
+    options?: AssistantUiRunOptions,
+  ): Promise<RunAgentResult> {
+    const input = parameters as Partial<RunAgentInput> | undefined;
+    let activeInput: Pick<RunAgentInput, "threadId" | "runId"> | undefined;
+    if (input?.runId) {
+      activeInput = {
+        threadId: input.threadId || this.threadId || "main",
+        runId: input.runId,
+      };
+      this.activeInput = activeInput;
     }
+    const wrapped: AgentSubscriber = {
+      ...subscriber,
+      onActivitySnapshotEvent: async (params) => {
+        if (params.event.activityType === "harness.run.v1") {
+          const parsed = runActivitySchema.safeParse(params.event.content);
+          if (parsed.success) activityStore.publish(parsed.data);
+        }
+        return subscriber?.onActivitySnapshotEvent?.(params);
+      },
+      onActivityDeltaEvent: async (params) => {
+        if (params.event.activityType === "harness.run.v1") {
+          activityStore.patch(
+            params.event.patch as readonly ActivityPatchOperation[],
+          );
+        }
+        return subscriber?.onActivityDeltaEvent?.(params);
+      },
+    };
+    const signal = options?.signal;
+    const cancelFromSignal = () => this.cancelActiveRun();
+    if (signal?.aborted) cancelFromSignal();
+    else signal?.addEventListener("abort", cancelFromSignal, { once: true });
+
+    return super.runAgent(parameters, wrapped).finally(() => {
+      signal?.removeEventListener("abort", cancelFromSignal);
+      if (
+        activeInput &&
+        this.activeInput?.threadId === activeInput.threadId &&
+        this.activeInput.runId === activeInput.runId
+      ) {
+        this.activeInput = undefined;
+      }
+    });
+  }
+
+  cancelActiveRun(): void {
+    if (!this.activeInput) return;
+    const relative = this.url.startsWith("/");
+    const base = globalThis.location?.origin ?? "http://localhost";
+    const url = new URL(this.url, base);
+    url.search = "";
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/threads/${encodeURIComponent(
+      this.activeInput.threadId,
+    )}/runs/${encodeURIComponent(this.activeInput.runId)}/cancel`;
+    const target = relative ? `${url.pathname}${url.search}` : url.toString();
+    void this.cancelFetch(target, {
+      method: "POST",
+      headers: this.headers,
+    }).catch((error: unknown) => {
+      console.error("[Harness Console] Failed to cancel Harness run", error);
+    });
+    this.activeInput = undefined;
+  }
+
+  override abortRun(): void {
+    this.cancelActiveRun();
     super.abortRun();
   }
 

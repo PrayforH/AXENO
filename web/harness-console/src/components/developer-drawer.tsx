@@ -1,6 +1,5 @@
 "use client";
 
-import { CopilotKitInspector } from "@copilotkit/react-core/v2";
 import { activityOverview } from "../lib/activity-schema";
 import { useRunActivity } from "../lib/activity-store";
 import { developerRows } from "../lib/developer-details";
@@ -106,7 +105,7 @@ export function DeveloperDrawer({
             <div className="developer-row" key={label}><span>{label}</span><code>{value}</code></div>
           ))}
         </div>
-        <CopilotKitInspector />
+        {activity && <StructuredValue value={activity} label="Harness activity" />}
       </details>
     </aside>
   );

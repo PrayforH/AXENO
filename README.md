@@ -9,7 +9,7 @@
 - **new-api 可以作为优先模型网关。** 通过 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 注入 Anthropic-compatible 网关；能力不满足时只走 Manifest 明确声明的官方回退，绝不静默切换。
 - **复杂 Agent 可安全落地。** 工具调用经过 `allow / deny / ask` 策略，审批可暂停、过期、拒绝或恢复；Run 有幂等键、状态机和 fencing token。
 - **从单机验证平滑走向生产。** 核心依赖端口抽象；本地用 Fake Runtime/内存组合，持久化契约已在 PostgreSQL、Redis、MinIO 上验证。
-- **前后端协议解耦。** Harness 事件是权威事实，AG-UI 只是无状态投影；CopilotKit 控制台可以替换，而不会影响 Agent 执行层。
+- **前后端协议解耦。** Harness 事件是权威事实，AG-UI 只是无状态投影；assistant-ui 控制台可以替换，而不会影响 Agent 执行层。
 - **可观测但不绑定厂商。** 应用只发 OpenTelemetry；生产可由 Collector 输出到 Langfuse，本地默认完全关闭 exporter。
 
 这意味着后续开发一个新 Agent，主要工作变成“写 Manifest + prompt/skills/tools + 少量 Python 扩展”，而不是每次重建会话、审批、网关、事件流、存储和 UI。
@@ -53,13 +53,15 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
-Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。主对话以紧凑执行时间线呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供可回放的完整事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Claude Provider。两种模式都会幂等发布 `helper@1.0.0` 与 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
+Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以紧凑执行时间线呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper@1.0.0` 与 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程
 ```
 
-审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。刷新页面会复用本地 thread，并由 CopilotRuntime 的 connect 路由回放已完成消息。原始 AG-UI、消息和状态位于“运行详情”底部的折叠式 CopilotKit Inspector。
+审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。页面刷新会复用本地 thread ID 且不会重复创建 Run；Phase 1 尚未把耐久事件接成 assistant-ui 的历史消息 adapter，因此刷新后不会自动恢复聊天正文。原始 AG-UI 活动、消息和状态可在“运行详情”中核对。
+
+点击“＋ 文件”上传本地文件后，Next.js 同源 BFF 会创建 InputArtifact；消息发送时只携带服务端 ID。Worker 校验归属后将文件以只读方式挂载到本次 Run 的 `inputs/`，Claude Agent SDK 可使用 `Read` 读取。浏览器路径、内联字节和伪造 URL 不会被信任为工作区输入。
 
 真实模式可用下列问题验证子 Agent：
 
@@ -67,7 +69,7 @@ Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。主�
 必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
 ```
 
-输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、CopilotKit BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
+输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、同源 AG-UI BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 
 new-api 实际连通性是显式的可选 smoke：
 

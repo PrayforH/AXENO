@@ -41,8 +41,7 @@ uv run python scripts/bootstrap_local_agent.py
 if [[ ! -f work/web.pid ]] || ! kill -0 "$(cat work/web.pid)" 2>/dev/null; then
   (
     cd web/harness-console
-    COPILOTKIT_TELEMETRY_DISABLED=true \
-      NEXT_PUBLIC_HARNESS_RUNTIME="$HARNESS_RUNTIME" \
+    NEXT_PUBLIC_HARNESS_RUNTIME="$HARNESS_RUNTIME" \
       HARNESS_API_URL=http://127.0.0.1:8000 \
       HARNESS_AGENT_NAME=echo-agent \
       HARNESS_AGENT_VERSION=0.1.0 \

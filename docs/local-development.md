@@ -40,9 +40,11 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 
 ## Web interaction validation
 
-打开 `http://127.0.0.1:3000` 后，默认界面是 CopilotKit v2 全页 Chat。浏览器只连接同源 `/api/copilotkit`；Next.js BFF 在服务端注入 `X-Tenant-ID`、`X-User-ID`，这些身份头不会进入浏览器配置或 URL。
+打开 `http://127.0.0.1:3000` 后，默认界面是 assistant-ui 全页 Chat。浏览器只连接同源 `/api/agui` 与 `/api/input-artifacts`；Next.js BFF 在服务端注入 `X-Tenant-ID`、`X-User-ID`，这些身份头不会进入浏览器配置或 URL。
 
-聊天中的“执行进度”以紧凑时间线显示模型路由、工作摘要、工具与子 Agent；工具输入/输出会按 JSON、代码或 unified diff 自动格式化。点击“运行详情”会打开右侧 Run Inspector，展示完整事件脊柱、模型、Provider、时长、轮次、成本与停止原因。原始 CopilotKit Inspector 保留在底部“协议与原始事件”折叠区。
+聊天中的“执行进度”以紧凑时间线显示模型路由、工作摘要、工具与子 Agent；工具输入/输出会按 JSON、代码或 unified diff 自动格式化。点击“运行详情”会打开右侧 Run Inspector，展示 Harness 事件脊柱、模型、Provider、时长、轮次、成本与停止原因。
+
+点击“＋ 文件”可上传浏览器可访问的本地文件。上传先创建 InputArtifact；发送消息后，Worker 校验租户和用户归属，再把文件只读挂载到该 Run 的 `inputs/`。SDK 读取输入文件产生的原始内容不会写入耐久工具事件。
 
 验证普通流式回答：
 
@@ -56,7 +58,7 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
 ```
 
-预期出现 `Agent` 子 Agent 卡片、`subagent.started/completed` 时间线，以及成功终态；子 Agent 的部分文本不会混入主 Agent 的流式消息。刷新页面后同一 ActivityMessage 会从耐久事件回放并重建详情。SDK 内部协调字段（如 `agentId`、`output_file`）不会进入界面。
+预期出现 `Agent` 子 Agent 卡片、`subagent.started/completed` 时间线，以及成功终态；子 Agent 的部分文本不会混入主 Agent 的流式消息。SDK 内部协调字段（如 `agentId`、`output_file`）不会进入界面。
 
 验证停止生成与后端取消：
 
@@ -77,8 +79,8 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 1. 对话先显示 Fake Runtime 的回答和审批卡片。
 2. 点击“批准并继续”，同一 SSE 收到审批结果并自动恢复 Run。
 3. 对话显示 `result.txt` 产物卡片；“下载”经 `/api/harness/artifacts/:id` 鉴权代理。
-4. 刷新后 thread ID 保持不变，CopilotRuntime connect 回放消息和领域卡片。
-5. “运行详情”默认关闭；打开后先查看结构化 Run Inspector，需要排查协议时再展开 CopilotKit Inspector。
+4. 刷新后 thread ID 保持不变，且不会重复创建 Run；Phase 1 暂不自动恢复聊天正文。
+5. “运行详情”默认关闭；打开后查看结构化 Run Inspector 与原始 Harness 活动。
 
 “新对话”会生成并持久化新的 thread ID。开发者详情不显示 tenant/user 身份头。
 

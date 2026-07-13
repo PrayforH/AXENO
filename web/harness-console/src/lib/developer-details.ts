@@ -4,6 +4,6 @@ export function developerRows(
   return [
     ["THREAD", threadId || "initializing"],
     ["AGENT", "harness-agent"],
-    ["ROUTE", "/api/copilotkit → Harness AG-UI"],
+    ["ROUTE", "/api/agui → Harness AG-UI"],
   ];
 }

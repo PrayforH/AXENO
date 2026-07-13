@@ -20,4 +20,61 @@ describe("activity store", () => {
     expect(listener).toHaveBeenCalledOnce();
     unsubscribe();
   });
+
+  it("applies Harness activity deltas without exposing the protocol as chat text", () => {
+    activityStore.publish(
+      runActivitySchema.parse({
+        run_id: "run-delta",
+        status: "queued",
+        started_at: "2026-07-13T00:00:00Z",
+        items: [],
+        metrics: {},
+      }),
+    );
+
+    activityStore.patch([
+      {
+        op: "add",
+        path: "/items/-",
+        value: {
+          id: "event-1",
+          event_type: "tool.request",
+          kind: "tool",
+          status: "running",
+          title: "调用 Read",
+          timestamp: "2026-07-13T00:00:01Z",
+          sequence: 1,
+          metadata: { name: "Read" },
+        },
+      },
+      { op: "replace", path: "/status", value: "running" },
+      { op: "add", path: "/metrics/turns", value: 1 },
+    ]);
+
+    expect(activityStore.getSnapshot()).toMatchObject({
+      status: "running",
+      metrics: { turns: 1 },
+      items: [{ title: "调用 Read" }],
+    });
+  });
+
+  it("clears stale run activity when the user starts a new thread", () => {
+    const listener = vi.fn();
+    const unsubscribe = activityStore.subscribe(listener);
+    activityStore.publish(
+      runActivitySchema.parse({
+        run_id: "run-old-thread",
+        status: "running",
+        started_at: "2026-07-13T00:00:00Z",
+        items: [],
+        metrics: {},
+      }),
+    );
+
+    activityStore.clear();
+
+    expect(activityStore.getSnapshot()).toBeUndefined();
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
+  });
 });

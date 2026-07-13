@@ -8,7 +8,7 @@ describe("developer drawer", () => {
     expect(rows).toEqual([
       ["THREAD", "thread-1"],
       ["AGENT", "harness-agent"],
-      ["ROUTE", "/api/copilotkit → Harness AG-UI"],
+      ["ROUTE", "/api/agui → Harness AG-UI"],
     ]);
     expect(JSON.stringify(rows)).not.toContain("X-Tenant-ID");
     expect(JSON.stringify(rows)).not.toContain("developer");
