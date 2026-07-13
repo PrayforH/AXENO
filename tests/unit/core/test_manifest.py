@@ -5,6 +5,7 @@ import pytest
 from harness.core.manifest import ManifestValidationError, load_manifest
 
 FIXTURE = Path("tests/fixtures/agents/echo-agent/agent.yaml")
+VALIDATION_AGENT = Path("agents/echo-agent/agent.yaml")
 
 
 def test_loads_valid_manifest_and_resolves_prompt() -> None:
@@ -18,6 +19,18 @@ def test_loads_valid_manifest_and_resolves_prompt() -> None:
 
 def test_content_hash_is_deterministic() -> None:
     assert load_manifest(FIXTURE).content_hash == load_manifest(FIXTURE).content_hash
+
+
+def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:
+    snapshot = load_manifest(VALIDATION_AGENT)
+
+    assert snapshot.manifest.metadata.version == "0.2.0"
+    assert tuple(
+        tool.builtin for tool in snapshot.manifest.spec.tools
+    ) == ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
+    assert "only when the user requests" in snapshot.system_prompt.lower()
+    assert "run workspace" in snapshot.system_prompt.lower()
+    assert "echo the user's request" not in snapshot.system_prompt.lower()
 
 
 def test_rejects_unknown_runtime(tmp_path: Path) -> None:
@@ -59,4 +72,3 @@ def test_rejects_inline_secrets(tmp_path: Path) -> None:
 
     with pytest.raises(ManifestValidationError, match="secret-like field"):
         load_manifest(path)
-

@@ -70,6 +70,10 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "LANGFUSE_SECRET_KEY=" in values
     assert "LANGFUSE_ENVIRONMENT=" in values
     assert "LANGFUSE_AUTHORIZATION=" not in values
+    assert "HARNESS_AGENT_VERSION=0.2.0" in values
+    assert compose()["services"]["web"]["environment"]["HARNESS_AGENT_VERSION"] == (
+        "${HARNESS_AGENT_VERSION:-0.2.0}"
+    )
 
 
 def test_external_langfuse_collector_uses_basic_auth() -> None:

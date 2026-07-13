@@ -14,4 +14,11 @@ describe("assistant-ui AG-UI runtime", () => {
     expect(shell).toContain("createInputAttachmentAdapter");
     expect(shell).not.toContain("CopilotKit");
   });
+
+  it("shows the immutable validation Agent version used by the runtime", () => {
+    const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
+
+    expect(page).toContain("echo-agent");
+    expect(page).toContain("0.2.0");
+  });
 });

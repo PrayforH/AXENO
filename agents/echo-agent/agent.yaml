@@ -2,7 +2,7 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: echo-agent
-  version: 0.1.0
+  version: 0.2.0
   labels:
     purpose: local-validation
 spec:
@@ -18,6 +18,11 @@ spec:
   skills: []
   tools:
     - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+    - builtin: Edit
+    - builtin: Bash
   subagents: []
   hooks: []
   permissions:
@@ -30,4 +35,3 @@ spec:
     maxTurns: 5
     timeoutSeconds: 300
     maxBudgetUsd: 1
-
