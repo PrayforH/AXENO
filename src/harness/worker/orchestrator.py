@@ -7,10 +7,11 @@ from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.input_artifacts import InputArtifactService
+from harness.application.memory import UserMemoryService
 from harness.application.types import Clock
 from harness.application.workspaces import WorkspaceService
 from harness.core.errors import ConflictError
-from harness.core.models import Run, RunStatus
+from harness.core.models import ExecutionIdentity, Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
@@ -43,6 +44,7 @@ class RunOrchestrator:
         observability: Observability | None = None,
         artifacts: ArtifactService | None = None,
         input_artifacts: InputArtifactService | None = None,
+        memory: UserMemoryService | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -56,6 +58,7 @@ class RunOrchestrator:
         self._observability = observability
         self._artifacts = artifacts
         self._input_artifacts = input_artifacts
+        self._memory = memory
 
     async def _move(
         self,
@@ -112,6 +115,20 @@ class RunOrchestrator:
                 run = await self._move(run, RunStatus.PROVISIONING)
             handle = await self._sandbox.provision(run)
             session = await self._sessions.get(tenant_id, run.session_id)
+            identity = ExecutionIdentity(
+                tenant_id=session.tenant_id,
+                user_id=session.user_id,
+                project_id=session.agent_name,
+                session_id=session.session_id,
+                run_id=run.run_id,
+                agent_name=session.agent_name,
+                agent_version=session.agent_version,
+            )
+            memory_projection = (
+                await self._memory.projection(identity)
+                if self._memory is not None
+                else ""
+            )
             raw_input_artifact_ids: object = run.input.get("input_artifact_ids", [])
             if not isinstance(raw_input_artifact_ids, list):
                 raise ValueError("run input_artifact_ids must be a list of strings")
@@ -161,6 +178,8 @@ class RunOrchestrator:
                 session=session,
                 workspace=handle.path,
                 input_files=tuple(item.path for item in staged_inputs),
+                identity=identity,
+                memory_projection=memory_projection,
             )
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):

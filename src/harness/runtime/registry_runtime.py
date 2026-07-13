@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 
+from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelCompatibility, ModelRoute
 from harness.core.ports import AgentRegistry
@@ -23,6 +24,7 @@ class RegistryClaudeRuntime:
         tool_resolver: ToolResolver | None = None,
         mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
         tool_gate: ToolGate | None = None,
+        memory_service: UserMemoryService | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
@@ -31,6 +33,7 @@ class RegistryClaudeRuntime:
             credential_provider=mcp_credential_provider
         )
         self._tool_gate = tool_gate
+        self._memory_service = memory_service
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
@@ -70,6 +73,7 @@ class RegistryClaudeRuntime:
                 subagent_versions=subagent_versions,
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
+                memory_service=self._memory_service,
             )
         else:
             runtime = ClaudeSdkRuntime(
@@ -80,6 +84,7 @@ class RegistryClaudeRuntime:
                 query_factory=self._query_factory,
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
+                memory_service=self._memory_service,
             )
         async for event in runtime.execute(context):
             yield event

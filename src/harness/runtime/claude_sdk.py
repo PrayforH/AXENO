@@ -1,6 +1,7 @@
 """Claude Agent SDK runtime adapter with explicit gateway routing."""
 
 from collections.abc import AsyncIterator, Callable
+from contextlib import nullcontext
 from typing import Any, cast
 
 from claude_agent_sdk import (
@@ -12,12 +13,14 @@ from claude_agent_sdk import (
     query,
 )
 
+from harness.application.memory import UserMemoryService
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelRoute
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.hooks import discard_sdk_stderr
 from harness.runtime.mcp_credentials import redact_mcp_credentials
+from harness.runtime.memory_tools import create_memory_mcp_server, memory_execution_context
 from harness.runtime.message_mapper import map_sdk_message
 from harness.runtime.model_router import ModelRouter
 from harness.runtime.sdk_tool_gate import ToolGate
@@ -43,6 +46,7 @@ class ClaudeSdkRuntime:
         session_store: object | None = None,
         tool_resolver: ToolResolver | None = None,
         tool_gate: ToolGate | None = None,
+        memory_service: UserMemoryService | None = None,
     ) -> None:
         self._agent_version = agent_version
         self._snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
@@ -53,6 +57,7 @@ class ClaudeSdkRuntime:
         self._session_store = session_store
         self._tool_resolver = tool_resolver or ToolResolver()
         self._tool_gate = tool_gate
+        self._memory_service = memory_service
 
     async def _options(
         self, context: RuntimeContext, route: ModelRoute
@@ -70,6 +75,13 @@ class ClaudeSdkRuntime:
         else:
             environment["ANTHROPIC_API_KEY"] = secret
         resolved_tools = await self._tool_resolver.resolve(manifest, context.identity)
+        mcp_servers = dict(resolved_tools.mcp_servers)
+        allowed_tools = list(resolved_tools.allowed_tools)
+        if self._memory_service is not None:
+            if "harness-memory" in mcp_servers:
+                raise ToolResolutionError("duplicate MCP server name: harness-memory")
+            mcp_servers["harness-memory"] = create_memory_mcp_server()
+            allowed_tools.append("mcp__harness-memory__update_user_memory")
         agents: dict[str, AgentDefinition] = {}
         for name, version in self._subagent_versions.items():
             snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
@@ -93,8 +105,8 @@ class ClaudeSdkRuntime:
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
         options = ClaudeAgentOptions(
             tools=list(resolved_tools.builtin_tools),
-            allowed_tools=list(resolved_tools.allowed_tools),
-            mcp_servers=dict(resolved_tools.mcp_servers),
+            allowed_tools=allowed_tools,
+            mcp_servers=mcp_servers,
             system_prompt=self._snapshot.system_prompt,
             model=route.model,
             fallback_model=None,
@@ -137,6 +149,13 @@ class ClaudeSdkRuntime:
         )
         yield RuntimeEvent(type="model.route.selected", payload=decision.event_payload)
         prompt = str(context.run.input.get("prompt", ""))
+        if context.memory_projection:
+            prompt = (
+                "<user_memory>\n"
+                f"{context.memory_projection}\n"
+                "</user_memory>\n\n"
+                f"{prompt}"
+            )
         if context.input_files:
             inventory = "\n".join(f"- {path}" for path in context.input_files)
             prompt = (
@@ -148,48 +167,56 @@ class ClaudeSdkRuntime:
         options, resolved_tools = await self._options(context, decision.route)
         partial_text_seen = False
         stream_message_open = False
-        async for message in self._query(prompt, options):
-            mapped = [
-                self._redact_event(event, resolved_tools)
-                for event in map_sdk_message(message)
-            ]
-            if self._tool_gate is not None:
-                mapped = [event for event in mapped if event.type != "tool.request"]
-            if isinstance(message, StreamEvent):
-                for event in mapped:
-                    if event.type == "message.start":
-                        if not stream_message_open:
-                            stream_message_open = True
-                            yield event
-                    elif event.type == "message.delta":
-                        partial_text_seen = True
-                        if not stream_message_open:
-                            stream_message_open = True
-                            yield RuntimeEvent(type="message.start")
-                        yield event
-                    elif event.type == "message.completed":
-                        if stream_message_open:
-                            stream_message_open = False
-                            yield event
-                    else:
-                        yield event
-                continue
-            if isinstance(message, AssistantMessage):
-                if partial_text_seen:
+        execution_context = (
+            memory_execution_context(
+                self._memory_service, context.identity
+            )
+            if self._memory_service is not None and context.identity is not None
+            else nullcontext()
+        )
+        with execution_context:
+            async for message in self._query(prompt, options):
+                mapped = [
+                    self._redact_event(event, resolved_tools)
+                    for event in map_sdk_message(message)
+                ]
+                if self._tool_gate is not None:
+                    mapped = [event for event in mapped if event.type != "tool.request"]
+                if isinstance(message, StreamEvent):
                     for event in mapped:
-                        if event.type != "message.delta":
+                        if event.type == "message.start":
+                            if not stream_message_open:
+                                stream_message_open = True
+                                yield event
+                        elif event.type == "message.delta":
+                            partial_text_seen = True
+                            if not stream_message_open:
+                                stream_message_open = True
+                                yield RuntimeEvent(type="message.start")
                             yield event
-                    partial_text_seen = False
+                        elif event.type == "message.completed":
+                            if stream_message_open:
+                                stream_message_open = False
+                                yield event
+                        else:
+                            yield event
                     continue
-                contains_text = any(event.type == "message.delta" for event in mapped)
-                if contains_text:
-                    yield RuntimeEvent(type="message.start")
+                if isinstance(message, AssistantMessage):
+                    if partial_text_seen:
+                        for event in mapped:
+                            if event.type != "message.delta":
+                                yield event
+                        partial_text_seen = False
+                        continue
+                    contains_text = any(event.type == "message.delta" for event in mapped)
+                    if contains_text:
+                        yield RuntimeEvent(type="message.start")
+                    for event in mapped:
+                        yield event
+                    if contains_text:
+                        yield RuntimeEvent(type="message.completed")
+                    continue
                 for event in mapped:
                     yield event
-                if contains_text:
-                    yield RuntimeEvent(type="message.completed")
-                continue
-            for event in mapped:
-                yield event
         if stream_message_open:
             yield RuntimeEvent(type="message.completed")
