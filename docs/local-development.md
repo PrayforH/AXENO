@@ -112,7 +112,7 @@ make web-test
 make web-build
 ```
 
-完整领域开发流程见 [domain-agents.md](domain-agents.md)。本地 API 的默认 MCP Registry 为空；领域 Manifest 使用 `mcp:` 前，必须在服务端组合根注册对应逻辑 ID。真实 SDK 的执行前审批桥完成前，只接入只读 Python/MCP 工具。
+完整领域开发流程见 [domain-agents.md](domain-agents.md)。本地 API 的默认 MCP Registry 为空；领域 Manifest 使用 `mcp:` 前，必须在服务端组合根注册对应逻辑 ID。真实 SDK 已通过 `PreToolUse` 前置执行策略；本地 inline 审批 waiter 只适用于单 API 进程。
 
 ## Troubleshooting
 

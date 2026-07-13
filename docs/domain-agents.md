@@ -132,5 +132,5 @@ curl -sS http://127.0.0.1:8000/v1/agents \
 
 - 主 Agent 支持 builtin、Python 和已注册 MCP；subagent 暂只支持 builtin，声明自定义工具会显式失败。
 - MCP Registry 与 allowlist 属于服务端部署配置，Manifest 无权自行提升权限。
-- 当前真实 SDK 的工具前置审批桥仍在建设中。现有 Harness `tool.request` 策略事件不能单独证明工具执行前已拦截，因此在该桥完成前，不应给真实模型暴露有副作用的 Python/MCP 工具；优先使用只读工具。
-
+- 真实 SDK 模式已使用 catch-all `PreToolUse` Hook，在执行前完成 allow/deny/ask。Phase 1 的 inline 审批 waiter 只适用于单 API 进程；生产多副本需要用 Redis/PostgreSQL 通知或队列 continuation 替换本地 Future。
+- 工具参数会进入耐久事件用于审计。领域工具不得把 Token、密码或不必要的个人数据放进参数；字段级 schema 脱敏仍需在生产化阶段补齐。

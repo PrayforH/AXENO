@@ -82,4 +82,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP；subagent 自定义工具及真实 SDK 工具调用的执行前审批桥仍是明确的后续边界。
+Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成策略与审批；subagent 自定义工具、字段级工具参数脱敏和多进程持久化审批 continuation 仍是明确的后续边界。

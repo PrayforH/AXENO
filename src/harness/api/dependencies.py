@@ -33,6 +33,7 @@ from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
+from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
 
@@ -107,6 +108,7 @@ def build_memory_container(
         store=artifact_store,
         id_generator=id_generator,
     )
+    policy = PolicyEngine(default_policy_rules())
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
     else:
@@ -114,6 +116,11 @@ def build_memory_container(
             registry=registry,
             config=load_cc_switch_claude_config(
                 resolved_settings.cc_switch_settings_path
+            ),
+            tool_gate=SdkToolGate(
+                policy=policy,
+                approvals=approval_service,
+                events=event_service,
             ),
         )
     worker = RunOrchestrator(
@@ -123,7 +130,7 @@ def build_memory_container(
         runtime=runtime,
         sandbox=LocalSandboxProvider(),
         clock=clock,
-        policy=PolicyEngine(default_policy_rules()),
+        policy=policy,
         approvals=approval_service,
         workspaces=WorkspaceService(artifact_store),
         observability=observability,

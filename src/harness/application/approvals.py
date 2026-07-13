@@ -1,5 +1,6 @@
 """Approval request and decision use cases."""
 
+import asyncio
 from datetime import timedelta
 
 from harness.application.events import EventService
@@ -27,6 +28,25 @@ class ApprovalService:
         self._clock = clock
         self._id_generator = id_generator
         self._ttl = ttl
+        self._inline_waiters: dict[str, asyncio.Future[ApprovalStatus]] = {}
+
+    def has_inline_waiter(self, approval_id: str) -> bool:
+        return approval_id in self._inline_waiters
+
+    def _register_inline_waiter(self, approval_id: str) -> None:
+        if approval_id not in self._inline_waiters:
+            self._inline_waiters[approval_id] = (
+                asyncio.get_running_loop().create_future()
+            )
+
+    async def wait_for_decision(self, approval_id: str) -> ApprovalStatus:
+        future = self._inline_waiters.get(approval_id)
+        if future is None:
+            raise ConflictError(f"inline approval waiter is not registered: {approval_id}")
+        try:
+            return await future
+        finally:
+            self._inline_waiters.pop(approval_id, None)
 
     async def _move(self, run: Run, status: RunStatus) -> Run:
         updated = run.model_copy(
@@ -50,9 +70,12 @@ class ApprovalService:
         tool_call_id: str,
         reason: str,
         message_id: str | None = None,
+        inline: bool = False,
     ) -> ApprovalRequest:
         existing = await self._approvals.find_by_tool_call(tenant_id, run_id, tool_call_id)
         if existing is not None:
+            if inline and existing.status is ApprovalStatus.PENDING:
+                self._register_inline_waiter(existing.approval_id)
             return existing
         run = await self._runs.get(tenant_id, run_id)
         if run.status is not RunStatus.RUNNING:
@@ -68,6 +91,8 @@ class ApprovalService:
             expires_at=now + self._ttl,
             created_at=now,
         )
+        if inline:
+            self._register_inline_waiter(approval.approval_id)
         await self._approvals.add(approval)
         payload = approval.model_dump(mode="json")
         if message_id is not None:
@@ -129,4 +154,7 @@ class ApprovalService:
                 },
             )
             await self._move(run, RunStatus.REJECTED)
+        waiter = self._inline_waiters.get(approval_id)
+        if waiter is not None and not waiter.done():
+            waiter.set_result(decision)
         return updated

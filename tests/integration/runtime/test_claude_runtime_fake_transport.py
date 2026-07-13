@@ -7,11 +7,13 @@ import pytest
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    HookMatcher,
     McpServerConfig,
     ResultMessage,
     StreamEvent,
     TextBlock,
 )
+from claude_agent_sdk.types import HookEvent
 
 from harness.core.manifest import ToolSpec, load_manifest
 from harness.core.models import (
@@ -30,6 +32,15 @@ from harness.runtime.tools import (
     ToolResolutionError,
     ToolResolver,
 )
+
+
+class RecordingToolGate:
+    def __init__(self) -> None:
+        self.contexts: list[RuntimeContext] = []
+
+    def hooks(self, context: RuntimeContext) -> dict[HookEvent, list[HookMatcher]]:
+        self.contexts.append(context)
+        return {"PreToolUse": []}
 
 
 @pytest.mark.asyncio
@@ -68,11 +79,13 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
             session_id="sdk-session",
         )
 
+    gate = RecordingToolGate()
     runtime = ClaudeSdkRuntime(
         agent_version=version,
         routes=[route],
         route_secrets={"new-api-default": "super-secret"},
         query_factory=fake_query,
+        tool_gate=gate,
     )
     now = datetime.now(UTC)
     context = RuntimeContext(
@@ -105,6 +118,9 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
     assert options.env["ANTHROPIC_AUTH_TOKEN"] == "super-secret"
     assert options.model == "claude-sonnet-4-6"
     assert options.cwd == tmp_path
+    assert options.hooks is not None
+    assert "PreToolUse" in options.hooks
+    assert gate.contexts == [context]
     assert [event.type for event in events] == [
         "model.route.selected",
         "message.start",

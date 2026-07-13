@@ -17,11 +17,16 @@ async def decide_approval(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> ApprovalRequest:
+    inline_waiting = container.approvals.has_inline_waiter(approval_id)
     approval = await container.approvals.decide(
         tenant_id=identity.tenant_id,
         approval_id=approval_id,
         decision=body.decision,
     )
-    if container.auto_execute and body.decision.value == "approved":
+    if (
+        container.auto_execute
+        and body.decision.value == "approved"
+        and not inline_waiting
+    ):
         background_tasks.add_task(container.worker.execute, identity.tenant_id, approval.run_id)
     return approval

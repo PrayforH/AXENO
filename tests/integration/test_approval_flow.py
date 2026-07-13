@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
@@ -135,3 +136,52 @@ async def test_expired_approval_cannot_execute() -> None:
             approval_id=approval.approval_id,
             decision=ApprovalStatus.APPROVED,
         )
+
+
+@pytest.mark.asyncio
+async def test_inline_approval_wakes_the_waiting_sdk_call_and_cleans_up() -> None:
+    service, runs, events = await arrange()
+
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-inline",
+        reason="Bash requires review",
+        inline=True,
+    )
+
+    assert service.has_inline_waiter(approval.approval_id)
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[0].type == "approval.requested"
+    waiting = asyncio.create_task(service.wait_for_decision(approval.approval_id))
+    await service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+
+    assert await waiting is ApprovalStatus.APPROVED
+    assert not service.has_inline_waiter(approval.approval_id)
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_inline_rejection_wakes_the_sdk_call_with_rejected_status() -> None:
+    service, runs, _ = await arrange()
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-inline",
+        reason="review",
+        inline=True,
+    )
+    waiting = asyncio.create_task(service.wait_for_decision(approval.approval_id))
+
+    await service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.REJECTED,
+    )
+
+    assert await waiting is ApprovalStatus.REJECTED
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.REJECTED

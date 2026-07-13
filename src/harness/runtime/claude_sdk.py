@@ -19,6 +19,7 @@ from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.hooks import discard_sdk_stderr
 from harness.runtime.message_mapper import map_sdk_message
 from harness.runtime.model_router import ModelRouter
+from harness.runtime.sdk_tool_gate import ToolGate
 from harness.runtime.tools import ToolResolutionError, ToolResolver
 
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
@@ -40,6 +41,7 @@ class ClaudeSdkRuntime:
         query_factory: QueryFactory = _default_query,
         session_store: object | None = None,
         tool_resolver: ToolResolver | None = None,
+        tool_gate: ToolGate | None = None,
     ) -> None:
         self._agent_version = agent_version
         self._snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
@@ -49,6 +51,7 @@ class ClaudeSdkRuntime:
         self._query = query_factory
         self._session_store = session_store
         self._tool_resolver = tool_resolver or ToolResolver()
+        self._tool_gate = tool_gate
 
     def _options(self, context: RuntimeContext, route: ModelRoute) -> ClaudeAgentOptions:
         manifest = self._snapshot.manifest
@@ -99,6 +102,7 @@ class ClaudeSdkRuntime:
             include_partial_messages=True,
             strict_mcp_config=True,
             agents=agents or None,
+            hooks=self._tool_gate.hooks(context) if self._tool_gate is not None else None,
             skills=list(manifest.spec.skills),
             env=environment,
             session_store=store,
@@ -120,6 +124,8 @@ class ClaudeSdkRuntime:
         stream_message_open = False
         async for message in self._query(prompt, options):
             mapped = map_sdk_message(message)
+            if self._tool_gate is not None:
+                mapped = [event for event in mapped if event.type != "tool.request"]
             if isinstance(message, StreamEvent):
                 for event in mapped:
                     if event.type == "message.start":
