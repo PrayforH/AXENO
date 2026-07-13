@@ -41,6 +41,14 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
+Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。`make dev-up` 会幂等发布 `echo-agent@0.1.0`；打开页面后可直接输入普通问题。输入以下内容可以验证完整人工审批与产物流程：
+
+```text
+[approval] [artifact] 验证完整流程
+```
+
+审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。刷新页面会复用本地 thread，并由 CopilotRuntime 的 connect 路由回放已完成消息。原始 AG-UI、消息和状态只在“运行详情”中的 CopilotKit Inspector 查看。
+
 new-api 实际连通性是显式的可选 smoke：
 
 ```bash
@@ -55,4 +63,3 @@ uv run python scripts/smoke_new_api.py
 ## 当前边界
 
 Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。
-
