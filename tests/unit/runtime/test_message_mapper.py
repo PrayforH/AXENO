@@ -2,6 +2,11 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     StreamEvent,
+    SystemMessage,
+    TaskNotificationMessage,
+    TaskProgressMessage,
+    TaskStartedMessage,
+    TaskUpdatedMessage,
     TextBlock,
     ToolUseBlock,
 )
@@ -39,8 +44,11 @@ def test_maps_partial_text_and_subagent_lifecycle() -> None:
 
     events = map_sdk_message(partial)
 
-    assert [event.type for event in events] == ["subagent.delta", "message.delta"]
-    assert events[0].payload["parent_tool_use_id"] == "agent-tool-1"
+    assert [event.type for event in events] == ["subagent.delta"]
+    assert events[0].payload == {
+        "parent_tool_use_id": "agent-tool-1",
+        "text": "x",
+    }
 
 
 def test_maps_stream_message_lifecycle() -> None:
@@ -59,6 +67,94 @@ def test_maps_stream_message_lifecycle() -> None:
 
     assert [event.type for event in map_sdk_message(started)] == ["message.start"]
     assert [event.type for event in map_sdk_message(stopped)] == ["message.completed"]
+
+
+def test_maps_task_lifecycle_to_safe_subagent_events() -> None:
+    started = TaskStartedMessage(
+        subtype="task_started",
+        data={},
+        task_id="task-1",
+        description="Review architecture",
+        uuid="start-1",
+        session_id="session-1",
+        tool_use_id="tool-1",
+        task_type="helper",
+    )
+    progress = TaskProgressMessage(
+        subtype="task_progress",
+        data={},
+        task_id="task-1",
+        description="Review architecture",
+        usage={"total_tokens": 12, "tool_uses": 2, "duration_ms": 300},
+        uuid="progress-1",
+        session_id="session-1",
+        tool_use_id="tool-1",
+        last_tool_name="Read",
+    )
+    completed = TaskNotificationMessage(
+        subtype="task_notification",
+        data={},
+        task_id="task-1",
+        status="completed",
+        output_file="/private/never-show",
+        summary="Found two boundary issues",
+        uuid="complete-1",
+        session_id="session-1",
+        tool_use_id="tool-1",
+        usage={"total_tokens": 20, "tool_uses": 3, "duration_ms": 500},
+    )
+    failed = TaskUpdatedMessage(
+        subtype="task_updated",
+        data={},
+        task_id="task-2",
+        patch={"status": "failed", "secret": "never-show"},
+        status="failed",
+        session_id="session-1",
+    )
+
+    events = [
+        map_sdk_message(started)[0],
+        map_sdk_message(progress)[0],
+        map_sdk_message(completed)[0],
+        map_sdk_message(failed)[0],
+    ]
+
+    assert [event.type for event in events] == [
+        "subagent.started",
+        "subagent.progress",
+        "subagent.completed",
+        "subagent.failed",
+    ]
+    assert events[0].payload == {
+        "task_id": "task-1",
+        "description": "Review architecture",
+        "status": "running",
+        "parent_tool_use_id": "tool-1",
+        "task_type": "helper",
+    }
+    assert events[1].payload["last_tool_name"] == "Read"
+    assert events[2].payload["summary"] == "Found two boundary issues"
+    assert "never-show" not in repr(events)
+
+
+def test_generic_system_message_whitelists_status_metadata() -> None:
+    message = SystemMessage(
+        subtype="status",
+        data={
+            "session_id": "session-1",
+            "status": "compacting",
+            "secret": "never-show",
+        },
+    )
+
+    events = map_sdk_message(message)
+
+    assert events[0].payload == {
+        "subtype": "status",
+        "session_id": "session-1",
+        "status": "compacting",
+    }
+    assert "never-show" not in repr(events)
 
 
 def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
