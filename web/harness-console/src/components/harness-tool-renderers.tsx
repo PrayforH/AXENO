@@ -7,6 +7,8 @@ import {
 import { z } from "zod";
 import { ApprovalCard, type ApprovalDetails } from "./approval-card";
 import { ArtifactCard, type ArtifactDetails } from "./artifact-list";
+import { SubagentCard } from "./subagent-card";
+import { ToolCard } from "./tool-card";
 
 const approvalSchema = z.object({
   approval_id: z.string(),
@@ -27,7 +29,29 @@ const artifactSchema = z.object({
   status: z.string().optional(),
 });
 
+const subagentSchema = z.object({
+  description: z.string().optional(),
+  prompt: z.string().optional(),
+  subagent_type: z.string().optional(),
+}).catchall(z.unknown());
+
 export function HarnessToolRenderers() {
+  for (const name of ["Task", "Agent"]) {
+    // Tool hooks are registered in a stable, unconditional order.
+    useRenderTool({
+      agentId: "harness-agent",
+      name,
+      parameters: subagentSchema,
+      render: ({ status, parameters, result }) => (
+        <SubagentCard
+          status={status}
+          parameters={parameters}
+          result={result}
+        />
+      ),
+    });
+  }
+
   useRenderTool({
     agentId: "harness-agent",
     name: "harness_request_approval",
@@ -78,6 +102,10 @@ export function HarnessToolRenderers() {
     },
   });
 
-  useDefaultRenderTool();
+  useDefaultRenderTool({
+    render: ({ name, status, parameters, result }) => (
+      <ToolCard name={name} status={status} args={parameters} result={result} />
+    ),
+  });
   return null;
 }

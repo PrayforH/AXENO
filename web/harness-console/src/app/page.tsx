@@ -54,13 +54,14 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="chat-stage" aria-label="Agent 对话">
-        <div className="run-rail" aria-hidden="true">
-          <span>LIVE</span>
-        </div>
-        <div className="chat-surface">
-          {threadId ? (
-            <CopilotChat
+      <div className={`workspace-stage ${developerMode ? "inspector-open" : ""}`}>
+        <section className="chat-stage" aria-label="Agent 对话">
+          <div className="run-rail" aria-hidden="true">
+            <span>LIVE</span>
+          </div>
+          <div className="chat-surface">
+            {threadId ? (
+              <CopilotChat
               key={threadId}
               className="harness-chat"
               agentId="harness-agent"
@@ -77,16 +78,18 @@ export default function Home() {
                 userMessageToolbarCopyMessageLabel: "复制消息",
                 userMessageToolbarEditMessageLabel: "编辑消息",
               }}
-            />
-          ) : (
-            <div className="chat-loading" role="status">
-              正在恢复会话…
-            </div>
-          )}
-        </div>
-      </section>
-
-      {developerMode && <DeveloperDrawer threadId={threadId} />}
+              />
+            ) : (
+              <div className="chat-loading" role="status">
+                正在恢复会话…
+              </div>
+            )}
+          </div>
+        </section>
+        {developerMode && (
+          <DeveloperDrawer threadId={threadId} onClose={() => setDeveloperMode(false)} />
+        )}
+      </div>
     </main>
   );
 }
