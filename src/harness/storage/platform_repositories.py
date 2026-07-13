@@ -71,18 +71,18 @@ class PostgresSessionRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: Session) -> None:
-        async with self._sessions() as session:
-            session.add(
+    async def add(self, session: Session) -> None:
+        async with self._sessions() as db_session:
+            db_session.add(
                 SessionRow(
-                    tenant_id=value.tenant_id,
-                    session_id=value.session_id,
-                    user_id=value.user_id,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=session.tenant_id,
+                    session_id=session.session_id,
+                    user_id=session.user_id,
+                    payload=session.model_dump(mode="json"),
                 )
             )
             await _commit_add(
-                session, message=f"session already exists: {value.session_id}"
+                db_session, message=f"session already exists: {session.session_id}"
             )
 
     async def get(self, tenant_id: str, session_id: str) -> Session:
@@ -97,20 +97,20 @@ class PostgresApprovalRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: ApprovalRequest) -> None:
+    async def add(self, approval: ApprovalRequest) -> None:
         async with self._sessions() as session:
             session.add(
                 ApprovalRow(
-                    tenant_id=value.tenant_id,
-                    approval_id=value.approval_id,
-                    run_id=value.run_id,
-                    tool_call_id=value.tool_call_id,
-                    status=value.status.value,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=approval.tenant_id,
+                    approval_id=approval.approval_id,
+                    run_id=approval.run_id,
+                    tool_call_id=approval.tool_call_id,
+                    status=approval.status.value,
+                    payload=approval.model_dump(mode="json"),
                 )
             )
             await _commit_add(
-                session, message=f"approval already exists: {value.approval_id}"
+                session, message=f"approval already exists: {approval.approval_id}"
             )
 
     async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
@@ -157,18 +157,18 @@ class PostgresArtifactRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: Artifact) -> None:
+    async def add(self, artifact: Artifact) -> None:
         async with self._sessions() as session:
             session.add(
                 ArtifactRow(
-                    tenant_id=value.tenant_id,
-                    artifact_id=value.artifact_id,
-                    run_id=value.run_id,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=artifact.tenant_id,
+                    artifact_id=artifact.artifact_id,
+                    run_id=artifact.run_id,
+                    payload=artifact.model_dump(mode="json"),
                 )
             )
             await _commit_add(
-                session, message=f"artifact already exists: {value.artifact_id}"
+                session, message=f"artifact already exists: {artifact.artifact_id}"
             )
 
     async def get(self, tenant_id: str, artifact_id: str) -> Artifact:
@@ -178,20 +178,20 @@ class PostgresArtifactRepository:
                 raise NotFoundError(f"artifact not found: {artifact_id}")
             return Artifact.model_validate(row.payload)
 
-    async def update(self, value: Artifact) -> None:
+    async def update(self, artifact: Artifact) -> None:
         statement = (
             update(ArtifactRow)
             .where(
-                ArtifactRow.tenant_id == value.tenant_id,
-                ArtifactRow.artifact_id == value.artifact_id,
+                ArtifactRow.tenant_id == artifact.tenant_id,
+                ArtifactRow.artifact_id == artifact.artifact_id,
             )
-            .values(run_id=value.run_id, payload=value.model_dump(mode="json"))
+            .values(run_id=artifact.run_id, payload=artifact.model_dump(mode="json"))
         )
         async with self._sessions() as session:
             result = await session.execute(statement)
             await session.commit()
             if not cast(CursorResult[Any], result).rowcount:
-                raise NotFoundError(f"artifact not found: {value.artifact_id}")
+                raise NotFoundError(f"artifact not found: {artifact.artifact_id}")
 
     async def list_for_run(self, tenant_id: str, run_id: str) -> list[Artifact]:
         statement = select(ArtifactRow.payload).where(
@@ -208,19 +208,19 @@ class PostgresInputArtifactRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: InputArtifact) -> None:
+    async def add(self, artifact: InputArtifact) -> None:
         async with self._sessions() as session:
             session.add(
                 InputArtifactRow(
-                    tenant_id=value.tenant_id,
-                    input_artifact_id=value.input_artifact_id,
-                    user_id=value.user_id,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=artifact.tenant_id,
+                    input_artifact_id=artifact.input_artifact_id,
+                    user_id=artifact.user_id,
+                    payload=artifact.model_dump(mode="json"),
                 )
             )
             await _commit_add(
                 session,
-                message=f"input artifact already exists: {value.input_artifact_id}",
+                message=f"input artifact already exists: {artifact.input_artifact_id}",
             )
 
     async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact:
@@ -232,21 +232,21 @@ class PostgresInputArtifactRepository:
                 raise NotFoundError(f"input artifact not found: {input_artifact_id}")
             return InputArtifact.model_validate(row.payload)
 
-    async def update(self, value: InputArtifact) -> None:
+    async def update(self, artifact: InputArtifact) -> None:
         statement = (
             update(InputArtifactRow)
             .where(
-                InputArtifactRow.tenant_id == value.tenant_id,
-                InputArtifactRow.input_artifact_id == value.input_artifact_id,
+                InputArtifactRow.tenant_id == artifact.tenant_id,
+                InputArtifactRow.input_artifact_id == artifact.input_artifact_id,
             )
-            .values(user_id=value.user_id, payload=value.model_dump(mode="json"))
+            .values(user_id=artifact.user_id, payload=artifact.model_dump(mode="json"))
         )
         async with self._sessions() as session:
             result = await session.execute(statement)
             await session.commit()
             if not cast(CursorResult[Any], result).rowcount:
                 raise NotFoundError(
-                    f"input artifact not found: {value.input_artifact_id}"
+                    f"input artifact not found: {artifact.input_artifact_id}"
                 )
 
 
@@ -254,15 +254,15 @@ class PostgresUserMemoryRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: UserMemory) -> None:
+    async def add(self, memory: UserMemory) -> None:
         async with self._sessions() as session:
             session.add(
                 UserMemoryRow(
-                    tenant_id=value.tenant_id,
-                    user_id=value.user_id,
-                    agent_name=value.agent_name,
-                    version=value.version,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=memory.tenant_id,
+                    user_id=memory.user_id,
+                    agent_name=memory.agent_name,
+                    version=memory.version,
+                    payload=memory.model_dump(mode="json"),
                 )
             )
             await _commit_add(session, message="user memory already exists")
@@ -315,37 +315,37 @@ class PostgresThreadFileRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: ThreadFile) -> None:
+    async def add(self, file: ThreadFile) -> None:
         async with self._sessions() as session:
-            if value.parent_file_id is not None:
+            if file.parent_file_id is not None:
                 parent = await session.get(
-                    ThreadFileRow, (value.tenant_id, value.parent_file_id)
+                    ThreadFileRow, (file.tenant_id, file.parent_file_id)
                 )
                 if parent is None:
                     raise NotFoundError(
-                        f"parent thread file not found: {value.parent_file_id}"
+                        f"parent thread file not found: {file.parent_file_id}"
                     )
                 parent_value = ThreadFile.model_validate(parent.payload)
                 if (parent_value.user_id, parent_value.session_id) != (
-                    value.user_id,
-                    value.session_id,
+                    file.user_id,
+                    file.session_id,
                 ):
                     raise ConflictError(
                         "derived file must share its parent's thread scope"
                     )
             session.add(
                 ThreadFileRow(
-                    tenant_id=value.tenant_id,
-                    file_id=value.file_id,
-                    user_id=value.user_id,
-                    session_id=value.session_id,
-                    parent_file_id=value.parent_file_id,
-                    created_at=value.created_at,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=file.tenant_id,
+                    file_id=file.file_id,
+                    user_id=file.user_id,
+                    session_id=file.session_id,
+                    parent_file_id=file.parent_file_id,
+                    created_at=file.created_at,
+                    payload=file.model_dump(mode="json"),
                 )
             )
             await _commit_add(
-                session, message=f"thread file already exists: {value.file_id}"
+                session, message=f"thread file already exists: {file.file_id}"
             )
 
     async def get(self, tenant_id: str, file_id: str) -> ThreadFile:
@@ -395,20 +395,20 @@ class PostgresWorkspaceSnapshotRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: WorkspaceSnapshot) -> None:
+    async def add(self, snapshot: WorkspaceSnapshot) -> None:
         async with self._sessions() as session:
             session.add(
                 WorkspaceSnapshotRow(
-                    tenant_id=value.tenant_id,
-                    snapshot_id=value.snapshot_id,
-                    session_id=value.session_id,
-                    created_at=value.created_at,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=snapshot.tenant_id,
+                    snapshot_id=snapshot.snapshot_id,
+                    session_id=snapshot.session_id,
+                    created_at=snapshot.created_at,
+                    payload=snapshot.model_dump(mode="json"),
                 )
             )
             await _commit_add(
                 session,
-                message=f"workspace snapshot already exists: {value.snapshot_id}",
+                message=f"workspace snapshot already exists: {snapshot.snapshot_id}",
             )
 
     async def get(self, tenant_id: str, snapshot_id: str) -> WorkspaceSnapshot:
@@ -444,15 +444,15 @@ class PostgresAguiThreadBindingRepository:
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
 
-    async def add(self, value: AguiThreadBinding) -> None:
+    async def add(self, binding: AguiThreadBinding) -> None:
         async with self._sessions() as session:
             session.add(
                 AguiThreadBindingRow(
-                    tenant_id=value.tenant_id,
-                    user_id=value.user_id,
-                    thread_id=value.thread_id,
-                    session_id=value.session_id,
-                    payload=value.model_dump(mode="json"),
+                    tenant_id=binding.tenant_id,
+                    user_id=binding.user_id,
+                    thread_id=binding.thread_id,
+                    session_id=binding.session_id,
+                    payload=binding.model_dump(mode="json"),
                 )
             )
             await _commit_add(session, message="AG-UI thread binding already exists")

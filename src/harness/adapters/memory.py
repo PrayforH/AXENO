@@ -20,7 +20,7 @@ from harness.core.models import (
     UserMemory,
     WorkspaceSnapshot,
 )
-from harness.core.ports import StoredObject
+from harness.core.ports import RunTask, StoredObject
 
 
 class InMemoryAgentRegistry:
@@ -408,17 +408,18 @@ class InMemoryAguiThreadBindingRepository:
 
 class InMemoryTaskQueue:
     def __init__(self) -> None:
-        self._items: deque[str] = deque()
-        self._pending: set[str] = set()
+        self._items: deque[RunTask] = deque()
+        self._pending: set[tuple[str, str]] = set()
 
-    async def enqueue(self, run_id: str) -> None:
-        if run_id not in self._pending:
-            self._pending.add(run_id)
-            self._items.append(run_id)
+    async def enqueue(self, task: RunTask) -> None:
+        key = (task.tenant_id, task.run_id)
+        if key not in self._pending:
+            self._pending.add(key)
+            self._items.append(task)
 
-    async def dequeue(self) -> str | None:
+    async def dequeue(self) -> RunTask | None:
         if not self._items:
             return None
-        run_id = self._items.popleft()
-        self._pending.remove(run_id)
-        return run_id
+        task = self._items.popleft()
+        self._pending.remove((task.tenant_id, task.run_id))
+        return task

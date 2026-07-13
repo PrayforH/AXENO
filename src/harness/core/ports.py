@@ -29,6 +29,13 @@ class StoredObject(BaseModel):
     size_bytes: int
 
 
+class RunTask(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tenant_id: str
+    run_id: str
+
+
 class AgentRegistry(Protocol):
     async def add(self, version: AgentVersion) -> None: ...
 
@@ -152,6 +159,6 @@ class AguiThreadBindingRepository(Protocol):
 
 
 class TaskQueue(Protocol):
-    async def enqueue(self, run_id: str) -> None: ...
+    async def enqueue(self, task: RunTask) -> None: ...
 
-    async def dequeue(self) -> str | None: ...
+    async def dequeue(self) -> RunTask | None: ...

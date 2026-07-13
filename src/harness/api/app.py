@@ -1,5 +1,8 @@
 """FastAPI application factory."""
 
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -52,7 +55,19 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
 
 
 def create_app(container: ApiContainer) -> FastAPI:
-    app = FastAPI(title="Claude Agent Harness", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
+        try:
+            yield
+        finally:
+            if container.close is not None:
+                await container.close()
+
+    app = FastAPI(
+        title="Claude Agent Harness",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
     app.state.container = container
     app.add_middleware(
         CORSMiddleware,
@@ -89,8 +104,16 @@ def create_memory_app(
     )
 
 
+def create_configured_app(settings: Settings) -> FastAPI:
+    if settings.environment == "production":
+        from harness.composition import build_production_container
+
+        return create_app(build_production_container(settings))
+    return create_memory_app(
+        auto_execute=settings.local_auto_execute,
+        settings=settings,
+    )
+
+
 settings = Settings()
-app = create_memory_app(
-    auto_execute=settings.local_auto_execute,
-    settings=settings,
-)
+app = create_configured_app(settings)

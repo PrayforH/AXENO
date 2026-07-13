@@ -32,6 +32,7 @@ dependencies = [
 
 [project.scripts]
 harness = "harness.cli:entrypoint"
+harness-worker = "harness.worker.main:entrypoint"
 
 [dependency-groups]
 dev = [

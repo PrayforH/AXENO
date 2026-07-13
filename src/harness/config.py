@@ -37,6 +37,8 @@ class Settings(BaseSettings):
 
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_api_key: SecretStr = SecretStr("")
+    anthropic_model: str = ""
+    worker_poll_interval_seconds: float = 0.25
 
     daytona_api_key: SecretStr = SecretStr("")
     daytona_api_url: str = "https://app.daytona.io/api"

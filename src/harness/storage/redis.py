@@ -5,6 +5,7 @@ from collections.abc import Awaitable
 from typing import Protocol
 
 from harness.core.events import RunEvent
+from harness.core.ports import RunTask
 
 
 class AsyncRedisClient(Protocol):
@@ -38,14 +39,17 @@ class RedisTaskQueue:
         self._pending = f"{namespace}:queue:pending"
         self._queue = f"{namespace}:queue:runs"
 
-    async def enqueue(self, run_id: str) -> None:
-        await self._client.eval(_ENQUEUE, 2, self._pending, self._queue, run_id)
+    async def enqueue(self, task: RunTask) -> None:
+        payload = task.model_dump_json()
+        await self._client.eval(_ENQUEUE, 2, self._pending, self._queue, payload)
 
-    async def dequeue(self) -> str | None:
+    async def dequeue(self) -> RunTask | None:
         value = await self._client.eval(_DEQUEUE, 2, self._pending, self._queue)
         if value is None:
             return None
-        return value.decode() if isinstance(value, bytes) else str(value)
+        return RunTask.model_validate_json(
+            value.decode() if isinstance(value, bytes) else str(value)
+        )
 
 
 class RedisEventBus:

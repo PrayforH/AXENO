@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import cast
 
 from ag_ui.core import (
@@ -12,11 +13,14 @@ from ag_ui.core import (
     TextInputContent,
 )
 
+from harness.adapters.memory import InMemoryAguiThreadBindingRepository
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.core.errors import ConflictError, NotFoundError
+from harness.core.models import AguiThreadBinding as StoredAguiThreadBinding
 from harness.core.models import Run
+from harness.core.ports import AguiThreadBindingRepository
 
 
 @dataclass(frozen=True)
@@ -33,21 +37,25 @@ class AguiRunService:
         sessions: SessionService,
         runs: RunService,
         input_artifacts: InputArtifactService,
+        bindings: AguiThreadBindingRepository | None = None,
     ) -> None:
         self._sessions = sessions
         self._run_service = runs
         self._input_artifacts = input_artifacts
-        self._bindings: dict[tuple[str, str, str], AguiThreadBinding] = {}
+        self._bindings = bindings or InMemoryAguiThreadBindingRepository()
         self._run_bindings: dict[tuple[str, str, str, str], str] = {}
         self._lock = asyncio.Lock()
 
     async def get_binding(
         self, *, tenant_id: str, user_id: str, thread_id: str
     ) -> AguiThreadBinding:
-        try:
-            return self._bindings[(tenant_id, user_id, thread_id)]
-        except KeyError as error:
-            raise NotFoundError(f"AG-UI thread is not bound: {thread_id}") from error
+        stored = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
+        session = await self._sessions.get(tenant_id, stored.session_id)
+        return AguiThreadBinding(
+            session_id=session.session_id,
+            agent_name=session.agent_name,
+            agent_version=session.agent_version,
+        )
 
     async def create_run(
         self,
@@ -112,10 +120,20 @@ class AguiRunService:
         agent_name: str,
         agent_version: str,
     ) -> AguiThreadBinding:
-        key = (tenant_id, user_id, thread_id)
         async with self._lock:
-            existing = self._bindings.get(key)
-            if existing is not None:
+            try:
+                stored = await self._bindings.get_by_thread(
+                    tenant_id, user_id, thread_id
+                )
+            except NotFoundError:
+                stored = None
+            if stored is not None:
+                session = await self._sessions.get(tenant_id, stored.session_id)
+                existing = AguiThreadBinding(
+                    session_id=session.session_id,
+                    agent_name=session.agent_name,
+                    agent_version=session.agent_version,
+                )
                 if (existing.agent_name, existing.agent_version) != (agent_name, agent_version):
                     raise ConflictError(
                         f"AG-UI thread {thread_id} is already bound to "
@@ -130,7 +148,17 @@ class AguiRunService:
                 agent_name=agent_name,
                 agent_version=agent_version,
             )
-            self._bindings[key] = binding
+            timestamp = datetime.now(UTC)
+            await self._bindings.add(
+                StoredAguiThreadBinding(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    session_id=session.session_id,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
             return binding
 
 

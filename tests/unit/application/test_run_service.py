@@ -59,7 +59,7 @@ async def test_create_run_is_idempotent_and_queues_once() -> None:
 
     assert first == second
     assert first.status is RunStatus.QUEUED
-    assert await queue.dequeue() == first.run_id
+    assert (await queue.dequeue()).run_id == first.run_id  # type: ignore[union-attr]
     assert await queue.dequeue() is None
     stored_events = await events.list_after("tenant-a", first.run_id, 0)
     assert [(item.sequence, item.type) for item in stored_events] == [(1, "run.queued")]

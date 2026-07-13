@@ -1,5 +1,6 @@
 """FastAPI dependencies and the local in-memory composition root."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
@@ -35,6 +36,7 @@ from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
 from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
+from harness.core.ports import EventRepository, TaskQueue
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
@@ -68,12 +70,14 @@ class ApiContainer:
     input_artifacts: InputArtifactService
     file_catalog: FileCatalogService
     memory: UserMemoryService
-    events: InMemoryEventRepository
+    events: EventRepository
+    task_queue: TaskQueue
     observability: Observability
     runtime: AgentRuntime
     worker: RunOrchestrator
     agui: AguiRunService
     auto_execute: bool
+    close: Callable[[], Awaitable[None]] | None = None
 
 
 def build_memory_container(
@@ -221,6 +225,7 @@ def build_memory_container(
         file_catalog=file_catalog_service,
         memory=memory_service,
         events=events,
+        task_queue=queue,
         observability=observability,
         runtime=runtime,
         worker=worker,

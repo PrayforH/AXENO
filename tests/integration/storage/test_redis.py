@@ -3,6 +3,7 @@ from typing import cast
 import pytest
 from redis.asyncio import Redis
 
+from harness.core.ports import RunTask
 from harness.storage.redis import AsyncRedisClient, RedisTaskQueue
 
 
@@ -14,9 +15,10 @@ async def test_redis_queue_deduplicates_delivery() -> None:
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = RedisTaskQueue(cast(AsyncRedisClient, client), namespace="test")
     try:
-        await queue.enqueue("run-1")
-        await queue.enqueue("run-1")
-        assert await queue.dequeue() == "run-1"
+        task = RunTask(tenant_id="tenant-a", run_id="run-1")
+        await queue.enqueue(task)
+        await queue.enqueue(task)
+        assert await queue.dequeue() == task
         assert await queue.dequeue() is None
     finally:
         await client.aclose()

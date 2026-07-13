@@ -16,6 +16,7 @@ from harness.core.models import (
     RunStatus,
     Session,
 )
+from harness.core.ports import RunTask
 
 
 def now() -> datetime:
@@ -87,9 +88,9 @@ async def test_run_repository_compare_and_set_prevents_stale_writes() -> None:
 async def test_task_queue_is_idempotent() -> None:
     queue = InMemoryTaskQueue()
 
-    await queue.enqueue("run-1")
-    await queue.enqueue("run-1")
+    task = RunTask(tenant_id="tenant-a", run_id="run-1")
+    await queue.enqueue(task)
+    await queue.enqueue(task)
 
-    assert await queue.dequeue() == "run-1"
+    assert await queue.dequeue() == task
     assert await queue.dequeue() is None
-

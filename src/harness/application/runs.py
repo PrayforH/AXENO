@@ -4,7 +4,7 @@ from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
 from harness.core.models import Run, RunStatus
-from harness.core.ports import RunRepository, SessionRepository, TaskQueue
+from harness.core.ports import RunRepository, RunTask, SessionRepository, TaskQueue
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
 
@@ -60,7 +60,7 @@ class RunService:
             session_id=session_id,
             event_type="run.queued",
         )
-        await self._queue.enqueue(run.run_id)
+        await self._queue.enqueue(RunTask(tenant_id=tenant_id, run_id=run.run_id))
         return run
 
     async def get(self, tenant_id: str, run_id: str) -> Run:
