@@ -22,6 +22,14 @@ cd web/harness-console && npm install && cd ../..
 make dev-up
 ```
 
+使用 cc-switch 当前已应用的 Claude Provider 启动真实模型模式：
+
+```bash
+make dev-up-cc-switch
+```
+
+该命令只在 API 启动时读取 `~/.claude/settings.json`，不会把网关令牌写入项目。cc-switch 切换 Provider 后需要重启 Harness。
+
 打开：
 
 - Harness API / Swagger: <http://127.0.0.1:8000/docs>
@@ -41,7 +49,7 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
-Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。`make dev-up` 会幂等发布 `echo-agent@0.1.0`；打开页面后可直接输入普通问题。输入以下内容可以验证完整人工审批与产物流程：
+Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Claude Provider。两种模式都会幂等发布 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程

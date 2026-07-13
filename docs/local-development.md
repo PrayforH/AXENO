@@ -13,7 +13,15 @@ make dev-up
 make dev-down
 ```
 
-`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布 `echo-agent@0.1.0`。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。
+连接 cc-switch 当前 Claude Provider：
+
+```bash
+make dev-up-cc-switch
+```
+
+真实模式在 API 启动时读取 `~/.claude/settings.json` 中的 Anthropic endpoint、model 和 credential。凭据不会复制到仓库文件或日志；cc-switch 切换 Provider 后执行 `make dev-down && make dev-up-cc-switch`。
+
+`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布 `echo-agent@0.1.0`。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
 
 如果本机 Docker 配置引用了缺失的 `docker-credential-osxkeychain`，脚本只对本次公共镜像拉取临时使用仓库内的匿名 helper，不修改全局 Docker 配置。
 

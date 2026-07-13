@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck verify dev-up dev-down migrate e2e web-test web-build
+.PHONY: install test lint typecheck verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build
 
 install:
 	uv sync --group dev
@@ -16,6 +16,9 @@ verify: lint typecheck test
 
 dev-up:
 	bash scripts/dev_up.sh
+
+dev-up-cc-switch:
+	HARNESS_RUNTIME=claude-sdk bash scripts/dev_up.sh
 
 dev-down:
 	bash scripts/dev_down.sh

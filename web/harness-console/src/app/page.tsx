@@ -4,6 +4,7 @@ import { CopilotChat } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
 import { DeveloperDrawer } from "../components/developer-drawer";
 import { HarnessToolRenderers } from "../components/harness-tool-renderers";
+import { runtimeDisclaimer } from "../lib/runtime-label";
 import { createNewThread, loadOrCreateThread } from "../lib/thread-store";
 
 export default function Home() {
@@ -68,7 +69,9 @@ export default function Home() {
                 chatInputPlaceholder: "描述你要让 Agent 完成的任务…",
                 welcomeMessageText:
                   "开始一次真实运行。你可以直接提问，或输入 [approval] [artifact] 验证审批与产物流程。",
-                chatDisclaimerText: "本地 Fake Runtime · Langfuse 默认关闭",
+                chatDisclaimerText: runtimeDisclaimer(
+                  process.env.NEXT_PUBLIC_HARNESS_RUNTIME,
+                ),
                 assistantMessageToolbarCopyMessageLabel: "复制回答",
                 assistantMessageToolbarRegenerateLabel: "重新运行",
                 userMessageToolbarCopyMessageLabel: "复制消息",
