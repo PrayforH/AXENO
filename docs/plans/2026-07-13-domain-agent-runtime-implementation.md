@@ -4,7 +4,7 @@
 
 **Goal:** Resolve Manifest builtin/Python/MCP tools into Claude Agent SDK options and provide a minimal CLI for creating and validating domain Agent packages.
 
-**Architecture:** A fail-closed `ToolResolver` turns logical Manifest references into immutable builtin, MCP server, and explicit allowlist collections. Python exports are in-process SDK MCP tools; external MCP references are supplied by a server-owned registry. `ClaudeSdkRuntime` consumes the resolved result. A small argparse CLI reuses the production Manifest publisher for scaffolding validation.
+**Architecture:** A fail-closed `ToolResolver` turns logical Manifest references into immutable builtin, MCP server, and explicit allowlist collections. Python exports are in-process SDK MCP tools; external MCP references are supplied by a server-owned registry. `ClaudeSdkRuntime` consumes the resolved result. A small argparse CLI reuses the production Manifest loader for scaffolding validation.
 
 **Tech Stack:** Python 3.12, Claude Agent SDK, Pydantic, argparse, pytest, Ruff, Pyright.
 
@@ -78,7 +78,7 @@ Expected: FAIL because the CLI does not exist.
 
 **Step 3: Implement the minimal CLI**
 
-Use argparse with `agent init` and `agent validate`. Render a conservative template, reuse `publish_manifest`, and keep all output deterministic and secret-free.
+Use argparse with `agent init` and `agent validate`. Render a conservative template, reuse `load_manifest`, and keep all output deterministic and secret-free.
 
 **Step 4: Verify GREEN**
 
@@ -111,4 +111,3 @@ Inspect tool permission timing, approval state transitions, secret boundaries, s
 **Step 4: Continue with the highest-risk finding**
 
 Unless verification exposes a regression, implement the real SDK pre-execution permission bridge next, using a separate approved design and TDD plan.
-

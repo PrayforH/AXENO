@@ -18,9 +18,13 @@
 
 ```bash
 uv sync --group dev
+uv run harness agent init invoice-reviewer
+uv run harness agent validate agents/invoice-reviewer/agent.yaml
 cd web/harness-console && npm install && cd ../..
 make dev-up
 ```
+
+领域 Agent 的 prompt、Python Tool、外部 MCP、发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)。
 
 使用 cc-switch 当前已应用的 Claude Provider 启动真实模型模式：
 
@@ -78,4 +82,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。
+Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP；subagent 自定义工具及真实 SDK 工具调用的执行前审批桥仍是明确的后续边界。
