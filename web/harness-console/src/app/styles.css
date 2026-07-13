@@ -223,30 +223,50 @@ button:focus-visible,
   font-size: 13px;
 }
 
-.developer-peek {
+.developer-drawer {
   min-height: 42px;
-  padding: 8px 16px 8px 54px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  padding: 10px 16px 10px 54px;
+  display: flex;
   align-items: center;
-  gap: 8px 12px;
+  justify-content: space-between;
+  gap: 18px;
   border-top: 1px solid var(--line);
   background: #111916;
   color: #d8e4de;
   font: 11px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.developer-peek span {
+.developer-grid {
+  min-width: 0;
+  display: flex;
+  gap: 18px;
+}
+
+.developer-row {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.developer-row span {
   color: #78b69d;
   font-size: 9px;
   letter-spacing: 0.12em;
 }
 
-.developer-peek code {
+.developer-row code {
   min-width: 0;
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.developer-drawer p {
+  margin: 0;
+  max-width: 360px;
+  color: #91a49b;
+  font: 11px/1.45 "Avenir Next", sans-serif;
 }
 
 .domain-card {
@@ -459,9 +479,15 @@ button:focus-visible,
     left: 4px;
   }
 
-  .developer-peek {
+  .developer-drawer {
     padding-left: 12px;
-    grid-template-columns: auto minmax(0, 1fr);
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .developer-grid {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .artifact-domain-card {

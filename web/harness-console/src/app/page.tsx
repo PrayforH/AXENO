@@ -2,6 +2,7 @@
 
 import { CopilotChat } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
+import { DeveloperDrawer } from "../components/developer-drawer";
 import { HarnessToolRenderers } from "../components/harness-tool-renderers";
 import { createNewThread, loadOrCreateThread } from "../lib/thread-store";
 
@@ -82,14 +83,7 @@ export default function Home() {
         </div>
       </section>
 
-      {developerMode && (
-        <aside className="developer-peek" aria-label="运行详情">
-          <span>THREAD</span>
-          <code>{threadId || "initializing"}</code>
-          <span>ROUTE</span>
-          <code>/api/copilotkit → harness-agent</code>
-        </aside>
-      )}
+      {developerMode && <DeveloperDrawer threadId={threadId} />}
     </main>
   );
 }
