@@ -7,6 +7,7 @@ import { useEffect, useMemo } from "react";
 import { activityStore } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
+import { uploadFeedbackStore } from "../lib/upload-feedback-store";
 
 export function AssistantRuntimeShell({
   threadId,
@@ -21,7 +22,10 @@ export function AssistantRuntimeShell({
     return next;
   }, [threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
-  useEffect(() => activityStore.clear(), [threadId]);
+  useEffect(() => {
+    activityStore.clear();
+    uploadFeedbackStore.clear();
+  }, [threadId]);
   const runtime = useAgUiRuntime({
     agent,
     showThinking: true,

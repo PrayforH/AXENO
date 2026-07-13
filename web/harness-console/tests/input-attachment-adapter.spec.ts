@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { PendingAttachment } from "@assistant-ui/react";
 import { createInputAttachmentAdapter } from "../src/lib/input-attachment-adapter";
+import { uploadFeedbackStore, uploadKey } from "../src/lib/upload-feedback-store";
 
 describe("Harness input attachment adapter", () => {
+  beforeEach(() => uploadFeedbackStore.clear());
+
   it("uploads once, then sends only the server-issued opaque id", async () => {
     let uploadedBody: FormData | undefined;
     const fetcher: typeof fetch = async (_input, init) => {
@@ -19,16 +22,39 @@ describe("Harness input attachment adapter", () => {
       );
     };
     const adapter = createInputAttachmentAdapter(fetcher);
+    expect(adapter.accept).toBe("*");
     const file = new File(["local file content"], "facts.txt", {
       type: "text/plain",
     });
 
-    const pending = (await adapter.add({ file })) as PendingAttachment;
-    const complete = await adapter.send(pending);
+    const addition = adapter.add({ file });
+    expect(Symbol.asyncIterator in addition).toBe(true);
+    const states: PendingAttachment[] = [];
+    for await (const state of addition as AsyncGenerator<PendingAttachment>) {
+      states.push(state);
+    }
+    const [uploading, pending] = states;
+
+    expect(uploading).toMatchObject({
+      id: pending?.id,
+      name: "facts.txt",
+      status: { type: "running", reason: "uploading", progress: 0 },
+    });
+    expect(states).toHaveLength(2);
+
+    expect(uploadFeedbackStore.getSnapshot()).toEqual([
+      {
+        key: uploadKey(file),
+        fileName: "facts.txt",
+        status: "ready",
+      },
+    ]);
+
+    const reloadedAdapter = createInputAttachmentAdapter(fetcher);
+    const complete = await reloadedAdapter.send(pending!);
 
     expect(uploadedBody?.get("file")).toBe(file);
     expect(pending).toMatchObject({
-      id: "input_artifact_abc123",
       type: "document",
       name: "facts.txt",
       contentType: "text/plain",
@@ -44,6 +70,7 @@ describe("Harness input attachment adapter", () => {
       },
     ]);
     expect(JSON.stringify(complete)).not.toContain("local file content");
+    expect(uploadFeedbackStore.getSnapshot()).toEqual([]);
   });
 
   it("surfaces the Harness upload error instead of creating a broken attachment", async () => {
@@ -54,12 +81,23 @@ describe("Harness input attachment adapter", () => {
       ),
     );
 
-    await expect(
-      adapter.add({
-        file: new File(["large"], "large.bin", {
-          type: "application/octet-stream",
-        }),
-      }),
-    ).rejects.toThrow("too large");
+    const file = new File(["large"], "large.bin", {
+      type: "application/octet-stream",
+    });
+
+    const addition = adapter.add({ file }) as AsyncGenerator<PendingAttachment>;
+    const uploading = await addition.next();
+    expect(uploading.value).toMatchObject({
+      status: { type: "running", reason: "uploading", progress: 0 },
+    });
+    await expect(addition.next()).rejects.toThrow("too large");
+    expect(uploadFeedbackStore.getSnapshot()).toEqual([
+      {
+        key: uploadKey(file),
+        fileName: "large.bin",
+        status: "error",
+        message: "too large",
+      },
+    ]);
   });
 });

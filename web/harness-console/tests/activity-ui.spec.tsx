@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ActivitySummary } from "../src/components/activity-summary";
 import { SubagentCard } from "../src/components/subagent-card";
 import { ToolCard } from "../src/components/tool-card";
+import { UploadFeedbackContent } from "../src/components/agent-thread";
 import {
   activityOverview,
   latestRunActivity,
@@ -106,5 +107,20 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("子 Agent");
     expect(html).toContain("helper");
     expect(html).toContain("分析仓库");
+  });
+
+  it("renders upload progress and actionable errors", () => {
+    const html = renderToStaticMarkup(
+      <UploadFeedbackContent
+        items={[
+          { key: "a", fileName: "facts.txt", status: "uploading" },
+          { key: "b", fileName: "report.docx", status: "error", message: "too large" },
+        ]}
+        onDismiss={() => undefined}
+      />,
+    );
+    expect(html).toContain("正在上传");
+    expect(html).toContain("上传失败：too large");
+    expect(html).toContain("关闭 report.docx 上传错误");
   });
 });

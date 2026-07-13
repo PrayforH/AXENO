@@ -16,6 +16,50 @@ import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity } from "../lib/activity-store";
+import {
+  type UploadFeedback,
+  uploadFeedbackStore,
+  useUploadFeedback,
+} from "../lib/upload-feedback-store";
+
+export function UploadFeedbackContent({
+  items,
+  onDismiss,
+}: {
+  items: readonly UploadFeedback[];
+  onDismiss: (key: string) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="upload-feedback" aria-live="polite" aria-label="附件上传状态">
+      {items.map((item) => (
+        <div key={item.key} className={`upload-feedback-item ${item.status}`}>
+          <span aria-hidden="true">
+            {item.status === "uploading" ? "↻" : item.status === "ready" ? "✓" : "!"}
+          </span>
+          <span>
+            <strong>{item.fileName}</strong>
+            {item.status === "uploading"
+              ? " 正在上传"
+              : item.status === "ready"
+                ? " 已就绪"
+                : ` 上传失败：${item.message ?? "未知错误"}`}
+          </span>
+          {item.status === "error" ? (
+            <button type="button" onClick={() => onDismiss(item.key)} aria-label={`关闭 ${item.fileName} 上传错误`}>
+              ×
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UploadFeedbackNotice() {
+  const items = useUploadFeedback();
+  return <UploadFeedbackContent items={items} onDismiss={uploadFeedbackStore.dismiss} />;
+}
 
 function ComposerAttachment() {
   return (
@@ -156,6 +200,7 @@ function Composer() {
         <ComposerPrimitive.Attachments>
           {() => <ComposerAttachment />}
         </ComposerPrimitive.Attachments>
+        <UploadFeedbackNotice />
         <ComposerPrimitive.Input
           className="aui-composer-input"
           placeholder="描述任务，或附加文件让 Agent 读取…"
