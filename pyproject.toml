@@ -24,6 +24,9 @@ dependencies = [
     "uvicorn[standard]>=0.35,<1",
 ]
 
+[project.scripts]
+harness = "harness.cli:entrypoint"
+
 [dependency-groups]
 dev = [
     "httpx>=0.28,<1",
