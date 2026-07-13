@@ -31,5 +31,14 @@ describe("assistant Markdown typography", () => {
     expect(styles).toMatch(
       /\[data-streamdown="code-block-body"\] > code > span[^{]*\{[^}]*display:\s*block;[^}]*counter-increment:\s*harness-code-line;/s,
     );
+    expect(styles).toMatch(
+      /\[data-streamdown="code-block-download-button"\][^{]*\{[^}]*display:\s*none;/s,
+    );
+    expect(styles).toMatch(
+      /\[data-streamdown="code-block-copy-button"\][^{]*\{[^}]*width:\s*32px;[^}]*height:\s*32px;/s,
+    );
+    expect(styles).toMatch(
+      /\[data-testid="copilot-assistant-toolbar"\][^{]*\{[^}]*justify-content:\s*flex-end;[^}]*opacity:\s*0\.55;/s,
+    );
   });
 });

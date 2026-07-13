@@ -339,6 +339,46 @@ button:focus-visible,
   color: #67756e;
 }
 
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-download-button"] {
+  display: none;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"] {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #607068;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"]:hover,
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"]:focus-visible {
+  border-color: #cbd6d0;
+  background: #ffffff;
+  color: #245d48;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"][data-copy-state="copied"] {
+  border-color: #b9d0c5;
+  background: #dfece6;
+  color: #276650;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"][data-copy-state="copied"] svg {
+  display: none;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-copy-button"][data-copy-state="copied"]::before {
+  content: "✓";
+  font: 700 14px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
 .chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-body"] {
   padding: 11px 12px;
   font-size: 13px;
@@ -368,6 +408,26 @@ button:focus-visible,
 
 .chat-surface [data-testid="copilot-assistant-message"] [data-streamdown="code-block-body"] > code > span:last-child:empty {
   display: none;
+}
+
+.chat-surface [data-testid="copilot-assistant-toolbar"] {
+  justify-content: flex-end;
+  margin: 2px 0 0;
+  opacity: 0.55;
+  transition: opacity 140ms ease;
+}
+
+.chat-surface [data-testid="copilot-assistant-message"]:hover [data-testid="copilot-assistant-toolbar"],
+.chat-surface [data-testid="copilot-assistant-toolbar"]:focus-within {
+  opacity: 1;
+}
+
+.chat-surface [data-testid="copilot-assistant-toolbar"] [data-testid="copilot-copy-button"] {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 5px;
+  color: #7a8580;
 }
 
 .chat-loading {
