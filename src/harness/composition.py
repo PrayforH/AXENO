@@ -90,6 +90,7 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         snapshot=settings.daytona_snapshot or None,
         remote_workspace_root=settings.daytona_remote_workspace_root,
         cli_version=settings.daytona_claude_cli_version,
+        cli_path=settings.daytona_claude_cli_path,
         delete_on_destroy=settings.daytona_delete_on_destroy,
     )
 

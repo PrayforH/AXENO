@@ -174,6 +174,7 @@ def build_memory_container(
             snapshot=resolved_settings.daytona_snapshot or None,
             remote_workspace_root=resolved_settings.daytona_remote_workspace_root,
             cli_version=resolved_settings.daytona_claude_cli_version,
+            cli_path=resolved_settings.daytona_claude_cli_path,
             delete_on_destroy=resolved_settings.daytona_delete_on_destroy,
         )
     else:

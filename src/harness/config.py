@@ -44,8 +44,9 @@ class Settings(BaseSettings):
     daytona_api_url: str = "https://app.daytona.io/api"
     daytona_target: str = ""
     daytona_snapshot: str = ""
-    daytona_remote_workspace_root: str = "/workspace/harness"
+    daytona_remote_workspace_root: str = "/home/daytona/harness"
     daytona_claude_cli_version: str = "2.1.206"
+    daytona_claude_cli_path: str = "/home/daytona/.local/bin/claude"
     daytona_delete_on_destroy: bool = False
     output_artifact_max_bytes: int = 50 * 1024 * 1024
 

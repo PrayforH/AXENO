@@ -49,14 +49,12 @@ def _mcp_config(options: ClaudeAgentOptions) -> str | None:
 
 
 def build_remote_claude_command(
-    options: ClaudeAgentOptions, *, cli_version: str
+    options: ClaudeAgentOptions, *, cli_path: str
 ) -> list[str]:
-    if not cli_version or any(character.isspace() for character in cli_version):
-        raise ValueError("a pinned Claude CLI version is required")
+    if not cli_path or any(character.isspace() for character in cli_path):
+        raise ValueError("an absolute Claude CLI path is required")
     command = [
-        "npx",
-        "--yes",
-        f"@anthropic-ai/claude-code@{cli_version}",
+        cli_path,
         "--output-format",
         "stream-json",
         "--verbose",
@@ -97,13 +95,13 @@ class DaytonaClaudeTransport(Transport):
         session: RemoteClaudeSession,
         options: ClaudeAgentOptions,
         remote_workspace: str,
-        cli_version: str,
+        cli_path: str,
         close_timeout: float = 5.0,
     ) -> None:
         self._session = session
         self._options = options
         self._remote_workspace = remote_workspace
-        self._cli_version = cli_version
+        self._cli_path = cli_path
         self._close_timeout = close_timeout
         self._ready = False
         self._stderr_task: asyncio.Task[None] | None = None
@@ -117,7 +115,7 @@ class DaytonaClaudeTransport(Transport):
         }
         await self._session.start(
             build_remote_claude_command(
-                self._options, cli_version=self._cli_version
+                self._options, cli_path=self._cli_path
             ),
             self._remote_workspace,
             environment,

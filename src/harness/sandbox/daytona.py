@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shlex
 import shutil
+import ssl
 import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
+import certifi
 from claude_agent_sdk import ClaudeAgentOptions
 from daytona import (
     AsyncDaytona,
@@ -27,8 +30,17 @@ from harness.runtime.daytona_transport import (
 from harness.sandbox.base import SandboxHandle, SandboxIsolation
 
 
+def configure_default_ca_bundle() -> None:
+    """Use certifi when this Python installation has no usable default CA file."""
+    default_ca_file: object = getattr(ssl.get_default_verify_paths(), "cafile", None)
+    if "SSL_CERT_FILE" not in os.environ and default_ca_file is None:
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+
+
 class DaytonaRemoteSandbox(Protocol):
     id: str
+
+    async def ensure_claude_cli(self, *, version: str, path: str) -> None: ...
 
     async def create_folder(self, path: str) -> None: ...
 
@@ -57,6 +69,7 @@ class SdkDaytonaRemoteSession:
     def __init__(self, sandbox: AsyncSandbox) -> None:
         self._sandbox = sandbox
         self._session_id = f"harness-{uuid4().hex}"
+        self._end_input_marker = f"__HARNESS_END_INPUT_{uuid4().hex}__"
         self._command_id: str | None = None
         self._stdout: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._stderr: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -67,7 +80,27 @@ class SdkDaytonaRemoteSession:
         environment = " ".join(
             f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())
         )
-        command = f"cd {shlex.quote(cwd)} && env {environment} {shlex.join(argv)}"
+        stdin_wrapper = (
+            'marker="$1"; shift; '
+            "while IFS= read -r line; do "
+            'if [ "$line" = "$marker" ]; then break; fi; '
+            'printf "%s\\n" "$line"; '
+            'done | "$@"'
+        )
+        wrapped_argv = [
+            "bash",
+            "-o",
+            "pipefail",
+            "-c",
+            stdin_wrapper,
+            "harness-stdin",
+            self._end_input_marker,
+            *argv,
+        ]
+        command = (
+            f"cd {shlex.quote(cwd)} && env {environment} "
+            f"{shlex.join(wrapped_argv)}"
+        )
         response = await self._sandbox.process.execute_session_command(
             self._session_id,
             SessionExecuteRequest(command=command, run_async=True),
@@ -102,7 +135,9 @@ class SdkDaytonaRemoteSession:
     async def end_input(self) -> None:
         if self._command_id is not None:
             await self._sandbox.process.send_session_command_input(
-                self._session_id, self._command_id, "\x04"
+                self._session_id,
+                self._command_id,
+                f"{self._end_input_marker}\n",
             )
 
     async def read_stdout(self) -> bytes | None:
@@ -129,6 +164,27 @@ class SdkDaytonaRemoteSandbox:
     def __init__(self, sandbox: AsyncSandbox) -> None:
         self._sandbox = sandbox
         self.id = sandbox.id
+
+    async def ensure_claude_cli(self, *, version: str, path: str) -> None:
+        quoted_path = shlex.quote(path)
+        expected = f"{version} (Claude Code)"
+        check = await self._sandbox.process.exec(f"{quoted_path} --version")
+        if check.exit_code == 0 and check.result.strip() == expected:
+            return
+        installer = (
+            "set -o pipefail; "
+            "curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "
+            "https://claude.ai/install.sh | bash -s "
+            f"{shlex.quote(version)}"
+        )
+        installed = await self._sandbox.process.exec(
+            f"bash -lc {shlex.quote(installer)}", timeout=180
+        )
+        if installed.exit_code != 0:
+            raise RuntimeError("failed to install the pinned Claude CLI in Daytona")
+        verified = await self._sandbox.process.exec(f"{quoted_path} --version")
+        if verified.exit_code != 0 or verified.result.strip() != expected:
+            raise RuntimeError("Daytona Claude CLI version verification failed")
 
     async def create_folder(self, path: str) -> None:
         response = await self._sandbox.process.exec(
@@ -166,6 +222,7 @@ class SdkDaytonaClient:
     def from_config(
         cls, *, api_key: str, api_url: str | None = None, target: str | None = None
     ) -> SdkDaytonaClient:
+        configure_default_ca_bundle()
         return cls(
             AsyncDaytona(
                 DaytonaConfig(api_key=api_key, api_url=api_url, target=target)
@@ -198,8 +255,9 @@ class DaytonaSandboxProvider:
         client: DaytonaClient,
         local_root: Path | None = None,
         snapshot: str | None = None,
-        remote_workspace_root: str = "/workspace/harness",
+        remote_workspace_root: str = "/home/daytona/harness",
         cli_version: str = "2.1.206",
+        cli_path: str = "/home/daytona/.local/bin/claude",
         delete_on_destroy: bool = False,
     ) -> None:
         self._client = client
@@ -207,6 +265,7 @@ class DaytonaSandboxProvider:
         self._snapshot = snapshot
         self._remote_workspace_root = remote_workspace_root.rstrip("/")
         self._cli_version = cli_version
+        self._cli_path = cli_path
         self._delete_on_destroy = delete_on_destroy
         self._sandboxes: dict[str, DaytonaRemoteSandbox] = {}
 
@@ -238,7 +297,7 @@ class DaytonaSandboxProvider:
                 session=sandbox.remote_session(),
                 options=options,
                 remote_workspace=remote_workspace,
-                cli_version=self._cli_version,
+                cli_path=self._cli_path,
             )
 
         return SandboxHandle(
@@ -253,6 +312,10 @@ class DaytonaSandboxProvider:
     async def prepare(self, handle: SandboxHandle) -> None:
         sandbox = self._sandboxes[handle.sandbox_id]
         assert handle.remote_workspace is not None
+        await sandbox.ensure_claude_cli(
+            version=self._cli_version,
+            path=self._cli_path,
+        )
         await sandbox.create_folder(handle.remote_workspace)
         for path in sorted(handle.path.rglob("*")):
             relative = path.relative_to(handle.path).as_posix()

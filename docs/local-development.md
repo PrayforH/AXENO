@@ -76,9 +76,14 @@ Manifest 决定 Agent 能看到哪些工具，实际 `SandboxHandle` 决定策�
 HARNESS_SANDBOX_PROVIDER=daytona
 HARNESS_DAYTONA_API_URL=https://app.daytona.io/api
 HARNESS_DAYTONA_API_KEY=dtn_replace_me
+HARNESS_DAYTONA_REMOTE_WORKSPACE_ROOT=/home/daytona/harness
+HARNESS_DAYTONA_CLAUDE_CLI_VERSION=2.1.206
+HARNESS_DAYTONA_CLAUDE_CLI_PATH=/home/daytona/.local/bin/claude
 ```
 
 随后执行 `make dev-down && make dev-up-cc-switch`。Daytona provisioning 失败时运行会失败，不会降级到 local 后继续使用容器权限。
+
+Daytona sandbox 运行在云端，因此 cc-switch 的 `ANTHROPIC_BASE_URL` 必须能从公网访问；`127.0.0.1`、`localhost` 和 `10/172.16-31/192.168` 私网地址只能用于 local sandbox。网关应启用 TLS、鉴权和来源限制，不要为了验证而直接暴露无保护的 new-api 端口。默认 sandbox 会通过 Anthropic 官方安装器校验并安装固定版本的 Linux 原生 Claude CLI；生产建议把相同版本预装进 `HARNESS_DAYTONA_SNAPSHOT`，避免每个 run 重复下载。
 
 验证停止生成与后端取消：
 

@@ -117,6 +117,11 @@ HARNESS_SANDBOX_PROVIDER=daytona
 HARNESS_DAYTONA_API_URL=https://app.daytona.io/api
 HARNESS_DAYTONA_API_KEY=dtn_replace_me
 HARNESS_DAYTONA_SNAPSHOT=your-approved-snapshot
+HARNESS_DAYTONA_REMOTE_WORKSPACE_ROOT=/home/daytona/harness
+HARNESS_DAYTONA_CLAUDE_CLI_VERSION=2.1.206
+HARNESS_DAYTONA_CLAUDE_CLI_PATH=/home/daytona/.local/bin/claude
 ```
 
 Daytona 容器是 Harness 的强隔离边界：Manifest 已声明的 `Write/Edit` 自动允许，`Bash` 仍需审批。本地 workspace 中 `Write/Edit/Bash` 均需审批。隔离级别来自实际 provision 结果；不得从用户请求或 Agent Manifest 接受该字段。
+
+Daytona 无法访问部署机的 loopback 或私网 new-api 地址；模型网关必须是 sandbox 可达且受 TLS、鉴权和网络策略保护的端点。`HARNESS_DAYTONA_CLAUDE_CLI_VERSION` 与当前 Python Agent SDK 捆绑版本保持一致。无 Snapshot 时 Harness 使用 Anthropic 官方安装器在 sandbox 中安装并核验该原生 CLI；生产应在受控 Snapshot 中预装 `HARNESS_DAYTONA_CLAUDE_CLI_PATH`，缩短启动时间并减少运行时供应链依赖。

@@ -70,14 +70,12 @@ def options() -> ClaudeAgentOptions:
     )
 
 
-def test_command_is_pinned_and_contains_required_streaming_flags() -> None:
-    command = build_remote_claude_command(options(), cli_version="2.1.206")
+def test_command_uses_native_cli_and_contains_required_streaming_flags() -> None:
+    command = build_remote_claude_command(
+        options(), cli_path="/home/daytona/.local/bin/claude"
+    )
 
-    assert command[:3] == [
-        "npx",
-        "--yes",
-        "@anthropic-ai/claude-code@2.1.206",
-    ]
+    assert command[0] == "/home/daytona/.local/bin/claude"
     assert command[-2:] == ["--input-format", "stream-json"]
     assert command[command.index("--model") + 1] == "gateway-model"
     assert command[command.index("--tools") + 1] == "Read,Bash"
@@ -99,7 +97,7 @@ async def test_transport_frames_fragmented_ndjson_and_skips_diagnostics() -> Non
         session=session,
         options=options(),
         remote_workspace="/workspace/run-a",
-        cli_version="2.1.206",
+        cli_path="/home/daytona/.local/bin/claude",
     )
 
     await transport.connect()
@@ -127,7 +125,7 @@ async def test_transport_reports_remote_exit_without_exposing_stderr() -> None:
         session=session,
         options=options(),
         remote_workspace="/workspace/run-a",
-        cli_version="2.1.206",
+        cli_path="/home/daytona/.local/bin/claude",
     )
     await transport.connect()
 
@@ -145,7 +143,7 @@ async def test_close_is_bounded_even_if_remote_termination_hangs() -> None:
         session=session,
         options=options(),
         remote_workspace="/workspace/run-a",
-        cli_version="2.1.206",
+        cli_path="/home/daytona/.local/bin/claude",
         close_timeout=0.01,
     )
     await transport.connect()
