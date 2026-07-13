@@ -18,6 +18,7 @@ from harness.adapters.memory import (
     InMemorySessionRepository,
     InMemoryTaskQueue,
 )
+from harness.agui.service import AguiRunService
 from harness.application.agents import AgentService
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
@@ -49,6 +50,7 @@ class ApiContainer:
     events: InMemoryEventRepository
     observability: Observability
     worker: RunOrchestrator
+    agui: AguiRunService
     auto_execute: bool
 
 
@@ -80,6 +82,9 @@ def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
         id_generator=id_generator,
         observability=observability,
     )
+    session_service = SessionService(
+        registry, sessions, clock=clock, id_generator=id_generator
+    )
     approval_service = ApprovalService(
         runs=runs,
         approvals=approvals,
@@ -106,15 +111,17 @@ def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
         observability=observability,
         artifacts=artifact_service,
     )
+    agui = AguiRunService(sessions=session_service, runs=run_service)
     return ApiContainer(
         agents=AgentService(registry, clock=clock),
-        sessions=SessionService(registry, sessions, clock=clock, id_generator=id_generator),
+        sessions=session_service,
         runs=run_service,
         approvals=approval_service,
         artifacts=artifact_service,
         events=events,
         observability=observability,
         worker=worker,
+        agui=agui,
         auto_execute=auto_execute,
     )
 
