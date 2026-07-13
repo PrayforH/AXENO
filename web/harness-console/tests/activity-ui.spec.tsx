@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ActivitySummary } from "../src/components/activity-summary";
+import { ApprovalCard } from "../src/components/approval-card";
 import { ArtifactCard } from "../src/components/artifact-list";
 import { SubagentCard } from "../src/components/subagent-card";
 import { ToolCard } from "../src/components/tool-card";
@@ -141,5 +142,25 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("预览");
     expect(html).toContain("?preview=1");
     expect(html).toContain("下载");
+  });
+
+  it("renders actionable controls for a pending inline approval", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalCard
+        details={{
+          approval_id: "approval-1",
+          run_id: "run-1",
+          tool_call_id: "tool-1",
+          reason: "matched policy rule write-review",
+        }}
+        complete={false}
+        onDecision={async () => undefined}
+      />,
+    );
+
+    expect(html).toContain("允许 Agent 执行受保护操作？");
+    expect(html).toContain("批准并继续");
+    expect(html).toContain("拒绝");
+    expect(html).toContain("write-review");
   });
 });
