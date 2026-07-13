@@ -154,7 +154,7 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_passes_provisioned_sandbox_facts_to_runtime(tmp_path: Path) -> None:
     runtime = CapturingRuntime()
-    orchestrator, _, _, _ = await arrange(
+    orchestrator, _, _, event_repository = await arrange(
         tmp_path,
         runtime_override=runtime,
         sandbox_override=ContainerSandboxProvider(root=tmp_path),
@@ -165,6 +165,10 @@ async def test_passes_provisioned_sandbox_facts_to_runtime(tmp_path: Path) -> No
     assert len(runtime.contexts) == 1
     assert runtime.contexts[0].sandbox_provider == "daytona"
     assert runtime.contexts[0].sandbox_isolation is SandboxIsolation.CONTAINER
+    assert runtime.contexts[0].assistant_message_id.startswith("assistant-run-1-")
+    events = await event_repository.list_after("tenant-a", "run-1", 0)
+    started = next(event for event in events if event.type == "message.start")
+    assert started.payload["message_id"] == runtime.contexts[0].assistant_message_id
 
 
 @pytest.mark.asyncio

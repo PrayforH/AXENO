@@ -21,6 +21,7 @@ class RuntimeContext(BaseModel):
     workspace: Path
     sandbox_provider: str = "local"
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE
+    assistant_message_id: str = Field(default="", exclude=True)
     input_files: tuple[str, ...] = ()
     identity: ExecutionIdentity | None = None
     memory_projection: str = Field(default="", exclude=True, repr=False)
@@ -34,6 +35,12 @@ class RuntimeContext(BaseModel):
 
     @model_validator(mode="after")
     def derive_identity(self) -> "RuntimeContext":
+        if not self.assistant_message_id:
+            object.__setattr__(
+                self,
+                "assistant_message_id",
+                f"assistant-{self.run.run_id}",
+            )
         if self.identity is None:
             object.__setattr__(
                 self,

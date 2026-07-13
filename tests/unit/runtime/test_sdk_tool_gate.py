@@ -84,6 +84,7 @@ async def _arrange(
             created_at=NOW,
         ),
         workspace=tmp_path,
+        assistant_message_id="assistant-sdk-message",
         sandbox_provider=(
             "daytona"
             if sandbox_isolation is SandboxIsolation.CONTAINER
@@ -239,6 +240,7 @@ async def test_container_write_uses_trusted_context_without_approval(
         "provider": "daytona",
         "isolation": "container",
     }
+    assert emitted[0].payload["message_id"] == "assistant-sdk-message"
     assert not any(event.type == "approval.requested" for event in emitted)
 
 
@@ -264,6 +266,7 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
             break
         await asyncio.sleep(0)
     assert requested
+    assert requested[0].payload["message_id"] == "assistant-sdk-message"
     approval_id = str(requested[0].payload["approval_id"])
 
     await approvals.decide(

@@ -86,6 +86,7 @@ class SdkToolGate:
             "tool_call_id": tool_call_id,
             "arguments": arguments,
             "policy_checked": True,
+            "message_id": context.assistant_message_id,
             "sandbox": {
                 "provider": context.sandbox_provider,
                 "isolation": context.sandbox_isolation.value,
@@ -131,6 +132,7 @@ class SdkToolGate:
                 run_id=context.run.run_id,
                 tool_call_id=tool_call_id,
                 reason=result.reason,
+                message_id=context.assistant_message_id,
                 inline=True,
             )
             decision = await self._approvals.wait_for_decision(approval.approval_id)

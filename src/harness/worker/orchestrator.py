@@ -266,6 +266,7 @@ class RunOrchestrator:
                 workspace=handle.path,
                 sandbox_provider=handle.provider,
                 sandbox_isolation=handle.isolation_level,
+                assistant_message_id=f"assistant-{run_id}-{uuid4().hex}",
                 input_files=tuple(
                     path
                     for item in staged_inputs
@@ -279,7 +280,7 @@ class RunOrchestrator:
                 runtime_transport_factory=handle.runtime_transport_factory,
                 artifact_publisher=artifact_publisher,
             )
-            active_message_id: str | None = None
+            active_message_id: str | None = context.assistant_message_id
             async for runtime_event in self._runtime_events(context):
                 latest = await self._runs.get(tenant_id, run_id)
                 if latest.status is RunStatus.CANCELLING:
@@ -340,6 +341,7 @@ class RunOrchestrator:
                 if runtime_event.type == "message.start":
                     active_message_id = str(
                         payload.get("message_id")
+                        or active_message_id
                         or f"assistant-{run_id}-{uuid4().hex}"
                     )
                     payload["message_id"] = active_message_id
