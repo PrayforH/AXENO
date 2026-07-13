@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.core.models import ExecutionIdentity, Run, Session
+from harness.runtime.artifact_tools import ArtifactPublisher
 
 RuntimeTransportFactory = Callable[[object], object]
 
@@ -22,6 +23,9 @@ class RuntimeContext(BaseModel):
     memory_projection: str = Field(default="", exclude=True, repr=False)
     processed_input_paths: tuple[str, ...] = ()
     runtime_transport_factory: RuntimeTransportFactory | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    artifact_publisher: ArtifactPublisher | None = Field(
         default=None, exclude=True, repr=False
     )
 

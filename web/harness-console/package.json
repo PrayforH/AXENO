@@ -13,6 +13,7 @@
     "@assistant-ui/react": "^0.14.26",
     "@assistant-ui/react-ag-ui": "^0.0.44",
     "@assistant-ui/react-markdown": "^0.14.5",
+    "@assistant-ui/react-ui": "^0.2.1",
     "next": "16.2.10",
     "react": "19.2.7",
     "react-dom": "19.2.7",

@@ -204,6 +204,7 @@ def build_memory_container(
         input_artifacts=input_artifact_service,
         memory=memory_service,
         workspace_policy_resolver=workspace_policy_resolver,
+        output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
     )
     agui = AguiRunService(
         sessions=session_service,

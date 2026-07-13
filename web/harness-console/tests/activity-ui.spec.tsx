@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { ActivitySummary } from "../src/components/activity-summary";
+import { ArtifactCard } from "../src/components/artifact-list";
 import { SubagentCard } from "../src/components/subagent-card";
 import { ToolCard } from "../src/components/tool-card";
 import { UploadFeedbackContent } from "../src/components/agent-thread";
@@ -122,5 +123,23 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("正在上传");
     expect(html).toContain("上传失败：too large");
     expect(html).toContain("关闭 report.docx 上传错误");
+  });
+
+  it("renders authenticated preview and download actions for artifacts", () => {
+    const html = renderToStaticMarkup(
+      <ArtifactCard
+        details={{
+          artifact_id: "artifact-1",
+          run_id: "run-1",
+          name: "report.pdf",
+          media_type: "application/pdf",
+          size_bytes: 2048,
+        }}
+      />,
+    );
+    expect(html).toContain("PDF");
+    expect(html).toContain("预览");
+    expect(html).toContain("?preview=1");
+    expect(html).toContain("下载");
   });
 });

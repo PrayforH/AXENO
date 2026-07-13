@@ -1,7 +1,7 @@
 """Claude Agent SDK runtime adapter with explicit gateway routing."""
 
 from collections.abc import AsyncIterator, Callable
-from contextlib import nullcontext
+from contextlib import ExitStack
 from typing import Any, cast
 
 from claude_agent_sdk import (
@@ -18,6 +18,10 @@ from harness.application.memory import UserMemoryService
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion, ModelRoute
+from harness.runtime.artifact_tools import (
+    artifact_execution_context,
+    create_artifact_mcp_server,
+)
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.hooks import discard_sdk_stderr
 from harness.runtime.mcp_credentials import redact_mcp_credentials
@@ -83,6 +87,11 @@ class ClaudeSdkRuntime:
                 raise ToolResolutionError("duplicate MCP server name: harness-memory")
             mcp_servers["harness-memory"] = create_memory_mcp_server()
             allowed_tools.append("mcp__harness-memory__update_user_memory")
+        if context.artifact_publisher is not None:
+            if "harness-artifacts" in mcp_servers:
+                raise ToolResolutionError("duplicate MCP server name: harness-artifacts")
+            mcp_servers["harness-artifacts"] = create_artifact_mcp_server()
+            allowed_tools.append("mcp__harness-artifacts__publish_artifact")
         agents: dict[str, AgentDefinition] = {}
         for name, version in self._subagent_versions.items():
             snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
@@ -168,14 +177,15 @@ class ClaudeSdkRuntime:
         options, resolved_tools = await self._options(context, decision.route)
         partial_text_seen = False
         stream_message_open = False
-        execution_context = (
-            memory_execution_context(
-                self._memory_service, context.identity
-            )
-            if self._memory_service is not None and context.identity is not None
-            else nullcontext()
-        )
-        with execution_context:
+        with ExitStack() as execution_context:
+            if self._memory_service is not None and context.identity is not None:
+                execution_context.enter_context(
+                    memory_execution_context(self._memory_service, context.identity)
+                )
+            if context.artifact_publisher is not None:
+                execution_context.enter_context(
+                    artifact_execution_context(context.artifact_publisher)
+                )
             if context.runtime_transport_factory is None:
                 query_messages = self._query(prompt, options)
             else:

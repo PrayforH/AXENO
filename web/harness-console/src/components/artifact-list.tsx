@@ -14,25 +14,48 @@ export function formatBytes(value?: number) {
 }
 
 export function ArtifactCard({ details }: { details: ArtifactDetails }) {
+  const contentUrl = `/api/harness/artifacts/${encodeURIComponent(details.artifact_id)}`;
+  const mediaType = details.media_type || "application/octet-stream";
+  const previewable =
+    mediaType.startsWith("text/") ||
+    mediaType.startsWith("image/") ||
+    mediaType === "application/json" ||
+    mediaType === "application/pdf";
+  const filemark = mediaType.includes("json")
+    ? "JSON"
+    : mediaType.includes("pdf")
+      ? "PDF"
+      : mediaType.startsWith("image/")
+        ? "IMG"
+        : "FILE";
   return (
     <section className="domain-card artifact-domain-card">
       <div className="artifact-filemark" aria-hidden="true">
-        TXT
+        {filemark}
       </div>
       <div className="artifact-copy">
         <div className="domain-card-kicker">运行产物</div>
         <h3>{details.name || "未命名产物"}</h3>
         <p>
-          {details.media_type || "application/octet-stream"} · {formatBytes(details.size_bytes)}
+          {mediaType} · {formatBytes(details.size_bytes)}
         </p>
         {details.sha256 && <code>sha256 {details.sha256.slice(0, 12)}…</code>}
       </div>
-      <a
-        className="download-button"
-        href={`/api/harness/artifacts/${encodeURIComponent(details.artifact_id)}`}
-      >
-        下载
-      </a>
+      <div className="artifact-actions">
+        {previewable && (
+          <a
+            className="preview-button"
+            href={`${contentUrl}?preview=1`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            预览
+          </a>
+        )}
+        <a className="download-button" href={contentUrl}>
+          下载
+        </a>
+      </div>
     </section>
   );
 }

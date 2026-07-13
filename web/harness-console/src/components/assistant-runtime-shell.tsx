@@ -1,6 +1,9 @@
 "use client";
 
-import { AssistantRuntimeProvider } from "@assistant-ui/react";
+import {
+  AssistantRuntimeProvider,
+  WebSpeechSynthesisAdapter,
+} from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
@@ -22,6 +25,7 @@ export function AssistantRuntimeShell({
     return next;
   }, [threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
+  const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   useEffect(() => {
     activityStore.clear();
     uploadFeedbackStore.clear();
@@ -29,7 +33,7 @@ export function AssistantRuntimeShell({
   const runtime = useAgUiRuntime({
     agent,
     showThinking: true,
-    adapters: { attachments },
+    adapters: { attachments, speech },
     onCancel: () => agent.cancelActiveRun(),
     onError: (error) => console.error("[Harness Console]", error),
   });

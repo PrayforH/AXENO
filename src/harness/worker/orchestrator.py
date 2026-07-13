@@ -21,6 +21,7 @@ from harness.core.state_machine import transition
 from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
+from harness.runtime.artifact_tools import ArtifactPublisher
 from harness.runtime.base import AgentRuntime, RuntimeContext
 from harness.runtime.input_redaction import (
     INPUT_CONTENT_REDACTION,
@@ -50,6 +51,7 @@ class RunOrchestrator:
         input_artifacts: InputArtifactService | None = None,
         memory: UserMemoryService | None = None,
         workspace_policy_resolver: WorkspacePolicyResolver | None = None,
+        output_artifact_max_bytes: int = 50 * 1024 * 1024,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -65,6 +67,7 @@ class RunOrchestrator:
         self._input_artifacts = input_artifacts
         self._memory = memory
         self._workspace_policy_resolver = workspace_policy_resolver
+        self._output_artifact_max_bytes = output_artifact_max_bytes
 
     async def _move(
         self,
@@ -202,6 +205,23 @@ class RunOrchestrator:
                     session_id=run.session_id,
                     event_type="run.resumed",
                 )
+            async def sync_workspace() -> None:
+                await self._sandbox.collect(handle)
+
+            artifact_publisher = (
+                ArtifactPublisher(
+                    workspace=handle.path,
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=run.session_id,
+                    artifacts=self._artifacts,
+                    events=self._events,
+                    sync_workspace=sync_workspace,
+                    max_file_bytes=self._output_artifact_max_bytes,
+                )
+                if self._artifacts is not None
+                else None
+            )
             context = RuntimeContext(
                 run=run,
                 session=session,
@@ -217,6 +237,7 @@ class RunOrchestrator:
                     path for item in staged_inputs for path in item.processed_paths
                 ),
                 runtime_transport_factory=handle.runtime_transport_factory,
+                artifact_publisher=artifact_publisher,
             )
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):

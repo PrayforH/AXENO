@@ -7,7 +7,7 @@ const FORWARDED_HEADERS = [
 ] as const;
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ artifactId: string }> },
 ): Promise<Response> {
   const { artifactId } = await context.params;
@@ -16,6 +16,9 @@ export async function GET(
   for (const name of FORWARDED_HEADERS) {
     const value = upstream.headers.get(name);
     if (value) headers.set(name, value);
+  }
+  if (new URL(request.url).searchParams.get("preview") === "1") {
+    headers.set("Content-Disposition", "inline");
   }
   return new Response(upstream.body, { status: upstream.status, headers });
 }
