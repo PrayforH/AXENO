@@ -8,7 +8,6 @@ from harness.api.dependencies import build_memory_container
 from harness.core.models import ApprovalStatus, RunStatus
 from scripts.bootstrap_local_agent import (
     DEFAULT_MANIFEST,
-    bootstrap_local_agent,
     bootstrap_local_agents,
     local_client_options,
 )
@@ -29,10 +28,10 @@ async def test_local_bootstrap_publishes_default_agent_for_agui() -> None:
     assert DEFAULT_MANIFEST == Path("agents/echo-agent/agent.yaml")
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await bootstrap_local_agent(client)
-        await bootstrap_local_agent(client)
+        await bootstrap_local_agents(client)
+        await bootstrap_local_agents(client)
         response = await client.post(
-            "/v1/agui?agent_name=echo-agent&agent_version=0.2.0",
+            "/v1/agui?agent_name=echo-agent&agent_version=0.3.0",
             headers={"X-Tenant-ID": "local", "X-User-ID": "developer"},
             json={
                 "threadId": "bootstrap-thread",
@@ -57,7 +56,7 @@ async def test_local_bootstrap_publishes_referenced_helper_agent() -> None:
         response = await client.post(
             "/v1/sessions",
             headers={"X-Tenant-ID": "local", "X-User-ID": "developer"},
-            json={"agent_name": "helper", "agent_version": "1.0.0"},
+            json={"agent_name": "helper-agent", "agent_version": "1.0.0"},
         )
 
     assert response.status_code == 201
@@ -74,8 +73,8 @@ def test_local_bootstrap_does_not_route_loopback_through_system_proxy() -> None:
 def test_dev_up_routes_web_to_published_validation_agent_version() -> None:
     script = Path("scripts/dev_up.sh").read_text()
 
-    assert "HARNESS_AGENT_VERSION=0.2.0" in script
-    assert "Local Agent: echo-agent@0.2.0" in script
+    assert "HARNESS_AGENT_VERSION=0.3.0" in script
+    assert "Local Agent: echo-agent@0.3.0" in script
 
 
 @pytest.mark.parametrize("script_name", ["dev_up.sh", "dev_down.sh"])

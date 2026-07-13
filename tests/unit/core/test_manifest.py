@@ -6,6 +6,7 @@ from harness.core.manifest import ManifestValidationError, load_manifest
 
 FIXTURE = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 VALIDATION_AGENT = Path("agents/echo-agent/agent.yaml")
+HELPER_AGENT = Path("agents/helper-agent/agent.yaml")
 
 
 def test_loads_valid_manifest_and_resolves_prompt() -> None:
@@ -32,15 +33,33 @@ def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:
         "Write",
         "Edit",
         "Bash",
+        "Task",
         None,
     )
     assert snapshot.manifest.spec.tools[-1].mcp == "tavily-readonly"
+    assert tuple(item.ref for item in snapshot.manifest.spec.subagents) == (
+        "helper-agent@1.0.0",
+    )
     assert "only when the user requests" in snapshot.system_prompt.lower()
     assert "run workspace" in snapshot.system_prompt.lower()
     assert "untrusted" in snapshot.system_prompt.lower()
     assert "source title" in snapshot.system_prompt.lower()
     assert "url" in snapshot.system_prompt.lower()
     assert "echo the user's request" not in snapshot.system_prompt.lower()
+
+
+def test_validation_helper_agent_is_bounded_to_read_only_investigation() -> None:
+    snapshot = load_manifest(HELPER_AGENT)
+
+    assert snapshot.manifest.metadata.name == "helper-agent"
+    assert snapshot.manifest.metadata.version == "1.0.0"
+    assert tuple(tool.builtin for tool in snapshot.manifest.spec.tools) == (
+        "Read",
+        "Glob",
+        "Grep",
+    )
+    assert snapshot.manifest.spec.subagents == ()
+    assert "parent agent" in snapshot.system_prompt.lower()
 
 
 def test_rejects_unknown_runtime(tmp_path: Path) -> None:

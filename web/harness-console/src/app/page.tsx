@@ -35,7 +35,7 @@ export default function Home() {
           <div className="agent-coordinate" title="当前 Agent 版本">
             <span className="live-dot" aria-hidden="true" />
             <span>echo-agent</span>
-            <code>0.2.0</code>
+            <code>0.3.0</code>
           </div>
           <button className="quiet-button" type="button" onClick={startNewConversation}>
             新对话

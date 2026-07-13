@@ -6,7 +6,7 @@ describe("Harness server configuration", () => {
     const config = getHarnessServerConfig({});
 
     expect(config.aguiUrl).toBe(
-      "http://127.0.0.1:8000/v1/agui?agent_name=echo-agent&agent_version=0.2.0",
+      "http://127.0.0.1:8000/v1/agui?agent_name=echo-agent&agent_version=0.3.0",
     );
     expect(config.identityHeaders).toEqual({
       "X-Tenant-ID": "local",
