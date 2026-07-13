@@ -54,7 +54,8 @@ if [[ ! -f work/web.pid ]] || ! kill -0 "$(cat work/web.pid)" 2>/dev/null; then
       HARNESS_AGENT_VERSION=0.2.0 \
       HARNESS_TENANT_ID=local \
       HARNESS_USER_ID=developer \
-      nohup npm run dev -- --hostname 127.0.0.1 >"$ROOT/work/web.log" 2>&1 &
+      nohup npm run dev -- --hostname 127.0.0.1 \
+      --webpack >"$ROOT/work/web.log" 2>&1 &
     echo $! > "$ROOT/work/web.pid"
   )
 fi

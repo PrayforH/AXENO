@@ -101,6 +101,19 @@ def test_dev_up_starts_only_local_infrastructure_from_production_compose() -> No
     assert "up -d postgres redis minio minio-init" in script
 
 
+def test_local_lifecycle_tracks_the_real_server_processes() -> None:
+    start = Path("scripts/dev_up.sh").read_text()
+    stop = Path("scripts/dev_down.sh").read_text()
+
+    assert "nohup uv run uvicorn harness.api.app:app" in start
+    assert "nohup npm run dev -- --hostname 127.0.0.1" in start
+    assert 'stop_matching "$ROOT/.venv/bin/uvicorn harness.api.app:app"' in stop
+    assert (
+        'stop_matching "$ROOT/web/harness-console/node_modules/.bin/next dev"'
+        in stop
+    )
+
+
 @pytest.mark.asyncio
 async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> None:
     container = build_memory_container()

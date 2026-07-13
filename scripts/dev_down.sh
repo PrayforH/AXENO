@@ -11,6 +11,19 @@ export HARNESS_NEW_API_BASE_URL="${HARNESS_NEW_API_BASE_URL:-http://127.0.0.1:1}
 export HARNESS_NEW_API_KEY="${HARNESS_NEW_API_KEY:-local-placeholder}"
 export HARNESS_NEW_API_MODEL="${HARNESS_NEW_API_MODEL:-local-placeholder}"
 
+stop_matching() {
+  local pattern="$1"
+  pkill -f "$pattern" 2>/dev/null || true
+}
+
+stop_listener() {
+  local port="$1"
+  local pid
+  while read -r pid; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done < <(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)
+}
+
 for service in api web; do
   pid_file="work/${service}.pid"
   if [[ -f "$pid_file" ]]; then
@@ -18,6 +31,11 @@ for service in api web; do
     rm -f "$pid_file"
   fi
 done
+
+stop_matching "$ROOT/.venv/bin/uvicorn harness.api.app:app"
+stop_matching "$ROOT/web/harness-console/node_modules/.bin/next dev"
+stop_listener 8000
+stop_listener 3000
 
 if ! command -v docker-credential-osxkeychain >/dev/null 2>&1; then
   chmod +x scripts/docker-helpers/docker-credential-osxkeychain
