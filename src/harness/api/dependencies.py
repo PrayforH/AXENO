@@ -42,6 +42,10 @@ from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
+from harness.runtime.default_tools import (
+    default_tool_resolver,
+    server_secret_credential_provider,
+)
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
@@ -182,11 +186,16 @@ def build_memory_container(
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
     else:
+        credential_provider = server_secret_credential_provider(
+            references_json=resolved_settings.mcp_secret_references_json,
+            secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
+        )
         runtime = RegistryClaudeRuntime(
             registry=registry,
             config=load_cc_switch_claude_config(
                 resolved_settings.cc_switch_settings_path
             ),
+            tool_resolver=default_tool_resolver(credential_provider),
             tool_gate=SdkToolGate(
                 policy=policy,
                 approvals=approval_service,

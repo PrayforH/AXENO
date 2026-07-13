@@ -1,7 +1,9 @@
+import json
 import os
 import subprocess
 import sys
 from dataclasses import replace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +13,10 @@ from harness.api.app import create_app, create_configured_app
 from harness.api.dependencies import build_memory_container
 from harness.composition import build_production_container
 from harness.config import Settings
+from harness.core.manifest import AgentManifest
+from harness.core.models import ExecutionIdentity
+from harness.runtime.registry_runtime import RegistryClaudeRuntime
+from harness.runtime.tools import ToolResolver
 from harness.storage.redis import RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository
 
@@ -30,6 +36,35 @@ def production_settings(**overrides: object) -> Settings:
     return Settings(**values)  # pyright: ignore[reportArgumentType]
 
 
+def tavily_manifest() -> AgentManifest:
+    return AgentManifest.model_validate(
+        {
+            "apiVersion": "harness/v1alpha1",
+            "kind": "Agent",
+            "metadata": {"name": "web-agent", "version": "1.0.0"},
+            "spec": {
+                "runtime": "claude-agent-sdk",
+                "model": {"route": "default", "model": "gateway-model"},
+                "prompt": {"system": "prompts/system.md"},
+                "tools": [{"mcp": "tavily-readonly"}],
+                "permissions": {"policy": "default"},
+            },
+        }
+    )
+
+
+def execution_identity() -> ExecutionIdentity:
+    return ExecutionIdentity(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        project_id="web-agent",
+        session_id="session-a",
+        run_id="run-a",
+        agent_name="web-agent",
+        agent_version="1.0.0",
+    )
+
+
 @pytest.mark.asyncio
 async def test_production_container_uses_durable_event_and_queue_adapters() -> None:
     container = build_production_container(production_settings())
@@ -38,6 +73,32 @@ async def test_production_container_uses_durable_event_and_queue_adapters() -> N
         assert isinstance(container.events, PostgresEventRepository)
         assert isinstance(container.task_queue, RedisTaskQueue)
         assert container.auto_execute is False
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
+@pytest.mark.asyncio
+async def test_production_composition_uses_server_owned_mcp_registry() -> None:
+    container = build_production_container(
+        production_settings(
+            mcp_secret_references_json=json.dumps(
+                {"tavily-readonly": {"authorization": "TAVILY_AUTHORIZATION"}}
+            ),
+            mcp_server_secrets_json=SecretStr(
+                json.dumps({"TAVILY_AUTHORIZATION": "Bearer production-key"})
+            ),
+        )
+    )
+    try:
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        resolver = cast(ToolResolver, vars(runtime)["_tool_resolver"])
+
+        resolved = await resolver.resolve(tavily_manifest(), execution_identity())
+
+        assert resolved.mcp_servers["tavily"]["headers"] == {
+            "Authorization": "Bearer production-key"
+        }
     finally:
         assert container.close is not None
         await container.close()

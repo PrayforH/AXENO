@@ -1,6 +1,5 @@
 """Production composition root using PostgreSQL, Redis, MinIO and Claude SDK."""
 
-import json
 from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
@@ -27,7 +26,10 @@ from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
-from harness.runtime.mcp_credentials import ServerSecretReferenceProvider
+from harness.runtime.default_tools import (
+    default_tool_resolver,
+    server_secret_credential_provider,
+)
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.runtime.session_store import PostgresSessionStore
@@ -93,26 +95,6 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         cli_path=settings.daytona_claude_cli_path,
         delete_on_destroy=settings.daytona_delete_on_destroy,
     )
-
-
-def _credential_provider(settings: Settings) -> ServerSecretReferenceProvider:
-    references_raw: object = json.loads(settings.mcp_secret_references_json)
-    secrets_raw: object = json.loads(settings.mcp_server_secrets_json.get_secret_value())
-    if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
-        raise ValueError("MCP credential settings must be JSON objects")
-    references: dict[str, dict[str, str]] = {}
-    for server, raw_values in cast(dict[object, object], references_raw).items():
-        if not isinstance(raw_values, dict):
-            continue
-        values = cast(dict[object, object], raw_values)
-        references[str(server)] = {
-            str(key): str(value) for key, value in values.items()
-        }
-    secrets = {
-        str(key): SecretStr(str(value))
-        for key, value in cast(dict[object, object], secrets_raw).items()
-    }
-    return ServerSecretReferenceProvider(references=references, secrets=secrets)
 
 
 def build_production_container(settings: Settings) -> ApiContainer:
@@ -200,10 +182,14 @@ def build_production_container(settings: Settings) -> ApiContainer:
         )
 
     policy = PolicyEngine(default_policy_rules())
+    credential_provider = server_secret_credential_provider(
+        references_json=settings.mcp_secret_references_json,
+        secrets_json=settings.mcp_server_secrets_json.get_secret_value(),
+    )
     runtime = RegistryClaudeRuntime(
         registry=registry,
         config=_gateway(settings),
-        mcp_credential_provider=_credential_provider(settings),
+        tool_resolver=default_tool_resolver(credential_provider),
         tool_gate=SdkToolGate(
             policy=policy, approvals=approval_service, events=events
         ),
