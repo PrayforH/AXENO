@@ -78,8 +78,18 @@ def create_app(container: ApiContainer) -> FastAPI:
     return app
 
 
-def create_memory_app(*, auto_execute: bool = False) -> FastAPI:
-    return create_app(build_memory_container(auto_execute=auto_execute))
+def create_memory_app(
+    *,
+    auto_execute: bool = False,
+    settings: Settings | None = None,
+) -> FastAPI:
+    return create_app(
+        build_memory_container(auto_execute=auto_execute, settings=settings)
+    )
 
 
-app = create_memory_app(auto_execute=Settings().local_auto_execute)
+settings = Settings()
+app = create_memory_app(
+    auto_execute=settings.local_auto_execute,
+    settings=settings,
+)

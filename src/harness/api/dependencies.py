@@ -29,7 +29,10 @@ from harness.application.workspaces import WorkspaceService
 from harness.config import Settings
 from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.runtime.base import AgentRuntime
+from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.fake import FakeRuntime
+from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
 
@@ -49,12 +52,18 @@ class ApiContainer:
     artifacts: ArtifactService
     events: InMemoryEventRepository
     observability: Observability
+    runtime: AgentRuntime
     worker: RunOrchestrator
     agui: AguiRunService
     auto_execute: bool
 
 
-def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
+def build_memory_container(
+    *,
+    auto_execute: bool = False,
+    settings: Settings | None = None,
+) -> ApiContainer:
+    resolved_settings = settings or Settings()
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -64,7 +73,7 @@ def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
     queue = InMemoryTaskQueue()
-    observability = build_observability(Settings())
+    observability = build_observability(resolved_settings)
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -98,11 +107,20 @@ def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
         store=artifact_store,
         id_generator=id_generator,
     )
+    if resolved_settings.runtime == "fake":
+        runtime: AgentRuntime = FakeRuntime()
+    else:
+        runtime = RegistryClaudeRuntime(
+            registry=registry,
+            config=load_cc_switch_claude_config(
+                resolved_settings.cc_switch_settings_path
+            ),
+        )
     worker = RunOrchestrator(
         sessions=sessions,
         runs=runs,
         events=event_service,
-        runtime=FakeRuntime(),
+        runtime=runtime,
         sandbox=LocalSandboxProvider(),
         clock=clock,
         policy=PolicyEngine(default_policy_rules()),
@@ -120,6 +138,7 @@ def build_memory_container(*, auto_execute: bool = False) -> ApiContainer:
         artifacts=artifact_service,
         events=events,
         observability=observability,
+        runtime=runtime,
         worker=worker,
         agui=agui,
         auto_execute=auto_execute,
