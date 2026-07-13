@@ -11,6 +11,24 @@ class Base(DeclarativeBase):
     pass
 
 
+class AgentVersionRow(Base):
+    __tablename__ = "agent_versions"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class SessionRow(Base):
+    __tablename__ = "sessions"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class RunRow(Base):
     __tablename__ = "runs"
     __table_args__ = (
@@ -72,4 +90,85 @@ class SdkSessionEntryRow(Base):
     sequence: Mapped[int] = mapped_column(Integer)
     entry_uuid: Mapped[str | None] = mapped_column(String(128), index=True)
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ApprovalRow(Base):
+    __tablename__ = "approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "run_id", "tool_call_id", name="uq_approval_tool_call"
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    approval_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    tool_call_id: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ArtifactRow(Base):
+    __tablename__ = "artifacts"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class InputArtifactRow(Base):
+    __tablename__ = "input_artifacts"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    input_artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class UserMemoryRow(Base):
+    __tablename__ = "user_memories"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ThreadFileRow(Base):
+    __tablename__ = "thread_files"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    file_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    parent_file_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class WorkspaceSnapshotRow(Base):
+    __tablename__ = "workspace_snapshots"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class AguiThreadBindingRow(Base):
+    __tablename__ = "agui_thread_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "session_id", name="uq_agui_binding_session"
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
