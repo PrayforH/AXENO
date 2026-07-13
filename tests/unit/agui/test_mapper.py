@@ -146,3 +146,17 @@ def test_artifact_projection_completes_its_tool_call() -> None:
     assert projected[-2].model_dump(by_alias=True)["toolCallId"] == (
         "harness-artifact-artifact-1"
     )
+
+
+def test_runtime_result_sets_immediate_activity_status_and_metrics() -> None:
+    projected = map_harness_event(
+        event(
+            "runtime.result",
+            {"is_error": False, "num_turns": 2, "total_cost_usd": 0.012},
+        )
+    )
+
+    patch = projected[-1].model_dump(by_alias=True)["patch"]
+    assert {"op": "replace", "path": "/status", "value": "succeeded"} in patch
+    assert {"op": "add", "path": "/metrics/turns", "value": 2} in patch
+    assert {"op": "add", "path": "/metrics/cost_usd", "value": 0.012} in patch

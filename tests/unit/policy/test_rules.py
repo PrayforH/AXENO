@@ -8,6 +8,8 @@ from harness.policy.rules import PolicyEngine, default_policy_rules
     ("tool", "arguments", "expected"),
     [
         ("Read", {"file_path": "/workspace/notes.txt"}, PolicyDecision.ALLOW),
+        ("Task", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
+        ("Agent", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
         ("Write", {"file_path": "/workspace/result.txt"}, PolicyDecision.ASK),
         ("Bash", {"command": "rm -rf /workspace/data"}, PolicyDecision.DENY),
     ],

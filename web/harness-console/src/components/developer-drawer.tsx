@@ -1,11 +1,8 @@
 "use client";
 
-import {
-  CopilotKitInspector,
-  UseAgentUpdate,
-  useAgent,
-} from "@copilotkit/react-core/v2";
-import { activityOverview, latestRunActivity } from "../lib/activity-schema";
+import { CopilotKitInspector } from "@copilotkit/react-core/v2";
+import { activityOverview } from "../lib/activity-schema";
+import { useRunActivity } from "../lib/activity-store";
 import { developerRows } from "../lib/developer-details";
 import { StructuredValue } from "./structured-value";
 
@@ -35,15 +32,7 @@ export function DeveloperDrawer({
   threadId: string;
   onClose?: () => void;
 }) {
-  const { agent } = useAgent({
-    agentId: "harness-agent",
-    updates: [
-      UseAgentUpdate.OnMessagesChanged,
-      UseAgentUpdate.OnRunStatusChanged,
-    ],
-    throttleMs: 80,
-  });
-  const activity = latestRunActivity(agent.messages);
+  const activity = useRunActivity();
   const overview = activity ? activityOverview(activity) : undefined;
 
   return (

@@ -20,7 +20,29 @@ from claude_agent_sdk import (
 from harness.runtime.base import RuntimeEvent
 
 
+def _safe_tool_result_content(content: object) -> object:
+    """Hide Claude SDK coordination metadata while preserving normal tool output."""
+    rendered = repr(content).lower()
+    if "tool result is internal metadata" in rendered and (
+        "agentid" in rendered or "output_file" in rendered
+    ):
+        return "[Internal tool metadata omitted]"
+    return content
+
+
 def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
+    if message.parent_tool_use_id is not None:
+        return [
+            RuntimeEvent(
+                type="subagent.delta",
+                payload={
+                    "parent_tool_use_id": message.parent_tool_use_id,
+                    "text": block.text,
+                },
+            )
+            for block in message.content
+            if isinstance(block, TextBlock)
+        ]
     events: list[RuntimeEvent] = []
     for block in message.content:
         if isinstance(block, TextBlock):
@@ -42,7 +64,7 @@ def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
                     type="tool.result",
                     payload={
                         "tool_call_id": block.tool_use_id,
-                        "content": block.content,
+                        "content": _safe_tool_result_content(block.content),
                         "is_error": bool(block.is_error),
                     },
                 )
@@ -190,7 +212,7 @@ def map_sdk_message(message: object) -> list[RuntimeEvent]:
                         type="tool.result",
                         payload={
                             "tool_call_id": block.tool_use_id,
-                            "content": block.content,
+                            "content": _safe_tool_result_content(block.content),
                             "is_error": bool(block.is_error),
                         },
                     )

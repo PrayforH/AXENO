@@ -49,13 +49,19 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
-Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Claude Provider。两种模式都会幂等发布 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
+Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。主对话以紧凑执行时间线呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供可回放的完整事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Claude Provider。两种模式都会幂等发布 `helper@1.0.0` 与 `echo-agent@0.1.0`，打开页面后可直接输入普通问题。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程
 ```
 
-审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。刷新页面会复用本地 thread，并由 CopilotRuntime 的 connect 路由回放已完成消息。原始 AG-UI、消息和状态只在“运行详情”中的 CopilotKit Inspector 查看。
+审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。刷新页面会复用本地 thread，并由 CopilotRuntime 的 connect 路由回放已完成消息。原始 AG-UI、消息和状态位于“运行详情”底部的折叠式 CopilotKit Inspector。
+
+真实模式可用下列问题验证子 Agent：
+
+```text
+必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
+```
 
 输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、CopilotKit BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 

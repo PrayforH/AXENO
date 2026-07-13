@@ -236,6 +236,9 @@ def activity_projection(event: RunEvent) -> list[BaseEvent]:
             {"op": "replace", "path": "/status", "value": item["status"]}
         )
     if event.type == "runtime.result":
+        patch.append(
+            {"op": "replace", "path": "/status", "value": item["status"]}
+        )
         for key, value in item["metadata"].items():
             patch.append(
                 {"op": "add", "path": f"/metrics/{key}", "value": value}

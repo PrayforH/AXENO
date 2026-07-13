@@ -131,6 +131,8 @@ class RunOrchestrator:
                         or f"assistant-{run_id}-{uuid4().hex}"
                     )
                     payload["message_id"] = active_message_id
+                elif runtime_event.type == "tool.request" and active_message_id is not None:
+                    payload["message_id"] = active_message_id
                 if runtime_event.type == "artifact.output" and self._artifacts is not None:
                     relative_path = str(payload.get("path", ""))
                     artifact_path = (handle.path / relative_path).resolve()
@@ -163,6 +165,15 @@ class RunOrchestrator:
                     if not isinstance(arguments, dict):
                         arguments = {}
                     typed_arguments = cast(dict[str, Any], arguments)
+                    # Keep the request in the durable event stream so AG-UI can
+                    # pair progress and results even when policy makes the decision.
+                    await self._events.append(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        session_id=run.session_id,
+                        event_type="tool.request",
+                        payload=payload,
+                    )
                     result = self._policy.evaluate(
                         PolicyContext(
                             tenant_id=tenant_id,

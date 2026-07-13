@@ -8,7 +8,9 @@ from claude_agent_sdk import (
     TaskStartedMessage,
     TaskUpdatedMessage,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
+    UserMessage,
 )
 
 from harness.runtime.message_mapper import map_sdk_message
@@ -48,6 +50,22 @@ def test_maps_partial_text_and_subagent_lifecycle() -> None:
     assert events[0].payload == {
         "parent_tool_use_id": "agent-tool-1",
         "text": "x",
+    }
+
+
+def test_child_assistant_text_never_enters_main_message_stream() -> None:
+    message = AssistantMessage(
+        content=[TextBlock(text="child answer")],
+        model="claude-sonnet-4-6",
+        parent_tool_use_id="agent-tool-1",
+    )
+
+    events = map_sdk_message(message)
+
+    assert [event.type for event in events] == ["subagent.delta"]
+    assert events[0].payload == {
+        "parent_tool_use_id": "agent-tool-1",
+        "text": "child answer",
     }
 
 
@@ -179,3 +197,32 @@ def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
         "total_cost_usd": 0.01,
         "stop_reason": None,
     }
+
+
+def test_internal_task_result_metadata_is_redacted() -> None:
+    message = UserMessage(
+        content=[
+            ToolResultBlock(
+                tool_use_id="task-1",
+                content=[
+                    {
+                        "type": "text",
+                        "text": (
+                            "This tool result is internal metadata. "
+                            "agentId: secret output_file: /private/tmp/secret"
+                        ),
+                    }
+                ],
+                is_error=False,
+            )
+        ],
+        uuid="user-1",
+        parent_tool_use_id=None,
+        tool_use_result=None,
+    )
+
+    events = map_sdk_message(message)
+
+    assert events[0].payload["content"] == "[Internal tool metadata omitted]"
+    assert "agentId" not in repr(events)
+    assert "/private/tmp" not in repr(events)

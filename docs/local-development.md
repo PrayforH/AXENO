@@ -42,11 +42,21 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 
 打开 `http://127.0.0.1:3000` 后，默认界面是 CopilotKit v2 全页 Chat。浏览器只连接同源 `/api/copilotkit`；Next.js BFF 在服务端注入 `X-Tenant-ID`、`X-User-ID`，这些身份头不会进入浏览器配置或 URL。
 
+聊天中的“执行进度”以紧凑时间线显示模型路由、工作摘要、工具与子 Agent；工具输入/输出会按 JSON、代码或 unified diff 自动格式化。点击“运行详情”会打开右侧 Run Inspector，展示完整事件脊柱、模型、Provider、时长、轮次、成本与停止原因。原始 CopilotKit Inspector 保留在底部“协议与原始事件”折叠区。
+
 验证普通流式回答：
 
 ```text
 请简要说明这个 Harness
 ```
+
+真实 `claude-sdk` 模式下验证工具与子 Agent：
+
+```text
+必须调用 Agent/Task 工具委派 helper 子 Agent，用一句话确认收到任务；等待完成后给最终答案。
+```
+
+预期出现 `Agent` 子 Agent 卡片、`subagent.started/completed` 时间线，以及成功终态；子 Agent 的部分文本不会混入主 Agent 的流式消息。刷新页面后同一 ActivityMessage 会从耐久事件回放并重建详情。SDK 内部协调字段（如 `agentId`、`output_file`）不会进入界面。
 
 验证停止生成与后端取消：
 
@@ -68,7 +78,7 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 2. 点击“批准并继续”，同一 SSE 收到审批结果并自动恢复 Run。
 3. 对话显示 `result.txt` 产物卡片；“下载”经 `/api/harness/artifacts/:id` 鉴权代理。
 4. 刷新后 thread ID 保持不变，CopilotRuntime connect 回放消息和领域卡片。
-5. “运行详情”默认关闭；打开后使用 CopilotKit Inspector 查看 AG-UI 事件、消息与状态。
+5. “运行详情”默认关闭；打开后先查看结构化 Run Inspector，需要排查协议时再展开 CopilotKit Inspector。
 
 “新对话”会生成并持久化新的 thread ID。开发者详情不显示 tenant/user 身份头。
 

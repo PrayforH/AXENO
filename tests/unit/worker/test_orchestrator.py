@@ -13,6 +13,7 @@ from harness.adapters.memory import (
 )
 from harness.application.events import EventService
 from harness.core.models import Run, RunStatus, Session
+from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.fake import FakeRuntime
 from harness.sandbox.local import LocalSandboxProvider
@@ -31,11 +32,36 @@ def ids() -> Callable[[str], str]:
     return generate
 
 
-async def arrange(tmp_path: Path, *, fail_runtime: bool = False):
+class ToolRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(
+            type="tool.request",
+            payload={
+                "tool_call_id": "task-1",
+                "name": "Task",
+                "arguments": {"subagent_type": "helper"},
+            },
+        )
+        yield RuntimeEvent(
+            type="tool.result",
+            payload={"tool_call_id": "task-1", "content": "done", "is_error": False},
+        )
+        yield RuntimeEvent(type="message.completed")
+
+
+async def arrange(
+    tmp_path: Path,
+    *,
+    fail_runtime: bool = False,
+    runtime_override: FakeRuntime | None = None,
+    policy: PolicyEngine | None = None,
+):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     event_repository = InMemoryEventRepository()
-    runtime = FakeRuntime(fail=fail_runtime)
+    runtime = runtime_override or FakeRuntime(fail=fail_runtime)
     sandbox = LocalSandboxProvider(root=tmp_path)
     session = Session(
         session_id="session-1",
@@ -69,6 +95,7 @@ async def arrange(tmp_path: Path, *, fail_runtime: bool = False):
         runtime=runtime,
         sandbox=sandbox,
         clock=lambda: NOW,
+        policy=policy,
     )
     return orchestrator, runtime, runs, event_repository
 
@@ -130,6 +157,26 @@ class PausableRuntime:
         yield RuntimeEvent(type="message.start")
         await self.resume.wait()
         yield RuntimeEvent(type="message.delta", payload={"text": "too late"})
+
+
+@pytest.mark.asyncio
+async def test_policy_keeps_tool_request_for_ui_before_decision(tmp_path: Path) -> None:
+    orchestrator, _, _, event_repository = await arrange(
+        tmp_path,
+        runtime_override=ToolRuntime(),
+        policy=PolicyEngine(default_policy_rules()),
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    events = await event_repository.list_after("tenant-a", "run-1", 0)
+    tool_events = [event.type for event in events if event.type.startswith("tool.")]
+    request = next(event for event in events if event.type == "tool.request")
+    assert result.status is RunStatus.SUCCEEDED
+    assert tool_events == ["tool.request", "tool.allowed", "tool.result"]
+    assert request.payload["message_id"] == next(
+        event.payload["message_id"] for event in events if event.type == "message.start"
+    )
 
 
 @pytest.mark.asyncio

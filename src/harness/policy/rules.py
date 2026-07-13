@@ -76,6 +76,8 @@ class PolicyEngine:
 def default_policy_rules() -> list[PolicyRule]:
     return [
         PolicyRule(name="read", tool="Read", decision=PolicyDecision.ALLOW),
+        PolicyRule(name="delegate", tool="Task", decision=PolicyDecision.ALLOW),
+        PolicyRule(name="delegate-agent", tool="Agent", decision=PolicyDecision.ALLOW),
         PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),
         PolicyRule(
             name="destructive-rm",

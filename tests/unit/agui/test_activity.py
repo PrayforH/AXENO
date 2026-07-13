@@ -86,7 +86,12 @@ def test_model_and_result_append_safe_activity_deltas() -> None:
         "model": "shdata-glm",
         "used_fallback": False,
     }
-    metric_values = {item["path"]: item["value"] for item in result["patch"][1:]}
+    assert result["patch"][1] == {
+        "op": "replace",
+        "path": "/status",
+        "value": "succeeded",
+    }
+    metric_values = {item["path"]: item["value"] for item in result["patch"][2:]}
     assert metric_values == {
         "/metrics/turns": 2,
         "/metrics/cost_usd": 0.02,

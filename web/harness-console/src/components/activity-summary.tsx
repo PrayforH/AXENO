@@ -1,4 +1,7 @@
+"use client";
+
 import type { ActivityItem, RunActivity } from "../lib/activity-schema";
+import { useRunActivity } from "../lib/activity-store";
 
 const statusLabels: Record<string, string> = {
   queued: "排队中",
@@ -24,6 +27,8 @@ function visibleItems(items: ActivityItem[]): ActivityItem[] {
 }
 
 export function ActivitySummary({ activity }: { activity: RunActivity }) {
+  const observed = useRunActivity();
+  if (observed?.run_id === activity.run_id) activity = observed;
   const items = visibleItems(activity.items);
   const latest = items.slice(-4);
   const modelItem = [...items].reverse().find((item) => item.event_type === "model.route.selected");
