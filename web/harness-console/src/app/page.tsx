@@ -2,6 +2,7 @@
 
 import { CopilotChat } from "@copilotkit/react-core/v2";
 import { useEffect, useState } from "react";
+import { HarnessToolRenderers } from "../components/harness-tool-renderers";
 import { createNewThread, loadOrCreateThread } from "../lib/thread-store";
 
 export default function Home() {
@@ -18,6 +19,7 @@ export default function Home() {
 
   return (
     <main className="console-shell">
+      <HarnessToolRenderers />
       <header className="console-header">
         <div className="brand-lockup" aria-label="Claude Agent Harness Console">
           <span className="brand-mark" aria-hidden="true">

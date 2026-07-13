@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalLabel } from "../src/components/approval-card";
+import { approvalLabel, formatApprovalReason } from "../src/components/approval-card";
 import { parseSseBlock } from "../src/lib/agui";
 
 describe("validation console contracts", () => {
@@ -13,5 +13,8 @@ describe("validation console contracts", () => {
   it("renders an explicit pending approval label", () => {
     expect(approvalLabel("pending")).toBe("等待人工审批");
   });
-});
 
+  it("uses a useful fallback when no policy reason is available", () => {
+    expect(formatApprovalReason(undefined)).toBe("此操作需要你确认后才能继续。");
+  });
+});

@@ -249,6 +249,170 @@ button:focus-visible,
   white-space: nowrap;
 }
 
+.domain-card {
+  width: min(620px, 100%);
+  margin: 10px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--rail);
+  background: #fbfcfa;
+  color: var(--ink);
+  box-shadow: 0 8px 22px rgb(26 43 36 / 7%);
+}
+
+.domain-card-kicker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--rail);
+  font: 700 10px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.domain-card-icon {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff0d7;
+  color: #925b13;
+  font: 800 11px/1 ui-monospace, monospace;
+}
+
+.domain-card h3 {
+  margin: 10px 0 5px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.domain-card p {
+  margin: 0;
+  color: var(--muted-ink);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.domain-metadata {
+  margin: 13px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.domain-metadata div {
+  min-width: 0;
+  padding: 9px 10px 9px 0;
+}
+
+.domain-metadata div + div {
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
+.domain-metadata dt {
+  color: #7a847f;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.domain-metadata dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: #2d3934;
+  font: 11px/1.35 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.domain-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.domain-actions button,
+.download-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.domain-actions .approve-button,
+.download-button {
+  border-color: var(--rail);
+  background: var(--rail);
+  color: white;
+}
+
+.domain-actions button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.decision-label {
+  color: var(--rail);
+  font-size: 12px;
+}
+
+.domain-card .domain-error {
+  margin: 0 0 10px;
+  color: #a24134;
+}
+
+.artifact-domain-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.artifact-filemark {
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #b8c8c0;
+  background: var(--rail-soft);
+  color: var(--rail);
+  font: 800 10px/1 ui-monospace, monospace;
+  letter-spacing: 0.08em;
+}
+
+.artifact-copy {
+  min-width: 0;
+}
+
+.artifact-copy h3 {
+  margin: 5px 0 1px;
+}
+
+.artifact-copy code {
+  display: block;
+  margin-top: 5px;
+  color: #78837e;
+  font-size: 10px;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+}
+
+.domain-loading {
+  color: var(--muted-ink);
+  font-size: 12px;
+}
+
 @media (max-width: 720px) {
   .console-shell {
     width: 100%;
@@ -298,6 +462,15 @@ button:focus-visible,
   .developer-peek {
     padding-left: 12px;
     grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .artifact-domain-card {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .artifact-domain-card .download-button {
+    grid-column: 1 / -1;
+    justify-content: center;
   }
 }
 
