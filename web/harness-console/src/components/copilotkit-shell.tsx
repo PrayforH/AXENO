@@ -7,6 +7,7 @@ export function CopilotKitShell({ children }: { children: ReactNode }) {
   return (
     <CopilotKit
       runtimeUrl="/api/copilotkit"
+      useSingleEndpoint={false}
       credentials="same-origin"
       onError={({ type, error, context }) => {
         console.error("[Harness Console]", type, error, context);
