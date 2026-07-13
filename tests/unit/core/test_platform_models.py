@@ -158,7 +158,7 @@ def test_runtime_context_rejects_unknown_sandbox_isolation(tmp_path: Path) -> No
             run=run,
             session=session,
             workspace=tmp_path,
-            sandbox_isolation="virtual-machine",
+            sandbox_isolation="virtual-machine",  # type: ignore[arg-type]
         )
 
     context = RuntimeContext(run=run, session=session, workspace=tmp_path)

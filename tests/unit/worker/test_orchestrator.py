@@ -20,8 +20,8 @@ from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.fake import FakeRuntime
-from harness.sandbox.local import LocalSandboxProvider
 from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
+from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
