@@ -15,6 +15,7 @@ class RuntimeContext(BaseModel):
     run: Run
     session: Session
     workspace: Path
+    input_files: tuple[str, ...] = ()
 
 
 class RuntimeEvent(BaseModel):

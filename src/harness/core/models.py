@@ -144,6 +144,19 @@ class Artifact(FrozenModel):
     size_bytes: int | None = None
 
 
+class InputArtifact(FrozenModel):
+    input_artifact_id: str
+    tenant_id: str
+    user_id: str
+    name: str
+    media_type: str
+    status: ArtifactStatus
+    object_key: str
+    created_at: datetime
+    sha256: str | None = None
+    size_bytes: int | None = None
+
+
 class WorkspaceSnapshot(FrozenModel):
     snapshot_id: str
     session_id: str

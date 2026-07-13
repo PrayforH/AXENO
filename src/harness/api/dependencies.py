@@ -14,6 +14,7 @@ from harness.adapters.memory import (
     InMemoryArtifactStore,
     InMemoryEventBus,
     InMemoryEventRepository,
+    InMemoryInputArtifactRepository,
     InMemoryRunRepository,
     InMemorySessionRepository,
     InMemoryTaskQueue,
@@ -23,6 +24,7 @@ from harness.application.agents import AgentService
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
+from harness.application.input_artifacts import InputArtifactService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspaceService
@@ -51,6 +53,7 @@ class ApiContainer:
     runs: RunService
     approvals: ApprovalService
     artifacts: ArtifactService
+    input_artifacts: InputArtifactService
     events: InMemoryEventRepository
     observability: Observability
     runtime: AgentRuntime
@@ -70,6 +73,7 @@ def build_memory_container(
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
     artifact_repository = InMemoryArtifactRepository()
+    input_artifact_repository = InMemoryInputArtifactRepository()
     artifact_store = InMemoryArtifactStore()
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
@@ -108,6 +112,12 @@ def build_memory_container(
         store=artifact_store,
         id_generator=id_generator,
     )
+    input_artifact_service = InputArtifactService(
+        repository=input_artifact_repository,
+        store=artifact_store,
+        id_generator=id_generator,
+        clock=clock,
+    )
     policy = PolicyEngine(default_policy_rules())
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
@@ -135,14 +145,20 @@ def build_memory_container(
         workspaces=WorkspaceService(artifact_store),
         observability=observability,
         artifacts=artifact_service,
+        input_artifacts=input_artifact_service,
     )
-    agui = AguiRunService(sessions=session_service, runs=run_service)
+    agui = AguiRunService(
+        sessions=session_service,
+        runs=run_service,
+        input_artifacts=input_artifact_service,
+    )
     return ApiContainer(
         agents=AgentService(registry, clock=clock),
         sessions=session_service,
         runs=run_service,
         approvals=approval_service,
         artifacts=artifact_service,
+        input_artifacts=input_artifact_service,
         events=events,
         observability=observability,
         runtime=runtime,

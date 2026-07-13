@@ -11,6 +11,7 @@ from harness.core.models import (
     ApprovalRequest,
     ApprovalStatus,
     Artifact,
+    InputArtifact,
     Run,
     RunStatus,
     Session,
@@ -233,6 +234,38 @@ class InMemoryArtifactRepository:
             for (item_tenant, _), artifact in self._items.items()
             if item_tenant == tenant_id and artifact.run_id == run_id
         ]
+
+
+class InMemoryInputArtifactRepository:
+    def __init__(self) -> None:
+        self._items: dict[tuple[str, str], InputArtifact] = {}
+        self._lock = asyncio.Lock()
+
+    async def add(self, artifact: InputArtifact) -> None:
+        key = (artifact.tenant_id, artifact.input_artifact_id)
+        async with self._lock:
+            if key in self._items:
+                raise ConflictError(
+                    f"input artifact already exists: {artifact.input_artifact_id}"
+                )
+            self._items[key] = artifact
+
+    async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact:
+        try:
+            return self._items[(tenant_id, input_artifact_id)]
+        except KeyError as error:
+            raise NotFoundError(
+                f"input artifact not found: {input_artifact_id}"
+            ) from error
+
+    async def update(self, artifact: InputArtifact) -> None:
+        key = (artifact.tenant_id, artifact.input_artifact_id)
+        async with self._lock:
+            if key not in self._items:
+                raise NotFoundError(
+                    f"input artifact not found: {artifact.input_artifact_id}"
+                )
+            self._items[key] = artifact
 
 
 class InMemoryTaskQueue:

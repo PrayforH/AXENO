@@ -6,6 +6,7 @@ from uuid import uuid4
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
+from harness.application.input_artifacts import InputArtifactService
 from harness.application.types import Clock
 from harness.application.workspaces import WorkspaceService
 from harness.core.errors import ConflictError
@@ -34,6 +35,7 @@ class RunOrchestrator:
         workspaces: WorkspaceService | None = None,
         observability: Observability | None = None,
         artifacts: ArtifactService | None = None,
+        input_artifacts: InputArtifactService | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -46,6 +48,7 @@ class RunOrchestrator:
         self._workspaces = workspaces
         self._observability = observability
         self._artifacts = artifacts
+        self._input_artifacts = input_artifacts
 
     async def _move(
         self,
@@ -102,6 +105,36 @@ class RunOrchestrator:
                 run = await self._move(run, RunStatus.PROVISIONING)
             handle = await self._sandbox.provision(run)
             session = await self._sessions.get(tenant_id, run.session_id)
+            raw_input_artifact_ids: object = run.input.get("input_artifact_ids", [])
+            if not isinstance(raw_input_artifact_ids, list):
+                raise ValueError("run input_artifact_ids must be a list of strings")
+            input_artifact_ids: list[str] = []
+            for item in cast(list[object], raw_input_artifact_ids):
+                if not isinstance(item, str):
+                    raise ValueError(
+                        "run input_artifact_ids must be a list of strings"
+                    )
+                input_artifact_ids.append(item)
+            if input_artifact_ids and self._input_artifacts is None:
+                raise RuntimeError("input artifact service is not configured")
+            staged_inputs = (
+                await self._input_artifacts.stage_for_run(
+                    tenant_id=tenant_id,
+                    user_id=session.user_id,
+                    input_artifact_ids=input_artifact_ids,
+                    workspace=handle.path,
+                )
+                if self._input_artifacts is not None
+                else []
+            )
+            for staged in staged_inputs:
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=run.session_id,
+                    event_type="input.staged",
+                    payload=staged.model_dump(mode="json"),
+                )
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
             else:
@@ -111,7 +144,12 @@ class RunOrchestrator:
                     session_id=run.session_id,
                     event_type="run.resumed",
                 )
-            context = RuntimeContext(run=run, session=session, workspace=handle.path)
+            context = RuntimeContext(
+                run=run,
+                session=session,
+                workspace=handle.path,
+                input_files=tuple(item.path for item in staged_inputs),
+            )
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):
                 latest = await self._runs.get(tenant_id, run_id)

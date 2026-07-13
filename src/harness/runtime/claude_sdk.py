@@ -119,6 +119,14 @@ class ClaudeSdkRuntime:
         )
         yield RuntimeEvent(type="model.route.selected", payload=decision.event_payload)
         prompt = str(context.run.input.get("prompt", ""))
+        if context.input_files:
+            inventory = "\n".join(f"- {path}" for path in context.input_files)
+            prompt = (
+                f"{prompt}\n\n"
+                "Browser-uploaded input files are available in this run workspace:\n"
+                f"{inventory}\n"
+                "Use the available file tools to inspect them when relevant."
+            )
         options = self._options(context, decision.route)
         partial_text_seen = False
         stream_message_open = False

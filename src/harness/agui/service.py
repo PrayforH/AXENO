@@ -2,9 +2,16 @@
 
 import asyncio
 from dataclasses import dataclass
+from typing import cast
 
-from ag_ui.core import RunAgentInput, TextInputContent
+from ag_ui.core import (
+    BinaryInputContent,
+    DocumentInputContent,
+    RunAgentInput,
+    TextInputContent,
+)
 
+from harness.application.input_artifacts import InputArtifactService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.core.errors import ConflictError, NotFoundError
@@ -19,9 +26,16 @@ class AguiThreadBinding:
 
 
 class AguiRunService:
-    def __init__(self, *, sessions: SessionService, runs: RunService) -> None:
+    def __init__(
+        self,
+        *,
+        sessions: SessionService,
+        runs: RunService,
+        input_artifacts: InputArtifactService,
+    ) -> None:
         self._sessions = sessions
         self._run_service = runs
+        self._input_artifacts = input_artifacts
         self._bindings: dict[tuple[str, str, str], AguiThreadBinding] = {}
         self._run_bindings: dict[tuple[str, str, str, str], str] = {}
         self._lock = asyncio.Lock()
@@ -43,6 +57,12 @@ class AguiRunService:
         agent_version: str,
         request: RunAgentInput,
     ) -> Run:
+        prompt, input_artifact_ids = _latest_user_input(request)
+        resolved = await self._input_artifacts.resolve_for_run(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            input_artifact_ids=input_artifact_ids,
+        )
         binding = await self._resolve_binding(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -54,7 +74,10 @@ class AguiRunService:
             tenant_id,
             binding.session_id,
             request.run_id,
-            input={"prompt": _latest_user_text(request)},
+            input={
+                "prompt": prompt,
+                "input_artifact_ids": [item.input_artifact_id for item in resolved],
+            },
         )
         async with self._lock:
             self._run_bindings[
@@ -110,12 +133,29 @@ class AguiRunService:
             return binding
 
 
-def _latest_user_text(request: RunAgentInput) -> str:
+def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
     for message in reversed(request.messages):
         if message.role != "user":
             continue
         content = message.content
         if isinstance(content, str):
-            return content
-        return "\n".join(item.text for item in content if isinstance(item, TextInputContent))
-    return ""
+            return content, []
+        text = "\n".join(
+            item.text for item in content if isinstance(item, TextInputContent)
+        )
+        input_artifact_ids: list[str] = []
+        for item in content:
+            input_artifact_id: object | None = None
+            if isinstance(item, BinaryInputContent):
+                input_artifact_id = item.id
+            elif isinstance(item, DocumentInputContent):
+                raw_metadata: object = item.metadata
+                if isinstance(raw_metadata, dict):
+                    metadata = cast(dict[str, object], raw_metadata)
+                    input_artifact_id = metadata.get(
+                        "inputArtifactId", metadata.get("input_artifact_id")
+                    )
+            if isinstance(input_artifact_id, str) and input_artifact_id:
+                input_artifact_ids.append(input_artifact_id)
+        return text, input_artifact_ids
+    return "", []

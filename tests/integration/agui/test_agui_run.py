@@ -6,6 +6,7 @@ from ag_ui.core import RunAgentInput
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_memory_app
+from harness.core.errors import NotFoundError
 
 FIXTURE_MANIFEST = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 HEADERS = {"X-Tenant-ID": "tenant-a", "X-User-ID": "user-1"}
@@ -116,3 +117,114 @@ async def test_cancel_agui_run_resolves_protocol_ids_to_harness_run() -> None:
     assert response.status_code == 200
     assert response.json()["run_id"] == run.run_id
     assert response.json()["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_agui_run_resolves_uploaded_binary_input_for_owner() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        uploaded = await client.post(
+            "/v1/input-artifacts",
+            files={"file": ("facts.txt", b"The code is amber-731.", "text/plain")},
+            headers=HEADERS,
+        )
+        input_artifact_id = uploaded.json()["input_artifact_id"]
+
+    body = _request(thread_id="thread-file", run_id="client-file", prompt="Read it")
+    body["messages"] = [
+        {
+            "id": "message-file",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read it"},
+                {
+                    "type": "binary",
+                    "mimeType": "text/plain",
+                    "id": input_artifact_id,
+                    "filename": "facts.txt",
+                },
+                {
+                    "type": "binary",
+                    "mimeType": "text/plain",
+                    "id": input_artifact_id,
+                    "filename": "duplicate.txt",
+                },
+            ],
+        }
+    ]
+    run = await app.state.container.agui.create_run(
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="0.1.0",
+        request=RunAgentInput.model_validate(body),
+    )
+
+    assert run.input == {
+        "prompt": "Read it",
+        "input_artifact_ids": [input_artifact_id],
+    }
+
+
+@pytest.mark.asyncio
+async def test_agui_run_does_not_trust_inline_data_urls_or_cross_user_ids() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        uploaded = await client.post(
+            "/v1/input-artifacts",
+            files={"file": ("private.txt", b"private", "text/plain")},
+            headers=HEADERS,
+        )
+        input_artifact_id = uploaded.json()["input_artifact_id"]
+
+    untrusted = _request(thread_id="thread-untrusted", run_id="untrusted", prompt="Read")
+    untrusted["messages"] = [
+        {
+            "id": "message-untrusted",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read"},
+                {
+                    "type": "binary",
+                    "mimeType": "text/plain",
+                    "url": "file:///Users/example/private.txt",
+                    "data": "c2VjcmV0",
+                    "filename": "private.txt",
+                },
+            ],
+        }
+    ]
+    run = await app.state.container.agui.create_run(
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="0.1.0",
+        request=RunAgentInput.model_validate(untrusted),
+    )
+    assert run.input["input_artifact_ids"] == []
+
+    forged = _request(thread_id="thread-forged", run_id="forged", prompt="Read")
+    forged["messages"] = [
+        {
+            "id": "message-forged",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Read"},
+                {
+                    "type": "binary",
+                    "mimeType": "text/plain",
+                    "id": input_artifact_id,
+                },
+            ],
+        }
+    ]
+    with pytest.raises(NotFoundError, match="input artifact not found"):
+        await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-2",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=RunAgentInput.model_validate(forged),
+        )

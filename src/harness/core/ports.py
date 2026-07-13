@@ -10,6 +10,7 @@ from harness.core.models import (
     ApprovalRequest,
     ApprovalStatus,
     Artifact,
+    InputArtifact,
     Run,
     RunStatus,
     Session,
@@ -92,6 +93,14 @@ class ArtifactRepository(Protocol):
     async def update(self, artifact: Artifact) -> None: ...
 
     async def list_for_run(self, tenant_id: str, run_id: str) -> list[Artifact]: ...
+
+
+class InputArtifactRepository(Protocol):
+    async def add(self, artifact: InputArtifact) -> None: ...
+
+    async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact: ...
+
+    async def update(self, artifact: InputArtifact) -> None: ...
 
 
 class TaskQueue(Protocol):
