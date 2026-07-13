@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from harness.core.models import Run, RunStatus
+from harness.sandbox.base import SandboxIsolation
 from harness.sandbox.daytona import (
     DaytonaRemoteSandbox,
     DaytonaSandboxProvider,
@@ -101,6 +102,8 @@ async def test_provider_creates_identity_labeled_sandbox_and_syncs_workspace(
     await provider.destroy(handle)
 
     assert client.created is not None
+    assert handle.provider == "daytona"
+    assert handle.isolation_level is SandboxIsolation.CONTAINER
     assert client.created["snapshot"] == "claude-harness-v1"
     assert client.created["labels"] == {
         "harness.tenant": "tenant-a",

@@ -16,6 +16,7 @@ from harness.core.models import (
     UserMemory,
 )
 from harness.runtime.base import RuntimeContext
+from harness.sandbox.base import SandboxIsolation
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
@@ -131,3 +132,34 @@ def test_runtime_context_derives_identity_and_hides_sensitive_runtime_state(
     assert "memory_projection" not in dumped
     assert "runtime_transport_factory" not in dumped
     assert "secret preference" not in str(dumped)
+
+
+def test_runtime_context_rejects_unknown_sandbox_isolation(tmp_path: Path) -> None:
+    session = Session(
+        session_id="session-a",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        agent_name="research-agent",
+        agent_version="1.2.0",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-a",
+        session_id=session.session_id,
+        tenant_id=session.tenant_id,
+        status=RunStatus.RUNNING,
+        idempotency_key="idem-a",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    with pytest.raises(ValidationError):
+        RuntimeContext(
+            run=run,
+            session=session,
+            workspace=tmp_path,
+            sandbox_isolation="virtual-machine",
+        )
+
+    context = RuntimeContext(run=run, session=session, workspace=tmp_path)
+    assert context.sandbox_isolation is SandboxIsolation.WORKSPACE

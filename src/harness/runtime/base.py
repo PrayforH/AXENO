@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.core.models import ExecutionIdentity, Run, Session
 from harness.runtime.artifact_tools import ArtifactPublisher
+from harness.sandbox.base import SandboxIsolation
 
 RuntimeTransportFactory = Callable[[object], object]
 
@@ -18,6 +19,8 @@ class RuntimeContext(BaseModel):
     run: Run
     session: Session
     workspace: Path
+    sandbox_provider: str = "local"
+    sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE
     input_files: tuple[str, ...] = ()
     identity: ExecutionIdentity | None = None
     memory_projection: str = Field(default="", exclude=True, repr=False)

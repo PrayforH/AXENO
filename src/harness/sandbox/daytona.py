@@ -24,7 +24,7 @@ from harness.runtime.daytona_transport import (
     DaytonaClaudeTransport,
     RemoteClaudeSession,
 )
-from harness.sandbox.base import SandboxHandle
+from harness.sandbox.base import SandboxHandle, SandboxIsolation
 
 
 class DaytonaRemoteSandbox(Protocol):
@@ -245,6 +245,7 @@ class DaytonaSandboxProvider:
             sandbox_id=sandbox.id,
             path=path,
             provider="daytona",
+            isolation_level=SandboxIsolation.CONTAINER,
             remote_workspace=remote_workspace,
             runtime_transport_factory=transport_factory,
         )

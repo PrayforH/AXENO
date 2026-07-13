@@ -1,6 +1,7 @@
 """Sandbox lifecycle contract."""
 
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -9,12 +10,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from harness.core.models import Run
 
 
+class SandboxIsolation(StrEnum):
+    WORKSPACE = "workspace"
+    CONTAINER = "container"
+
+
 class SandboxHandle(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     sandbox_id: str
     path: Path
     provider: str = "local"
+    isolation_level: SandboxIsolation = SandboxIsolation.WORKSPACE
     remote_workspace: str | None = None
     runtime_transport_factory: Callable[[object], object] | None = Field(
         default=None, exclude=True, repr=False
