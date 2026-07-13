@@ -20,6 +20,7 @@ from harness.adapters.memory import (
     InMemoryTaskQueue,
     InMemoryThreadFileRepository,
     InMemoryUserMemoryRepository,
+    InMemoryWorkspaceSnapshotRepository,
 )
 from harness.agui.service import AguiRunService
 from harness.application.agents import AgentService
@@ -31,8 +32,9 @@ from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
-from harness.application.workspaces import WorkspaceService
+from harness.application.workspaces import WorkspacePolicy, WorkspaceService
 from harness.config import Settings
+from harness.core.manifest import AgentManifestSnapshot
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
 from harness.policy.rules import PolicyEngine, default_policy_rules
@@ -83,6 +85,7 @@ def build_memory_container(
     input_artifact_repository = InMemoryInputArtifactRepository()
     memory_repository = InMemoryUserMemoryRepository()
     thread_file_repository = InMemoryThreadFileRepository()
+    workspace_snapshot_repository = InMemoryWorkspaceSnapshotRepository()
     artifact_store = InMemoryArtifactStore()
     events = InMemoryEventRepository()
     bus = InMemoryEventBus()
@@ -135,6 +138,19 @@ def build_memory_container(
         file_catalog=file_catalog_service,
     )
     memory_service = UserMemoryService(memory_repository, clock=clock)
+    workspace_service = WorkspaceService(
+        artifact_store, snapshots=workspace_snapshot_repository
+    )
+
+    async def workspace_policy_resolver(
+        tenant_id: str, agent_name: str, agent_version: str
+    ) -> WorkspacePolicy:
+        version = await registry.get(tenant_id, agent_name, agent_version)
+        manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
+        return WorkspacePolicy(
+            restore_session=manifest.spec.workspace.restore_session,
+            archive_on_complete=manifest.spec.workspace.archive_on_complete,
+        )
     policy = PolicyEngine(default_policy_rules())
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
@@ -160,11 +176,12 @@ def build_memory_container(
         clock=clock,
         policy=policy,
         approvals=approval_service,
-        workspaces=WorkspaceService(artifact_store),
+        workspaces=workspace_service,
         observability=observability,
         artifacts=artifact_service,
         input_artifacts=input_artifact_service,
         memory=memory_service,
+        workspace_policy_resolver=workspace_policy_resolver,
     )
     agui = AguiRunService(
         sessions=session_service,

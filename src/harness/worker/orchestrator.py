@@ -9,7 +9,11 @@ from harness.application.events import EventService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
 from harness.application.types import Clock
-from harness.application.workspaces import WorkspaceService
+from harness.application.workspaces import (
+    WorkspacePolicy,
+    WorkspacePolicyResolver,
+    WorkspaceService,
+)
 from harness.core.errors import ConflictError
 from harness.core.models import ExecutionIdentity, Run, RunStatus
 from harness.core.ports import RunRepository, SessionRepository
@@ -45,6 +49,7 @@ class RunOrchestrator:
         artifacts: ArtifactService | None = None,
         input_artifacts: InputArtifactService | None = None,
         memory: UserMemoryService | None = None,
+        workspace_policy_resolver: WorkspacePolicyResolver | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -59,6 +64,7 @@ class RunOrchestrator:
         self._artifacts = artifacts
         self._input_artifacts = input_artifacts
         self._memory = memory
+        self._workspace_policy_resolver = workspace_policy_resolver
 
     async def _move(
         self,
@@ -115,6 +121,27 @@ class RunOrchestrator:
                 run = await self._move(run, RunStatus.PROVISIONING)
             handle = await self._sandbox.provision(run)
             session = await self._sessions.get(tenant_id, run.session_id)
+            workspace_policy = (
+                await self._workspace_policy_resolver(
+                    tenant_id, session.agent_name, session.agent_version
+                )
+                if self._workspace_policy_resolver is not None
+                else WorkspacePolicy()
+            )
+            if self._workspaces is not None and workspace_policy.restore_session:
+                restored = await self._workspaces.restore_latest(
+                    tenant_id=tenant_id,
+                    session_id=session.session_id,
+                    workspace=handle.path,
+                )
+                if restored is not None:
+                    await self._events.append(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        session_id=run.session_id,
+                        event_type="workspace.restored",
+                        payload=restored.model_dump(mode="json"),
+                    )
             identity = ExecutionIdentity(
                 tenant_id=session.tenant_id,
                 user_id=session.user_id,
@@ -366,7 +393,7 @@ class RunOrchestrator:
                 )
                 if runtime_event.type == "message.completed":
                     active_message_id = None
-            if self._workspaces is not None:
+            if self._workspaces is not None and workspace_policy.archive_on_complete:
                 snapshot = await self._workspaces.archive(
                     tenant_id=tenant_id,
                     session_id=run.session_id,
