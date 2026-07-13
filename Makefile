@@ -1,4 +1,6 @@
-.PHONY: install test lint typecheck verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build
+.PHONY: install test lint typecheck verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e
+
+DOCKER_COMPOSE = docker compose --env-file deploy/docker-compose/.env.docker -f deploy/docker-compose/compose.yaml
 
 install:
 	uv sync --group dev
@@ -35,3 +37,21 @@ web-test:
 
 web-build:
 	cd web/harness-console && npm run build
+
+docker-config:
+	$(DOCKER_COMPOSE) config --quiet
+
+docker-build:
+	$(DOCKER_COMPOSE) build
+
+docker-up:
+	$(DOCKER_COMPOSE) up -d --wait
+
+docker-up-observability:
+	$(DOCKER_COMPOSE) --profile observability up -d --wait
+
+docker-down:
+	$(DOCKER_COMPOSE) down
+
+docker-e2e:
+	uv run python scripts/e2e_docker.py

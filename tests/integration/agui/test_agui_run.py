@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -67,6 +68,34 @@ async def test_post_agui_runs_agent_and_streams_standard_events() -> None:
         "threadId": "thread-a",
         "runId": "client-run-1",
     }
+
+
+@pytest.mark.asyncio
+async def test_post_agui_waits_for_terminal_event_after_run_status_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_memory_app(auto_execute=True)
+    worker = app.state.container.worker
+    event_service = worker._events
+    original_append = event_service.append
+
+    async def delayed_append(**values: object):
+        if values.get("event_type") == "run.succeeded":
+            await asyncio.sleep(0.1)
+        return await original_append(**values)
+
+    monkeypatch.setattr(event_service, "append", delayed_append)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
+        )
+        response = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json=_request(thread_id="thread-race", run_id="client-race", prompt="hello"),
+            headers=HEADERS,
+        )
+
+    assert any(event.get("type") == "RUN_FINISHED" for event in _events(response.text))
 
 
 @pytest.mark.asyncio

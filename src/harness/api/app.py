@@ -54,6 +54,10 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
         return await call_next(request)
 
 
+async def _healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 def create_app(container: ApiContainer) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -69,6 +73,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.container = container
+    app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

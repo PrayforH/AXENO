@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from dataclasses import replace
 
 import pytest
@@ -67,3 +70,26 @@ def test_app_lifespan_closes_composed_resources() -> None:
         pass
 
     assert closed is True
+
+
+def test_production_composition_imports_in_clean_worker_process() -> None:
+    environment = {
+        **os.environ,
+        "HARNESS_ENVIRONMENT": "production",
+        "HARNESS_RUNTIME": "claude-sdk",
+        "HARNESS_NEW_API_BASE_URL": "https://gateway.example",
+        "HARNESS_NEW_API_MODEL": "deepseek-chat",
+        "HARNESS_NEW_API_KEY": "model-secret",
+        "HARNESS_MINIO_ACCESS_KEY": "minio-access",
+        "HARNESS_MINIO_SECRET_KEY": "minio-secret",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import harness.composition"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr

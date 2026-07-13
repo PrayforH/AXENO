@@ -116,6 +116,8 @@ make web-build
 
 完整领域开发流程见 [domain-agents.md](domain-agents.md)。本地 API 的默认 MCP Registry 为空；领域 Manifest 使用 `mcp:` 前，必须在服务端组合根注册对应逻辑 ID。真实 SDK 已通过 `PreToolUse` 前置执行策略；本地 inline 审批 waiter 只适用于单 API 进程。
 
+单机生产形态、国内依赖镜像、真实网关黑盒验收与 Langfuse profile 见 [deployment.md](deployment.md)。
+
 ## Troubleshooting
 
 - 端口占用：检查 `5432/6379/9000/9001/8000/3000`。

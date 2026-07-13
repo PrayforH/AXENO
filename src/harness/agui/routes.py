@@ -15,6 +15,14 @@ from harness.core.models import Run
 
 router = APIRouter(prefix="/agui", tags=["ag-ui"])
 
+_TERMINAL_EVENT_TYPES = {
+    "run.cancelled",
+    "run.failed",
+    "run.rejected",
+    "run.succeeded",
+    "run.timed_out",
+}
+
 
 def _encode_event(event_id: str, event: object) -> str:
     data = json.dumps(
@@ -47,6 +55,7 @@ async def run_agui_agent(
 
     async def stream() -> AsyncIterator[str]:
         sequence = 0
+        terminal_event_seen = False
         while True:
             events = await container.events.list_after(
                 identity.tenant_id, run.run_id, sequence
@@ -65,10 +74,9 @@ async def run_agui_agent(
                     )
                     yield _encode_event(event_id, item)
                 sequence = event.sequence
-            latest = await container.runs.get(identity.tenant_id, run.run_id)
-            if latest.status.is_terminal and not await container.events.list_after(
-                identity.tenant_id, run.run_id, sequence
-            ):
+                if event.type in _TERMINAL_EVENT_TYPES:
+                    terminal_event_seen = True
+            if terminal_event_seen:
                 break
             await asyncio.sleep(0.02)
         if worker_task is not None:

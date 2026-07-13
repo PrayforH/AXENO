@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 from collections import defaultdict, deque
 
-from harness.core.errors import ConflictError, NotFoundError
+from harness.core.errors import ConflictError, EventSequenceConflictError, NotFoundError
 from harness.core.events import RunEvent
 from harness.core.models import (
     AgentVersion,
@@ -161,7 +161,7 @@ class InMemoryEventRepository:
             key = (event.tenant_id, event.run_id)
             expected_sequence = len(self._items[key]) + 1
             if event.sequence != expected_sequence:
-                raise ConflictError(
+                raise EventSequenceConflictError(
                     f"event sequence must be {expected_sequence}, got {event.sequence}"
                 )
             self._items[key].append(event)

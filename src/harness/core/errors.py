@@ -15,3 +15,7 @@ class NotFoundError(HarnessDomainError):
 
 class ConflictError(HarnessDomainError):
     """Raised when an idempotency or optimistic concurrency rule is violated."""
+
+
+class EventSequenceConflictError(ConflictError):
+    """Raised when another writer claims an event sequence first."""

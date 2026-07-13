@@ -78,6 +78,16 @@ def default_policy_rules() -> list[PolicyRule]:
         PolicyRule(name="read", tool="Read", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate", tool="Task", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate-agent", tool="Agent", decision=PolicyDecision.ALLOW),
+        PolicyRule(
+            name="harness-memory-update",
+            tool="mcp__harness-memory__update_user_memory",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="harness-artifact-publish",
+            tool="mcp__harness-artifacts__publish_artifact",
+            decision=PolicyDecision.ALLOW,
+        ),
         PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),
         PolicyRule(
             name="destructive-rm",

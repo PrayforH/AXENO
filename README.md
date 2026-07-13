@@ -26,6 +26,14 @@ make dev-up
 
 领域 Agent 的 prompt、Python Tool、外部 MCP、发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)。
 
+生产形态 Docker Compose（API、Worker、Web、PostgreSQL、Redis、MinIO、migration、可选 Langfuse Collector）见 [docs/deployment.md](docs/deployment.md)。构建默认使用清华 PyPI 与 npmmirror，可通过 `.env.docker` 覆盖：
+
+```bash
+cp deploy/docker-compose/.env.docker.example deploy/docker-compose/.env.docker
+make docker-build
+make docker-up
+```
+
 使用 cc-switch 当前已应用的 Claude Provider 启动真实模型模式：
 
 ```bash
@@ -84,4 +92,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-Phase 1 是可运行的基础框架与验证面，不是最终控制平面：生产认证、Kubernetes per-run Pod、完整数据库组合根、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成策略与审批；subagent 自定义工具、字段级工具参数脱敏和多进程持久化审批 continuation 仍是明确的后续边界。
+当前仓库已经具备持久化生产组合根和单机 Docker 部署基线，但不是最终控制平面：公网认证/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成策略与审批；subagent 自定义工具、字段级工具参数脱敏和多进程持久化审批 continuation 仍是明确的后续边界。

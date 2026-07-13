@@ -5,7 +5,7 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
 
-from harness.core.errors import ConflictError, NotFoundError
+from harness.core.errors import ConflictError, EventSequenceConflictError, NotFoundError
 from harness.core.events import RunEvent
 from harness.core.models import Run, RunStatus
 from harness.storage.database import SessionFactory
@@ -102,7 +102,9 @@ class PostgresEventRepository:
                 await session.commit()
             except IntegrityError as error:
                 await session.rollback()
-                raise ConflictError(f"event sequence already exists: {event.sequence}") from error
+                raise EventSequenceConflictError(
+                    f"event sequence already exists: {event.sequence}"
+                ) from error
 
     async def list_after(self, tenant_id: str, run_id: str, after_sequence: int) -> list[RunEvent]:
         statement = (

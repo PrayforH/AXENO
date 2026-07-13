@@ -10,6 +10,16 @@ from harness.policy.rules import PolicyEngine, default_policy_rules
         ("Read", {"file_path": "/workspace/notes.txt"}, PolicyDecision.ALLOW),
         ("Task", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
         ("Agent", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
+        (
+            "mcp__harness-memory__update_user_memory",
+            {"content": "remember this"},
+            PolicyDecision.ALLOW,
+        ),
+        (
+            "mcp__harness-artifacts__publish_artifact",
+            {"path": "outputs/report.md"},
+            PolicyDecision.ALLOW,
+        ),
         ("Write", {"file_path": "/workspace/result.txt"}, PolicyDecision.ASK),
         ("Bash", {"command": "rm -rf /workspace/data"}, PolicyDecision.DENY),
     ],

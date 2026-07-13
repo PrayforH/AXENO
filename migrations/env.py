@@ -1,3 +1,4 @@
+import os
 from asyncio import run
 from logging.config import fileConfig
 
@@ -8,6 +9,8 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from harness.storage.models import Base
 
 config = context.config
+if database_url := os.getenv("HARNESS_DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", database_url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
