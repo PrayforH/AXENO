@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 
 from harness.agui.mapper import map_harness_event
@@ -33,20 +34,67 @@ def test_maps_run_and_text_lifecycle_to_standard_events() -> None:
     assert finished[0].model_dump(by_alias=True)["type"] == "RUN_FINISHED"
 
 
-def test_maps_tool_and_versioned_custom_events() -> None:
+def test_maps_tool_and_domain_events_to_tool_calls() -> None:
     tool = map_harness_event(
         event(
             "tool.request",
             {"tool_call_id": "tool-1", "name": "Read", "arguments": {"path": "a"}},
         )
     )
-    approval = map_harness_event(event("approval.requested", {"approval_id": "approval-1"}))
-    artifact = map_harness_event(event("artifact.ready", {"artifact_id": "artifact-1"}))
+    approval = map_harness_event(
+        event(
+            "approval.requested",
+            {
+                "approval_id": "approval-1",
+                "tool_call_id": "tool-1",
+                "reason": "Write requires approval",
+            },
+        )
+    )
+    artifact = map_harness_event(
+        event(
+            "artifact.ready",
+            {
+                "artifact_id": "artifact-1",
+                "name": "result.txt",
+                "media_type": "text/plain",
+                "size_bytes": 21,
+            },
+        )
+    )
 
     assert [item.model_dump(by_alias=True)["type"] for item in tool] == [
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
         "TOOL_CALL_END",
     ]
-    assert approval[0].model_dump(by_alias=True)["name"] == "harness.approval.v1"
-    assert artifact[0].model_dump(by_alias=True)["name"] == "harness.artifact.v1"
+    assert [item.model_dump(by_alias=True)["type"] for item in approval] == [
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+    ]
+    assert approval[0].model_dump(by_alias=True)["toolCallName"] == (
+        "harness_request_approval"
+    )
+    assert json.loads(approval[1].model_dump(by_alias=True)["delta"]) == {
+        "approval_id": "approval-1",
+        "run_id": "run-1",
+        "tool_call_id": "tool-1",
+        "reason": "Write requires approval",
+    }
+    assert artifact[0].model_dump(by_alias=True)["toolCallName"] == (
+        "harness_present_artifact"
+    )
+    assert json.loads(artifact[1].model_dump(by_alias=True)["delta"]) == {
+        "artifact_id": "artifact-1",
+        "run_id": "run-1",
+        "name": "result.txt",
+        "media_type": "text/plain",
+        "size_bytes": 21,
+    }
+
+
+def test_keeps_subagent_events_as_versioned_activity() -> None:
+    activity = map_harness_event(event("subagent.started", {"name": "researcher"}))
+
+    assert activity[0].model_dump(by_alias=True)["name"] == "harness.subagent.v1"

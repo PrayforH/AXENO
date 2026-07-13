@@ -26,6 +26,29 @@ def _custom(event: RunEvent, name: str) -> Sequence[BaseEvent]:
     return [CustomEvent(name=name, value=event.payload)]
 
 
+def _domain_tool(
+    event: RunEvent,
+    *,
+    name: str,
+    fields: tuple[str, ...],
+) -> Sequence[BaseEvent]:
+    tool_call_id = f"harness-domain-{event.event_id}"
+    arguments = {key: event.payload[key] for key in fields if key in event.payload}
+    arguments["run_id"] = event.run_id
+    return [
+        ToolCallStartEvent(
+            tool_call_id=tool_call_id,
+            tool_call_name=name,
+            parent_message_id=f"assistant-{event.run_id}",
+        ),
+        ToolCallArgsEvent(
+            tool_call_id=tool_call_id,
+            delta=json.dumps(arguments, separators=(",", ":")),
+        ),
+        ToolCallEndEvent(tool_call_id=tool_call_id),
+    ]
+
+
 def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
     message_id = str(event.payload.get("message_id", f"assistant-{event.run_id}"))
     if event.type == "run.queued":
@@ -70,9 +93,26 @@ def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
             )
         ]
     if event.type == "approval.requested":
-        return _custom(event, "harness.approval.v1")
+        return _domain_tool(
+            event,
+            name="harness_request_approval",
+            fields=("approval_id", "tool_call_id", "reason", "expires_at", "status"),
+        )
     if event.type.startswith("subagent."):
         return _custom(event, "harness.subagent.v1")
+    if event.type == "artifact.ready":
+        return _domain_tool(
+            event,
+            name="harness_present_artifact",
+            fields=(
+                "artifact_id",
+                "name",
+                "media_type",
+                "size_bytes",
+                "sha256",
+                "status",
+            ),
+        )
     if event.type.startswith("artifact.") or event.type == "workspace.archived":
         return _custom(event, "harness.artifact.v1")
     if event.type in {"runtime.result", "model.route.selected"}:
