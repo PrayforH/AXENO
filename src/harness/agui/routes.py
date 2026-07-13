@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from harness.agui.mapper import map_harness_event
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.core.models import Run
 
 router = APIRouter(prefix="/agui", tags=["ag-ui"])
 
@@ -77,6 +78,24 @@ async def run_agui_agent(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post(
+    "/threads/{thread_id}/runs/{client_run_id}/cancel",
+    response_model=Run,
+)
+async def cancel_agui_run(
+    thread_id: str,
+    client_run_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> Run:
+    return await container.agui.cancel_run(
+        tenant_id=identity.tenant_id,
+        user_id=identity.user_id,
+        thread_id=thread_id,
+        client_run_id=client_run_id,
     )
 
 

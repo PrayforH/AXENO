@@ -114,6 +114,9 @@ class RunOrchestrator:
             context = RuntimeContext(run=run, session=session, workspace=handle.path)
             active_message_id: str | None = None
             async for runtime_event in self._runtime.execute(context):
+                latest = await self._runs.get(tenant_id, run_id)
+                if latest.status is RunStatus.CANCELLING:
+                    return await self._move(latest, RunStatus.CANCELLED)
                 payload = dict(runtime_event.payload)
                 if runtime_event.type == "message.start":
                     active_message_id = str(

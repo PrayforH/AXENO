@@ -1,13 +1,20 @@
 """Deterministic runtime used for tests and local infrastructure validation."""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 
 
 class FakeRuntime:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        delay: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._fail = fail
+        self._delay = delay
         self.execution_count = 0
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
@@ -16,6 +23,8 @@ class FakeRuntime:
             raise RuntimeError("configured fake runtime failure")
         prompt = str(context.run.input.get("prompt", ""))
         yield RuntimeEvent(type="message.start", payload={"role": "assistant"})
+        if "[slow]" in prompt:
+            await self._delay(3.0)
         yield RuntimeEvent(type="message.delta", payload={"text": f"Echo: {prompt}"})
         if "[approval]" in prompt:
             yield RuntimeEvent(

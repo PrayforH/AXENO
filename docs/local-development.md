@@ -40,6 +40,14 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 请简要说明这个 Harness
 ```
 
+验证停止生成与后端取消：
+
+```text
+[slow] 验证停止
+```
+
+消息开始生成后点击输入框旁的停止按钮。前端会中止当前流，同时通知 Harness 取消对应的内部 Run；约 3 秒内后端状态应从 `cancelling` 进入 `cancelled`，且不会继续输出剩余内容。`[slow]` 只是 Fake Runtime 的本地验收标记，不会进入真实 Agent 协议。
+
 验证审批、自动恢复与 Artifact：
 
 ```text

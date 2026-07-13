@@ -1,4 +1,5 @@
-from collections.abc import Callable
+import asyncio
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from harness.adapters.memory import (
 )
 from harness.application.events import EventService
 from harness.core.models import Run, RunStatus, Session
+from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.fake import FakeRuntime
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
@@ -116,3 +118,66 @@ async def test_runtime_failure_marks_run_failed_and_cleans_sandbox(tmp_path: Pat
     events = await event_repository.list_after("tenant-a", "run-1", 0)
     assert events[-1].type == "run.failed"
 
+
+class PausableRuntime:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.resume = asyncio.Event()
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        self.started.set()
+        yield RuntimeEvent(type="message.start")
+        await self.resume.wait()
+        yield RuntimeEvent(type="message.delta", payload={"text": "too late"})
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_runtime_stops_at_next_event_boundary(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    events = InMemoryEventRepository()
+    runtime = PausableRuntime()
+    session = Session(
+        session_id="session-1",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-1",
+        session_id=session.session_id,
+        tenant_id=session.tenant_id,
+        status=RunStatus.QUEUED,
+        idempotency_key="cancel-boundary",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await sessions.add(session)
+    await runs.add(run)
+    orchestrator = RunOrchestrator(
+        sessions=sessions,
+        runs=runs,
+        events=EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()),
+        runtime=runtime,
+        sandbox=LocalSandboxProvider(root=tmp_path),
+        clock=lambda: NOW,
+    )
+
+    execution = asyncio.create_task(orchestrator.execute("tenant-a", "run-1"))
+    await runtime.started.wait()
+    while (await runs.get("tenant-a", "run-1")).status is not RunStatus.RUNNING:
+        await asyncio.sleep(0)
+    current = await runs.get("tenant-a", "run-1")
+    cancelling = current.model_copy(update={"status": RunStatus.CANCELLING})
+    assert await runs.compare_and_set(RunStatus.RUNNING, cancelling)
+    runtime.resume.set()
+
+    result = await execution
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert result.status is RunStatus.CANCELLED
+    assert "message.delta" not in [item.type for item in emitted]

@@ -21,8 +21,9 @@ class AguiThreadBinding:
 class AguiRunService:
     def __init__(self, *, sessions: SessionService, runs: RunService) -> None:
         self._sessions = sessions
-        self._runs = runs
+        self._run_service = runs
         self._bindings: dict[tuple[str, str, str], AguiThreadBinding] = {}
+        self._run_bindings: dict[tuple[str, str, str, str], str] = {}
         self._lock = asyncio.Lock()
 
     async def get_binding(
@@ -49,12 +50,34 @@ class AguiRunService:
             agent_name=agent_name,
             agent_version=agent_version,
         )
-        return await self._runs.create(
+        run = await self._run_service.create(
             tenant_id,
             binding.session_id,
             request.run_id,
             input={"prompt": _latest_user_text(request)},
         )
+        async with self._lock:
+            self._run_bindings[
+                (tenant_id, user_id, request.thread_id, request.run_id)
+            ] = run.run_id
+        return run
+
+    async def cancel_run(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        client_run_id: str,
+    ) -> Run:
+        key = (tenant_id, user_id, thread_id, client_run_id)
+        async with self._lock:
+            run_id = self._run_bindings.get(key)
+        if run_id is None:
+            raise NotFoundError(
+                f"AG-UI run is not bound: {thread_id}/{client_run_id}"
+            )
+        return await self._run_service.cancel(tenant_id, run_id)
 
     async def _resolve_binding(
         self,

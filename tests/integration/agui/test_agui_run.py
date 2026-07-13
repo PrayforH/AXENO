@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from ag_ui.core import RunAgentInput
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_memory_app
@@ -87,3 +88,29 @@ async def test_post_agui_reuses_harness_session_for_same_thread() -> None:
     assert first.session_id == second.session_id
     assert first.agent_name == "echo-agent"
     assert first.agent_version == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_cancel_agui_run_resolves_protocol_ids_to_harness_run() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        request = RunAgentInput.model_validate(
+            _request(thread_id="thread-cancel", run_id="client-run-cancel", prompt="wait")
+        )
+        run = await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=request,
+        )
+
+        response = await client.post(
+            "/v1/agui/threads/thread-cancel/runs/client-run-cancel/cancel",
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run.run_id
+    assert response.json()["status"] == "cancelling"

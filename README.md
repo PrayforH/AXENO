@@ -49,6 +49,8 @@ Web 首页是 CopilotKit v2 全页对话，而不是原始 Events 面板。`make
 
 审批卡片选择“批准并继续”后，同一 Run 自动恢复并显示 `result.txt` 下载卡片。刷新页面会复用本地 thread，并由 CopilotRuntime 的 connect 路由回放已完成消息。原始 AG-UI、消息和状态只在“运行详情”中的 CopilotKit Inspector 查看。
 
+输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、CopilotKit BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
+
 new-api 实际连通性是显式的可选 smoke：
 
 ```bash
