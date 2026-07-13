@@ -19,6 +19,7 @@ from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.hooks import discard_sdk_stderr
 from harness.runtime.message_mapper import map_sdk_message
 from harness.runtime.model_router import ModelRouter
+from harness.runtime.tools import ToolResolutionError, ToolResolver
 
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
 
@@ -38,6 +39,7 @@ class ClaudeSdkRuntime:
         subagent_versions: dict[str, AgentVersion] | None = None,
         query_factory: QueryFactory = _default_query,
         session_store: object | None = None,
+        tool_resolver: ToolResolver | None = None,
     ) -> None:
         self._agent_version = agent_version
         self._snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
@@ -46,6 +48,7 @@ class ClaudeSdkRuntime:
         self._subagent_versions = subagent_versions or {}
         self._query = query_factory
         self._session_store = session_store
+        self._tool_resolver = tool_resolver or ToolResolver()
 
     def _options(self, context: RuntimeContext, route: ModelRoute) -> ClaudeAgentOptions:
         manifest = self._snapshot.manifest
@@ -60,11 +63,15 @@ class ClaudeSdkRuntime:
             environment["ANTHROPIC_AUTH_TOKEN"] = secret
         else:
             environment["ANTHROPIC_API_KEY"] = secret
-        tools = [tool.builtin for tool in manifest.spec.tools if tool.builtin is not None]
+        resolved_tools = self._tool_resolver.resolve(manifest)
         agents: dict[str, AgentDefinition] = {}
         for name, version in self._subagent_versions.items():
             snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
             subagent_manifest = snapshot.manifest
+            if any(tool.builtin is None for tool in subagent_manifest.spec.tools):
+                raise ToolResolutionError(
+                    f"subagent custom tools are not supported: {name}"
+                )
             subagent_tools = [
                 tool.builtin
                 for tool in subagent_manifest.spec.tools
@@ -79,7 +86,9 @@ class ClaudeSdkRuntime:
             )
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
         return ClaudeAgentOptions(
-            tools=tools,
+            tools=list(resolved_tools.builtin_tools),
+            allowed_tools=list(resolved_tools.allowed_tools),
+            mcp_servers=dict(resolved_tools.mcp_servers),
             system_prompt=self._snapshot.system_prompt,
             model=route.model,
             fallback_model=None,

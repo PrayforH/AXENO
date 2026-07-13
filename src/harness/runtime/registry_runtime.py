@@ -8,6 +8,7 @@ from harness.core.ports import AgentRegistry
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.claude_sdk import ClaudeSdkRuntime, QueryFactory
+from harness.runtime.tools import ToolResolver
 
 
 class RegistryClaudeRuntime:
@@ -17,10 +18,12 @@ class RegistryClaudeRuntime:
         registry: AgentRegistry,
         config: CcSwitchClaudeConfig,
         query_factory: QueryFactory | None = None,
+        tool_resolver: ToolResolver | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
         self._query_factory = query_factory
+        self._tool_resolver = tool_resolver or ToolResolver()
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
@@ -58,6 +61,7 @@ class RegistryClaudeRuntime:
                 routes=[route],
                 route_secrets=route_secrets,
                 subagent_versions=subagent_versions,
+                tool_resolver=self._tool_resolver,
             )
         else:
             runtime = ClaudeSdkRuntime(
@@ -66,6 +70,7 @@ class RegistryClaudeRuntime:
                 route_secrets=route_secrets,
                 subagent_versions=subagent_versions,
                 query_factory=self._query_factory,
+                tool_resolver=self._tool_resolver,
             )
         async for event in runtime.execute(context):
             yield event

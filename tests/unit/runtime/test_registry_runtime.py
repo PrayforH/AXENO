@@ -1,22 +1,38 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    McpServerConfig,
+    ResultMessage,
+    TextBlock,
+)
 from pydantic import SecretStr
 
 from harness.adapters.memory import InMemoryAgentRegistry
-from harness.core.manifest import load_manifest
+from harness.core.manifest import ToolSpec, load_manifest
 from harness.core.models import AgentVersion, AgentVersionStatus, Run, RunStatus, Session
 from harness.runtime.base import RuntimeContext
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
+from harness.runtime.tools import McpServerRegistration, ToolResolver
 
 
 @pytest.mark.asyncio
 async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path) -> None:
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    echo_spec = snapshot.manifest.spec.model_copy(
+        update={
+            "tools": snapshot.manifest.spec.tools
+            + (ToolSpec.model_validate({"mcp": "crm"}),)
+        }
+    )
+    echo_manifest = snapshot.manifest.model_copy(update={"spec": echo_spec})
+    snapshot = snapshot.model_copy(update={"manifest": echo_manifest})
     helper_snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     registry = InMemoryAgentRegistry()
     await registry.add(
@@ -64,6 +80,18 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
             credential=SecretStr("registry-secret"),
         ),
         query_factory=fake_query,
+        tool_resolver=ToolResolver(
+            mcp_registry={
+                "crm": McpServerRegistration(
+                    server_name="crm-prod",
+                    config=cast(
+                        McpServerConfig,
+                        {"type": "http", "url": "https://mcp.example.test"},
+                    ),
+                    allowed_tools=("mcp__crm-prod__search",),
+                )
+            }
+        ),
     )
     now = datetime.now(UTC)
     context = RuntimeContext(
@@ -101,6 +129,9 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert helper.model == "inherit"
     assert isinstance(captured[0][1].tools, list)
     assert "Task" in captured[0][1].tools
+    assert isinstance(captured[0][1].mcp_servers, dict)
+    assert set(captured[0][1].mcp_servers) == {"crm-prod"}
+    assert captured[0][1].allowed_tools == ["mcp__crm-prod__search"]
     assert [event.type for event in events] == [
         "model.route.selected",
         "message.start",
