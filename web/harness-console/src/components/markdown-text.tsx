@@ -6,6 +6,7 @@ import {
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { memo, useState } from "react";
+import { SourceLink } from "./source-link";
 
 function CodeHeader({ language, code }: CodeHeaderProps) {
   const [copied, setCopied] = useState(false);
@@ -31,7 +32,7 @@ function MarkdownTextImpl() {
     <MarkdownTextPrimitive
       className="aui-md"
       remarkPlugins={[remarkGfm]}
-      components={{ CodeHeader }}
+      components={{ CodeHeader, a: SourceLink }}
       defer
     />
   );

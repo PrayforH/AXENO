@@ -25,9 +25,7 @@ body {
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    linear-gradient(90deg, rgb(23 32 29 / 3%) 1px, transparent 1px) 0 0 / 52px 52px,
-    var(--paper);
+  background: var(--paper);
 }
 
 button,
@@ -43,15 +41,13 @@ textarea:focus-visible {
 }
 
 .console-shell {
-  width: min(1440px, calc(100% - 32px));
-  height: calc(100dvh - 32px);
+  width: 100%;
+  height: 100dvh;
   min-height: 620px;
-  margin: 16px auto;
+  margin: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  border: 1px solid var(--line);
   background: var(--surface);
-  box-shadow: 0 22px 70px rgb(24 39 33 / 10%);
   overflow: hidden;
 }
 
@@ -68,8 +64,8 @@ textarea:focus-visible {
 }
 
 .console-header {
-  min-height: 72px;
-  padding: 13px 18px 13px 16px;
+  min-height: 56px;
+  padding: 8px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -78,8 +74,7 @@ textarea:focus-visible {
 }
 
 .brand-lockup,
-.header-actions,
-.agent-coordinate {
+.header-actions {
   display: flex;
   align-items: center;
 }
@@ -89,8 +84,8 @@ textarea:focus-visible {
 }
 
 .brand-mark {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   display: grid;
   place-items: center;
   background: var(--ink);
@@ -109,34 +104,12 @@ textarea:focus-visible {
 
 .brand-lockup h1 {
   margin: 0;
-  font: 600 20px/1.1 "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font: 600 18px/1.1 "Avenir Next Condensed", "Arial Narrow", sans-serif;
   letter-spacing: -0.02em;
 }
 
 .header-actions {
   gap: 8px;
-}
-
-.agent-coordinate {
-  height: 36px;
-  gap: 8px;
-  padding: 0 11px;
-  border: 1px solid var(--line);
-  color: #39443f;
-  font-size: 13px;
-}
-
-.agent-coordinate code {
-  color: var(--muted-ink);
-  font-size: 11px;
-}
-
-.live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #2e8a64;
-  box-shadow: 0 0 0 4px var(--rail-soft);
 }
 
 .quiet-button,
@@ -167,34 +140,7 @@ textarea:focus-visible {
 .chat-stage {
   min-height: 0;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-}
-
-.run-rail {
-  position: relative;
-  border-right: 1px solid var(--line);
-  background: #f9faf8;
-}
-
-.run-rail::after {
-  content: "";
-  width: 2px;
-  position: absolute;
-  inset: 32px auto 32px 18px;
-  background: linear-gradient(var(--rail), var(--rail-soft));
-}
-
-.run-rail span {
-  position: absolute;
-  z-index: 1;
-  top: 12px;
-  left: 10px;
-  padding: 3px 2px;
-  background: #f9faf8;
-  color: var(--rail);
-  font: 700 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.08em;
-  writing-mode: vertical-rl;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .chat-surface,
@@ -1064,7 +1010,7 @@ textarea:focus-visible {
   }
 
   .console-header {
-    min-height: 62px;
+    min-height: 56px;
     padding: 10px 12px;
   }
 
@@ -1077,27 +1023,11 @@ textarea:focus-visible {
     font-size: 17px;
   }
 
-  .agent-coordinate {
-    display: none;
-  }
-
   .quiet-button,
   .icon-button {
     min-height: 34px;
     padding: 0 9px;
     font-size: 12px;
-  }
-
-  .chat-stage {
-    grid-template-columns: 24px minmax(0, 1fr);
-  }
-
-  .run-rail::after {
-    left: 11px;
-  }
-
-  .run-rail span {
-    left: 4px;
   }
 
   .developer-drawer {
@@ -1381,7 +1311,8 @@ textarea:focus-visible {
   width: 100%;
   margin-top: auto;
   padding: 18px max(22px, calc((100% - 900px) / 2)) 12px;
-  background: linear-gradient(to bottom, rgb(255 255 255 / 0%), #fff 22%, #fff 100%);
+  background: rgb(255 255 255 / 96%);
+  border-top: 1px solid rgb(216 222 217 / 72%);
 }
 
 .composer-dropzone { position: relative; }
@@ -1449,7 +1380,45 @@ textarea:focus-visible,
   min-width: 0;
   min-height: 0;
   height: 100%;
-  --aui-thread-max-width: 52rem;
+  --aui-thread-max-width: 57.5rem;
+}
+
+.source-link {
+  max-width: 100%;
+  margin-inline: 0.08em;
+  padding: 0.13em 0.35em;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.42em;
+  border: 1px solid #cfddd5;
+  border-radius: 4px;
+  background: #f4f8f5;
+  color: #1f684f;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+
+.source-link:hover {
+  border-color: #9fbcae;
+  background: #eaf2ed;
+}
+
+.source-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-host {
+  color: #718078;
+  font: 0.72em/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.source-open {
+  color: #718078;
+  font-size: 0.8em;
 }
 
 .aui-thread-root .aui-thread-viewport {

@@ -32,11 +32,6 @@ export default function Home() {
         </div>
 
         <div className="header-actions">
-          <div className="agent-coordinate" title="当前 Agent 版本">
-            <span className="live-dot" aria-hidden="true" />
-            <span>echo-agent</span>
-            <code>0.3.0</code>
-          </div>
           <button className="quiet-button" type="button" onClick={startNewConversation}>
             新对话
           </button>
@@ -54,9 +49,6 @@ export default function Home() {
 
       <div className={`workspace-stage ${developerMode ? "inspector-open" : ""}`}>
         <section className="chat-stage" aria-label="Agent 对话">
-          <div className="run-rail" aria-hidden="true">
-            <span>LIVE</span>
-          </div>
           <div className="chat-surface">
             {threadId ? (
               <AssistantRuntimeShell key={threadId} threadId={threadId}>
