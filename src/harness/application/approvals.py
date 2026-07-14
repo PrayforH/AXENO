@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import timedelta
+from typing import Any
 
 from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
@@ -71,6 +72,12 @@ class ApprovalService:
         reason: str,
         message_id: str | None = None,
         inline: bool = False,
+        tool_name: str | None = None,
+        argument_summary: dict[str, Any] | None = None,
+        sandbox_provider: str | None = None,
+        sandbox_isolation: str | None = None,
+        policy_rule: str | None = None,
+        risk: str | None = None,
     ) -> ApprovalRequest:
         existing = await self._approvals.find_by_tool_call(tenant_id, run_id, tool_call_id)
         if existing is not None:
@@ -90,6 +97,12 @@ class ApprovalService:
             reason=reason,
             expires_at=now + self._ttl,
             created_at=now,
+            tool_name=tool_name,
+            argument_summary=argument_summary or {},
+            sandbox_provider=sandbox_provider,
+            sandbox_isolation=sandbox_isolation,
+            policy_rule=policy_rule,
+            risk=risk,
         )
         if inline:
             self._register_inline_waiter(approval.approval_id)

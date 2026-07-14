@@ -267,6 +267,15 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
         await asyncio.sleep(0)
     assert requested
     assert requested[0].payload["message_id"] == "assistant-sdk-message"
+    assert requested[0].payload["tool_name"] == "Write"
+    assert requested[0].payload["argument_summary"] == {
+        "file_path": "result.txt"
+    }
+    assert requested[0].payload["sandbox_provider"] == "local"
+    assert requested[0].payload["sandbox_isolation"] == "workspace"
+    assert requested[0].payload["policy_rule"] == "write-review"
+    assert requested[0].payload["risk"] == "medium"
+    assert "done" not in repr(requested[0].payload)
     approval_id = str(requested[0].payload["approval_id"])
 
     await approvals.decide(
@@ -308,3 +317,41 @@ async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
     assert "tool.result" not in event_types
     assert "run.rejected" not in event_types
     assert event_types[-1] == "run.running"
+
+
+@pytest.mark.asyncio
+async def test_approval_command_summary_redacts_inline_credentials(
+    tmp_path: Path,
+) -> None:
+    gate, approvals, _, events, context = await _arrange(tmp_path)
+    private_token = "private-command-token"
+    task = asyncio.create_task(
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Bash",
+                {"command": f"curl -H 'Authorization: Bearer {private_token}' /status"},
+                "tool-secret-command",
+            ),
+        )
+    )
+    requested = []
+    for _ in range(20):
+        emitted = await events.list_after("tenant-a", "run-sdk", 0)
+        requested = [event for event in emitted if event.type == "approval.requested"]
+        if requested:
+            break
+        await asyncio.sleep(0)
+    assert requested
+
+    approval_payload = requested[0].payload
+    assert private_token not in repr(approval_payload)
+    assert "[REDACTED]" in str(approval_payload["argument_summary"]["command"])
+
+    await approvals.decide(
+        tenant_id="tenant-a",
+        approval_id=str(approval_payload["approval_id"]),
+        decision=ApprovalStatus.REJECTED,
+    )
+    assert _decision(await task) == "deny"

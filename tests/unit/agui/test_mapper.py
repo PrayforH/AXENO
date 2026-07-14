@@ -55,6 +55,12 @@ def test_maps_tool_and_domain_events_to_tool_calls() -> None:
                 "tool_call_id": "tool-1",
                 "reason": "Write requires approval",
                 "message_id": "assistant-approval-segment",
+                "tool_name": "Write",
+                "argument_summary": {"file_path": "outputs/report.md"},
+                "sandbox_provider": "local",
+                "sandbox_isolation": "workspace",
+                "policy_rule": "write-review",
+                "risk": "medium",
             },
         )
     )
@@ -93,6 +99,12 @@ def test_maps_tool_and_domain_events_to_tool_calls() -> None:
         "run_id": "run-1",
         "tool_call_id": "tool-1",
         "reason": "Write requires approval",
+        "tool_name": "Write",
+        "argument_summary": {"file_path": "outputs/report.md"},
+        "sandbox_provider": "local",
+        "sandbox_isolation": "workspace",
+        "policy_rule": "write-review",
+        "risk": "medium",
     }
     assert artifact[0].model_dump(by_alias=True)["toolCallName"] == (
         "harness_present_artifact"

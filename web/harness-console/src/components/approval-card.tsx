@@ -9,6 +9,12 @@ export interface ApprovalDetails {
   tool_call_id?: string;
   reason?: string;
   expires_at?: string;
+  tool_name?: string;
+  argument_summary?: Record<string, unknown>;
+  sandbox_provider?: string;
+  sandbox_isolation?: string;
+  policy_rule?: string;
+  risk?: string;
 }
 
 export function approvalLabel(status: string) {
@@ -17,6 +23,44 @@ export function approvalLabel(status: string) {
 
 export function formatApprovalReason(reason?: string) {
   return reason?.trim() || "此操作需要你确认后才能继续。";
+}
+
+const riskLabels: Record<string, string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
+};
+
+export function approvalContextRows(details: ApprovalDetails) {
+  const summary = details.argument_summary ?? {};
+  const action = [
+    "command",
+    "file_path",
+    "path",
+    "query",
+    "url",
+    "description",
+  ]
+    .map((key) => summary[key])
+    .find((value) => typeof value === "string");
+  const rows: Array<{ label: string; value: string }> = [];
+  if (details.tool_name) rows.push({ label: "工具", value: details.tool_name });
+  if (typeof action === "string") rows.push({ label: "操作", value: action });
+  if (details.sandbox_provider || details.sandbox_isolation) {
+    rows.push({
+      label: "环境",
+      value: [details.sandbox_provider, details.sandbox_isolation]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+  if (details.risk) {
+    rows.push({ label: "风险", value: riskLabels[details.risk] ?? details.risk });
+  }
+  if (details.policy_rule) {
+    rows.push({ label: "策略", value: details.policy_rule });
+  }
+  return rows;
 }
 
 export function ApprovalCard({
@@ -46,6 +90,7 @@ export function ApprovalCard({
   }
 
   const settled = complete || decision !== null;
+  const contextRows = approvalContextRows(details);
   return (
     <section className="domain-card approval-domain-card" aria-live="polite">
       <div className="domain-card-kicker">
@@ -57,14 +102,18 @@ export function ApprovalCard({
       <h3>允许 Agent 执行受保护操作？</h3>
       <p>{formatApprovalReason(details.reason)}</p>
       <dl className="domain-metadata">
-        <div>
-          <dt>工具调用</dt>
-          <dd>{details.tool_call_id || "未提供"}</dd>
-        </div>
-        <div>
-          <dt>Run</dt>
-          <dd>{details.run_id}</dd>
-        </div>
+        {contextRows.map((row) => (
+          <div key={row.label}>
+            <dt>{row.label}</dt>
+            <dd>{row.value}</dd>
+          </div>
+        ))}
+        {contextRows.length === 0 && (
+          <div>
+            <dt>工具调用</dt>
+            <dd>{details.tool_call_id || "未提供"}</dd>
+          </div>
+        )}
       </dl>
       {error && <p className="domain-error">{error}</p>}
       <div className="domain-actions">

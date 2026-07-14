@@ -112,7 +112,19 @@ def _map_standard_event(event: RunEvent) -> Sequence[BaseEvent]:
             event,
             name="harness_request_approval",
             tool_call_id=f"harness-approval-{approval_id}",
-            fields=("approval_id", "tool_call_id", "reason", "expires_at", "status"),
+            fields=(
+                "approval_id",
+                "tool_call_id",
+                "reason",
+                "expires_at",
+                "status",
+                "tool_name",
+                "argument_summary",
+                "sandbox_provider",
+                "sandbox_isolation",
+                "policy_rule",
+                "risk",
+            ),
         )
     if event.type in {"approval.approved", "approval.rejected"}:
         approval_id = str(event.payload.get("approval_id", event.event_id))

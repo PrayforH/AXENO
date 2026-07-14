@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Protocol, cast
 
 from claude_agent_sdk import HookMatcher
@@ -29,6 +30,53 @@ from harness.runtime.input_redaction import (
 
 class ToolGate(Protocol):
     def hooks(self, context: RuntimeContext) -> dict[HookEvent, list[HookMatcher]]: ...
+
+
+_APPROVAL_ARGUMENT_KEYS = (
+    "command",
+    "file_path",
+    "path",
+    "query",
+    "url",
+    "urls",
+    "description",
+    "subagent_type",
+    "pattern",
+    "glob",
+)
+_AUTHORIZATION_TEXT = re.compile(
+    r"(?i)\b(authorization\s*[:=]\s*)([^'\"\n]+)"
+)
+_BEARER_TEXT = re.compile(r"(?i)\b(bearer\s+)([^\s'\"&]+)")
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(token|api[_-]?key|secret|password)(\s*[:=]\s*)([^\s'\"&]+)"
+)
+
+
+def _safe_text(value: str, *, limit: int = 500) -> str:
+    redacted = _AUTHORIZATION_TEXT.sub(r"\1[REDACTED]", value)
+    redacted = _BEARER_TEXT.sub(r"\1[REDACTED]", redacted)
+    redacted = _SECRET_ASSIGNMENT.sub(r"\1\2[REDACTED]", redacted)
+    return redacted if len(redacted) <= limit else f"{redacted[: limit - 1]}…"
+
+
+def _approval_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in _APPROVAL_ARGUMENT_KEYS:
+        value = arguments.get(key)
+        if isinstance(value, str):
+            summary[key] = _safe_text(value)
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            summary[key] = [_safe_text(item, limit=200) for item in value[:5]]
+    return summary
+
+
+def _approval_risk(tool_name: str) -> str:
+    if tool_name == "Bash":
+        return "high"
+    if tool_name in {"Write", "Edit"}:
+        return "medium"
+    return "low"
 
 
 def _hook_output(decision: str, reason: str) -> SyncHookJSONOutput:
@@ -134,6 +182,12 @@ class SdkToolGate:
                 reason=result.reason,
                 message_id=context.assistant_message_id,
                 inline=True,
+                tool_name=tool_name,
+                argument_summary=_approval_argument_summary(arguments),
+                sandbox_provider=context.sandbox_provider,
+                sandbox_isolation=context.sandbox_isolation.value,
+                policy_rule=result.rule_name,
+                risk=_approval_risk(tool_name),
             )
             decision = await self._approvals.wait_for_decision(approval.approval_id)
             if decision is not ApprovalStatus.APPROVED:

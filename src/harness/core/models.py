@@ -154,6 +154,12 @@ class ApprovalRequest(FrozenModel):
     reason: str
     expires_at: datetime
     created_at: datetime
+    tool_name: str | None = None
+    argument_summary: dict[str, Any] = Field(default_factory=dict)
+    sandbox_provider: str | None = None
+    sandbox_isolation: str | None = None
+    policy_rule: str | None = None
+    risk: str | None = None
 
 
 class Artifact(FrozenModel):
