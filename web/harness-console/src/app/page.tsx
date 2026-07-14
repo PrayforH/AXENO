@@ -8,47 +8,48 @@ import { createNewThread, loadOrCreateThread } from "../lib/thread-store";
 
 export default function Home() {
   const [threadId, setThreadId] = useState("");
-  const [developerMode, setDeveloperMode] = useState(false);
+  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
 
   useEffect(() => {
     setThreadId(loadOrCreateThread(window.localStorage));
   }, []);
 
-  function startNewConversation() {
+  function startNewTask() {
     setThreadId(createNewThread(window.localStorage));
+    setRunDetailsOpen(false);
   }
 
   return (
     <main className="console-shell">
       <header className="console-header">
-        <div className="brand-lockup" aria-label="Claude Agent Harness Console">
+        <div className="brand-lockup" aria-label="智能任务助手">
           <span className="brand-mark" aria-hidden="true">
             H
           </span>
           <div>
-            <p className="eyebrow">Agent Harness</p>
-            <h1>交互验证台</h1>
+            <p className="eyebrow">Agent Workspace</p>
+            <h1>智能任务助手</h1>
           </div>
         </div>
 
         <div className="header-actions">
-          <button className="quiet-button" type="button" onClick={startNewConversation}>
-            新对话
+          <button className="quiet-button" type="button" onClick={startNewTask}>
+            新任务
           </button>
           <button
             className="icon-button"
             type="button"
-            aria-pressed={developerMode}
-            aria-label="切换开发者信息"
-            onClick={() => setDeveloperMode((current) => !current)}
+            aria-pressed={runDetailsOpen}
+            aria-label="切换本次运行详情"
+            onClick={() => setRunDetailsOpen((current) => !current)}
           >
-            {developerMode ? "关闭详情" : "运行详情"}
+            {runDetailsOpen ? "关闭详情" : "本次运行"}
           </button>
         </div>
       </header>
 
-      <div className={`workspace-stage ${developerMode ? "inspector-open" : ""}`}>
-        <section className="chat-stage" aria-label="Agent 对话">
+      <div className={`workspace-stage ${runDetailsOpen ? "inspector-open" : ""}`}>
+        <section className="chat-stage" aria-label="Agent 任务对话">
           <div className="chat-surface">
             {threadId ? (
               <AssistantRuntimeShell key={threadId} threadId={threadId}>
@@ -56,13 +57,13 @@ export default function Home() {
               </AssistantRuntimeShell>
             ) : (
               <div className="chat-loading" role="status">
-                正在恢复会话…
+                  正在恢复任务…
               </div>
             )}
           </div>
         </section>
-        {developerMode && (
-          <DeveloperDrawer threadId={threadId} onClose={() => setDeveloperMode(false)} />
+        {runDetailsOpen && (
+          <DeveloperDrawer threadId={threadId} onClose={() => setRunDetailsOpen(false)} />
         )}
       </div>
     </main>

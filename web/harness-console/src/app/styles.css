@@ -1425,6 +1425,12 @@ textarea:focus-visible,
   padding-inline: 18px;
 }
 
+.aui-thread-viewport-footer {
+  position: sticky;
+  z-index: 8;
+  bottom: 0;
+}
+
 .harness-composer-shell {
   width: 100%;
   max-width: var(--aui-thread-max-width);

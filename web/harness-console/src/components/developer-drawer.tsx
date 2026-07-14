@@ -35,14 +35,14 @@ export function DeveloperDrawer({
   const overview = activity ? activityOverview(activity) : undefined;
 
   return (
-    <aside className="developer-drawer" aria-label="运行详情">
+    <aside className="developer-drawer" aria-label="本次运行">
       <header className="inspector-header">
         <div>
-          <p className="eyebrow">Run inspector</p>
-          <h2>运行详情</h2>
+          <p className="eyebrow">Current run</p>
+          <h2>本次运行</h2>
         </div>
         {onClose && (
-          <button type="button" className="inspector-close" onClick={onClose} aria-label="关闭运行详情">×</button>
+          <button type="button" className="inspector-close" onClick={onClose} aria-label="关闭本次运行">×</button>
         )}
       </header>
 
@@ -93,13 +93,13 @@ export function DeveloperDrawer({
       ) : (
         <div className="inspector-empty">
           <span className="empty-orbit" aria-hidden="true" />
-          <strong>等待 Agent 运行</strong>
-          <p>发送消息后，这里会显示工作摘要、工具调用、子 Agent 与模型指标。</p>
+          <strong>还没有运行记录</strong>
+          <p>提交任务后，可在这里查看执行步骤、工具使用和运行结果。</p>
         </div>
       )}
 
       <details className="raw-inspector">
-        <summary>协议与原始事件</summary>
+        <summary>高级诊断</summary>
         <div className="developer-grid">
           {developerRows(threadId).map(([label, value]) => (
             <div className="developer-row" key={label}><span>{label}</span><code>{value}</code></div>
