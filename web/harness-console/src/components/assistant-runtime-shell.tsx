@@ -7,7 +7,7 @@ import {
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import type { ReactNode } from "react";
 import { useEffect, useMemo } from "react";
-import { activityStore } from "../lib/activity-store";
+import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
@@ -19,6 +19,7 @@ export function AssistantRuntimeShell({
   threadId: string;
   children: ReactNode;
 }) {
+  const runView = useRunViewModel();
   const agent = useMemo(() => {
     const next = new HarnessHttpAgent({ url: "/api/agui" });
     next.threadId = threadId;
@@ -40,7 +41,12 @@ export function AssistantRuntimeShell({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      {children}
+      <div
+        className="assistant-runtime-shell"
+        data-run-phase={runView?.phase ?? "idle"}
+      >
+        {children}
+      </div>
     </AssistantRuntimeProvider>
   );
 }

@@ -204,6 +204,12 @@ textarea:focus-visible {
   height: 100%;
 }
 
+.assistant-runtime-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
 /* Assistant Markdown typography */
 .chat-surface [data-testid="copilot-assistant-message"] {
   font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;

@@ -3,6 +3,10 @@
 import { useSyncExternalStore } from "react";
 import type { RunActivity } from "./activity-schema";
 import { activityItemSchema, runActivitySchema } from "./activity-schema";
+import {
+  reduceRunViewModel,
+  type RunViewModel,
+} from "./run-view-model";
 
 export type ActivityPatchOperation = {
   op: string;
@@ -11,16 +15,19 @@ export type ActivityPatchOperation = {
 };
 
 let snapshot: RunActivity | undefined;
+let viewSnapshot: RunViewModel | undefined;
 const listeners = new Set<() => void>();
 
 export const activityStore = {
   clear() {
-    if (snapshot === undefined) return;
+    if (snapshot === undefined && viewSnapshot === undefined) return;
     snapshot = undefined;
+    viewSnapshot = undefined;
     for (const listener of listeners) listener();
   },
   publish(activity: RunActivity) {
     snapshot = activity;
+    viewSnapshot = reduceRunViewModel(viewSnapshot, activity);
     for (const listener of listeners) listener();
   },
   patch(operations: readonly ActivityPatchOperation[]) {
@@ -63,12 +70,23 @@ export const activityStore = {
   getSnapshot() {
     return snapshot;
   },
+  getViewSnapshot() {
+    return viewSnapshot;
+  },
 };
 
 export function useRunActivity(): RunActivity | undefined {
   return useSyncExternalStore(
     activityStore.subscribe,
     activityStore.getSnapshot,
+    () => undefined,
+  );
+}
+
+export function useRunViewModel(): RunViewModel | undefined {
+  return useSyncExternalStore(
+    activityStore.subscribe,
+    activityStore.getViewSnapshot,
     () => undefined,
   );
 }

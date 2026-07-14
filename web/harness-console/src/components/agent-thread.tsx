@@ -19,7 +19,8 @@ import { ArtifactCard, type ArtifactDetails } from "./artifact-list";
 import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
-import { useRunActivity } from "../lib/activity-store";
+import { useRunActivity, useRunViewModel } from "../lib/activity-store";
+import { selectComposerDisabled } from "../lib/run-view-model";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -70,8 +71,15 @@ function UploadFeedbackNotice() {
 }
 
 function HarnessComposer() {
+  const runView = useRunViewModel();
+  const runLocked = selectComposerDisabled(runView);
   return (
-    <div className="harness-composer-shell">
+    <div
+      className="harness-composer-shell"
+      data-run-phase={runView?.phase ?? "idle"}
+      data-run-locked={runLocked ? "true" : "false"}
+      aria-busy={runLocked}
+    >
       <UploadFeedbackNotice />
       <Composer />
       <p className="runtime-disclaimer">
@@ -150,7 +158,6 @@ function HarnessAssistantMessage() {
         components={{
           Text: MarkdownText,
           Reasoning: ReasoningPart,
-          tools: { Fallback: HarnessToolPart },
         }}
       />
       <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
@@ -164,14 +171,12 @@ function HarnessAssistantMessage() {
 
 function LatestActivity() {
   const activity = useRunActivity();
-  if (
-    !activity ||
-    ["succeeded", "failed", "cancelled"].includes(activity.status)
-  ) {
+  const runView = useRunViewModel();
+  if (!activity || !runView || ["completed", "failed", "rejected", "cancelled"].includes(runView.phase)) {
     return null;
   }
   return (
-    <div className={`latest-activity ${activity.status}`}>
+    <div className={`latest-activity ${runView.phase}`}>
       <ActivitySummary activity={activity} />
     </div>
   );
@@ -204,6 +209,7 @@ export function AgentThread() {
         allowSpeak: true,
         allowFeedbackPositive: true,
         allowFeedbackNegative: true,
+        components: { ToolFallback: HarnessToolPart },
       }}
       userMessage={{ allowEdit: true }}
       branchPicker={{ allowBranchPicker: true }}

@@ -77,4 +77,70 @@ describe("activity store", () => {
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
   });
+
+  it("projects one monotonic run view from snapshots and deltas", () => {
+    expect("getViewSnapshot" in activityStore).toBe(true);
+    const store = activityStore as typeof activityStore & {
+      getViewSnapshot: () => { phase: string } | undefined;
+    };
+    activityStore.publish(
+      runActivitySchema.parse({
+        run_id: "run-view-store",
+        status: "running",
+        started_at: "2026-07-13T00:00:00Z",
+        items: [
+          {
+            id: "run-start",
+            event_type: "run.running",
+            kind: "run",
+            status: "running",
+            title: "Agent 开始执行",
+            timestamp: "2026-07-13T00:00:01Z",
+            sequence: 1,
+            metadata: {},
+          },
+        ],
+        metrics: {},
+      }),
+    );
+    activityStore.patch([
+      {
+        op: "add",
+        path: "/items/-",
+        value: {
+          id: "runtime-result",
+          event_type: "runtime.result",
+          kind: "result",
+          status: "succeeded",
+          title: "模型执行完成",
+          timestamp: "2026-07-13T00:00:02Z",
+          sequence: 2,
+          metadata: {},
+        },
+      },
+      { op: "replace", path: "/status", value: "succeeded" },
+    ]);
+
+    expect(store.getViewSnapshot()?.phase).toBe("running");
+
+    activityStore.patch([
+      {
+        op: "add",
+        path: "/items/-",
+        value: {
+          id: "run-complete",
+          event_type: "run.succeeded",
+          kind: "run",
+          status: "succeeded",
+          title: "运行完成",
+          timestamp: "2026-07-13T00:00:03Z",
+          sequence: 3,
+          metadata: {},
+        },
+      },
+    ]);
+    activityStore.patch([{ op: "replace", path: "/status", value: "running" }]);
+
+    expect(store.getViewSnapshot()?.phase).toBe("completed");
+  });
 });
