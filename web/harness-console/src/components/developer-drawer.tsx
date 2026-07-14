@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { activityOverview } from "../lib/activity-schema";
 import { useRunActivity } from "../lib/activity-store";
 import { developerRows } from "../lib/developer-details";
+import { isHiddenByCollapsedDetails } from "../lib/focus-target";
 import { StructuredValue } from "./structured-value";
 
 const statusLabels: Record<string, string> = {
@@ -26,6 +28,20 @@ const kindLabels: Record<string, string> = {
   error: "错误",
 };
 
+function useNarrowRunPanel() {
+  const [isModal, setIsModal] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 980px)");
+    const update = () => setIsModal(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return isModal;
+}
+
 export function DeveloperDrawer({
   threadId,
   onClose,
@@ -35,16 +51,85 @@ export function DeveloperDrawer({
 }) {
   const activity = useRunActivity();
   const overview = activity ? activityOverview(activity) : undefined;
+  const isModal = useNarrowRunPanel();
+  const panelRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!isModal) return;
+    const panel = panelRef.current;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const backgroundState = Array.from(
+      document.querySelectorAll<HTMLElement>(".console-header, .chat-stage"),
+      (background) => [background, background.inert] as const,
+    );
+    for (const [background] of backgroundState) background.inert = true;
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose?.();
+        return;
+      }
+      if (event.key !== "Tab" || !panel) return;
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => {
+        if (
+          element.hidden ||
+          element.inert ||
+          element.closest('[hidden], [inert], [aria-hidden="true"]') ||
+          isHiddenByCollapsedDetails(element)
+        ) return false;
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          element.getClientRects().length > 0
+        );
+      });
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !panel.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !panel.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      for (const [background, wasInert] of backgroundState) {
+        background.inert = wasInert;
+      }
+      previouslyFocused?.focus();
+    };
+  }, [isModal, onClose]);
 
   return (
-    <aside className="developer-drawer" aria-label="本次运行">
+    <aside
+      ref={panelRef}
+      className="developer-drawer"
+      aria-label="本次运行"
+      role={isModal ? "dialog" : undefined}
+      aria-modal={isModal || undefined}
+    >
       <header className="inspector-header">
         <div>
           <p className="eyebrow">Current run</p>
           <h2>本次运行</h2>
         </div>
         {onClose && (
-          <button type="button" className="inspector-close" onClick={onClose} aria-label="关闭本次运行">×</button>
+          <button ref={closeButtonRef} type="button" className="inspector-close" onClick={onClose} aria-label="关闭本次运行">×</button>
         )}
       </header>
 

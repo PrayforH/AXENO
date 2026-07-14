@@ -223,7 +223,7 @@ function HarnessAssistantMessage() {
         }}
       />
       <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
-        <div className="aui-message-error">本次运行未完整结束，请查看运行详情。</div>
+        <div className="aui-message-error">本次运行未完整结束，请打开“本次运行”查看详情。</div>
       </AuiIf>
       <BranchPicker />
       <AssistantActionBar />

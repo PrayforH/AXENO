@@ -1,4 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 
 vi.mock("@assistant-ui/react-ui", async (importOriginal) => {
@@ -56,6 +58,11 @@ vi.mock("@assistant-ui/react-ui", async (importOriginal) => {
 
 import { AgentThread } from "../src/components/agent-thread";
 
+const agentThreadSource = readFileSync(
+  join(process.cwd(), "src/components/agent-thread.tsx"),
+  "utf8",
+);
+
 it("registers the approval renderer through the assistant-ui Thread config", () => {
   const html = renderToStaticMarkup(<AgentThread />);
 
@@ -72,4 +79,9 @@ it("presents task-first guidance through a custom assistant-ui welcome", () => {
   expect(html).toContain("阅读与整理");
   expect(html).toContain("执行与协作");
   expect(html).toContain("关键操作会先请求确认");
+});
+
+it("uses the current run control name in incomplete-run guidance", () => {
+  expect(agentThreadSource).toContain("请打开“本次运行”查看详情");
+  expect(agentThreadSource).not.toContain("请查看运行详情");
 });

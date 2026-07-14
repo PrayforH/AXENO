@@ -56,8 +56,14 @@ export default function Home() {
                 <AgentThread />
               </AssistantRuntimeShell>
             ) : (
-              <div className="chat-loading" role="status">
-                  正在恢复任务…
+              <div className="chat-loading" role="status" aria-busy="true">
+                <div className="chat-loading-skeleton" aria-hidden="true">
+                  <span className="chat-loading-avatar" />
+                  <span className="chat-loading-line" />
+                  <span className="chat-loading-line" />
+                  <span className="chat-loading-card" />
+                </div>
+                <span>正在恢复任务…</span>
               </div>
             )}
           </div>

@@ -42,7 +42,7 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 
 打开 `http://127.0.0.1:3000` 后，默认界面是 assistant-ui 全页 Chat。浏览器只连接同源 `/api/agui` 与 `/api/input-artifacts`；Next.js BFF 在服务端注入 `X-Tenant-ID`、`X-User-ID`，这些身份头不会进入浏览器配置或 URL。
 
-聊天中的“执行进度”以紧凑时间线显示模型路由、工作摘要、工具与子 Agent；工具输入/输出会按 JSON、代码或 unified diff 自动格式化。点击“运行详情”会打开右侧 Run Inspector，展示 Harness 事件脊柱、模型、Provider、时长、轮次、成本与停止原因。
+聊天中的“执行进度”以紧凑时间线显示模型路由、工作摘要、工具与子 Agent；工具输入/输出会按 JSON、代码或 unified diff 自动格式化。点击“本次运行”会打开右侧运行面板，展示用户可读的执行记录、模型、Provider、时长、轮次、成本与停止原因。
 
 点击“＋ 文件”可上传浏览器可访问的本地文件。上传先创建 InputArtifact；发送消息后，Worker 校验租户和用户归属，再把文件只读挂载到该 Run 的 `inputs/`。SDK 读取输入文件产生的原始内容不会写入耐久工具事件。
 
@@ -124,9 +124,9 @@ Daytona sandbox 运行在云端，因此 cc-switch 的 `ANTHROPIC_BASE_URL` 必�
 2. 点击“批准并继续”，同一 SSE 收到审批结果并自动恢复 Run。
 3. 对话显示 `result.txt` 产物卡片；“下载”经 `/api/harness/artifacts/:id` 鉴权代理。
 4. 刷新后 thread ID 保持不变，且不会重复创建 Run；Phase 1 暂不自动恢复聊天正文。
-5. “运行详情”默认关闭；打开后查看结构化 Run Inspector 与原始 Harness 活动。
+5. “本次运行”默认关闭；打开后先查看结构化运行记录，需要排障时再展开“高级诊断”查看原始 Harness 活动。
 
-“新对话”会生成并持久化新的 thread ID。开发者详情不显示 tenant/user 身份头。
+“新任务”会生成并持久化新的 thread ID。“高级诊断”不显示 tenant/user 身份头。
 
 ## Observability and Langfuse
 

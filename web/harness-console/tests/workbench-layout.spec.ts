@@ -68,4 +68,29 @@ describe("full-page agent workbench", () => {
       /\.execution-ribbon\.phase-completed\s*\{[^}]*opacity:\s*0\.[0-9]+;/s,
     );
   });
+
+  it("shows a lightweight recovery skeleton instead of a lone loading line", () => {
+    expect(page).toContain('className="chat-loading-skeleton"');
+    expect(page).toContain('aria-busy="true"');
+    expect(styles).toContain(".chat-loading-skeleton");
+    expect(styles).toContain(".chat-loading-line");
+  });
+
+  it("keeps primary touch targets at least 40px high", () => {
+    expect(styles).toMatch(
+      /\.quiet-button,\s*\.icon-button\s*\{[^}]*min-height:\s*40px;/s,
+    );
+    expect(styles).toMatch(
+      /\.inspector-close\s*\{[^}]*width:\s*40px;[^}]*height:\s*40px;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-composer-shell \.aui-composer-attach,[\s\S]*?min-height:\s*40px;/s,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*?button,\s*summary\s*\{[^}]*min-height:\s*40px !important;/s,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*?\.preview-button,\s*\.download-button\s*\{[^}]*min-height:\s*40px;/s,
+    );
+  });
 });
