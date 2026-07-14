@@ -36,4 +36,16 @@ describe("full-page agent workbench", () => {
     );
     expect(styles).not.toContain("linear-gradient");
   });
+
+  it("styles a task brief instead of a generic chat welcome", () => {
+    expect(styles).toMatch(
+      /\.user-task-welcome\s*\{[^}]*max-width:\s*var\(--aui-thread-max-width\);/s,
+    );
+    expect(styles).toMatch(
+      /\.user-task-grid\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/s,
+    );
+    expect(styles).toMatch(
+      /@media\s*\(max-width:\s*680px\)[\s\S]*?\.user-task-grid\s*\{[^}]*grid-template-columns:\s*1fr;/s,
+    );
+  });
 });

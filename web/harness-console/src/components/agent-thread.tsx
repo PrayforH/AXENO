@@ -12,6 +12,7 @@ import {
   BranchPicker,
   Composer,
   Thread,
+  ThreadWelcome,
 } from "@assistant-ui/react-ui";
 import { ActivitySummary } from "./activity-summary";
 import { ApprovalCard, type ApprovalDetails } from "./approval-card";
@@ -83,9 +84,70 @@ function HarnessComposer() {
       <UploadFeedbackNotice />
       <Composer />
       <p className="runtime-disclaimer">
-        Claude Agent SDK · new-api gateway · 输出可能需要人工核验
+        文件在隔离工作区中处理 · 关键操作会先请求确认
       </p>
     </div>
+  );
+}
+
+const welcomeTasks = [
+  {
+    code: "PLAN",
+    title: "分析与规划",
+    description: "梳理复杂问题，输出有优先级的行动方案",
+    prompt: "分析这个仓库的架构风险，并给出可执行、带优先级的重构顺序",
+  },
+  {
+    code: "READ",
+    title: "阅读与整理",
+    description: "读取附件，提取事实、证据和结构化摘要",
+    prompt: "读取我附加的文档，提取关键事实并标出证据位置",
+  },
+  {
+    code: "ACT",
+    title: "执行与协作",
+    description: "调用工具或子 Agent，完成多步骤任务",
+    prompt: "把复杂任务拆给子 Agent，并汇总工具调用和最终结论",
+  },
+] as const;
+
+export function UserTaskWelcome() {
+  return (
+    <ThreadWelcome.Root className="user-task-welcome">
+      <ThreadWelcome.Center className="user-task-hero">
+        <ThreadWelcome.Avatar />
+        <div className="user-task-intro">
+          <p className="user-task-kicker">开始一项任务</p>
+          <h2>今天想让 Agent 完成什么？</h2>
+          <p>
+            描述目标或附加资料。Agent 可以分析、整理和执行复杂任务，并持续汇报进展。
+          </p>
+        </div>
+      </ThreadWelcome.Center>
+
+      <div className="user-task-grid" aria-label="推荐任务">
+        {welcomeTasks.map((task) => (
+          <ThreadWelcome.Suggestion
+            key={task.code}
+            suggestion={{
+              prompt: task.prompt,
+              text: (
+                <span className="user-task-card-copy">
+                  <small>{task.code}</small>
+                  <strong>{task.title}</strong>
+                  <span>{task.description}</span>
+                </span>
+              ),
+            }}
+          />
+        ))}
+      </div>
+
+      <p className="user-task-trust">
+        <span aria-hidden="true">✓</span>
+        文件在隔离工作区中处理，关键操作会先请求确认
+      </p>
+    </ThreadWelcome.Root>
   );
 }
 
@@ -184,23 +246,6 @@ export function AgentThread() {
   return (
     <Thread
       assistantAvatar={{ fallback: "H" }}
-      welcome={{
-        message: "让 Agent 真正执行，而不只是聊天",
-        suggestions: [
-          {
-            prompt: "分析这个仓库的架构风险，并给出可执行的重构顺序",
-            text: "分析仓库架构与重构顺序",
-          },
-          {
-            prompt: "读取我附加的文档，提取关键事实并标出证据位置",
-            text: "读取文档并提取证据",
-          },
-          {
-            prompt: "把复杂任务拆给子 Agent，并汇总工具调用和最终结论",
-            text: "拆解多 Agent 任务",
-          },
-        ],
-      }}
       assistantMessage={{
         allowCopy: true,
         allowReload: true,
@@ -215,6 +260,7 @@ export function AgentThread() {
       components={{
         AssistantMessage: HarnessAssistantMessage,
         Composer: HarnessComposer,
+        ThreadWelcome: UserTaskWelcome,
         MessagesFooter: LatestActivity,
       }}
       strings={{
@@ -238,7 +284,7 @@ export function AgentThread() {
           cancel: { tooltip: "停止运行" },
           addAttachment: { tooltip: "添加本地文件" },
           removeAttachment: { tooltip: "移除附件" },
-          input: { placeholder: "描述任务，或附加文件让 Agent 读取…" },
+          input: { placeholder: "描述你希望完成的任务，可附加文件或资料…" },
         },
         editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
       }}

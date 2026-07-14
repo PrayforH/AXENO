@@ -1,13 +1,14 @@
 :root {
   color-scheme: light;
-  --paper: #f5f7f4;
-  --surface: #ffffff;
+  --paper: #eef2ed;
+  --surface: #fbfcfa;
+  --surface-raised: #ffffff;
   --ink: #17201d;
-  --muted-ink: #66706b;
-  --line: #d8ded9;
+  --muted-ink: #626e68;
+  --line: #d2dad4;
   --rail: #276650;
-  --rail-soft: #e2eee8;
-  --signal: #d78a27;
+  --rail-soft: #dce9e2;
+  --signal: #b97922;
   font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   background: var(--paper);
   color: var(--ink);
@@ -47,7 +48,7 @@ textarea:focus-visible {
   margin: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  background: var(--surface);
+  background: var(--paper);
   overflow: hidden;
 }
 
@@ -71,6 +72,8 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 20px;
   border-bottom: 1px solid var(--line);
+  background: rgb(251 252 250 / 94%);
+  backdrop-filter: blur(12px);
 }
 
 .brand-lockup,
@@ -141,6 +144,7 @@ textarea:focus-visible {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  background: var(--paper);
 }
 
 .chat-surface,
@@ -1383,6 +1387,145 @@ textarea:focus-visible,
   --aui-thread-max-width: 57.5rem;
 }
 
+/* User task brief */
+.user-task-welcome {
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  margin: 0 auto;
+  padding: clamp(34px, 7vh, 74px) 0 30px;
+  display: grid;
+  align-content: center;
+  gap: 24px;
+}
+
+.user-task-hero {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  text-align: left;
+}
+
+.user-task-hero .aui-avatar-root {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #aabbb2;
+  border-radius: 10px;
+  background: #1c2a24;
+  color: #f7faf8;
+  box-shadow: 7px 7px 0 #d8e3dd;
+}
+
+.user-task-intro {
+  min-width: 0;
+}
+
+.user-task-kicker {
+  margin: 0 0 7px;
+  color: var(--rail);
+  font: 700 10px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.user-task-intro h2 {
+  margin: 0;
+  color: #18231f;
+  font: 650 clamp(29px, 4vw, 42px)/1.06 "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  letter-spacing: -0.038em;
+}
+
+.user-task-intro > p:last-child {
+  max-width: 620px;
+  margin: 12px 0 0;
+  color: var(--muted-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.user-task-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.user-task-grid .aui-thread-welcome-suggestion {
+  position: relative;
+  min-height: 132px;
+  padding: 17px 16px 15px;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid #ccd6d0;
+  border-top: 3px solid var(--rail);
+  border-radius: 9px;
+  background: rgb(251 252 250 / 88%);
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 7px 18px rgb(24 39 32 / 4%);
+  transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.user-task-grid .aui-thread-welcome-suggestion:nth-child(2) {
+  border-top-color: #748c7f;
+}
+
+.user-task-grid .aui-thread-welcome-suggestion:nth-child(3) {
+  border-top-color: var(--signal);
+}
+
+.user-task-grid .aui-thread-welcome-suggestion:hover {
+  border-color: #9eb2a7;
+  background: var(--surface-raised);
+  transform: translateY(-2px);
+}
+
+.user-task-card-copy {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.user-task-card-copy small {
+  color: #78877f;
+  font: 700 9px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.user-task-card-copy strong {
+  color: #203029;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.user-task-card-copy > span {
+  color: #66736d;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.user-task-trust {
+  margin: -7px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #6c7872;
+  font-size: 11px;
+}
+
+.user-task-trust > span {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #b8c9c0;
+  border-radius: 50%;
+  color: var(--rail);
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .source-link {
   max-width: 100%;
   margin-inline: 0.08em;
@@ -1429,6 +1572,11 @@ textarea:focus-visible,
   position: sticky;
   z-index: 8;
   bottom: 0;
+  width: 100%;
+  padding: 16px 18px 12px;
+  border-top: 1px solid rgb(199 209 203 / 72%);
+  background: rgb(238 242 237 / 94%);
+  backdrop-filter: blur(14px);
 }
 
 .harness-composer-shell {
@@ -1437,9 +1585,10 @@ textarea:focus-visible,
 }
 
 .harness-composer-shell .aui-composer-root {
-  background: rgb(255 255 255 / 96%);
-  border-color: #cbd5cf;
-  box-shadow: 0 14px 36px rgb(28 48 39 / 10%);
+  border-color: #b9c8c0;
+  border-radius: 11px;
+  background: rgb(255 255 255 / 97%);
+  box-shadow: 0 12px 30px rgb(28 48 39 / 9%);
 }
 
 .harness-composer-shell .aui-composer-input {
@@ -1682,7 +1831,7 @@ textarea:focus-visible,
 .runtime-disclaimer {
   margin: 7px 0 0;
   color: #8b9690;
-  font: 8px/1.4 ui-monospace, monospace;
+  font: 9px/1.45 "Avenir Next", "Segoe UI", sans-serif;
   text-align: center;
 }
 
@@ -1701,5 +1850,53 @@ textarea:focus-visible,
 
   .execution-tree {
     padding-left: 20px;
+  }
+}
+
+@media (max-width: 680px) {
+  .user-task-welcome {
+    padding: 26px 0 20px;
+    gap: 18px;
+  }
+
+  .user-task-hero {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .user-task-hero .aui-avatar-root {
+    width: 40px;
+    height: 40px;
+    box-shadow: 5px 5px 0 #d8e3dd;
+  }
+
+  .user-task-intro h2 {
+    font-size: clamp(25px, 8vw, 34px);
+  }
+
+  .user-task-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .user-task-grid .aui-thread-welcome-suggestion {
+    min-height: 88px;
+    padding: 13px 14px;
+  }
+
+  .user-task-card-copy {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 4px 9px;
+  }
+
+  .user-task-card-copy > span {
+    grid-column: 2;
+  }
+
+  .user-task-trust {
+    align-items: flex-start;
+  }
+
+  .aui-thread-viewport-footer {
+    padding: 11px 8px 8px;
   }
 }
