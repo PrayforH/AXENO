@@ -15,10 +15,16 @@ describe("assistant-ui AG-UI runtime", () => {
     expect(shell).not.toContain("CopilotKit");
   });
 
-  it("shows the immutable validation Agent version used by the runtime", () => {
+  it("keeps the immutable Agent coordinate in server configuration", () => {
     const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
+    const config = readFileSync(
+      join(process.cwd(), "src/lib/server-config.ts"),
+      "utf8",
+    );
 
-    expect(page).toContain("echo-agent");
-    expect(page).toContain("0.2.0");
+    expect(page).not.toContain("echo-agent");
+    expect(page).not.toContain("0.3.0");
+    expect(config).toContain('environment.HARNESS_AGENT_NAME ?? "echo-agent"');
+    expect(config).toContain('environment.HARNESS_AGENT_VERSION ?? "0.3.0"');
   });
 });

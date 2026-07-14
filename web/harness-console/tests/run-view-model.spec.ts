@@ -160,6 +160,53 @@ describe("run view model", () => {
     expect(model.taskCount).toBe(1);
   });
 
+  it("merges a delegation tool request into its real SDK subagent task", async () => {
+    const { reduceRunViewModel } = await moduleUnderTest();
+    const model = reduceRunViewModel(
+      undefined,
+      activity("succeeded", [
+        {
+          id: "delegate-request",
+          event_type: "tool.request",
+          kind: "subagent",
+          status: "running",
+          title: "调用 Agent",
+          sequence: 1,
+          metadata: { tool_call_id: "call-1", name: "Agent" },
+        },
+        {
+          id: "task-started",
+          event_type: "subagent.started",
+          kind: "subagent",
+          status: "running",
+          title: "子 Agent 正在执行",
+          sequence: 2,
+          metadata: { task_id: "task-1", parent_tool_use_id: "call-1" },
+        },
+        {
+          id: "task-completed",
+          event_type: "subagent.completed",
+          kind: "subagent",
+          status: "succeeded",
+          title: "子 Agent 已完成",
+          summary: "证据检查完成",
+          sequence: 3,
+          metadata: { task_id: "task-1", parent_tool_use_id: "call-1" },
+        },
+      ]),
+    );
+
+    expect(model.taskCount).toBe(1);
+    expect(model.tasks).toEqual([
+      expect.objectContaining({
+        id: "task-1",
+        parentId: "call-1",
+        title: "证据检查完成",
+        status: "completed",
+      }),
+    ]);
+  });
+
   it("derives composer locking from the same run phase", async () => {
     const { selectComposerDisabled } = await moduleUnderTest();
 

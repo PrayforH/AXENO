@@ -110,9 +110,29 @@ function workStatus(item: ActivityItem): WorkStatus {
 
 function taskNodes(items: readonly ActivityItem[]): RunTaskNode[] {
   const tasks = new Map<string, RunTaskNode>();
+  const delegatedToolCalls = new Set(
+    items.flatMap((item) => {
+      const taskId = item.metadata.task_id;
+      const parentId = item.metadata.parent_tool_use_id;
+      return item.kind === "subagent" &&
+        typeof taskId === "string" &&
+        typeof parentId === "string"
+        ? [parentId]
+        : [];
+    }),
+  );
   for (const item of items) {
     if (item.kind !== "subagent") continue;
-    const taskId = item.metadata.task_id ?? item.metadata.tool_call_id ?? item.id;
+    const realTaskId = item.metadata.task_id;
+    const toolCallId = item.metadata.tool_call_id;
+    if (
+      typeof realTaskId !== "string" &&
+      typeof toolCallId === "string" &&
+      delegatedToolCalls.has(toolCallId)
+    ) {
+      continue;
+    }
+    const taskId = realTaskId ?? toolCallId ?? item.id;
     if (typeof taskId !== "string") continue;
     const parent = item.metadata.parent_tool_use_id;
     tasks.set(taskId, {
