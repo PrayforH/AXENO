@@ -74,10 +74,10 @@ HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_AUTHORIZATION":"Bearer tvly-replace-me"
 配置真实网关与 Tavily 后，可以运行可选冒烟测试：
 
 ```bash
-uv run pytest tests/integration/runtime/test_tavily_mcp_live.py -q
+HARNESS_RUN_LIVE_TESTS=1 uv run pytest tests/integration/runtime/test_tavily_mcp_live.py -q
 ```
 
-测试会要求真实 Agent 调用允许的 Tavily 工具、返回完整来源 URL，并确认耐久事件不包含凭据；未配置通用 MCP secret reference 时会明确跳过。
+测试会要求真实 Agent 调用允许的 Tavily 工具、返回完整来源 URL，并确认耐久事件不包含凭据。只有显式设置 `HARNESS_RUN_LIVE_TESTS=1` 且已配置通用 MCP secret reference 时才访问外部模型和 Tavily；否则会明确跳过，避免普通回归测试受外部模型行为影响。
 
 ## Sandbox development permissions
 

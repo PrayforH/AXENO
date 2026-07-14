@@ -1,6 +1,7 @@
 """Opt-in smoke test for the real model gateway and Tavily remote MCP."""
 
 import json
+import os
 import re
 from typing import cast
 
@@ -10,6 +11,22 @@ from harness.api.dependencies import build_memory_container
 from harness.config import Settings
 from harness.core.models import RunStatus
 from harness.runtime.default_tools import TAVILY_ALLOWED_TOOLS, TAVILY_REFERENCE
+
+
+def _live_tests_enabled() -> bool:
+    return os.getenv("HARNESS_RUN_LIVE_TESTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def test_live_smoke_requires_explicit_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HARNESS_RUN_LIVE_TESTS", raising=False)
+    assert not _live_tests_enabled()
+    monkeypatch.setenv("HARNESS_RUN_LIVE_TESTS", "1")
+    assert _live_tests_enabled()
 
 
 def _configured_tavily_credential(settings: Settings) -> str | None:
@@ -32,6 +49,8 @@ def _configured_tavily_credential(settings: Settings) -> str | None:
 
 @pytest.mark.asyncio
 async def test_tavily_live_search_returns_cited_current_information() -> None:
+    if not _live_tests_enabled():
+        pytest.skip("set HARNESS_RUN_LIVE_TESTS=1 to run external model smoke tests")
     settings = Settings()
     credential = _configured_tavily_credential(settings)
     if credential is None:
