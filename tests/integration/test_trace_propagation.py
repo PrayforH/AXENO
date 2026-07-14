@@ -42,6 +42,53 @@ def test_trace_context_propagates_api_to_worker_runtime() -> None:
     assert by_name["runtime.execute"].parent is not None
 
 
+def test_bound_attributes_propagate_to_nested_spans() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+
+    with observability.bind_attributes({"langfuse.session.id": "session-a"}):
+        with observability.span("run.root"):
+            with observability.span("run.child"):
+                pass
+
+    spans = exporter.get_finished_spans()
+    assert {span.name for span in spans} == {"run.root", "run.child"}
+    assert all(
+        span.attributes is not None
+        and span.attributes["langfuse.session.id"] == "session-a"
+        for span in spans
+    )
+
+
+def test_distinct_traces_can_share_a_langfuse_session() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+
+    with observability.bind_attributes({"langfuse.session.id": "session-a"}):
+        with observability.span("run.one"):
+            pass
+        with observability.span("run.two"):
+            pass
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 2
+    assert spans[0].context is not None
+    assert spans[1].context is not None
+    assert spans[0].context.trace_id != spans[1].context.trace_id
+    assert {
+        span.attributes["langfuse.session.id"]  # type: ignore[index]
+        for span in spans
+    } == {"session-a"}
+
+
 def test_trace_resource_labels_the_deployment_environment() -> None:
     exporter = InMemorySpanExporter()
     observability = build_observability(

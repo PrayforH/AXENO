@@ -40,10 +40,13 @@ class RunService:
         await self._sessions.get(tenant_id, session_id)
         existing = await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
         if existing is not None:
+            self._annotate_trace(session_id, existing.run_id)
             return existing
         timestamp = self._clock()
+        run_id = self._id_generator("run")
+        self._annotate_trace(session_id, run_id)
         run = Run(
-            run_id=self._id_generator("run"),
+            run_id=run_id,
             session_id=session_id,
             tenant_id=tenant_id,
             status=RunStatus.QUEUED,
@@ -62,6 +65,17 @@ class RunService:
         )
         await self._queue.enqueue(RunTask(tenant_id=tenant_id, run_id=run.run_id))
         return run
+
+    def _annotate_trace(self, session_id: str, run_id: str) -> None:
+        if self._observability is None:
+            return
+        self._observability.annotate_current_span(
+            {
+                "langfuse.session.id": session_id,
+                "session.id": session_id,
+                "run.id": run_id,
+            }
+        )
 
     async def get(self, tenant_id: str, run_id: str) -> Run:
         return await self._runs.get(tenant_id, run_id)

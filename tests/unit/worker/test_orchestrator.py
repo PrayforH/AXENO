@@ -185,7 +185,8 @@ async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
 
     await orchestrator.execute("tenant-a", "run-1")
 
-    assert {span.name for span in exporter.get_finished_spans()} >= {
+    spans = exporter.get_finished_spans()
+    assert {span.name for span in spans} >= {
         "harness.worker.run",
         "harness.sandbox.provision",
         "harness.memory.load",
@@ -195,6 +196,12 @@ async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
         "harness.sandbox.collect",
         "harness.sandbox.destroy",
     }
+    assert all(
+        span.attributes is not None
+        and span.attributes["langfuse.session.id"] == "session-1"
+        for span in spans
+        if span.name.startswith("harness.")
+    )
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from harness.adapters.memory import (
     InMemoryEventBus,
@@ -12,7 +14,9 @@ from harness.adapters.memory import (
 )
 from harness.application.events import EventService
 from harness.application.runs import RunService
+from harness.config import Settings
 from harness.core.models import RunStatus, Session
+from harness.observability.provider import build_observability
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
@@ -63,6 +67,51 @@ async def test_create_run_is_idempotent_and_queues_once() -> None:
     assert await queue.dequeue() is None
     stored_events = await events.list_after("tenant-a", first.run_id, 0)
     assert [(item.sequence, item.type) for item in stored_events] == [(1, "run.queued")]
+
+
+@pytest.mark.asyncio
+async def test_create_run_annotates_the_api_trace_with_session_identity() -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    queue = InMemoryTaskQueue()
+    events = InMemoryEventRepository()
+    bus = InMemoryEventBus()
+    ids = id_generator()
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    await sessions.add(
+        Session(
+            session_id="session-1",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="1.0.0",
+            created_at=NOW,
+        )
+    )
+    service = RunService(
+        sessions,
+        runs,
+        queue,
+        EventService(events, bus, clock=lambda: NOW, id_generator=ids),
+        clock=lambda: NOW,
+        id_generator=ids,
+        observability=observability,
+    )
+
+    with observability.span("harness.api.request"):
+        run = await service.create("tenant-a", "session-1", "idem-1")
+
+    span = exporter.get_finished_spans()[0]
+    assert span.attributes is not None
+    assert span.attributes["langfuse.session.id"] == "session-1"
+    assert span.attributes["session.id"] == "session-1"
+    assert span.attributes["run.id"] == run.run_id
+    assert "traceparent" in run.trace_context
 
 
 @pytest.mark.asyncio

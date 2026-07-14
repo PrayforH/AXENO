@@ -127,15 +127,21 @@ class RunOrchestrator:
         if self._observability is None:
             return await self._execute(tenant_id, run_id)
         run = await self._runs.get(tenant_id, run_id)
-        with self._observability.span(
-            "harness.worker.run",
-            carrier=run.trace_context,
-            attributes={
-                "run.id": run_id,
-                "tenant.hash": correlation_hash(tenant_id),
-            },
+        with self._observability.bind_attributes(
+            {
+                "langfuse.session.id": run.session_id,
+                "session.id": run.session_id,
+            }
         ):
-            return await self._execute(tenant_id, run_id)
+            with self._observability.span(
+                "harness.worker.run",
+                carrier=run.trace_context,
+                attributes={
+                    "run.id": run_id,
+                    "tenant.hash": correlation_hash(tenant_id),
+                },
+            ):
+                return await self._execute(tenant_id, run_id)
 
     async def _execute(self, tenant_id: str, run_id: str) -> Run:
         run = await self._runs.get(tenant_id, run_id)

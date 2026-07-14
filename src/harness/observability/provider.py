@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import cast
 
 from opentelemetry import propagate
@@ -9,12 +10,28 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
-from opentelemetry.trace import NoOpTracerProvider, Status, StatusCode, Tracer
+from opentelemetry.trace import (
+    NoOpTracerProvider,
+    Status,
+    StatusCode,
+    Tracer,
+    get_current_span,
+)
 
 from harness.config import Settings
 from harness.observability.redaction import redact
 
 ProcessorFactory = Callable[[SpanExporter], SpanProcessor]
+AttributeValue = str | bool | int | float
+
+
+def _safe_attributes(
+    attributes: Mapping[str, AttributeValue] | None,
+) -> dict[str, AttributeValue]:
+    return cast(
+        dict[str, AttributeValue],
+        redact(dict(attributes or {})),
+    )
 
 
 class Observability:
@@ -28,6 +45,10 @@ class Observability:
         self.enabled = enabled
         self.tracer = tracer
         self.exporter = exporter
+        self._bound_attributes: ContextVar[dict[str, AttributeValue] | None] = ContextVar(
+            f"harness_observability_attributes_{id(self)}",
+            default=None,
+        )
 
     def inject(self) -> dict[str, str]:
         carrier: dict[str, str] = {}
@@ -35,18 +56,40 @@ class Observability:
         return carrier
 
     @contextmanager
+    def bind_attributes(
+        self,
+        attributes: Mapping[str, AttributeValue],
+    ) -> Generator[None]:
+        inherited = self._bound_attributes.get() or {}
+        token = self._bound_attributes.set(
+            {**inherited, **_safe_attributes(attributes)}
+        )
+        try:
+            yield
+        finally:
+            self._bound_attributes.reset(token)
+
+    def annotate_current_span(
+        self,
+        attributes: Mapping[str, AttributeValue],
+    ) -> None:
+        span = get_current_span()
+        for key, value in _safe_attributes(attributes).items():
+            span.set_attribute(key, value)
+
+    @contextmanager
     def span(
         self,
         name: str,
         *,
         carrier: Mapping[str, str] | None = None,
-        attributes: Mapping[str, str | bool | int | float] | None = None,
+        attributes: Mapping[str, AttributeValue] | None = None,
     ) -> Generator[None]:
         context = propagate.extract(dict(carrier)) if carrier else None
-        safe_attributes = cast(
-            dict[str, str | bool | int | float],
-            redact(dict(attributes or {})),
-        )
+        safe_attributes = {
+            **(self._bound_attributes.get() or {}),
+            **_safe_attributes(attributes),
+        }
         with self.tracer.start_as_current_span(
             name,
             context=context,
