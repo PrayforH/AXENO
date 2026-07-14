@@ -66,8 +66,14 @@ def _approval_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
         value = arguments.get(key)
         if isinstance(value, str):
             summary[key] = _safe_text(value)
-        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
-            summary[key] = [_safe_text(item, limit=200) for item in value[:5]]
+        elif isinstance(value, list):
+            values = cast(list[object], value)
+            if all(isinstance(item, str) for item in values):
+                summary[key] = [
+                    _safe_text(item, limit=200)
+                    for item in values[:5]
+                    if isinstance(item, str)
+                ]
     return summary
 
 

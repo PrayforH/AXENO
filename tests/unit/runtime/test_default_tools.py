@@ -63,8 +63,8 @@ async def test_default_resolver_injects_tavily_authorization_and_exact_allowlist
     resolved = await _factory()(provider).resolve(_manifest(), _identity())
 
     assert resolved.allowed_tools == (
-        "mcp__tavily__tavily-search",
-        "mcp__tavily__tavily-extract",
+        "mcp__tavily__tavily_search",
+        "mcp__tavily__tavily_extract",
     )
     assert resolved.mcp_servers["tavily"] == {
         "type": "http",

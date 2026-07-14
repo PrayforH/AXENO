@@ -119,8 +119,8 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert isinstance(captured[0][1].mcp_servers, dict)
     assert set(captured[0][1].mcp_servers) == {"tavily"}
     assert captured[0][1].allowed_tools == [
-        "mcp__tavily__tavily-search",
-        "mcp__tavily__tavily-extract",
+        "mcp__tavily__tavily_search",
+        "mcp__tavily__tavily_extract",
     ]
     assert [event.type for event in events] == [
         "model.route.selected",

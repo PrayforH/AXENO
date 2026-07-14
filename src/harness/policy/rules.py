@@ -99,12 +99,12 @@ def default_policy_rules() -> list[PolicyRule]:
         ),
         PolicyRule(
             name="tavily-search",
-            tool="mcp__tavily__tavily-search",
+            tool="mcp__tavily__tavily_search",
             decision=PolicyDecision.ALLOW,
         ),
         PolicyRule(
             name="tavily-extract",
-            tool="mcp__tavily__tavily-extract",
+            tool="mcp__tavily__tavily_extract",
             decision=PolicyDecision.ALLOW,
         ),
         PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),

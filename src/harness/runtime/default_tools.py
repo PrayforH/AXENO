@@ -14,8 +14,8 @@ from harness.runtime.tools import McpServerRegistration, ToolResolver
 
 TAVILY_REFERENCE = "tavily-readonly"
 TAVILY_ALLOWED_TOOLS = (
-    "mcp__tavily__tavily-search",
-    "mcp__tavily__tavily-extract",
+    "mcp__tavily__tavily_search",
+    "mcp__tavily__tavily_extract",
 )
 
 

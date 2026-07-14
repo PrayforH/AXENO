@@ -22,17 +22,17 @@ from harness.sandbox.base import SandboxIsolation
             PolicyDecision.ALLOW,
         ),
         (
-            "mcp__tavily__tavily-search",
+            "mcp__tavily__tavily_search",
             {"query": "current release"},
             PolicyDecision.ALLOW,
         ),
         (
-            "mcp__tavily__tavily-extract",
+            "mcp__tavily__tavily_extract",
             {"urls": ["https://example.test/source"]},
             PolicyDecision.ALLOW,
         ),
         (
-            "mcp__tavily__tavily-crawl",
+            "mcp__tavily__tavily_crawl",
             {"url": "https://example.test"},
             PolicyDecision.DENY,
         ),
