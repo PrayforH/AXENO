@@ -172,9 +172,7 @@ function HarnessAssistantMessage() {
 function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
-  if (!activity || !runView || ["completed", "failed", "rejected", "cancelled"].includes(runView.phase)) {
-    return null;
-  }
+  if (!activity || !runView) return null;
   return (
     <div className={`latest-activity ${runView.phase}`}>
       <ActivitySummary activity={activity} />

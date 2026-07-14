@@ -1,71 +1,132 @@
 "use client";
 
-import type { ActivityItem, RunActivity } from "../lib/activity-schema";
-import { useRunActivity } from "../lib/activity-store";
+import type { RunActivity } from "../lib/activity-schema";
+import { useRunViewModel } from "../lib/activity-store";
+import {
+  reduceRunViewModel,
+  type RunPhase,
+  type RunTaskNode,
+  type RunToolNode,
+  type RunViewModel,
+  type WorkStatus,
+} from "../lib/run-view-model";
 
-const statusLabels: Record<string, string> = {
-  queued: "排队中",
-  running: "运行中",
-  waiting: "等待中",
-  succeeded: "已完成",
-  failed: "失败",
-  cancelled: "已停止",
+const phaseLabels: Record<RunPhase, string> = {
+  queued: "等待执行",
+  running: "正在执行",
+  waiting_approval: "等待审批",
+  completed: "执行完成",
+  failed: "执行失败",
+  rejected: "执行被拒绝",
+  cancelled: "执行已停止",
 };
 
-function visibleItems(items: ActivityItem[]): ActivityItem[] {
-  return items.filter((item) => {
-    if (item.event_type === "run.queued" || item.event_type === "message.completed") return false;
-    if (item.event_type === "tool.result") {
-      return !items.some(
-        (candidate) =>
-          candidate.event_type === "tool.request" &&
-          candidate.metadata.tool_call_id === item.metadata.tool_call_id,
-      );
-    }
-    return true;
-  });
+const workLabels: Record<WorkStatus, string> = {
+  running: "进行中",
+  waiting: "等待中",
+  completed: "已完成",
+  failed: "失败",
+};
+
+function durationLabel(elapsedMs: number) {
+  if (elapsedMs < 1_000) return `${elapsedMs}ms`;
+  if (elapsedMs < 60_000) return `${Math.round(elapsedMs / 1_000)}s`;
+  const minutes = Math.floor(elapsedMs / 60_000);
+  const seconds = Math.round((elapsedMs % 60_000) / 1_000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function TaskRow({ task }: { task: RunTaskNode }) {
+  const active = task.status === "running" || task.status === "waiting";
+  return (
+    <details
+      className={`execution-task task-${task.status}`}
+      open={active}
+    >
+      <summary>
+        <span className="execution-node" aria-hidden="true" />
+        <span>{task.title}</span>
+        <small>{workLabels[task.status]}</small>
+      </summary>
+      <div className="execution-task-detail">
+        <code>{task.id}</code>
+        {task.parentId && <span>父任务 {task.parentId}</span>}
+      </div>
+    </details>
+  );
+}
+
+function ToolRow({ tool }: { tool: RunToolNode }) {
+  return (
+    <div className={`execution-tool tool-${tool.status}`}>
+      <span className="execution-node" aria-hidden="true" />
+      <code>{tool.name}</code>
+      <small>{workLabels[tool.status]}</small>
+    </div>
+  );
+}
+
+function ribbonFacts(view: RunViewModel) {
+  const facts: string[] = [];
+  if (view.toolCount > 0) facts.push(`${view.toolCount} 个工具`);
+  if (view.taskCount > 0) facts.push(`${view.taskCount} 个子任务`);
+  facts.push(durationLabel(view.elapsedMs));
+  return facts;
 }
 
 export function ActivitySummary({ activity }: { activity: RunActivity }) {
-  const observed = useRunActivity();
-  if (observed?.run_id === activity.run_id) activity = observed;
-  const items = visibleItems(activity.items);
-  const latest = items.slice(-4);
-  const modelItem = [...items].reverse().find((item) => item.event_type === "model.route.selected");
-  const toolCount = items.filter((item) => item.event_type === "tool.request" && item.kind === "tool").length;
-  const subagentCount = items.filter((item) => item.kind === "subagent").length;
+  const observed = useRunViewModel();
+  const view =
+    observed?.runId === activity.run_id
+      ? observed
+      : reduceRunViewModel(undefined, activity);
+  const facts = ribbonFacts(view);
+  const model = [...view.items]
+    .reverse()
+    .find((item) => item.event_type === "model.route.selected")?.summary;
 
   return (
-    <section className={`activity-summary activity-${activity.status}`} aria-label="执行进度">
-      <header className="activity-summary-header">
-        <div>
-          <span className="activity-pulse" aria-hidden="true" />
-          <strong>执行进度</strong>
-          <span className="activity-status">{statusLabels[activity.status] ?? activity.status}</span>
-        </div>
-        <div className="activity-facts">
-          {modelItem?.summary && <span>{modelItem.summary}</span>}
-          {toolCount > 0 && <span>{toolCount} 个工具</span>}
-          {subagentCount > 0 && <span>{subagentCount} 个子 Agent 事件</span>}
-        </div>
-      </header>
-      <div className="activity-spine">
-        {latest.map((item) => (
-          <div className={`activity-row activity-kind-${item.kind}`} key={item.id}>
-            <span className="activity-node" aria-hidden="true" />
-            <div>
-              <span>{item.title}</span>
-              {item.summary && <small>{item.summary}</small>}
-              {item.kind === "tool" && typeof item.metadata.name === "string" && (
-                <code>{item.metadata.name}</code>
-              )}
-            </div>
-            <span className={`activity-row-status status-${item.status}`}>
-              {statusLabels[item.status] ?? item.status}
-            </span>
-          </div>
-        ))}
+    <details
+      className={`execution-ribbon phase-${view.phase}`}
+      aria-label="执行进度"
+    >
+      <summary>
+        <span className="execution-chevron" aria-hidden="true" />
+        <span className="execution-phase">{phaseLabels[view.phase]}</span>
+        <span className="execution-summary">{view.summary}</span>
+        <span className="execution-facts">
+          {facts.map((fact) => (
+            <span key={fact}>{fact}</span>
+          ))}
+        </span>
+      </summary>
+      <div className="execution-tree">
+        {view.tasks.length > 0 && (
+          <section aria-label="子任务">
+            <h4>子 Agent 任务</h4>
+            {view.tasks.map((task) => (
+              <TaskRow key={task.id} task={task} />
+            ))}
+          </section>
+        )}
+        {view.tools.length > 0 && (
+          <section aria-label="工具调用">
+            <h4>工具</h4>
+            {view.tools.map((tool) => (
+              <ToolRow key={tool.id} tool={tool} />
+            ))}
+          </section>
+        )}
+        {model && (
+          <section className="execution-runtime" aria-label="运行时">
+            <h4>模型</h4>
+            <code>{model}</code>
+          </section>
+        )}
+        {view.tasks.length === 0 && view.tools.length === 0 && (
+          <p className="execution-empty">{view.summary}</p>
+        )}
       </div>
-    </section>
+    </details>
   );
 }

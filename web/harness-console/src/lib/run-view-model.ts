@@ -129,8 +129,14 @@ function taskNodes(items: readonly ActivityItem[]): RunTaskNode[] {
 function toolNodes(items: readonly ActivityItem[]): RunToolNode[] {
   const tools = new Map<string, RunToolNode>();
   for (const item of items) {
-    const toolCallId = item.metadata.tool_call_id;
-    if (typeof toolCallId !== "string") continue;
+    const rawToolCallId = item.metadata.tool_call_id;
+    const toolCallId =
+      typeof rawToolCallId === "string"
+        ? rawToolCallId
+        : item.event_type === "tool.request"
+          ? item.id
+          : undefined;
+    if (!toolCallId) continue;
     if (item.event_type === "tool.request" && item.kind === "tool") {
       tools.set(toolCallId, {
         id: toolCallId,
