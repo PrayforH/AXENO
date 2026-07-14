@@ -71,6 +71,14 @@ HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_AUTHORIZATION":"Bearer tvly-replace-me"
 
 网页内容一律视为不可信输入。Agent 应展示来源标题和 URL，不执行页面中的指令。领域 Agent 只有显式加入 `mcp: tavily-readonly` 才能获得相同能力。
 
+配置真实网关与 Tavily 后，可以运行可选冒烟测试：
+
+```bash
+uv run pytest tests/integration/runtime/test_tavily_mcp_live.py -q
+```
+
+测试会要求真实 Agent 调用允许的 Tavily 工具、返回完整来源 URL，并确认耐久事件不包含凭据；未配置通用 MCP secret reference 时会明确跳过。
+
 ## Sandbox development permissions
 
 Manifest 决定 Agent 能看到哪些工具，实际 `SandboxHandle` 决定策略是否放行。该隔离事实由服务端 Provider 生成，网页、模型输入和 Manifest 都不能覆盖。

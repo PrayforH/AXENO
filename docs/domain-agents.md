@@ -85,7 +85,24 @@ tools:
   - mcp: crm-readonly
 ```
 
-`crm-readonly` 是逻辑 ID，不是 URL。服务端通过 `McpServerRegistration` 注入真实 stdio/HTTP/SSE/SDK 配置及显式 allowlist。Manifest 中不要存命令、Header、Token 或环境变量。当前默认组合根使用空 Registry，所以未注册 ID 会 fail closed；部署具体领域 Agent 时必须在服务端组合根完成注册。
+`crm-readonly` 是逻辑 ID，不是 URL。服务端通过 `McpServerRegistration` 注入真实 stdio/HTTP/SSE/SDK 配置及显式 allowlist。Manifest 中不要存命令、Header、Token 或环境变量。默认组合根已经注册 `tavily-readonly`；其他未注册 ID 会 fail closed，部署具体领域能力时必须在服务端组合根完成注册。
+
+### 复用通用检索与协作能力
+
+领域 Agent 可以直接组合 Harness 已审核的通用能力，不需要复制主 Agent、审批组件或事件协议。例如，一个需要外部事实检索、同时需要把本地材料交给只读助手分析的 Agent 可以声明：
+
+```yaml
+tools:
+  - builtin: Read
+  - builtin: Task
+  - mcp: tavily-readonly
+subagents:
+  - ref: helper-agent@1.0.0
+```
+
+`mcp: tavily-readonly` 只暴露 Tavily 的 search 与 extract，真实 URL、Header 和凭据由服务端 Registry 注入。Claude Agent SDK 会把远端的连字符工具名规范化为 `mcp__tavily__tavily_search` 和 `mcp__tavily__tavily_extract`，Registry allowlist 与 Policy 必须使用规范化后的名字。网页结果必须作为不可信数据处理，回答中应列出来源标题和完整 URL。`helper-agent@1.0.0` 只有 `Read/Glob/Grep`，适合归纳工作区证据，不能写文件、执行 Shell 或访问外部服务。
+
+新增工具时应保持四层边界一致：Manifest 声明能力上限，服务端 Registry 注入连接，Policy 明确 `allow / deny / ask`，自动化测试覆盖允许和拒绝路径。领域项目复用 Harness 的共享审批与运行界面，因此审批、执行进度、子任务树和终态处理会自动出现，不应为每个领域 Agent fork 一套 Web UI。
 
 ## 3. 复用模型网关与平台能力
 

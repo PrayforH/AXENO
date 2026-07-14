@@ -100,6 +100,15 @@ def test_dev_up_starts_only_local_infrastructure_from_production_compose() -> No
     assert "up -d postgres redis minio minio-init" in script
 
 
+def test_domain_agent_guide_documents_shared_general_capabilities() -> None:
+    guide = Path("docs/domain-agents.md").read_text()
+
+    assert "mcp: tavily-readonly" in guide
+    assert "helper-agent@1.0.0" in guide
+    assert "共享审批与运行界面" in guide
+    assert "Policy" in guide
+
+
 def test_local_lifecycle_tracks_the_real_server_processes() -> None:
     start = Path("scripts/dev_up.sh").read_text()
     stop = Path("scripts/dev_down.sh").read_text()
