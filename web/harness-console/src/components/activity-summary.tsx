@@ -103,23 +103,23 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
       <div className="execution-tree">
         {view.tasks.length > 0 && (
           <section aria-label="子任务">
-            <h4>子 Agent 任务</h4>
+            <h4>子任务</h4>
             {view.tasks.map((task) => (
               <TaskRow key={task.id} task={task} />
             ))}
           </section>
         )}
         {view.tools.length > 0 && (
-          <section aria-label="工具调用">
-            <h4>工具</h4>
+          <section aria-label="使用的工具">
+            <h4>使用的工具</h4>
             {view.tools.map((tool) => (
               <ToolRow key={tool.id} tool={tool} />
             ))}
           </section>
         )}
         {model && (
-          <section className="execution-runtime" aria-label="运行时">
-            <h4>模型</h4>
+          <section className="execution-runtime" aria-label="运行模型">
+            <h4>运行模型</h4>
             <code>{model}</code>
           </section>
         )}

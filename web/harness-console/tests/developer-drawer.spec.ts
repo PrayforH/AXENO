@@ -7,6 +7,7 @@ const panel = readFileSync(
   join(process.cwd(), "src/components/developer-drawer.tsx"),
   "utf8",
 );
+const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
 
 describe("developer drawer", () => {
   it("shows protocol coordinates without leaking server identity", () => {
@@ -28,5 +29,20 @@ describe("developer drawer", () => {
     expect(panel).toContain("高级诊断");
     expect(panel).not.toContain("Run inspector");
     expect(panel).not.toContain("协议与原始事件");
+  });
+
+  it("keeps raw identifiers inside advanced diagnostics", () => {
+    const advancedStart = panel.indexOf('<details className="raw-inspector">');
+
+    expect(advancedStart).toBeGreaterThan(-1);
+    expect(panel.slice(0, advancedStart)).not.toContain("activity.run_id");
+    expect(panel.slice(advancedStart)).toContain("developerRows(threadId)");
+    expect(panel.slice(advancedStart)).toContain("value={activity}");
+  });
+
+  it("uses a desktop side panel and a mobile bottom sheet", () => {
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) 360px");
+    expect(styles).toMatch(/@media \(max-width: 980px\)[\s\S]*\.workspace-stage\.inspector-open \.developer-drawer[\s\S]*max-height: 72dvh/);
+    expect(styles).toMatch(/\.workspace-stage\.inspector-open \.developer-drawer[\s\S]*inset: auto 0 0/);
   });
 });

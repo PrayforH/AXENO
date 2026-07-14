@@ -102,4 +102,92 @@ describe("execution ribbon", () => {
     expect(html).toContain("Grep");
     expect(html).not.toContain("subagent.started");
   });
+
+  it("uses user-readable section titles for expanded run details", () => {
+    const routed = runActivitySchema.parse({
+      ...activity,
+      items: [
+        ...activity.items,
+        {
+          id: "model-route",
+          event_type: "model.route.selected",
+          kind: "run",
+          status: "succeeded",
+          title: "模型路由已选择",
+          summary: "claude-sonnet",
+          timestamp: "2026-07-14T00:00:07Z",
+          sequence: 7,
+          metadata: { model: "claude-sonnet" },
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(<ActivitySummary activity={routed} />);
+
+    expect(html).toContain("子任务");
+    expect(html).toContain("使用的工具");
+    expect(html).toContain("运行模型");
+    expect(html).not.toContain("子 Agent 任务");
+    expect(html).not.toContain("<h4>工具</h4>");
+  });
+
+  it.each([
+    ["approval.requested", "tool", "waiting", "等待审批"],
+    ["run.failed", "error", "failed", "执行失败"],
+  ] as const)(
+    "keeps the %s state explicit in the collapsed line",
+    (eventType, kind, status, label) => {
+      const state = runActivitySchema.parse({
+        ...activity,
+        status,
+        items: [
+          ...activity.items,
+          {
+            id: `state-${status}`,
+            event_type: eventType,
+            kind,
+            status,
+            title: label,
+            timestamp: "2026-07-14T00:00:07Z",
+            sequence: 7,
+            metadata:
+              eventType === "approval.requested"
+                ? { approval_id: "approval-1", tool_call_id: "tool-1" }
+                : {},
+          },
+        ],
+      });
+      const html = renderToStaticMarkup(<ActivitySummary activity={state} />);
+      const phase =
+        eventType === "approval.requested" ? "waiting_approval" : "failed";
+
+      expect(html).toContain(label);
+      expect(html).not.toContain(
+        `<details class="execution-ribbon phase-${phase}" open`,
+      );
+    },
+  );
+
+  it("marks successful runs as a visually secondary state", () => {
+    const completed = runActivitySchema.parse({
+      ...activity,
+      status: "succeeded",
+      items: [
+        ...activity.items,
+        {
+          id: "run-completed",
+          event_type: "run.succeeded",
+          kind: "result",
+          status: "succeeded",
+          title: "任务已完成",
+          timestamp: "2026-07-14T00:00:07Z",
+          sequence: 7,
+          metadata: {},
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(<ActivitySummary activity={completed} />);
+
+    expect(html).toContain("phase-completed");
+    expect(html).toContain("执行完成");
+  });
 });

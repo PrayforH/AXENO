@@ -84,7 +84,9 @@ describe("Codex-style activity UI", () => {
     );
     expect(html).toContain("执行进度");
     expect(html).toContain("Read");
-    expect(html).toContain("子 Agent");
+    expect(html).toContain("子任务");
+    expect(html).toContain("使用的工具");
+    expect(html).toContain("运行模型");
     expect(html).toContain("claude-sonnet");
     expect(html).not.toContain("model.route.selected");
   });

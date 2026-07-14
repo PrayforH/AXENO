@@ -48,4 +48,24 @@ describe("full-page agent workbench", () => {
       /@media\s*\(max-width:\s*680px\)[\s\S]*?\.user-task-grid\s*\{[^}]*grid-template-columns:\s*1fr;/s,
     );
   });
+
+  it("removes obsolete custom thread layout rules superseded by assistant-ui", () => {
+    for (const selector of [
+      ".aui-welcome {",
+      ".aui-message-list {",
+      ".aui-message {",
+      ".aui-viewport-footer {",
+      ".aui-composer {",
+    ]) {
+      expect(styles).not.toContain(selector);
+    }
+    expect(styles).toContain(".aui-thread-root");
+    expect(styles).toContain(".aui-composer-root");
+  });
+
+  it("visually recedes a completed execution ribbon", () => {
+    expect(styles).toMatch(
+      /\.execution-ribbon\.phase-completed\s*\{[^}]*opacity:\s*0\.[0-9]+;/s,
+    );
+  });
 });

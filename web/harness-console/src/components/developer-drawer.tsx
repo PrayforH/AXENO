@@ -12,16 +12,18 @@ const statusLabels: Record<string, string> = {
   succeeded: "已完成",
   failed: "失败",
   cancelled: "已停止",
+  rejected: "已拒绝",
+  timed_out: "已超时",
 };
 
 const kindLabels: Record<string, string> = {
-  run: "RUN",
-  analysis: "WORK",
-  tool: "TOOL",
-  subagent: "AGENT",
-  artifact: "FILE",
-  result: "DONE",
-  error: "ERROR",
+  run: "运行",
+  analysis: "分析",
+  tool: "工具",
+  subagent: "子任务",
+  artifact: "文件",
+  result: "完成",
+  error: "错误",
 };
 
 export function DeveloperDrawer({
@@ -51,16 +53,15 @@ export function DeveloperDrawer({
           <section className="run-overview">
             <div className="run-overview-status">
               <span className={`activity-pulse status-${activity.status}`} aria-hidden="true" />
-              <div><small>RUN STATUS</small><strong>{statusLabels[activity.status] ?? activity.status}</strong></div>
-              <code>{activity.run_id.slice(0, 8)}</code>
+              <div><small>运行状态</small><strong>{statusLabels[activity.status] ?? activity.status}</strong></div>
             </div>
             <dl className="run-metrics">
-              <div><dt>MODEL</dt><dd title={overview.model}>{overview.model}</dd></div>
-              <div><dt>PROVIDER</dt><dd>{overview.provider}</dd></div>
-              <div><dt>DURATION</dt><dd>{overview.duration}</dd></div>
-              <div><dt>TURNS</dt><dd>{overview.turns}</dd></div>
-              <div><dt>COST</dt><dd>{overview.cost}</dd></div>
-              <div><dt>STOP</dt><dd>{overview.stopReason}</dd></div>
+              <div><dt>运行模型</dt><dd title={overview.model}>{overview.model}</dd></div>
+              <div><dt>模型服务</dt><dd>{overview.provider}</dd></div>
+              <div><dt>运行用时</dt><dd>{overview.duration}</dd></div>
+              <div><dt>对话轮次</dt><dd>{overview.turns}</dd></div>
+              <div><dt>估算费用</dt><dd>{overview.cost}</dd></div>
+              <div><dt>结束原因</dt><dd>{overview.stopReason}</dd></div>
             </dl>
             <div className="run-counts">
               <span><strong>{overview.toolCalls}</strong> 工具调用</span>
@@ -68,25 +69,20 @@ export function DeveloperDrawer({
             </div>
           </section>
 
-          <section className="inspector-timeline" aria-label="完整执行时间线">
-            <div className="inspector-section-title"><span>完整时间线</span><code>{activity.items.length} EVENTS</code></div>
+          <section className="inspector-timeline" aria-label="执行记录">
+            <div className="inspector-section-title"><span>执行记录</span><span>{activity.items.length} 条</span></div>
             {activity.items.map((item) => (
-              <details className={`inspector-event inspector-kind-${item.kind}`} key={item.id}>
-                <summary>
+              <article className={`inspector-event inspector-kind-${item.kind}`} key={item.id}>
+                <div className="inspector-event-summary">
                   <span className="inspector-node" aria-hidden="true" />
                   <span className="inspector-event-copy">
-                    <small>{kindLabels[item.kind] ?? item.kind.toUpperCase()} · {item.sequence}</small>
+                    <small>{kindLabels[item.kind] ?? "步骤"} · {item.sequence}</small>
                     <strong>{item.title}</strong>
                     {item.summary && <span>{item.summary}</span>}
                   </span>
                   <time>{new Date(item.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>
-                </summary>
-                {Object.keys(item.metadata).length > 0 && (
-                  <div className="inspector-event-detail">
-                    <StructuredValue value={item.metadata} label="事件数据" />
-                  </div>
-                )}
-              </details>
+                </div>
+              </article>
             ))}
           </section>
         </>
