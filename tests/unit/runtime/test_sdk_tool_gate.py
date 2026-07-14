@@ -276,3 +276,35 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
     )
 
     assert _decision(await task) == "allow"
+
+
+@pytest.mark.asyncio
+async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
+    tmp_path: Path,
+) -> None:
+    gate, approvals, runs, events, context = await _arrange(tmp_path)
+    task = asyncio.create_task(
+        _invoke(gate, context, _input("Bash", {"command": "pwd"}, "tool-rejected"))
+    )
+    requested = []
+    for _ in range(20):
+        emitted = await events.list_after("tenant-a", "run-sdk", 0)
+        requested = [event for event in emitted if event.type == "approval.requested"]
+        if requested:
+            break
+        await asyncio.sleep(0)
+    assert requested
+
+    await approvals.decide(
+        tenant_id="tenant-a",
+        approval_id=str(requested[0].payload["approval_id"]),
+        decision=ApprovalStatus.REJECTED,
+    )
+
+    assert _decision(await task) == "deny"
+    assert (await runs.get("tenant-a", "run-sdk")).status is RunStatus.RUNNING
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    event_types = [event.type for event in emitted]
+    assert "tool.result" not in event_types
+    assert "run.rejected" not in event_types
+    assert event_types[-1] == "run.running"

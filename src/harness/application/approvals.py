@@ -136,7 +136,8 @@ class ApprovalService:
             event_type=f"approval.{decision.value}",
             payload={"approval_id": approval_id},
         )
-        if decision is ApprovalStatus.APPROVED:
+        inline = approval_id in self._inline_waiters
+        if decision is ApprovalStatus.APPROVED or inline:
             await self._move(run, RunStatus.RUNNING)
         else:
             await self._events.append(
