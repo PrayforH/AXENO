@@ -17,6 +17,7 @@ import {
 import { ActivitySummary } from "./activity-summary";
 import { ApprovalCard, type ApprovalDetails } from "./approval-card";
 import { ArtifactCard, type ArtifactDetails } from "./artifact-list";
+import { TokenIndicator } from "./chat/token-indicator";
 import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
@@ -238,6 +239,7 @@ function LatestActivity() {
   return (
     <div className={`latest-activity ${runView.phase}`}>
       <ActivitySummary activity={activity} />
+      <TokenIndicator />
     </div>
   );
 }

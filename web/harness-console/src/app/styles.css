@@ -2228,3 +2228,170 @@ textarea:focus-visible,
     grid-template-columns: 1fr;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Token Indicator                                                    */
+/* ------------------------------------------------------------------ */
+
+.token-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--muted-ink);
+}
+
+.token-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.token-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--rail);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Agent Detail Page                                                  */
+/* ------------------------------------------------------------------ */
+
+.back-link {
+  display: inline-block;
+  font-size: 13px;
+  color: var(--muted-ink);
+  text-decoration: none;
+  margin-bottom: 8px;
+}
+
+.back-link:hover {
+  color: var(--rail);
+}
+
+.agent-detail-grid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.agent-versions-panel h2,
+.agent-detail-panel h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 12px;
+}
+
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.version-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  transition: border-color 0.15s;
+}
+
+.version-item:hover {
+  border-color: var(--rail);
+}
+
+.version-item--active {
+  border-color: var(--rail);
+  background: var(--rail-soft);
+}
+
+.version-item strong {
+  font-size: 14px;
+}
+
+.version-item time {
+  font-size: 11px;
+  color: var(--muted-ink);
+}
+
+.detail-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  margin-bottom: 16px;
+}
+
+.detail-meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.detail-meta dt {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-ink);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detail-meta dd {
+  font-size: 14px;
+  color: var(--ink);
+  margin: 0;
+}
+
+.detail-meta code {
+  font-size: 12px;
+}
+
+.manifest-preview {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.manifest-preview summary {
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--surface);
+}
+
+.manifest-code {
+  padding: 14px;
+  margin: 0;
+  background: #1a1d21;
+  color: #e8ecef;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.muted {
+  color: var(--muted-ink);
+  font-size: 14px;
+}
+
+@media (max-width: 760px) {
+  .agent-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
