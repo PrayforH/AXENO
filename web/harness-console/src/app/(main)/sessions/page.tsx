@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createNewThread, loadOrCreateThread } from "../../lib/thread-store";
+import { createNewThread, loadOrCreateThread } from "../../../lib/thread-store";
 
 interface SessionInfo {
   session_id: string;

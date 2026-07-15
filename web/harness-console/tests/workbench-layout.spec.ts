@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const chatPage = readFileSync(join(process.cwd(), "src/app/chat/page.tsx"), "utf8");
+const chatPage = readFileSync(join(process.cwd(), "src/app/(main)/chat/page.tsx"), "utf8");
 const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
 

@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AgentThread } from "../../components/agent-thread";
-import { AssistantRuntimeShell } from "../../components/assistant-runtime-shell";
-import { DeveloperDrawer } from "../../components/developer-drawer";
-import { createNewThread, loadOrCreateThread } from "../../lib/thread-store";
+import { AgentThread } from "../../../components/agent-thread";
+import { AssistantRuntimeShell } from "../../../components/assistant-runtime-shell";
+import { DeveloperDrawer } from "../../../components/developer-drawer";
+import { createNewThread, loadOrCreateThread } from "../../../lib/thread-store";
 
 export default function ChatPage() {
   const [threadId, setThreadId] = useState("");
