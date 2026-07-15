@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 mkdir -p work
 HARNESS_RUNTIME="${HARNESS_RUNTIME:-fake}"
+API_PORT="${API_PORT:-8000}"
+WEB_PORT="${WEB_PORT:-3000}"
 export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-harness}"
 export MINIO_ROOT_USER="${MINIO_ROOT_USER:-minioadmin}"
 export MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-minioadmin}"
@@ -25,14 +27,14 @@ uv run alembic upgrade head
 if [[ ! -f work/api.pid ]] || ! kill -0 "$(cat work/api.pid)" 2>/dev/null; then
   HARNESS_RUNTIME="$HARNESS_RUNTIME" \
     HARNESS_LOCAL_AUTO_EXECUTE=true HARNESS_OTEL_ENABLED=false \
-    nohup uv run uvicorn harness.api.app:app --host 127.0.0.1 --port 8000 \
+    nohup uv run uvicorn harness.api.app:app --host 127.0.0.1 --port "$API_PORT" \
     >work/api.log 2>&1 &
   echo $! > work/api.pid
 fi
 
 api_ready=false
 for _ in {1..30}; do
-  if curl -fsS http://127.0.0.1:8000/openapi.json >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:${API_PORT}/openapi.json" >/dev/null 2>&1; then
     api_ready=true
     break
   fi
@@ -49,12 +51,12 @@ if [[ ! -f work/web.pid ]] || ! kill -0 "$(cat work/web.pid)" 2>/dev/null; then
   (
     cd web/harness-console
     NEXT_PUBLIC_HARNESS_RUNTIME="$HARNESS_RUNTIME" \
-      HARNESS_API_URL=http://127.0.0.1:8000 \
+      HARNESS_API_URL="http://127.0.0.1:${API_PORT}" \
       HARNESS_AGENT_NAME=echo-agent \
       HARNESS_AGENT_VERSION=0.3.0 \
       HARNESS_TENANT_ID=local \
       HARNESS_USER_ID=developer \
-      nohup npm run dev -- --hostname 127.0.0.1 \
+      nohup npm run dev -- --hostname 127.0.0.1 --port "$WEB_PORT" \
       --webpack >"$ROOT/work/web.log" 2>&1 &
     echo $! > "$ROOT/work/web.pid"
   )
@@ -62,7 +64,7 @@ fi
 
 ready=false
 for _ in {1..30}; do
-  if curl -fsS http://127.0.0.1:3000 >/dev/null 2>&1; then
+  if curl -fsS "http://127.0.0.1:${WEB_PORT}" >/dev/null 2>&1; then
     ready=true
     break
   fi
@@ -75,8 +77,8 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 
-echo "Harness API: http://127.0.0.1:8000/docs"
-echo "Harness Console: http://127.0.0.1:3000"
+echo "Harness API: http://127.0.0.1:${API_PORT}/docs"
+echo "Harness Console: http://127.0.0.1:${WEB_PORT}"
 echo "Local Agent: echo-agent@0.3.0"
 echo "Runtime: $HARNESS_RUNTIME"
 echo "Langfuse/OTLP: disabled"

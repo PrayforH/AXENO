@@ -9,7 +9,7 @@ spec:
   runtime: claude-agent-sdk
   model:
     route: new-api-default
-    model: claude-sonnet-4-6
+    model: deepseek-v4-pro
     fallbackRoute: anthropic-official
     fallbackModel: claude-sonnet-4-6
     requiredCapabilities: [streaming, tool_use]
@@ -24,7 +24,6 @@ spec:
     - builtin: Edit
     - builtin: Bash
     - builtin: Task
-    - mcp: tavily-readonly
   subagents:
     - ref: helper-agent@1.0.0
   hooks: []
