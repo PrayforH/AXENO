@@ -43,6 +43,30 @@ class InMemoryAgentRegistry:
         except KeyError as error:
             raise NotFoundError(f"agent version not found: {name}@{version}") from error
 
+    async def list_by_tenant(
+        self, tenant_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AgentVersion]:
+        return sorted(
+            (
+                v
+                for (t, _, _), v in self._items.items()
+                if t == tenant_id
+            ),
+            key=lambda v: (v.name, v.version),
+            reverse=True,
+        )[offset : offset + limit]
+
+    async def list_versions(self, tenant_id: str, name: str) -> list[AgentVersion]:
+        return sorted(
+            (
+                v
+                for (t, n, _), v in self._items.items()
+                if t == tenant_id and n == name
+            ),
+            key=lambda v: v.version,
+            reverse=True,
+        )
+
 
 class InMemorySessionRepository:
     def __init__(self) -> None:
@@ -61,6 +85,30 @@ class InMemorySessionRepository:
             return self._items[(tenant_id, session_id)]
         except KeyError as error:
             raise NotFoundError(f"session not found: {session_id}") from error
+
+    async def list_by_user(
+        self, tenant_id: str, user_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[Session]:
+        return sorted(
+            (
+                s
+                for (t, _), s in self._items.items()
+                if t == tenant_id and s.user_id == user_id
+            ),
+            key=lambda s: s.created_at,
+            reverse=True,
+        )[offset : offset + limit]
+
+    async def update(self, session: Session) -> None:
+        key = (session.tenant_id, session.session_id)
+        async with self._lock:
+            if key not in self._items:
+                raise NotFoundError(f"session not found: {session.session_id}")
+            self._items[key] = session
+
+    async def delete(self, tenant_id: str, session_id: str) -> None:
+        async with self._lock:
+            self._items.pop((tenant_id, session_id), None)
 
 
 class InMemoryRunRepository:
@@ -100,6 +148,40 @@ class InMemoryRunRepository:
                 return False
             self._items[key] = updated
             return True
+
+    async def list_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        results = [
+            run
+            for (t, _), run in self._items.items()
+            if t == tenant_id
+            and (session_id is None or run.session_id == session_id)
+            and (status is None or run.status.value == status)
+        ]
+        results.sort(key=lambda r: r.created_at, reverse=True)
+        return results[offset : offset + limit]
+
+    async def count_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        return sum(
+            1
+            for (t, _), run in self._items.items()
+            if t == tenant_id
+            and (session_id is None or run.session_id == session_id)
+            and (status is None or run.status.value == status)
+        )
 
 
 class InMemoryApprovalRepository:

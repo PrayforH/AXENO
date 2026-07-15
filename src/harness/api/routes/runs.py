@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, status
 from fastapi.responses import StreamingResponse
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
@@ -52,6 +52,24 @@ async def cancel_run(
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Run:
     return await container.runs.cancel(identity.tenant_id, run_id)
+
+
+@router.get("/runs", response_model=list[Run])
+async def list_runs(
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+    session_id: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[Run]:
+    return await container.runs.list_runs(
+        identity.tenant_id,
+        session_id=session_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/runs/{run_id}/events")

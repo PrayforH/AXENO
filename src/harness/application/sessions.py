@@ -43,3 +43,13 @@ class SessionService:
 
     async def get(self, tenant_id: str, session_id: str) -> Session:
         return await self._sessions.get(tenant_id, session_id)
+
+    async def list_by_user(
+        self, tenant_id: str, user_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[Session]:
+        return await self._sessions.list_by_user(
+            tenant_id, user_id, limit=limit, offset=offset
+        )
+
+    async def delete(self, tenant_id: str, session_id: str) -> None:
+        await self._sessions.delete(tenant_id, session_id)

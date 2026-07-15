@@ -95,3 +95,33 @@ class RunService:
             event_type="run.cancelling",
         )
         return updated
+
+    async def list_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        return await self._runs.list_runs(
+            tenant_id,
+            session_id=session_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        return await self._runs.count_runs(
+            tenant_id,
+            session_id=session_id,
+            status=status,
+        )

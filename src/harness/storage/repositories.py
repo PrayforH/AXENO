@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from harness.core.errors import ConflictError, EventSequenceConflictError, NotFoundError
@@ -26,6 +26,8 @@ class PostgresRunRepository:
                     idempotency_key=run.idempotency_key,
                     status=run.status.value,
                     fencing_token=run.fencing_token,
+                    created_at=run.created_at,
+                    updated_at=run.updated_at,
                     payload=run.model_dump(mode="json"),
                 )
             )
@@ -73,6 +75,50 @@ class PostgresRunRepository:
             await session.commit()
             cursor = cast(CursorResult[Any], result)
             return bool(cursor.rowcount)
+
+    async def list_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]:
+        conditions = [RunRow.tenant_id == tenant_id]
+        if session_id is not None:
+            conditions.append(RunRow.session_id == session_id)
+        if status is not None:
+            conditions.append(RunRow.status == status)
+        statement = (
+            select(RunRow.payload)
+            .where(*conditions)
+            .order_by(RunRow.updated_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        async with self._sessions() as session:
+            return [
+                Run.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
+    async def count_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        conditions = [RunRow.tenant_id == tenant_id]
+        if session_id is not None:
+            conditions.append(RunRow.session_id == session_id)
+        if status is not None:
+            conditions.append(RunRow.status == status)
+        statement = select(func.count()).select_from(RunRow).where(*conditions)
+        async with self._sessions() as session:
+            result = await session.execute(statement)
+            return result.scalar_one()
 
 
 class PostgresEventRepository:

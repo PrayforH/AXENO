@@ -26,6 +26,7 @@ class SessionRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -41,6 +42,8 @@ class RunRow(Base):
     idempotency_key: Mapped[str] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(32), index=True)
     fencing_token: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

@@ -66,6 +66,34 @@ class PostgresAgentRegistry:
                 raise NotFoundError(f"agent version not found: {name}@{version}")
             return AgentVersion.model_validate(row.payload)
 
+    async def list_by_tenant(
+        self, tenant_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AgentVersion]:
+        statement = (
+            select(AgentVersionRow.payload)
+            .where(AgentVersionRow.tenant_id == tenant_id)
+            .order_by(AgentVersionRow.name, AgentVersionRow.version.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        async with self._sessions() as session:
+            return [
+                AgentVersion.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
+    async def list_versions(self, tenant_id: str, name: str) -> list[AgentVersion]:
+        statement = (
+            select(AgentVersionRow.payload)
+            .where(AgentVersionRow.tenant_id == tenant_id, AgentVersionRow.name == name)
+            .order_by(AgentVersionRow.version.desc())
+        )
+        async with self._sessions() as session:
+            return [
+                AgentVersion.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
 
 class PostgresSessionRepository:
     def __init__(self, sessions: SessionFactory) -> None:
@@ -78,6 +106,7 @@ class PostgresSessionRepository:
                     tenant_id=session.tenant_id,
                     session_id=session.session_id,
                     user_id=session.user_id,
+                    created_at=session.created_at,
                     payload=session.model_dump(mode="json"),
                 )
             )
@@ -91,6 +120,49 @@ class PostgresSessionRepository:
             if row is None:
                 raise NotFoundError(f"session not found: {session_id}")
             return Session.model_validate(row.payload)
+
+    async def list_by_user(
+        self, tenant_id: str, user_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[Session]:
+        statement = (
+            select(SessionRow.payload)
+            .where(
+                SessionRow.tenant_id == tenant_id,
+                SessionRow.user_id == user_id,
+            )
+            .order_by(SessionRow.created_at.desc().nullslast())
+            .limit(limit)
+            .offset(offset)
+        )
+        async with self._sessions() as session:
+            return [
+                Session.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
+    async def update(self, session: Session) -> None:
+        statement = (
+            update(SessionRow)
+            .where(
+                SessionRow.tenant_id == session.tenant_id,
+                SessionRow.session_id == session.session_id,
+            )
+            .values(payload=session.model_dump(mode="json"))
+        )
+        async with self._sessions() as db_session:
+            result = await db_session.execute(statement)
+            await db_session.commit()
+            if not cast(CursorResult[Any], result).rowcount:
+                raise NotFoundError(f"session not found: {session.session_id}")
+
+    async def delete(self, tenant_id: str, session_id: str) -> None:
+        statement = delete(SessionRow).where(
+            SessionRow.tenant_id == tenant_id,
+            SessionRow.session_id == session_id,
+        )
+        async with self._sessions() as session:
+            await session.execute(statement)
+            await session.commit()
 
 
 class PostgresApprovalRepository:

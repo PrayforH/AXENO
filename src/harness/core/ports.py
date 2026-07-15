@@ -41,11 +41,25 @@ class AgentRegistry(Protocol):
 
     async def get(self, tenant_id: str, name: str, version: str) -> AgentVersion: ...
 
+    async def list_by_tenant(
+        self, tenant_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AgentVersion]: ...
+
+    async def list_versions(self, tenant_id: str, name: str) -> list[AgentVersion]: ...
+
 
 class SessionRepository(Protocol):
     async def add(self, session: Session) -> None: ...
 
     async def get(self, tenant_id: str, session_id: str) -> Session: ...
+
+    async def list_by_user(
+        self, tenant_id: str, user_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[Session]: ...
+
+    async def update(self, session: Session) -> None: ...
+
+    async def delete(self, tenant_id: str, session_id: str) -> None: ...
 
 
 class RunRepository(Protocol):
@@ -58,6 +72,24 @@ class RunRepository(Protocol):
     ) -> Run | None: ...
 
     async def compare_and_set(self, expected_status: RunStatus, updated: Run) -> bool: ...
+
+    async def list_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Run]: ...
+
+    async def count_runs(
+        self,
+        tenant_id: str,
+        *,
+        session_id: str | None = None,
+        status: str | None = None,
+    ) -> int: ...
 
 
 class ApprovalRepository(Protocol):

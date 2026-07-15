@@ -42,3 +42,15 @@ class AgentService:
         )
         await self._registry.add(version)
         return version
+
+    async def list_agents(
+        self, tenant_id: str, *, limit: int = 50, offset: int = 0
+    ) -> list[AgentVersion]:
+        return await self._registry.list_by_tenant(
+            tenant_id, limit=limit, offset=offset
+        )
+
+    async def get_with_versions(
+        self, tenant_id: str, name: str
+    ) -> list[AgentVersion]:
+        return await self._registry.list_versions(tenant_id, name)

@@ -2,25 +2,26 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const chatPage = readFileSync(join(process.cwd(), "src/app/chat/page.tsx"), "utf8");
 const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
 
 describe("full-page agent workbench", () => {
   it("presents a user task workspace instead of an internal validation console", () => {
-    expect(page).toContain("Agent Workspace");
-    expect(page).toContain("智能任务助手");
-    expect(page).toContain("新任务");
-    expect(page).toContain("本次运行");
-    expect(page).not.toContain("交互验证台");
-    expect(page).not.toContain("切换开发者信息");
-    expect(page).not.toContain("developerMode");
+    expect(chatPage).toContain("Agent Workspace");
+    expect(chatPage).toContain("智能任务助手");
+    expect(chatPage).toContain("新任务");
+    expect(chatPage).toContain("本次运行");
+    expect(chatPage).not.toContain("交互验证台");
+    expect(chatPage).not.toContain("切换开发者信息");
+    expect(chatPage).not.toContain("developerMode");
   });
 
   it("removes the decorative live rail and hard-coded agent coordinate", () => {
-    expect(page).not.toContain("run-rail");
-    expect(page).not.toContain(">LIVE<");
-    expect(page).not.toContain("echo-agent");
-    expect(page).not.toContain("0.3.0");
+    expect(chatPage).not.toContain("run-rail");
+    expect(chatPage).not.toContain(">LIVE<");
+    expect(chatPage).not.toContain("echo-agent");
+    expect(chatPage).not.toContain("0.3.0");
   });
 
   it("uses a dense centered conversation and compact sticky controls", () => {
@@ -70,8 +71,8 @@ describe("full-page agent workbench", () => {
   });
 
   it("shows a lightweight recovery skeleton instead of a lone loading line", () => {
-    expect(page).toContain('className="chat-loading-skeleton"');
-    expect(page).toContain('aria-busy="true"');
+    expect(chatPage).toContain('className="chat-loading-skeleton"');
+    expect(chatPage).toContain('aria-busy="true"');
     expect(styles).toContain(".chat-loading-skeleton");
     expect(styles).toContain(".chat-loading-line");
   });
@@ -92,5 +93,9 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /@media \(max-width: 720px\)[\s\S]*?\.preview-button,\s*\.download-button\s*\{[^}]*min-height:\s*40px;/s,
     );
+  });
+
+  it("redirects root to the chat page", () => {
+    expect(page).toContain('redirect("/chat")');
   });
 });
