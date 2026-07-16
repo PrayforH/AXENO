@@ -772,3 +772,6 @@ class KubernetesSandboxProvider:
             await self._client.delete(record.name, f"{record.name}-egress")
             self._owned.discard(record.name)
         return len(expired)
+
+    async def active_count(self) -> int:
+        return len(await self._client.list_managed_pods())

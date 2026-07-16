@@ -9,6 +9,7 @@ from typing import Protocol
 from harness.config import Settings
 from harness.core.models import Run
 from harness.core.ports import RunTask, TaskQueue
+from harness.reliability.metrics import ReliabilityMetrics
 from harness.worker.orchestrator import RunOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -121,12 +122,63 @@ async def maintenance_loop(
         await _wait_for_work(stop, poll_interval)
 
 
+async def _write_metrics_response(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    metrics: ReliabilityMetrics,
+) -> None:
+    try:
+        request = await reader.read(8192)
+        first_line = request.split(b"\r\n", 1)[0]
+        if first_line.startswith(b"GET /metrics "):
+            body = metrics.render_prometheus().encode()
+            status = b"200 OK"
+            content_type = b"text/plain; version=0.0.4; charset=utf-8"
+        else:
+            body = b"not found\n"
+            status = b"404 Not Found"
+            content_type = b"text/plain; charset=utf-8"
+        writer.write(
+            b"HTTP/1.1 "
+            + status
+            + b"\r\nContent-Type: "
+            + content_type
+            + b"\r\nContent-Length: "
+            + str(len(body)).encode()
+            + b"\r\nConnection: close\r\n\r\n"
+            + body
+        )
+        await writer.drain()
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def start_metrics_server(
+    metrics: ReliabilityMetrics,
+    *,
+    host: str = "0.0.0.0",
+    port: int = 8001,
+) -> asyncio.Server:
+    """Expose process-local worker metrics on an internal-only HTTP port."""
+
+    return await asyncio.start_server(
+        lambda reader, writer: _write_metrics_response(reader, writer, metrics),
+        host,
+        port,
+    )
+
+
 async def serve(settings: Settings) -> None:
     """Compose and run the production worker until SIGINT or SIGTERM."""
 
     from harness.composition import build_production_container
 
     container = build_production_container(settings)
+    metrics_server = await start_metrics_server(
+        container.reliability_metrics,
+        port=settings.worker_metrics_port,
+    )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
@@ -137,10 +189,7 @@ async def serve(settings: Settings) -> None:
     try:
 
         async def preview_maintenance() -> None:
-            await container.approvals.reap_expired()
-            await container.quotas.reap_expired_all()
             await container.preview_controller.process_once()
-            await container.preview_controller.reap_expired()
 
         async def eval_maintenance() -> None:
             await container.eval_controller.process_once()
@@ -148,9 +197,8 @@ async def serve(settings: Settings) -> None:
         async def deployment_maintenance() -> None:
             await container.deployment_controller.process_once()
 
-        async def lifecycle_maintenance() -> None:
-            await container.lifecycle.enqueue_due_retention_jobs()
-            await container.lifecycle_controller.process_once()
+        async def reliability_maintenance() -> None:
+            await container.reliability_controller.process_once()
 
         control_tasks = [
             asyncio.create_task(
@@ -179,24 +227,13 @@ async def serve(settings: Settings) -> None:
             ),
             asyncio.create_task(
                 maintenance_loop(
-                    lifecycle_maintenance,
+                    reliability_maintenance,
                     stop=stop,
-                    poll_interval=settings.worker_poll_interval_seconds,
-                    label="data-lifecycle",
+                    poll_interval=settings.reliability_reaper_interval_seconds,
+                    label="reliability",
                 )
             ),
         ]
-        if container.sandbox_maintenance is not None:
-            control_tasks.append(
-                asyncio.create_task(
-                    maintenance_loop(
-                        container.sandbox_maintenance,
-                        stop=stop,
-                        poll_interval=settings.kubernetes_reaper_interval_seconds,
-                        label="sandbox-reaper",
-                    )
-                )
-            )
         try:
             await worker_loop(
                 container.task_queue,
@@ -209,6 +246,8 @@ async def serve(settings: Settings) -> None:
             stop.set()
             await asyncio.gather(*control_tasks)
     finally:
+        metrics_server.close()
+        await metrics_server.wait_closed()
         if container.close is not None:
             await container.close()
 

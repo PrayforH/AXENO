@@ -67,6 +67,14 @@ class CredentialBroker(Protocol):
     async def revoke_run(self, tenant_id: str, run_id: str) -> None: ...
 
 
+class CredentialLeaseMaintenance(Protocol):
+    """Optional control-plane maintenance surface for a credential broker."""
+
+    async def reap_expired(self) -> int: ...
+
+    async def active_lease_count(self) -> int: ...
+
+
 type CredentialSourceKey = tuple[str, CredentialResourceKind, str]
 
 
@@ -150,6 +158,24 @@ class InMemoryCredentialBroker:
         for lease_id, lease in tuple(self._leases.items()):
             if lease.tenant_id == tenant_id and lease.run_id == run_id:
                 self._leases[lease_id] = lease.model_copy(update={"revoked_at": now})
+
+    async def reap_expired(self) -> int:
+        now = self._clock()
+        expired = [
+            lease_id
+            for lease_id, lease in self._leases.items()
+            if lease.revoked_at is not None or lease.expires_at <= now
+        ]
+        for lease_id in expired:
+            del self._leases[lease_id]
+        return len(expired)
+
+    async def active_lease_count(self) -> int:
+        now = self._clock()
+        return sum(
+            lease.revoked_at is None and lease.expires_at > now
+            for lease in self._leases.values()
+        )
 
 
 class BrokerMcpCredentialProvider(DynamicMcpCredentialProvider):

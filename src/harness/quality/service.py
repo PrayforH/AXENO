@@ -23,6 +23,7 @@ from harness.quality.models import (
 )
 from harness.quality.queue import QualityTask, QualityTaskQueue
 from harness.quality.repositories import QualityRepository
+from harness.reliability.metrics import ReliabilityMetrics
 
 
 def _stable(prefix: str, *parts: str) -> str:
@@ -39,6 +40,7 @@ class QualityService:
         sessions: SessionRepository,
         events: EventRepository,
         artifacts: ArtifactRepository,
+        metrics: ReliabilityMetrics | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._repository = repository
@@ -47,12 +49,20 @@ class QualityService:
         self._sessions = sessions
         self._events = events
         self._artifacts = artifacts
+        self._metrics = metrics
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def record_terminal_run(
         self, run: Run, session: Session, trace_id: str
     ) -> list[QualityScore]:
-        if not run.status.is_terminal or not trace_id:
+        if not run.status.is_terminal:
+            return []
+        if self._metrics is not None:
+            self._metrics.increment(
+                "harness_trace_terminal_total",
+                labels={"completeness": "complete" if trace_id else "missing"},
+            )
+        if not trace_id:
             return []
         events = await self._events.list_after(run.tenant_id, run.run_id, 0)
         artifacts = await self._artifacts.list_for_run(run.tenant_id, run.run_id)

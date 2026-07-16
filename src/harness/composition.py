@@ -4,11 +4,12 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from pydantic import SecretStr
 from redis.asyncio import Redis
+from sqlalchemy import func, select
 
 from harness.agui.service import AguiRunService
 from harness.agui.task_title import AnthropicCompatibleTaskTitleGenerator
@@ -29,7 +30,7 @@ from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepos
 from harness.auth.service import AuthService, OAuthProviderConfig
 from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import ModelCompatibility, Session
+from harness.core.models import ModelCompatibility, RunStatus, Session
 from harness.core.ports import ArtifactStore, TaskQueue
 from harness.deployments.controller import DeploymentController
 from harness.deployments.queue import DeploymentTaskQueue
@@ -55,7 +56,13 @@ from harness.quality.controller import QualitySyncController
 from harness.quality.langfuse import DisabledQualityExporter, LangfuseQualityExporter
 from harness.quality.queue import QualityTaskQueue
 from harness.quality.service import QualityService
+from harness.quota.models import QuotaResource
 from harness.quota.service import QuotaService
+from harness.reliability.adapters import ObservedEventRepository
+from harness.reliability.controller import MaintenanceReaper, ReliabilityController
+from harness.reliability.metrics import ReliabilityMetrics
+from harness.reliability.probes import CapacityProbe, QueueStats
+from harness.reliability.service import ReliabilityService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     default_tool_resolver,
@@ -91,6 +98,7 @@ from harness.storage.lifecycle_adapters import (
 )
 from harness.storage.lifecycle_repository import PostgresDataLifecycleRepository
 from harness.storage.minio import MinioArtifactStore
+from harness.storage.models import UsageLedgerRow
 from harness.storage.platform_repositories import (
     PostgresAgentRegistry,
     PostgresAguiThreadBindingRepository,
@@ -106,6 +114,7 @@ from harness.storage.preview_repository import PostgresPreviewRepository
 from harness.storage.quality_repository import PostgresQualityRepository
 from harness.storage.quota_repository import PostgresQuotaRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
+from harness.storage.reliability_repository import PostgresReliabilityRepository
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.studio.catalog import default_capability_catalog
@@ -330,7 +339,7 @@ def build_production_container(
     file_repository = PostgresThreadFileRepository(sessions)
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
-    event_repository = PostgresEventRepository(sessions)
+    raw_event_repository = PostgresEventRepository(sessions)
     agent_drafts = PostgresAgentDraftRepository(sessions)
     preview_repository = PostgresPreviewRepository(sessions)
     eval_dataset_repository = PostgresEvalDatasetRepository(sessions)
@@ -372,6 +381,10 @@ def build_production_container(
         secure=settings.minio_secure,
     )
     observability = build_observability(settings)
+    reliability_metrics = ReliabilityMetrics()
+    observed_event_repository = ObservedEventRepository(
+        raw_event_repository, reliability_metrics
+    )
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -480,7 +493,7 @@ def build_production_container(
         id_generator=lambda: ids("preview"),
         quotas=quotas,
     )
-    events = EventService(event_repository, bus, clock=clock, id_generator=ids)
+    events = EventService(raw_event_repository, bus, clock=clock, id_generator=ids)
     session_service = SessionService(
         registry,
         session_repository,
@@ -563,8 +576,9 @@ def build_production_container(
         queue=quality_queue,
         runs=runs,
         sessions=session_repository,
-        events=event_repository,
+        events=raw_event_repository,
         artifacts=artifact_repository,
+        metrics=reliability_metrics,
         clock=clock,
     )
     quality_exporter = (
@@ -779,6 +793,100 @@ def build_production_container(
         ),
     )
 
+    async def infrastructure_facts(tenant_id: str) -> dict[str, int | None]:
+        async with sessions() as db:
+            rows = (
+                await db.execute(
+                    select(
+                        UsageLedgerRow.resource,
+                        func.coalesce(func.sum(UsageLedgerRow.amount), 0),
+                    )
+                    .where(
+                        UsageLedgerRow.tenant_id == tenant_id,
+                        UsageLedgerRow.resource.in_(
+                            (
+                                QuotaResource.ARTIFACT_BYTES.value,
+                                QuotaResource.SNAPSHOT_BYTES.value,
+                            )
+                        ),
+                    )
+                    .group_by(UsageLedgerRow.resource)
+                )
+            ).all()
+        totals = {str(resource): int(total) for resource, total in rows}
+        checked_out = getattr(engine.pool, "checkedout", None)
+        active_sandboxes = (
+            await runtime_sandbox.active_count()
+            if isinstance(runtime_sandbox, KubernetesSandboxProvider)
+            else None
+        )
+        return {
+            "active_sandboxes": active_sandboxes,
+            "database_pool_checked_out": (
+                int(cast(Callable[[], Any], checked_out)())
+                if callable(checked_out)
+                else None
+            ),
+            "artifact_bytes": totals.get(QuotaResource.ARTIFACT_BYTES.value, 0),
+            "snapshot_bytes": totals.get(QuotaResource.SNAPSHOT_BYTES.value, 0),
+        }
+
+    async def lifecycle_reap() -> int:
+        await lifecycle.enqueue_due_retention_jobs()
+        return int(await lifecycle_controller.process_once() is not None)
+
+    reliability_repository = PostgresReliabilityRepository(sessions)
+    capacity_probe = CapacityProbe(
+        runs=runs,
+        approvals=approvals,
+        previews=preview_repository,
+        queue=cast(QueueStats, queue),
+        lifecycle=lifecycle_repository,
+        credentials=credential_broker,
+        infrastructure_facts=infrastructure_facts,
+    )
+    reliability = ReliabilityService(
+        reliability_repository,
+        reliability_metrics,
+        capacity_probe,
+        clock=clock,
+        id_generator=ids,
+    )
+    maintenance = [
+        MaintenanceReaper("approval-expiry", "approval", approval_service.reap_expired),
+        MaintenanceReaper("preview-expiry", "preview", preview_controller.reap_expired),
+        MaintenanceReaper("quota-reservation", "quota", quotas.reap_expired_all),
+        MaintenanceReaper("workspace-retention", "workspace", lifecycle_reap),
+    ]
+    if credential_broker is not None:
+        maintenance.append(
+            MaintenanceReaper(
+                "credential-lease", "credential_lease", credential_broker.reap_expired
+            )
+        )
+    if sandbox_maintenance is not None:
+        maintenance.append(
+            MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance)
+        )
+    reliability_controller = ReliabilityController(
+        runs=runs,
+        events=events,
+        repository=reliability_repository,
+        metrics=reliability_metrics,
+        thresholds={
+            RunStatus.QUEUED: settings.stuck_queued_seconds,
+            RunStatus.PROVISIONING: settings.stuck_provisioning_seconds,
+            RunStatus.RUNNING: settings.stuck_running_seconds,
+            RunStatus.WAITING_APPROVAL: settings.stuck_waiting_approval_seconds,
+            RunStatus.CANCELLING: settings.stuck_cancelling_seconds,
+        },
+        maintenance=maintenance,
+        quotas=quotas,
+        credentials=credential_broker,
+        clock=clock,
+        id_generator=ids,
+    )
+
     async def close() -> None:
         await redis.aclose()
         await engine.dispose()
@@ -808,6 +916,9 @@ def build_production_container(
         quotas=quotas,
         lifecycle=lifecycle,
         lifecycle_controller=lifecycle_controller,
+        reliability_metrics=reliability_metrics,
+        reliability=reliability,
+        reliability_controller=reliability_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
@@ -816,7 +927,8 @@ def build_production_container(
         input_artifacts=input_service,
         file_catalog=file_service,
         memory=memory_service,
-        events=event_repository,
+        events=raw_event_repository,
+        observed_events=observed_event_repository,
         task_queue=queue,
         observability=observability,
         runtime=runtime,

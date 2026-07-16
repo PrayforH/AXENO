@@ -416,6 +416,55 @@ class DataLifecycleJobRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class ReliabilityIncidentRow(Base):
+    __tablename__ = "reliability_incidents"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "fingerprint",
+            name="uq_reliability_incident_fingerprint",
+        ),
+        Index("ix_reliability_incidents_status", "tenant_id", "status", "updated_at"),
+        Index("ix_reliability_incidents_recovery", "kind", "status", "updated_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(256))
+    kind: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class ReaperActionRow(Base):
+    __tablename__ = "reaper_actions"
+    __table_args__ = (
+        Index("ix_reaper_actions_tenant_occurred", "tenant_id", "occurred_at"),
+    )
+
+    action_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128))
+    reaper: Mapped[str] = mapped_column(String(80))
+    resource_type: Mapped[str] = mapped_column(String(80))
+    resource_id: Mapped[str] = mapped_column(String(256))
+    outcome: Mapped[str] = mapped_column(String(32))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class CapacitySnapshotRow(Base):
+    __tablename__ = "capacity_snapshots"
+    __table_args__ = (
+        Index("ix_capacity_snapshots_captured", "tenant_id", "captured_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 
@@ -437,6 +486,7 @@ class RunRow(Base):
     idempotency_key: Mapped[str] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(32), index=True)
     fencing_token: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

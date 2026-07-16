@@ -122,6 +122,16 @@ async def test_export_failure_retries_without_changing_run_terminal_state() -> N
 
 
 @pytest.mark.asyncio
+async def test_terminal_run_without_trace_is_counted_as_incomplete() -> None:
+    container = build_memory_container()
+    await seed_run(container, "missing-trace-agent")
+
+    assert container.reliability_metrics.count(
+        "harness_trace_terminal_total", labels={"completeness": "missing"}
+    ) == 1
+
+
+@pytest.mark.asyncio
 async def test_dataset_projection_and_langfuse_payload_are_metadata_only() -> None:
     container = build_memory_container()
     draft, _version, session, run = await seed_run(container, "dataset-quality-agent")

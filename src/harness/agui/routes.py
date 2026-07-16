@@ -119,7 +119,7 @@ async def run_agui_agent(
         sequence = 0
         terminal_event_seen = False
         while True:
-            events = await container.events.list_after(
+            events = await container.observed_events.list_after(
                 identity.tenant_id, run.run_id, sequence
             )
             for event in events:
@@ -271,7 +271,7 @@ async def get_agui_thread_history(
                     id=f"user-{run.run_id}", role="user", content=prompt
                 )
             )
-        events = await container.events.list_after(
+        events = await container.observed_events.list_after(
             identity.tenant_id, run.run_id, 0
         )
         response = "".join(
@@ -431,7 +431,9 @@ async def stream_agui_events(
     ensure_permission(identity, "tasks:read")
     await require_owned_run(container, identity, run_id)
     raw_id = (last_event_id or "0").split(":", 1)[0]
-    events = await container.events.list_after(identity.tenant_id, run_id, int(raw_id))
+    events = await container.observed_events.list_after(
+        identity.tenant_id, run_id, int(raw_id)
+    )
 
     async def stream() -> AsyncIterator[str]:
         for event in events:

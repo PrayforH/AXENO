@@ -1,5 +1,6 @@
 """PostgreSQL implementations of authoritative Run and Event ports."""
 
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, select, update
@@ -26,6 +27,7 @@ class PostgresRunRepository:
                     idempotency_key=run.idempotency_key,
                     status=run.status.value,
                     fencing_token=run.fencing_token,
+                    updated_at=run.updated_at,
                     payload=run.model_dump(mode="json"),
                 )
             )
@@ -66,6 +68,7 @@ class PostgresRunRepository:
             .values(
                 status=updated.status.value,
                 fencing_token=updated.fencing_token,
+                updated_at=updated.updated_at,
                 payload=updated.model_dump(mode="json"),
             )
         )
@@ -94,6 +97,37 @@ class PostgresRunRepository:
                 key=lambda run: (run.updated_at, run.run_id),
                 reverse=True,
             )[:limit]
+
+    async def list_for_tenant(self, tenant_id: str, *, limit: int) -> list[Run]:
+        statement = (
+            select(RunRow.payload)
+            .where(RunRow.tenant_id == tenant_id)
+            .order_by(RunRow.updated_at.desc(), RunRow.run_id.desc())
+            .limit(limit)
+        )
+        async with self._sessions() as session:
+            payloads = (await session.scalars(statement)).all()
+            return [Run.model_validate(payload) for payload in payloads]
+
+    async def list_stale(
+        self,
+        statuses: frozenset[RunStatus],
+        updated_at_or_before: datetime,
+        *,
+        limit: int,
+    ) -> list[Run]:
+        statement = (
+            select(RunRow.payload)
+            .where(
+                RunRow.status.in_(tuple(item.value for item in statuses)),
+                RunRow.updated_at <= updated_at_or_before,
+            )
+            .order_by(RunRow.updated_at, RunRow.run_id)
+            .limit(limit)
+        )
+        async with self._sessions() as session:
+            payloads = (await session.scalars(statement)).all()
+            return [Run.model_validate(payload) for payload in payloads]
 
 
 class PostgresEventRepository:
