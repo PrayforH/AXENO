@@ -1,5 +1,11 @@
 # Production Agent release runbook
 
+平台级构建、签名、`test → canary → production` 同制品晋级见
+[Release and environment promotion](runbooks/release-promotion.md)；失败恢复和灾备见
+[Rollback and disaster recovery](runbooks/rollback-disaster-recovery.md)；上线总检查见
+[Final production readiness](runbooks/final-production-readiness.md)。本文继续描述单个领域 Agent
+内容发布与运行质量检查。
+
 ## Release gate
 
 在发布一个新的 `name@version` 前确认：
