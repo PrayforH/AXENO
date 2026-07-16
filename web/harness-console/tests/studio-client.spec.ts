@@ -114,4 +114,59 @@ describe("Studio typed API mapping", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it("creates an immutable Dataset Version and a version-pinned Eval Run", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : null;
+      calls.push({ url, body });
+      if (url.endsWith("eval-datasets")) {
+        return Response.json({
+          datasetId: "dataset-one",
+          version: 2,
+          agentName: "policy-researcher",
+        });
+      }
+      return Response.json({ run: { evalRunId: "eval-one", status: "queued" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const dataset = await studioClient.createEvalDataset(
+      "draft-api",
+      7,
+      "发布必测集",
+      "dataset-one",
+    );
+    await studioClient.createEvalRun(
+      dataset,
+      "1.2.3",
+      "eval:dataset-one:v2:1.2.3",
+      "preview-one",
+    );
+
+    expect(calls).toEqual([
+      {
+        url: "/api/studio/eval-datasets",
+        body: {
+          draftId: "draft-api",
+          expectedRevision: 7,
+          name: "发布必测集",
+          datasetId: "dataset-one",
+          required: true,
+        },
+      },
+      {
+        url: "/api/studio/eval-runs",
+        body: {
+          datasetId: "dataset-one",
+          datasetVersion: 2,
+          agentName: "policy-researcher",
+          agentVersion: "1.2.3",
+          idempotencyKey: "eval:dataset-one:v2:1.2.3",
+          previewId: "preview-one",
+        },
+      },
+    ]);
+  });
 });

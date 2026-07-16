@@ -155,6 +155,25 @@ initialize/tools-list/审核过的只读 smoke、Workspace 文件操作、审批
 持续续租，取消、超时或任何阶段失败都会进入稳定终态并执行 Sandbox 清理。Daytona 或目标
 网络失败不会回退到 Local Sandbox。
 
+### 耐久 Eval 控制面
+
+Studio Eval 将草稿中的用例固化为不可变 `EvalDatasetVersion`，再对已发布 Agent 版本创建
+`EvalRun`。每个 Case 使用独立 Session、稳定幂等键和正常 Run/Event 协议；工具、终态、审批、
+输出文本和时长评分只读取服务端持久化事件，不信任浏览器上报结果。
+
+Eval Controller 使用独立 Redis namespace `harness:eval` 做短步 reconcile，并在独立异步控制
+循环中与主 Run Worker 并行运行。它不会同步等待子 Run：先持久化 Session/Run 身份并让主 Run
+Worker 执行，后续租约再评分和推进下一 Case。因此长 Run 不会阻塞 Eval 超时检查，Worker 或
+Controller 重启不会丢失已完成 Case，也不会因单个 Case 基础设施失败终止整套。超时会取消
+对应服务端 Run；取消 Eval 会先取消活动 Run，最终收敛到 `cancelled`。
+非终态步骤通过当前租约的 retry/reschedule 原子回到 ready，只有终态才 ACK；不要改成先 ACK
+再 enqueue，否则进程在两次操作之间退出会遗留无任务的活动 Eval Run。
+
+JSON 与 JUnit 报告写入与 Run Artifact 共用的 MinIO/S3 对象存储，但使用 Eval 自己的元数据和
+租户校验下载接口。三张 PostgreSQL 表 `eval_dataset_versions`、`eval_runs`、
+`eval_case_results` 由 migration `0009` 创建。晋级控制器必须调用 Eval gate，确认目标版本已通过
+所有最新的 required Dataset Version；不得仅依赖 Studio 页面状态。
+
 Daytona 配置通过环境变量注入：
 
 ```dotenv

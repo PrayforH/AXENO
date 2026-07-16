@@ -108,7 +108,10 @@ describe("Agent Studio management page", () => {
     for (const label of ["隔离试跑", "不可变 Bundle", "按环境晋级"]) {
       expect(workbench).toContain(label);
     }
-    expect(workbench).toContain("离线轨迹评测");
+    expect(workbench).toContain("固定版本轨迹评测");
+    expect(workbench).toContain("耐久 Eval 控制面");
+    expect(workbench).toContain("每个 Case 使用独立 Session");
+    expect(workbench).toContain("downloadEvalArtifact");
     expect(workbench).toContain("线上质量监控");
     expect(workbench).toContain("必须调用");
     expect(workbench).toContain("禁止");

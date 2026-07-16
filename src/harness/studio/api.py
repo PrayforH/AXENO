@@ -9,8 +9,22 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 
-from harness.api.dependencies import Identity, ensure_permission, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    ensure_permission,
+    require_identity,
+)
 from harness.core.errors import ConflictError, NotFoundError
+from harness.evals.controller import EvalController
+from harness.evals.models import (
+    CreateEvalDatasetVersionRequest,
+    CreateEvalRunRequest,
+    EvalDatasetVersion,
+    EvalGateResult,
+    EvalRunView,
+)
+from harness.evals.service import EvalControlPlaneService
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.models import (
@@ -136,7 +150,195 @@ def get_preview_controller(request: Request) -> PreviewController:
     return controller
 
 
+def get_eval_service(request: Request) -> EvalControlPlaneService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "evals", None)
+    if not isinstance(service, EvalControlPlaneService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "eval_control_plane_not_configured",
+                "message": "Studio Eval control plane is not configured",
+            },
+        )
+    return service
+
+
+def get_eval_controller(request: Request) -> EvalController:
+    container = getattr(request.app.state, "container", None)
+    controller = getattr(container, "eval_controller", None)
+    if not isinstance(controller, EvalController):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "eval_controller_not_configured",
+                "message": "Studio Eval controller is not configured",
+            },
+        )
+    return controller
+
+
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
+
+
+@router.post(
+    "/eval-datasets",
+    response_model=EvalDatasetVersion,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_eval_dataset(
+    body: CreateEvalDatasetVersionRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> EvalDatasetVersion:
+    try:
+        return await service.create_dataset_version(
+            tenant_id=actor.tenant_id, user_id=actor.user_id, request=body
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "draft_not_ready", "message": str(error)},
+        ) from error
+
+
+@router.get("/eval-datasets", response_model=list[EvalDatasetVersion])
+async def list_eval_datasets(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> list[EvalDatasetVersion]:
+    return await service.list_datasets(actor.tenant_id)
+
+
+@router.get(
+    "/eval-datasets/{dataset_id}/versions/{version}",
+    response_model=EvalDatasetVersion,
+)
+async def get_eval_dataset(
+    dataset_id: str,
+    version: int,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> EvalDatasetVersion:
+    try:
+        return await service.get_dataset(actor.tenant_id, dataset_id, version)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
+    "/eval-runs", response_model=EvalRunView, status_code=status.HTTP_202_ACCEPTED
+)
+async def create_eval_run(
+    body: CreateEvalRunRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+    controller: Annotated[EvalController, Depends(get_eval_controller)],
+) -> EvalRunView:
+    try:
+        result = await service.create_run(
+            tenant_id=actor.tenant_id, user_id=actor.user_id, request=body
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        assert isinstance(container, ApiContainer)
+        background_tasks.add_task(
+            controller.drain_locally,
+            actor.tenant_id,
+            result.run.eval_run_id,
+            run_queue=container.task_queue,
+            executor=container.worker,
+        )
+    return result
+
+
+@router.get("/eval-runs", response_model=list[EvalRunView])
+async def list_eval_runs(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> list[EvalRunView]:
+    return await service.list_runs(actor.tenant_id)
+
+
+@router.get("/eval-runs/{eval_run_id}", response_model=EvalRunView)
+async def get_eval_run(
+    eval_run_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> EvalRunView:
+    try:
+        return await service.get_run(actor.tenant_id, eval_run_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post("/eval-runs/{eval_run_id}/cancel", response_model=EvalRunView)
+async def cancel_eval_run(
+    eval_run_id: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+    controller: Annotated[EvalController, Depends(get_eval_controller)],
+) -> EvalRunView:
+    try:
+        result = await service.cancel_run(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            eval_run_id=eval_run_id,
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        assert isinstance(container, ApiContainer)
+        background_tasks.add_task(
+            controller.drain_locally,
+            actor.tenant_id,
+            eval_run_id,
+            run_queue=container.task_queue,
+            executor=container.worker,
+        )
+    return result
+
+
+@router.get("/eval-runs/{eval_run_id}/artifacts/{artifact_id}")
+async def download_eval_artifact(
+    eval_run_id: str,
+    artifact_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> Response:
+    try:
+        name, media_type, content = await service.download_artifact(
+            actor.tenant_id, eval_run_id, artifact_id
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+@router.get(
+    "/evaluation-gates/{agent_name}/versions/{agent_version}",
+    response_model=EvalGateResult,
+)
+async def get_eval_gate(
+    agent_name: str,
+    agent_version: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> EvalGateResult:
+    return await service.gate(actor.tenant_id, agent_name, agent_version)
 
 
 @router.get("/catalog", response_model=CapabilityCatalogRecord)

@@ -4,7 +4,7 @@ import pytest
 
 from harness.core.models import Run
 from harness.core.ports import RunTask
-from harness.worker.main import worker_loop
+from harness.worker.main import maintenance_loop, worker_loop
 
 
 class Queue:
@@ -178,3 +178,33 @@ async def test_worker_continues_when_lease_renewal_temporarily_fails() -> None:
     await asyncio.wait_for(worker, timeout=0.2)
 
     assert queue.acknowledged == [task]
+
+
+@pytest.mark.asyncio
+async def test_control_plane_maintenance_runs_while_a_child_run_is_active() -> None:
+    stop = asyncio.Event()
+    queue = Queue([RunTask(tenant_id="tenant-a", run_id="run-1")])
+    executor = SlowExecutor(stop)
+    reconciled = asyncio.Event()
+
+    async def reconcile() -> object:
+        reconciled.set()
+        return 0
+
+    worker = asyncio.create_task(
+        worker_loop(queue, executor, stop=stop, poll_interval=0.001)
+    )
+    controller = asyncio.create_task(
+        maintenance_loop(
+            reconcile,
+            stop=stop,
+            poll_interval=0.001,
+            label="eval",
+        )
+    )
+
+    await executor.started.wait()
+    await asyncio.wait_for(reconciled.wait(), timeout=0.1)
+    assert not worker.done()
+    executor.release.set()
+    await asyncio.gather(worker, controller)

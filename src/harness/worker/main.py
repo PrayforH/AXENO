@@ -104,6 +104,23 @@ async def worker_loop(
             await heartbeat
 
 
+async def maintenance_loop(
+    maintenance: Callable[[], Awaitable[object]],
+    *,
+    stop: asyncio.Event,
+    poll_interval: float,
+    label: str,
+) -> None:
+    """Run an independent control-plane reconciler beside Run execution."""
+
+    while not stop.is_set():
+        try:
+            await maintenance()
+        except Exception:
+            logger.exception("%s maintenance failed", label)
+        await _wait_for_work(stop, poll_interval)
+
+
 async def serve(settings: Settings) -> None:
     """Compose and run the production worker until SIGINT or SIGTERM."""
 
@@ -118,19 +135,43 @@ async def serve(settings: Settings) -> None:
         except NotImplementedError:  # pragma: no cover - Windows event loop
             pass
     try:
-        async def maintenance() -> None:
+        async def preview_maintenance() -> None:
             await container.approvals.reap_expired()
             await container.preview_controller.process_once()
             await container.preview_controller.reap_expired()
 
-        await worker_loop(
-            container.task_queue,
-            container.worker,
-            stop=stop,
-            poll_interval=settings.worker_poll_interval_seconds,
-            lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
-            maintenance=maintenance,
+        async def eval_maintenance() -> None:
+            await container.eval_controller.process_once()
+
+        control_tasks = (
+            asyncio.create_task(
+                maintenance_loop(
+                    preview_maintenance,
+                    stop=stop,
+                    poll_interval=settings.worker_poll_interval_seconds,
+                    label="preview",
+                )
+            ),
+            asyncio.create_task(
+                maintenance_loop(
+                    eval_maintenance,
+                    stop=stop,
+                    poll_interval=settings.worker_poll_interval_seconds,
+                    label="eval",
+                )
+            ),
         )
+        try:
+            await worker_loop(
+                container.task_queue,
+                container.worker,
+                stop=stop,
+                poll_interval=settings.worker_poll_interval_seconds,
+                lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
+            )
+        finally:
+            stop.set()
+            await asyncio.gather(*control_tasks)
     finally:
         if container.close is not None:
             await container.close()

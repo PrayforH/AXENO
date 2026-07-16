@@ -157,6 +157,71 @@ class PreviewDeploymentRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class EvalDatasetVersionRow(Base):
+    __tablename__ = "eval_dataset_versions"
+    __table_args__ = (
+        CheckConstraint(
+            "version >= 1", name="ck_eval_dataset_version_positive"
+        ),
+        Index("ix_eval_datasets_tenant_created", "tenant_id", "created_at"),
+        Index("ix_eval_datasets_tenant_agent", "tenant_id", "agent_name"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128))
+    required: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class EvalRunRow(Base):
+    __tablename__ = "eval_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "idempotency_key", name="uq_eval_run_idempotency"
+        ),
+        CheckConstraint(
+            "dataset_version >= 1", name="ck_eval_run_dataset_version_positive"
+        ),
+        Index("ix_eval_runs_tenant_created", "tenant_id", "created_at"),
+        Index(
+            "ix_eval_runs_agent_version",
+            "tenant_id",
+            "agent_name",
+            "agent_version",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    eval_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    dataset_id: Mapped[str] = mapped_column(String(128), index=True)
+    dataset_version: Mapped[int] = mapped_column(Integer)
+    agent_name: Mapped[str] = mapped_column(String(128))
+    agent_version: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    fencing_token: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class EvalCaseResultRow(Base):
+    __tablename__ = "eval_case_results"
+    __table_args__ = (
+        Index("ix_eval_case_results_run", "tenant_id", "eval_run_id"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    eval_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    case_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

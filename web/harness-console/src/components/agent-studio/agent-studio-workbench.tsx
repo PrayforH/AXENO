@@ -18,6 +18,9 @@ import {
   studioClient,
   type StudioCapabilities,
   type StudioDraftSummary,
+  type StudioEvalDataset,
+  type StudioEvalGate,
+  type StudioEvalRun,
   type StudioPreflightCheck,
   type StudioPreview,
   type StudioValidation,
@@ -78,6 +81,10 @@ export function AgentStudioWorkbench() {
   const [publishing, setPublishing] = useState(false);
   const [creatingPreview, setCreatingPreview] = useState(false);
   const [previews, setPreviews] = useState<StudioPreview[]>([]);
+  const [evalDatasets, setEvalDatasets] = useState<StudioEvalDataset[]>([]);
+  const [evalRuns, setEvalRuns] = useState<StudioEvalRun[]>([]);
+  const [evalGate, setEvalGate] = useState<StudioEvalGate | null>(null);
+  const [evalAction, setEvalAction] = useState<"dataset" | "run" | "cancel" | "">("");
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [versionConflict, setVersionConflict] = useState(false);
@@ -135,15 +142,19 @@ export function AgentStudioWorkbench() {
       setLoading(true);
       setLoadError("");
       try {
-        const [serverDrafts, serverCapabilities, serverPreviews] = await Promise.all([
+        const [serverDrafts, serverCapabilities, serverPreviews, serverDatasets, serverEvalRuns] = await Promise.all([
           studioClient.listDrafts(),
           studioClient.capabilities(),
           studioClient.listPreviews(),
+          studioClient.listEvalDatasets(),
+          studioClient.listEvalRuns(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
         setDrafts(serverDrafts);
         setPreviews(serverPreviews);
+        setEvalDatasets(serverDatasets);
+        setEvalRuns(serverEvalRuns);
         const migration = await migrateLegacyStudioDraft(
           window.localStorage,
           studioClient,
@@ -426,6 +437,69 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function createEvalDataset() {
+    if (!draft.id || dirty || !canEdit) return;
+    setEvalAction("dataset");
+    try {
+      const existing = evalDatasets
+        .filter((item) => item.agentName === draft.name)
+        .sort((left, right) => right.version - left.version)[0];
+      const created = await studioClient.createEvalDataset(
+        draft.id,
+        draft.revision,
+        `${draft.displayName} 发布必测集`,
+        existing?.datasetId,
+      );
+      setEvalDatasets(await studioClient.listEvalDatasets());
+      setNotice(`已固化 Dataset ${created.datasetId}@${created.version} · ${created.cases.length} 用例`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Dataset 创建失败");
+    } finally {
+      setEvalAction("");
+    }
+  }
+
+  async function startEvalRun(dataset: StudioEvalDataset) {
+    if (!draft.publishedVersion || !canEdit) return;
+    setEvalAction("run");
+    try {
+      const previewId = activePreview?.status === "ready" && !activePreview.stale
+        ? activePreview.previewId
+        : undefined;
+      const started = await studioClient.createEvalRun(
+        dataset,
+        draft.publishedVersion,
+        `studio-eval:${dataset.datasetId}:v${dataset.version}:${draft.publishedVersion}:${crypto.randomUUID()}`,
+        previewId,
+      );
+      setEvalRuns((current) => [
+        started,
+        ...current.filter((item) => item.run.evalRunId !== started.run.evalRunId),
+      ]);
+      setNotice(`Eval 已排队 · ${started.totalCases} 个独立 Case`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Eval 创建失败");
+    } finally {
+      setEvalAction("");
+    }
+  }
+
+  async function cancelEvalRun(evalRunId: string) {
+    setEvalAction("cancel");
+    try {
+      const updated = await studioClient.cancelEvalRun(evalRunId);
+      setEvalRuns((current) => [
+        updated,
+        ...current.filter((item) => item.run.evalRunId !== evalRunId),
+      ]);
+      setNotice("Eval 正在取消；活动子 Run 会先进入 cancelled");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Eval 取消失败");
+    } finally {
+      setEvalAction("");
+    }
+  }
+
   function sectionSummary(section: StudioSection) {
     switch (section) {
       case "identity":
@@ -455,6 +529,14 @@ export function AgentStudioWorkbench() {
     (item) => item.draftId === draft.id
       && !["cancelled", "failed", "expired"].includes(item.status),
   ) ?? previews.find((item) => item.draftId === draft.id);
+  const agentDatasets = evalDatasets
+    .filter((item) => item.agentName === draft.name)
+    .sort((left, right) => right.version - left.version);
+  const latestDataset = agentDatasets[0];
+  const agentEvalRuns = evalRuns.filter((item) => item.run.agentName === draft.name);
+  const activeEvalRun = agentEvalRuns.find((item) =>
+    ["queued", "running", "cancelling"].includes(item.run.status),
+  ) ?? agentEvalRuns[0];
   const publishedCurrent = Boolean(
     draft.publishedVersion === draft.version
     && draft.publishedHash
@@ -493,6 +575,39 @@ export function AgentStudioWorkbench() {
       window.clearTimeout(timer);
     };
   }, [activePreview?.previewId, activePreview?.status]);
+
+  useEffect(() => {
+    if (!activeEvalRun || !["queued", "running", "cancelling"].includes(activeEvalRun.run.status)) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const refreshed = await studioClient.getEvalRun(activeEvalRun.run.evalRunId);
+        if (!active) return;
+        setEvalRuns((current) => [
+          refreshed,
+          ...current.filter((item) => item.run.evalRunId !== refreshed.run.evalRunId),
+        ]);
+      } catch (error) {
+        if (active) setNotice(error instanceof Error ? error.message : "Eval 状态读取失败");
+      }
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [activeEvalRun?.run.evalRunId, activeEvalRun?.run.status, activeEvalRun?.cases.length]);
+
+  useEffect(() => {
+    if (!draft.publishedVersion) {
+      setEvalGate(null);
+      return;
+    }
+    let active = true;
+    void studioClient.getEvalGate(draft.name, draft.publishedVersion)
+      .then((gate) => { if (active) setEvalGate(gate); })
+      .catch(() => { if (active) setEvalGate(null); });
+    return () => { active = false; };
+  }, [draft.name, draft.publishedVersion, activeEvalRun?.run.status]);
 
   if (loading) {
     return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
@@ -1288,6 +1403,115 @@ export function AgentStudioWorkbench() {
                     </article>
                   ))}
                 </div>
+                <section className={styles.evalControlPlane} aria-label="持久化评测控制面">
+                  <header>
+                    <div>
+                      <span>耐久 Eval 控制面</span>
+                      <strong>
+                        {latestDataset
+                          ? `${latestDataset.name} · v${latestDataset.version}`
+                          : "尚未固化 Dataset Version"}
+                      </strong>
+                      <small>
+                        每个 Case 使用独立 Session；进度、Run/Event 评分和报告均由服务端持久化。
+                      </small>
+                    </div>
+                    <div className={styles.evalControlActions}>
+                      <button
+                        type="button"
+                        disabled={!canEdit || !draft.id || dirty || Boolean(evalAction)}
+                        onClick={() => void createEvalDataset()}
+                      >
+                        {evalAction === "dataset"
+                          ? "固化中…"
+                          : latestDataset
+                            ? "创建新 Dataset 版本"
+                            : "固化 Dataset"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!canEdit || !latestDataset || !draft.publishedVersion || Boolean(evalAction) || Boolean(activeEvalRun && ["queued", "running", "cancelling"].includes(activeEvalRun.run.status))}
+                        onClick={() => latestDataset && void startEvalRun(latestDataset)}
+                      >
+                        {evalAction === "run" ? "排队中…" : "运行固定版本 Eval"}
+                      </button>
+                    </div>
+                  </header>
+
+                  {activeEvalRun ? (
+                    <article className={styles.evalRunCard} data-status={activeEvalRun.run.status}>
+                      <div className={styles.evalRunSummary}>
+                        <span className={styles.evalRunSignal} aria-hidden="true" />
+                        <div>
+                          <strong>
+                            {activeEvalRun.run.status} · {activeEvalRun.passedCases}/{activeEvalRun.totalCases} 通过
+                          </strong>
+                          <small>
+                            {activeEvalRun.run.agentName}@{activeEvalRun.run.agentVersion} · Dataset v{activeEvalRun.run.datasetVersion}
+                            {activeEvalRun.run.activeCaseId ? ` · 正在处理 ${activeEvalRun.run.activeCaseId}` : ""}
+                          </small>
+                        </div>
+                        {["queued", "running", "cancelling"].includes(activeEvalRun.run.status) && (
+                          <button
+                            type="button"
+                            disabled={Boolean(evalAction)}
+                            onClick={() => void cancelEvalRun(activeEvalRun.run.evalRunId)}
+                          >
+                            {evalAction === "cancel" ? "取消中…" : "取消"}
+                          </button>
+                        )}
+                      </div>
+                      <ol className={styles.evalCaseResults}>
+                        {activeEvalRun.cases.map((result) => (
+                          <li key={result.caseId} data-status={result.status}>
+                            <span>{result.passed ? "✓" : "!"}</span>
+                            <div>
+                              <strong>{result.caseId}</strong>
+                              <small>
+                                {result.status} · {result.durationSeconds.toFixed(2)}s
+                                {result.tools.length ? ` · ${result.tools.join(" / ")}` : ""}
+                              </small>
+                              {result.failures.length > 0 && <p>{result.failures.join("；")}</p>}
+                            </div>
+                            <code>{result.runId ? result.runId.slice(-10) : "no-run"}</code>
+                          </li>
+                        ))}
+                      </ol>
+                      {activeEvalRun.run.artifacts.length > 0 && (
+                        <div className={styles.evalArtifacts}>
+                          {activeEvalRun.run.artifacts.map((artifact) => (
+                            <button
+                              type="button"
+                              key={artifact.artifactId}
+                              onClick={() => void studioClient.downloadEvalArtifact(activeEvalRun.run.evalRunId, artifact.artifactId)}
+                            >
+                              下载 {artifact.name} · {artifact.sizeBytes} B
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  ) : (
+                    <div className={styles.evalRunEmpty}>
+                      固化 Dataset 并发布不可变 Agent 版本后，可启动第一轮耐久 Eval。
+                    </div>
+                  )}
+
+                  {agentEvalRuns.length > 1 && (
+                    <details className={styles.evalHistory}>
+                      <summary>版本对比 · 最近 {agentEvalRuns.length} 轮</summary>
+                      <div>
+                        {agentEvalRuns.slice(0, 6).map((item) => (
+                          <span key={item.run.evalRunId} data-status={item.run.status}>
+                            <code>{item.run.agentVersion}</code>
+                            <strong>{item.passedCases}/{item.totalCases}</strong>
+                            <small>{item.run.status} · Dataset v{item.run.datasetVersion}</small>
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </section>
                 <div className={styles.releaseGate}>
                   <div>
                     <span>本地结构门禁</span>
@@ -1295,15 +1519,19 @@ export function AgentStudioWorkbench() {
                   </div>
                   <div>
                     <span>真实环境预检</span>
-                    <strong>等待 MCP / Sandbox 连通性验证</strong>
+                    <strong>{activePreview?.preflightResult?.status === "passed" ? "Model / MCP / Sandbox 已通过" : "尚未取得真实 Preflight 证明"}</strong>
                   </div>
                   <div>
-                    <span>离线轨迹评测</span>
-                    <strong>{draft.evalCases.length} 用例 · 工具 / 终态 / 输出断言</strong>
+                    <span>固定版本轨迹评测</span>
+                    <strong>
+                      {evalGate
+                        ? `${evalGate.passedDatasets}/${evalGate.requiredDatasets} 必测 Dataset 通过`
+                        : `${draft.evalCases.length} 用例待固化`}
+                    </strong>
                   </div>
                   <div>
                     <span>线上质量监控</span>
-                    <strong>待接入 Langfuse Dataset / Score / Alert</strong>
+                    <strong>G11 接入 Langfuse Score / Alert</strong>
                   </div>
                 </div>
                 <div className={styles.releaseArchitecture} aria-label="发布架构">
@@ -1311,7 +1539,7 @@ export function AgentStudioWorkbench() {
                     <span>PREVIEW</span>
                     <strong>临时隔离环境</strong>
                     <p>结构检查通过后创建短时试跑环境；失败不污染任何正式版本。</p>
-                    <code>TTL 60 min · 待控制面接入</code>
+                    <code>TTL 60 min · 真实 Preflight</code>
                   </article>
                   <article>
                     <span>VERSION</span>

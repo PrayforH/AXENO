@@ -29,6 +29,9 @@ from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelCompatibility
 from harness.core.ports import ArtifactStore, TaskQueue
+from harness.evals.controller import EvalController
+from harness.evals.queue import EvalTaskQueue
+from harness.evals.service import EvalControlPlaneService
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
@@ -48,6 +51,10 @@ from harness.sandbox.daytona import DaytonaSandboxProvider, SdkDaytonaClient
 from harness.sandbox.local import LocalSandboxProvider
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
+from harness.storage.eval_repository import (
+    PostgresEvalDatasetRepository,
+    PostgresEvalRunRepository,
+)
 from harness.storage.minio import MinioArtifactStore
 from harness.storage.platform_repositories import (
     PostgresAgentRegistry,
@@ -207,6 +214,8 @@ def build_production_container(
     event_repository = PostgresEventRepository(sessions)
     agent_drafts = PostgresAgentDraftRepository(sessions)
     preview_repository = PostgresPreviewRepository(sessions)
+    eval_dataset_repository = PostgresEvalDatasetRepository(sessions)
+    eval_run_repository = PostgresEvalRunRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
@@ -271,6 +280,11 @@ def build_production_container(
         visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
     )
+    eval_queue = EvalTaskQueue.redis(
+        redis_client,
+        visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
+        retry_delay_seconds=settings.worker_task_retry_delay_seconds,
+    )
     preview_service = PreviewService(
         repository=preview_repository,
         queue=preview_queue,
@@ -319,6 +333,29 @@ def build_production_container(
         clock=clock,
         processor=DefaultInputProcessor(),
         file_catalog=file_service,
+    )
+    eval_service = EvalControlPlaneService(
+        datasets=eval_dataset_repository,
+        runs=eval_run_repository,
+        queue=eval_queue,
+        studio=studio_service,
+        registry=registry,
+        object_store=store,
+        previews=preview_service,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
+    eval_controller = EvalController(
+        datasets=eval_dataset_repository,
+        repository=eval_run_repository,
+        queue=eval_queue,
+        sessions=session_service,
+        runs=run_service,
+        events=events,
+        inputs=input_service,
+        object_store=store,
+        clock=clock,
     )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     workspace_service = WorkspaceService(
@@ -465,6 +502,10 @@ def build_production_container(
         preview_repository=preview_repository,
         previews=preview_service,
         preview_controller=preview_controller,
+        eval_dataset_repository=eval_dataset_repository,
+        eval_run_repository=eval_run_repository,
+        evals=eval_service,
+        eval_controller=eval_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

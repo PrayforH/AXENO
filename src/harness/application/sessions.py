@@ -29,6 +29,8 @@ class SessionService:
         user_id: str,
         agent_name: str,
         agent_version: str,
+        *,
+        session_id: str | None = None,
     ) -> Session:
         version = await self._registry.get(tenant_id, agent_name, agent_version)
         if version.status is not AgentVersionStatus.PUBLISHED:
@@ -41,14 +43,28 @@ class SessionService:
                 agent_version=agent_version,
             )
         session = Session(
-            session_id=self._id_generator("session"),
+            session_id=session_id or self._id_generator("session"),
             tenant_id=tenant_id,
             user_id=user_id,
             agent_name=agent_name,
             agent_version=agent_version,
             created_at=self._clock(),
         )
-        await self._sessions.add(session)
+        try:
+            await self._sessions.add(session)
+        except ConflictError as error:
+            if session_id is None:
+                raise
+            existing = await self._sessions.get(tenant_id, session_id)
+            if (
+                existing.user_id != user_id
+                or existing.agent_name != agent_name
+                or existing.agent_version != agent_version
+            ):
+                raise ConflictError(
+                    "deterministic Session ID was reused for another Eval Case"
+                ) from error
+            return existing
         return session
 
     async def get(self, tenant_id: str, session_id: str) -> Session:

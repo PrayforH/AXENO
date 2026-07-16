@@ -49,6 +49,15 @@ from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import Run, Session
 from harness.core.ports import EventRepository, TaskQueue
+from harness.evals.controller import EvalController
+from harness.evals.queue import EvalTaskQueue
+from harness.evals.repositories import (
+    EvalDatasetRepository,
+    EvalRunRepository,
+    InMemoryEvalDatasetRepository,
+    InMemoryEvalRunRepository,
+)
+from harness.evals.service import EvalControlPlaneService
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
@@ -114,6 +123,10 @@ class ApiContainer:
     preview_repository: PreviewRepository
     previews: PreviewService
     preview_controller: PreviewController
+    eval_dataset_repository: EvalDatasetRepository
+    eval_run_repository: EvalRunRepository
+    evals: EvalControlPlaneService
+    eval_controller: EvalController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -174,6 +187,9 @@ def build_memory_container(
     agent_drafts = InMemoryAgentDraftRepository()
     preview_repository = InMemoryPreviewRepository()
     preview_queue = PreviewTaskQueue.memory()
+    eval_dataset_repository = InMemoryEvalDatasetRepository()
+    eval_run_repository = InMemoryEvalRunRepository()
+    eval_queue = EvalTaskQueue.memory()
     capability_catalog_repository = InMemoryCapabilityCatalogRepository()
 
     def clock() -> datetime:
@@ -247,6 +263,29 @@ def build_memory_container(
         clock=clock,
         processor=DefaultInputProcessor(),
         file_catalog=file_catalog_service,
+    )
+    eval_service = EvalControlPlaneService(
+        datasets=eval_dataset_repository,
+        runs=eval_run_repository,
+        queue=eval_queue,
+        studio=studio_service,
+        registry=registry,
+        object_store=artifact_store,
+        previews=preview_service,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    eval_controller = EvalController(
+        datasets=eval_dataset_repository,
+        repository=eval_run_repository,
+        queue=eval_queue,
+        sessions=session_service,
+        runs=run_service,
+        events=event_service,
+        inputs=input_artifact_service,
+        object_store=artifact_store,
+        clock=clock,
     )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     workspace_service = WorkspaceService(
@@ -403,6 +442,10 @@ def build_memory_container(
         preview_repository=preview_repository,
         previews=preview_service,
         preview_controller=preview_controller,
+        eval_dataset_repository=eval_dataset_repository,
+        eval_run_repository=eval_run_repository,
+        evals=eval_service,
+        eval_controller=eval_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

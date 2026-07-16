@@ -12,6 +12,7 @@ from harness.adapters.memory import InMemoryAgentRegistry
 from harness.api.app import create_app
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.core.errors import NotFoundError
+from harness.evals.models import EvalRunStatus
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -55,6 +56,19 @@ def draft_request(name: str = "policy-researcher") -> dict[str, str]:
         "description": "整理政策材料并输出有出处的研究结论。",
         "template": "analyst",
     }
+
+
+async def drain_eval(container: ApiContainer, eval_run_id: str) -> None:
+    for _ in range(40):
+        await container.eval_controller.process_once()
+        task = await container.task_queue.dequeue()
+        if task is not None:
+            await container.worker.execute(task.tenant_id, task.run_id)
+            await container.task_queue.acknowledge(task)
+        current = await container.eval_run_repository.get("tenant-a", eval_run_id)
+        if current.status.is_terminal:
+            return
+    raise AssertionError("Eval Run did not converge")
 
 
 @pytest.mark.asyncio
@@ -124,6 +138,137 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert published.json()["name"] == "policy-researcher"
     assert "snapshot" not in published.json()
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_eval_control_plane_runs_cases_persists_reports_and_exposes_gate() -> None:
+    application, container = app_and_container()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "evaluator-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("evaluated-agent"),
+        )
+        draft_id = created.json()["draftId"]
+        dataset = await client.post(
+            "/v1/studio/eval-datasets",
+            headers=headers,
+            json={
+                "draftId": draft_id,
+                "expectedRevision": 1,
+                "name": "发布必测集",
+                "required": True,
+            },
+        )
+        published = await client.post(
+            f"/v1/studio/drafts/{draft_id}/publish",
+            headers=headers,
+            json={"expectedRevision": 1},
+        )
+        started = await client.post(
+            "/v1/studio/eval-runs",
+            headers=headers,
+            json={
+                "datasetId": dataset.json()["datasetId"],
+                "datasetVersion": dataset.json()["version"],
+                "agentName": "evaluated-agent",
+                "agentVersion": published.json()["version"],
+                "idempotencyKey": "evaluated-agent-release-1",
+            },
+        )
+        eval_run_id = started.json()["run"]["evalRunId"]
+        await drain_eval(container, eval_run_id)
+        finished = await client.get(
+            f"/v1/studio/eval-runs/{eval_run_id}", headers=headers
+        )
+        listed = await client.get("/v1/studio/eval-runs", headers=headers)
+        gate = await client.get(
+            "/v1/studio/evaluation-gates/evaluated-agent/versions/0.1.0",
+            headers=headers,
+        )
+        artifacts = finished.json()["run"]["artifacts"]
+        report = await client.get(
+            f"/v1/studio/eval-runs/{eval_run_id}/artifacts/"
+            f"{artifacts[0]['artifactId']}",
+            headers=headers,
+        )
+
+    assert dataset.status_code == 201, dataset.text
+    assert dataset.json()["version"] == 1
+    assert len(dataset.json()["cases"]) == 3
+    assert started.status_code == 202, started.text
+    assert finished.status_code == 200
+    assert finished.json()["run"]["status"] == EvalRunStatus.PASSED
+    assert finished.json()["passedCases"] == 3
+    assert len({item["sessionId"] for item in finished.json()["cases"]}) == 3
+    assert listed.json()[0]["run"]["evalRunId"] == eval_run_id
+    assert gate.json() == {
+        "agentName": "evaluated-agent",
+        "agentVersion": "0.1.0",
+        "passed": True,
+        "requiredDatasets": 1,
+        "passedDatasets": 1,
+        "missingDatasetIds": [],
+    }
+    assert {item["name"] for item in artifacts} == {"report.json", "junit.xml"}
+    assert report.status_code == 200
+    assert report.headers["content-disposition"] == 'attachment; filename="report.json"'
+    assert report.json()["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_memory_auto_execute_drives_eval_and_child_run_queues() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "evaluator-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("auto-eval-agent"),
+        )
+        dataset = await client.post(
+            "/v1/studio/eval-datasets",
+            headers=headers,
+            json={
+                "draftId": created.json()["draftId"],
+                "expectedRevision": 1,
+                "name": "自动评测集",
+            },
+        )
+        await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/publish",
+            headers=headers,
+            json={"expectedRevision": 1},
+        )
+        started = await client.post(
+            "/v1/studio/eval-runs",
+            headers=headers,
+            json={
+                "datasetId": dataset.json()["datasetId"],
+                "datasetVersion": 1,
+                "agentName": "auto-eval-agent",
+                "agentVersion": "0.1.0",
+                "idempotencyKey": "auto-eval-one",
+            },
+        )
+
+    stored = await container.eval_run_repository.get(
+        "tenant-a", started.json()["run"]["evalRunId"]
+    )
+    assert stored.status is EvalRunStatus.PASSED
 
 
 @pytest.mark.asyncio

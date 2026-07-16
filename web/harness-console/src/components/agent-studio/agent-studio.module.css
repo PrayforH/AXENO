@@ -1957,6 +1957,238 @@
   font: 500 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.evalControlPlane {
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 12px;
+  background: #fbfcfb;
+}
+
+.evalControlPlane > header {
+  display: grid;
+  gap: 12px;
+  padding: 15px;
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.evalControlPlane > header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.evalControlPlane > header span {
+  color: var(--studio-green);
+  font: 700 8px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.evalControlPlane > header strong {
+  color: var(--studio-ink);
+  font-size: 11px;
+}
+
+.evalControlPlane > header small {
+  max-width: 560px;
+  color: var(--studio-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.evalControlActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.evalControlActions button,
+.evalRunSummary button,
+.evalArtifacts button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 7px;
+  color: var(--studio-ink);
+  background: #fff;
+  font: 650 9px/1 ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.evalControlActions button:last-child {
+  color: #fff;
+  border-color: var(--studio-green);
+  background: var(--studio-green);
+}
+
+.evalControlActions button:disabled,
+.evalRunSummary button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.evalRunCard {
+  padding: 13px 15px 15px;
+}
+
+.evalRunSummary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.evalRunSignal {
+  width: 9px;
+  height: 9px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  outline: 1px solid var(--studio-green);
+  background: var(--studio-green);
+}
+
+.evalRunCard[data-status="queued"] .evalRunSignal,
+.evalRunCard[data-status="running"] .evalRunSignal,
+.evalRunCard[data-status="cancelling"] .evalRunSignal {
+  box-shadow: 0 0 0 5px var(--studio-green-soft);
+}
+
+.evalRunCard[data-status="failed"] .evalRunSignal,
+.evalRunCard[data-status="cancelled"] .evalRunSignal {
+  outline-color: var(--studio-red);
+  background: var(--studio-red);
+}
+
+.evalRunSummary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.evalRunSummary strong {
+  font-size: 10px;
+}
+
+.evalRunSummary small {
+  color: var(--studio-muted);
+  font: 500 8px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.evalCaseResults {
+  display: grid;
+  gap: 1px;
+  margin: 13px 0 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--studio-line);
+  border-radius: 9px;
+  background: var(--studio-line);
+  list-style: none;
+}
+
+.evalCaseResults li {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 50px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.evalCaseResults li > span {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--studio-green);
+  background: var(--studio-green-soft);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.evalCaseResults li:not([data-status="passed"]) > span {
+  color: var(--studio-red);
+  background: var(--studio-red-soft);
+}
+
+.evalCaseResults li > div {
+  display: grid;
+  gap: 2px;
+}
+
+.evalCaseResults strong {
+  font-size: 9px;
+}
+
+.evalCaseResults small,
+.evalCaseResults p,
+.evalCaseResults code {
+  color: var(--studio-muted);
+  font: 500 8px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.evalCaseResults p {
+  margin: 2px 0 0;
+  color: var(--studio-red);
+}
+
+.evalArtifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.evalArtifacts button {
+  color: var(--studio-green);
+}
+
+.evalRunEmpty {
+  padding: 20px 15px;
+  color: var(--studio-muted);
+  font-size: 9px;
+  text-align: center;
+}
+
+.evalHistory {
+  margin: 0 15px 15px;
+  border-top: 1px solid var(--studio-line);
+}
+
+.evalHistory summary {
+  padding: 11px 0;
+  color: var(--studio-muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.evalHistory > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.evalHistory > div > span {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--studio-line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.evalHistory code,
+.evalHistory small {
+  color: var(--studio-muted);
+  font: 500 8px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.evalHistory strong {
+  font-size: 10px;
+}
+
 .releaseGate {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

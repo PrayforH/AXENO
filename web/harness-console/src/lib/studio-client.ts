@@ -149,6 +149,90 @@ export type StudioPreview = {
   staleReason: string | null;
 };
 
+export type StudioEvalDataset = {
+  tenantId: string;
+  datasetId: string;
+  version: number;
+  name: string;
+  agentName: string;
+  required: boolean;
+  sourceDraftId: string;
+  sourceDraftRevision: number;
+  sourceContentHash: string;
+  sourcePackageHash: string;
+  cases: ApiEvalCase[];
+  fixtures: Array<{
+    path: string;
+    mediaType: string;
+    objectId: string;
+    sha256: string;
+    sizeBytes: number;
+  }>;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type StudioEvalCaseResult = {
+  tenantId: string;
+  evalRunId: string;
+  caseId: string;
+  sessionId: string;
+  runId: string;
+  status: "passed" | "failed" | "error" | "timed_out" | "cancelled";
+  passed: boolean;
+  durationSeconds: number;
+  failures: string[];
+  tools: string[];
+  approvalRequested: boolean;
+  completedAt: string;
+};
+
+export type StudioEvalRun = {
+  run: {
+    tenantId: string;
+    evalRunId: string;
+    datasetId: string;
+    datasetVersion: number;
+    agentName: string;
+    agentVersion: string;
+    previewId: string | null;
+    environment: string | null;
+    requestedBy: string;
+    idempotencyKey: string;
+    status: "queued" | "running" | "cancelling" | "cancelled" | "passed" | "failed";
+    fencingToken: number;
+    nextCaseIndex: number;
+    activeCaseId: string | null;
+    activeSessionId: string | null;
+    activeInputArtifactIds: string[];
+    activeRunId: string | null;
+    activeStartedAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+    completedAt: string | null;
+    errorCode: string | null;
+    artifacts: Array<{
+      artifactId: string;
+      name: string;
+      mediaType: string;
+      sha256: string;
+      sizeBytes: number;
+    }>;
+  };
+  cases: StudioEvalCaseResult[];
+  passedCases: number;
+  totalCases: number;
+};
+
+export type StudioEvalGate = {
+  agentName: string;
+  agentVersion: string;
+  passed: boolean;
+  requiredDatasets: number;
+  passedDatasets: number;
+  missingDatasetIds: string[];
+};
+
 export type StudioCapabilities = {
   modelRoutes: Array<{
     routeId: string;
@@ -350,6 +434,66 @@ export const studioClient = {
     request<StudioPreview>(`previews/${encodeURIComponent(previewId)}/cancel`, {
       method: "POST",
     }),
+  listEvalDatasets: () => request<StudioEvalDataset[]>("eval-datasets"),
+  createEvalDataset: (
+    draftId: string,
+    expectedRevision: number,
+    name: string,
+    datasetId?: string,
+  ) => request<StudioEvalDataset>("eval-datasets", {
+    method: "POST",
+    body: JSON.stringify({
+      draftId,
+      expectedRevision,
+      name,
+      ...(datasetId ? { datasetId } : {}),
+      required: true,
+    }),
+  }),
+  listEvalRuns: () => request<StudioEvalRun[]>("eval-runs"),
+  createEvalRun: (
+    dataset: StudioEvalDataset,
+    agentVersion: string,
+    idempotencyKey: string,
+    previewId?: string,
+  ) => request<StudioEvalRun>("eval-runs", {
+    method: "POST",
+    body: JSON.stringify({
+      datasetId: dataset.datasetId,
+      datasetVersion: dataset.version,
+      agentName: dataset.agentName,
+      agentVersion,
+      idempotencyKey,
+      ...(previewId ? { previewId } : {}),
+    }),
+  }),
+  getEvalRun: (evalRunId: string) =>
+    request<StudioEvalRun>(`eval-runs/${encodeURIComponent(evalRunId)}`),
+  cancelEvalRun: (evalRunId: string) =>
+    request<StudioEvalRun>(`eval-runs/${encodeURIComponent(evalRunId)}/cancel`, {
+      method: "POST",
+    }),
+  getEvalGate: (agentName: string, agentVersion: string) =>
+    request<StudioEvalGate>(
+      `evaluation-gates/${encodeURIComponent(agentName)}/versions/${encodeURIComponent(agentVersion)}`,
+    ),
+  async downloadEvalArtifact(evalRunId: string, artifactId: string): Promise<void> {
+    const response = requireAuthenticatedResponse(
+      await fetch(
+        `/api/studio/eval-runs/${encodeURIComponent(evalRunId)}/artifacts/${encodeURIComponent(artifactId)}`,
+        { cache: "no-store" },
+      ),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "eval-report";
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
   async downloadBundle(draftId: string): Promise<void> {
     const response = requireAuthenticatedResponse(
       await fetch(`/api/studio/drafts/${encodeURIComponent(draftId)}/bundle`, {
