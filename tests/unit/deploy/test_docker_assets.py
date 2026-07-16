@@ -37,7 +37,10 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert "HARNESS_NEW_API_KEY" in services["worker"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" in services["worker"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" in services["worker"]["environment"]
-    assert "HARNESS_NEW_API_KEY" not in services["api"]["environment"]
+    # The control plane uses the compatible model route for semantic task titles.
+    # Sandbox and business MCP credentials remain worker-only.
+    assert "HARNESS_NEW_API_KEY" in services["api"]["environment"]
+    assert "HARNESS_NEW_API_KEY" not in services["web"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" not in services["api"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" not in services["api"]["environment"]
     assert set(services["migrate"]["environment"]) == {"HARNESS_DATABASE_URL"}
