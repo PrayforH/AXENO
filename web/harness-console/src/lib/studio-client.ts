@@ -92,6 +92,41 @@ export type StudioValidation = {
   packageHash: string | null;
 };
 
+export type StudioPreflightCheck = {
+  stage: "bundle" | "sandbox_provision" | "sandbox_prepare" | "model" | "mcp" | "approval" | "workspace_artifact" | "cleanup";
+  status: "passed" | "failed" | "skipped" | "cancelled" | "timed_out";
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  summary: string;
+  errorCode: string | null;
+  details: Record<string, string | number | boolean>;
+};
+
+export type StudioPreflightResult = {
+  schemaVersion: "harness.preflight/v1";
+  previewId: string;
+  status: "passed" | "failed" | "cancelled" | "timed_out";
+  startedAt: string;
+  completedAt: string;
+  checks: StudioPreflightCheck[];
+  events: Array<{
+    sequence: number;
+    eventType: "check.started" | "check.completed";
+    stage: StudioPreflightCheck["stage"];
+    occurredAt: string;
+    status: StudioPreflightCheck["status"] | null;
+    errorCode: string | null;
+  }>;
+  errorCode: string | null;
+  artifact: {
+    name: string;
+    mediaType: string;
+    sha256: string;
+    sizeBytes: number;
+  } | null;
+};
+
 export type StudioPreview = {
   previewId: string;
   tenantId: string;
@@ -109,6 +144,7 @@ export type StudioPreview = {
   updatedAt: string;
   expiresAt: string;
   errorCode: string | null;
+  preflightResult: StudioPreflightResult | null;
   stale: boolean;
   staleReason: string | null;
 };

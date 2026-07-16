@@ -10,7 +10,7 @@ from harness.runtime.mcp_credentials import (
     DynamicMcpCredentialProvider,
     ServerSecretReferenceProvider,
 )
-from harness.runtime.tools import McpServerRegistration, ToolResolver
+from harness.runtime.tools import McpServerRegistration, McpSmokeCheck, ToolResolver
 
 TAVILY_REFERENCE = "tavily-readonly"
 TAVILY_ALLOWED_TOOLS = (
@@ -60,6 +60,14 @@ def default_tool_resolver(
                 ),
                 allowed_tools=TAVILY_ALLOWED_TOOLS,
                 credential_query_parameters=(("tavilyApiKey", "api_key"),),
+                preflight_smoke=McpSmokeCheck(
+                    tool="tavily_search",
+                    arguments={
+                        "query": "Model Context Protocol connectivity check",
+                        "max_results": 1,
+                        "search_depth": "basic",
+                    },
+                ),
             )
         },
         credential_provider=credential_provider,

@@ -149,6 +149,12 @@ Compose 将控制面与执行面凭据分开：只有 worker 接收模型网关�
 
 Worker 队列使用 Redis visibility lease：dequeue 后进入 processing，执行期间每 20 秒续租，成功后 ack，异常按延迟 retry；worker 崩溃后租约到期的任务会重新进入 ready。每次交付都有独立 receipt，旧 worker 的迟到 ack 不能删除新 owner 的 lease；Run Repository 同时用 fencing token 拒绝旧 owner 的迟到写入。`HARNESS_WORKER_TASK_HEARTBEAT_SECONDS` 必须小于 `HARNESS_WORKER_TASK_VISIBILITY_TIMEOUT_SECONDS`。这保证“至少一次交付”，业务写工具仍必须幂等，不能依赖队列做到恰好一次。
 
+Studio Preview 会在目标 Sandbox 内执行版本化 Live Preflight：模型流式与 Tool Use、MCP
+initialize/tools-list/审核过的只读 smoke、Workspace 文件操作、审批策略和 Artifact 回收。整体
+超时由 `HARNESS_PREFLIGHT_TIMEOUT_SECONDS` 控制（默认 180 秒）；执行期间 Preview Worker
+持续续租，取消、超时或任何阶段失败都会进入稳定终态并执行 Sandbox 清理。Daytona 或目标
+网络失败不会回退到 Local Sandbox。
+
 Daytona 配置通过环境变量注入：
 
 ```dotenv

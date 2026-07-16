@@ -118,15 +118,19 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".studioStateShell");
   });
 
-  it("creates a hash-bound short-lived Preview without claiming live preflight", () => {
+  it("creates a hash-bound Preview and renders real Preflight facts", () => {
     expect(workbench).toContain("studioClient.createPreview");
     expect(workbench).toContain("studioClient.cancelPreview");
     expect(workbench).toContain("crypto.randomUUID()");
     expect(workbench).toContain('["cancelled", "failed", "expired"]');
     expect(workbench).toContain("测试身份 · Draft r");
-    expect(workbench).toContain("真实 Preflight 在下一阶段执行");
+    expect(workbench).toContain("真实 Preflight · {activePreview.preflightResult.status}");
+    expect(workbench).toContain("preflightStageLabels[check.stage]");
+    expect(workbench).toContain("preflightProgress(activePreview.preflightResult.checks)");
+    expect(workbench).toContain("workspace_artifact");
     expect(workbench).toContain("Preview · {activePreview.status}");
     expect(styles).toContain(".previewBanner");
+    expect(styles).toContain(".preflightDisclosure");
   });
 
   it("renders only tenant API rows instead of invented live agents", () => {

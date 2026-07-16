@@ -1,6 +1,6 @@
 """Sandbox lifecycle contract."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -28,10 +28,29 @@ class SandboxHandle(BaseModel):
     )
 
 
+class SandboxCommandResult(BaseModel):
+    """Bounded command result without command arguments or environment secrets."""
+
+    model_config = ConfigDict(frozen=True)
+
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+
 class SandboxProvider(Protocol):
     async def provision(self, run: Run) -> SandboxHandle: ...
 
     async def prepare(self, handle: SandboxHandle) -> None: ...
+
+    async def execute(
+        self,
+        handle: SandboxHandle,
+        argv: Sequence[str],
+        *,
+        environment: Mapping[str, str] | None = None,
+        timeout_seconds: float = 30,
+    ) -> SandboxCommandResult: ...
 
     async def collect(self, handle: SandboxHandle) -> None: ...
 

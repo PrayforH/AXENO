@@ -28,6 +28,7 @@ from harness.studio.models import (
     ReplaceCapabilityCatalogRequest,
     UpsertCatalogResourceRequest,
 )
+from harness.studio.preflight_models import PreflightEvent
 from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_models import CreatePreviewRequest, PreviewDeployment
 from harness.studio.preview_service import PreviewService
@@ -299,6 +300,22 @@ async def get_preview(
         return await service.get(actor.tenant_id, preview_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
+
+
+@router.get(
+    "/previews/{preview_id}/events",
+    response_model=list[PreflightEvent],
+)
+async def get_preview_events(
+    preview_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[PreviewService, Depends(get_preview_service)],
+) -> list[PreflightEvent]:
+    try:
+        preview = await service.get(actor.tenant_id, preview_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    return list(preview.preflight_result.events) if preview.preflight_result else []
 
 
 @router.post("/previews/{preview_id}/cancel", response_model=PreviewDeployment)

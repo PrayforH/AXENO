@@ -118,7 +118,10 @@ async def test_production_studio_api_restores_draft_after_container_restart(
     assert restored.json() == created.json()
     assert restored_preview.status_code == 200
     assert restored_preview.json()["status"] == "queued"
-    assert reconciled_preview.status.value == "ready"
+    assert reconciled_preview.status.value == "failed"
+    assert reconciled_preview.error_code == "preflight_draft_not_ready"
+    assert reconciled_preview.preflight_result is not None
+    assert reconciled_preview.preflight_result.status.value == "failed"
     assert restored_catalog.status_code == 200
     assert restored_catalog.json()["revision"] == 2
     route = next(

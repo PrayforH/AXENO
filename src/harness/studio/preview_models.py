@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import Field
 
 from harness.studio.models import StudioModel
+from harness.studio.preflight_models import PreflightResult
 
 
 class PreviewStatus(StrEnum):
@@ -46,6 +47,9 @@ class PreviewDeployment(StudioModel):
     updated_at: datetime = Field(alias="updatedAt")
     expires_at: datetime = Field(alias="expiresAt")
     error_code: str | None = Field(default=None, alias="errorCode")
+    preflight_result: PreflightResult | None = Field(
+        default=None, alias="preflightResult"
+    )
     stale: bool = False
     stale_reason: str | None = Field(default=None, alias="staleReason")
 

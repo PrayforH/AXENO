@@ -65,6 +65,13 @@ from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueu
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
+from harness.studio.preflight_probes import (
+    AnthropicSandboxModelProbe,
+    FakeMcpPreflightProbe,
+    FakeModelPreflightProbe,
+    StreamableHttpMcpProbe,
+)
 from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_service import PreviewService
@@ -272,12 +279,6 @@ def build_production_container(
         clock=clock,
         id_generator=lambda: ids("preview"),
     )
-    preview_controller = PreviewController(
-        repository=preview_repository,
-        queue=preview_queue,
-        clock=clock,
-    )
-
     events = EventService(event_repository, bus, clock=clock, id_generator=ids)
     session_service = SessionService(
         registry,
@@ -366,11 +367,12 @@ def build_production_container(
         primary_gateway, fallback_gateway, runtime_sandbox, credential_provider = (
             execution_config
         )
+        tool_resolver = default_tool_resolver(credential_provider)
         runtime = RegistryClaudeRuntime(
             registry=registry,
             config=primary_gateway,
             fallback_config=fallback_gateway,
-            tool_resolver=default_tool_resolver(credential_provider),
+            tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
                 profiles=policy_profiles,
                 approvals=approval_service,
@@ -384,9 +386,34 @@ def build_production_container(
             ),
             observability=observability,
         )
+        model_probe = AnthropicSandboxModelProbe(primary_gateway)
+        mcp_probe = StreamableHttpMcpProbe(tool_resolver)
     else:
         runtime = FakeRuntime()
         runtime_sandbox = LocalSandboxProvider()
+        model_probe = FakeModelPreflightProbe()
+        mcp_probe = FakeMcpPreflightProbe()
+    preflight_runner = LivePreflightRunner(
+        studio=studio_service,
+        sandbox=runtime_sandbox,
+        model_probe=model_probe,
+        mcp_probe=mcp_probe,
+        policies=policy_profiles,
+        observability=observability,
+        timeout_seconds=settings.preflight_timeout_seconds,
+        clock=clock,
+    )
+    preview_controller = PreviewController(
+        repository=preview_repository,
+        queue=preview_queue,
+        provisioner=LivePreflightProvisioner(
+            runner=preflight_runner,
+            repository=preview_repository,
+            clock=clock,
+        ),
+        heartbeat_seconds=settings.worker_task_heartbeat_seconds,
+        clock=clock,
+    )
     worker = RunOrchestrator(
         sessions=session_repository,
         runs=runs,

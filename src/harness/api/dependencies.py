@@ -70,6 +70,13 @@ from harness.sandbox.daytona import (
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
+from harness.studio.preflight_probes import (
+    AnthropicSandboxModelProbe,
+    FakeMcpPreflightProbe,
+    FakeModelPreflightProbe,
+    StreamableHttpMcpProbe,
+)
 from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_repositories import (
@@ -200,12 +207,6 @@ def build_memory_container(
         clock=clock,
         id_generator=lambda: id_generator("preview"),
     )
-    preview_controller = PreviewController(
-        repository=preview_repository,
-        queue=preview_queue,
-        clock=clock,
-    )
-
     event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
     run_service = RunService(
         sessions,
@@ -317,17 +318,21 @@ def build_memory_container(
         sandbox = LocalSandboxProvider()
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
+        model_probe = FakeModelPreflightProbe()
+        mcp_probe = FakeMcpPreflightProbe()
     else:
         credential_provider = server_secret_credential_provider(
             references_json=resolved_settings.mcp_secret_references_json,
             secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
         )
+        gateway = load_cc_switch_claude_config(
+            resolved_settings.cc_switch_settings_path
+        )
+        tool_resolver = default_tool_resolver(credential_provider)
         runtime = RegistryClaudeRuntime(
             registry=registry,
-            config=load_cc_switch_claude_config(
-                resolved_settings.cc_switch_settings_path
-            ),
-            tool_resolver=default_tool_resolver(credential_provider),
+            config=gateway,
+            tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
                 profiles=policy_profiles,
                 approvals=approval_service,
@@ -336,6 +341,29 @@ def build_memory_container(
             memory_service=memory_service,
             observability=observability,
         )
+        model_probe = AnthropicSandboxModelProbe(gateway)
+        mcp_probe = StreamableHttpMcpProbe(tool_resolver)
+    preflight_runner = LivePreflightRunner(
+        studio=studio_service,
+        sandbox=sandbox,
+        model_probe=model_probe,
+        mcp_probe=mcp_probe,
+        policies=policy_profiles,
+        observability=observability,
+        timeout_seconds=resolved_settings.preflight_timeout_seconds,
+        clock=clock,
+    )
+    preview_controller = PreviewController(
+        repository=preview_repository,
+        queue=preview_queue,
+        provisioner=LivePreflightProvisioner(
+            runner=preflight_runner,
+            repository=preview_repository,
+            clock=clock,
+        ),
+        heartbeat_seconds=resolved_settings.worker_task_heartbeat_seconds,
+        clock=clock,
+    )
     worker = RunOrchestrator(
         sessions=sessions,
         runs=runs,

@@ -313,6 +313,10 @@ async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes()
         current = await client.get(
             f"/v1/studio/previews/{first.json()['previewId']}", headers=headers
         )
+        preflight_events = await client.get(
+            f"/v1/studio/previews/{first.json()['previewId']}/events",
+            headers=headers,
+        )
 
         changed_spec = created.json()["spec"]
         changed_spec["description"] = "Draft changed after Preview creation."
@@ -339,6 +343,20 @@ async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes()
     assert repeated.json()["previewId"] == first.json()["previewId"]
     assert len(listed.json()) == 1
     assert current.json()["status"] == "ready"
+    assert current.json()["preflightResult"]["schemaVersion"] == "harness.preflight/v1"
+    assert current.json()["preflightResult"]["status"] == "passed"
+    assert {check["stage"] for check in current.json()["preflightResult"]["checks"]} == {
+        "bundle",
+        "sandbox_provision",
+        "sandbox_prepare",
+        "model",
+        "mcp",
+        "approval",
+        "workspace_artifact",
+        "cleanup",
+    }
+    assert preflight_events.status_code == 200
+    assert len(preflight_events.json()) == 16
     assert changed.status_code == 200
     assert stale.json()["stale"] is True
     assert stale.json()["staleReason"] == "draft_revision_changed"
@@ -657,6 +675,7 @@ def test_studio_routes_are_exposed_once_in_openapi() -> None:
         "/v1/studio/drafts/{draft_id}/publish",
         "/v1/studio/previews",
         "/v1/studio/previews/{preview_id}",
+        "/v1/studio/previews/{preview_id}/events",
         "/v1/studio/previews/{preview_id}/cancel",
     }
 

@@ -18,6 +18,7 @@ import {
   studioClient,
   type StudioCapabilities,
   type StudioDraftSummary,
+  type StudioPreflightCheck,
   type StudioPreview,
   type StudioValidation,
 } from "../../lib/studio-client";
@@ -45,6 +46,25 @@ const lifecycleStages = [
 
 function riskLabel(risk: "low" | "medium" | "high") {
   return risk === "high" ? "高" : risk === "medium" ? "中" : "低";
+}
+
+const preflightStageLabels = {
+  bundle: "不可变 Bundle",
+  sandbox_provision: "Sandbox 创建",
+  sandbox_prepare: "Workspace 准备",
+  model: "模型流式与 Tool Use",
+  mcp: "MCP 与只读 Smoke",
+  approval: "Write / Edit / Bash 审批",
+  workspace_artifact: "文件与 Artifact",
+  cleanup: "Sandbox 清理",
+} as const;
+
+function preflightProgress(checks: StudioPreflightCheck[]) {
+  const passed = checks.filter((check) => check.status === "passed").length;
+  const skipped = checks.filter((check) => check.status === "skipped").length;
+  return skipped > 0
+    ? `${passed} 通过 · ${skipped} 跳过`
+    : `${passed}/${checks.length} 通过`;
 }
 
 export function AgentStudioWorkbench() {
@@ -453,6 +473,27 @@ export function AgentStudioWorkbench() {
     (stage) => stage.id === activeLifecycleStage,
   );
 
+  useEffect(() => {
+    if (!activePreview || !["queued", "provisioning", "cancelling"].includes(activePreview.status)) return;
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const refreshed = await studioClient.getPreview(activePreview.previewId);
+        if (!active) return;
+        setPreviews((current) => [
+          refreshed,
+          ...current.filter((item) => item.previewId !== refreshed.previewId),
+        ]);
+      } catch (error) {
+        if (active) setNotice(error instanceof Error ? error.message : "Preview 状态读取失败");
+      }
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [activePreview?.previewId, activePreview?.status]);
+
   if (loading) {
     return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
   }
@@ -583,7 +624,7 @@ export function AgentStudioWorkbench() {
               type="button"
               className={styles.previewButton}
               disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
-              title="创建绑定当前 Draft 双 Hash 的短时测试环境；真实 Preflight 在下一阶段执行"
+              title="创建绑定当前 Draft 双 Hash 的短时测试环境，并执行真实 Model、Sandbox 与 MCP Preflight"
               onClick={() => void createPreview()}
             >
               {creatingPreview ? "创建中…" : "创建 Preview"}
@@ -628,18 +669,48 @@ export function AgentStudioWorkbench() {
         )}
         {activePreview && (
           <div className={styles.previewBanner} data-status={activePreview.status} data-stale={activePreview.stale}>
-            <div>
+            <div className={styles.previewIdentity}>
               <strong>Preview · {activePreview.status}{activePreview.stale ? " · stale" : ""}</strong>
               <span>
                 测试身份 · Draft r{activePreview.draftRevision} · 到期 {new Date(activePreview.expiresAt).toLocaleString("zh-CN")}
               </span>
             </div>
-            <div>
+            <div className={styles.previewActions}>
               <button type="button" onClick={() => void refreshPreview(activePreview.previewId)}>刷新</button>
               {!(["cancelled", "failed", "expired"] as string[]).includes(activePreview.status) && (
                 <button type="button" onClick={() => void cancelPreview(activePreview.previewId)}>取消</button>
               )}
             </div>
+            {activePreview.preflightResult && (
+              <details className={styles.preflightDisclosure}>
+                <summary>
+                  <span>
+                    真实 Preflight · {activePreview.preflightResult.status}
+                    {activePreview.preflightResult.errorCode ? ` · ${activePreview.preflightResult.errorCode}` : ""}
+                  </span>
+                  <small>
+                    {preflightProgress(activePreview.preflightResult.checks)}
+                  </small>
+                </summary>
+                <ol>
+                  {activePreview.preflightResult.checks.map((check) => (
+                    <li key={check.stage} data-status={check.status}>
+                      <span aria-hidden="true">{check.status === "passed" ? "✓" : check.status === "skipped" ? "–" : "!"}</span>
+                      <div>
+                        <strong>{preflightStageLabels[check.stage]}</strong>
+                        <small>{check.summary}{check.errorCode ? ` · ${check.errorCode}` : ""}</small>
+                      </div>
+                      <code>{check.durationMs}ms</code>
+                    </li>
+                  ))}
+                </ol>
+                {activePreview.preflightResult.artifact && (
+                  <p>
+                    Artifact · {activePreview.preflightResult.artifact.name} · {activePreview.preflightResult.artifact.sizeBytes} B · {activePreview.preflightResult.artifact.sha256.slice(0, 12)}
+                  </p>
+                )}
+              </details>
+            )}
           </div>
         )}
         {!canEdit && (

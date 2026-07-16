@@ -73,7 +73,13 @@ async def test_preview_queue_recovers_a_crashed_worker_lease() -> None:
             visibility_timeout_seconds=0.05,
             retry_delay_seconds=0,
         )
-        assert await recovered_queue.dequeue() == task
+        recovered = None
+        for _attempt in range(20):
+            recovered = await recovered_queue.dequeue()
+            if recovered is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert recovered == task
         await recovered_queue.acknowledge(task)
         assert await recovered_queue.dequeue() is None
     finally:

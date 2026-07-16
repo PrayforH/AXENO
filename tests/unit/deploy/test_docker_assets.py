@@ -37,6 +37,9 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert "HARNESS_NEW_API_KEY" in services["worker"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" in services["worker"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" in services["worker"]["environment"]
+    assert services["worker"]["environment"]["HARNESS_PREFLIGHT_TIMEOUT_SECONDS"] == (
+        "${HARNESS_PREFLIGHT_TIMEOUT_SECONDS:-180}"
+    )
     # The control plane uses the compatible model route for semantic task titles.
     # Sandbox and business MCP credentials remain worker-only.
     assert "HARNESS_NEW_API_KEY" in services["api"]["environment"]
@@ -84,6 +87,7 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "HARNESS_API_BEARER_TOKEN=" in values
     assert "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=false" in values
     assert "HARNESS_SANDBOX_PROVIDER=daytona" in values
+    assert "HARNESS_PREFLIGHT_TIMEOUT_SECONDS=180" in values
     assert "MINIO_ROOT_PASSWORD=" in values
     assert "LANGFUSE_OTLP_ENDPOINT=" in values
     assert "LANGFUSE_PUBLIC_KEY=" in values

@@ -29,6 +29,14 @@ class ToolResolutionError(ValueError):
 
 
 @dataclass(frozen=True)
+class McpSmokeCheck:
+    """Server-reviewed read-only call used only by live Preflight."""
+
+    tool: str
+    arguments: Mapping[str, object]
+
+
+@dataclass(frozen=True)
 class McpServerRegistration:
     """Server-owned MCP configuration referenced by a logical Manifest ID."""
 
@@ -38,6 +46,7 @@ class McpServerRegistration:
     credential_headers: tuple[tuple[str, str], ...] = ()
     credential_environment: tuple[tuple[str, str], ...] = ()
     credential_query_parameters: tuple[tuple[str, str], ...] = ()
+    preflight_smoke: McpSmokeCheck | None = None
 
     def __post_init__(self) -> None:
         public_config = cast(dict[str, object], self.config)
@@ -59,6 +68,7 @@ class ResolvedTools:
     builtin_tools: tuple[str, ...]
     mcp_servers: Mapping[str, McpServerConfig]
     allowed_tools: tuple[str, ...]
+    mcp_smokes: Mapping[str, McpSmokeCheck]
     sensitive_names: frozenset[str] = frozenset()
     sensitive_values: frozenset[str] = frozenset()
 
@@ -84,6 +94,7 @@ class ToolResolver:
         python_tools: list[SdkMcpTool[Any]] = []
         mcp_servers: dict[str, McpServerConfig] = {}
         allowed_tools: list[str] = []
+        mcp_smokes: dict[str, McpSmokeCheck] = {}
         sensitive_names: set[str] = set()
         sensitive_values: set[str] = set()
 
@@ -176,6 +187,8 @@ class ToolResolver:
                 sensitive_names.update(injected)
                 sensitive_values.update(injected.values())
             mcp_servers[registration.server_name] = cast(McpServerConfig, config)
+            if registration.preflight_smoke is not None:
+                mcp_smokes[registration.server_name] = registration.preflight_smoke
             for allowed_tool in registration.allowed_tools:
                 if allowed_tool not in allowed_tools:
                     allowed_tools.append(allowed_tool)
@@ -194,6 +207,7 @@ class ToolResolver:
             builtin_tools=tuple(builtins),
             mcp_servers=MappingProxyType(mcp_servers),
             allowed_tools=tuple(allowed_tools),
+            mcp_smokes=MappingProxyType(mcp_smokes),
             sensitive_names=frozenset(sensitive_names),
             sensitive_values=frozenset(sensitive_values),
         )

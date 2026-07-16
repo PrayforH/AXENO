@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
@@ -17,6 +18,12 @@ from harness.studio.preview_repositories import PreviewRepository
 PreviewProvisioner = Callable[[PreviewDeployment], Awaitable[None]]
 
 
+class PreviewProvisioningError(RuntimeError):
+    def __init__(self, error_code: str) -> None:
+        self.error_code = error_code
+        super().__init__(error_code)
+
+
 async def _no_op_provisioner(_preview: PreviewDeployment) -> None:
     """G07 lifecycle hook; G08 replaces this with real isolated Preflight."""
 
@@ -28,11 +35,15 @@ class PreviewController:
         repository: PreviewRepository,
         queue: PreviewTaskQueue,
         provisioner: PreviewProvisioner | None = None,
+        heartbeat_seconds: float = 20,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        if heartbeat_seconds <= 0:
+            raise ValueError("Preview heartbeat interval must be positive")
         self._repository = repository
         self._queue = queue
         self._provisioner = provisioner or _no_op_provisioner
+        self._heartbeat_seconds = heartbeat_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def process_once(self) -> PreviewDeployment | None:
@@ -41,6 +52,12 @@ class PreviewController:
             return None
         try:
             result = await self.reconcile(task.tenant_id, task.preview_id)
+        except PreviewProvisioningError as error:
+            try:
+                result = await self._fail(task, error.error_code)
+            except Exception:
+                await self._queue.retry(task)
+                raise
         except Exception:
             try:
                 result = await self._fail(task, "preview_controller_failed")
@@ -63,7 +80,15 @@ class PreviewController:
         if current.status is PreviewStatus.QUEUED:
             current = await self._move(current, PreviewStatus.PROVISIONING)
         if current.status is PreviewStatus.PROVISIONING:
-            await self._provisioner(current)
+            try:
+                await self._provision_with_heartbeat(current)
+            except PreviewProvisioningError as error:
+                latest = await self._repository.get(tenant_id, preview_id)
+                if latest.status.is_terminal:
+                    return latest
+                return await self._move(
+                    latest, PreviewStatus.FAILED, error_code=error.error_code
+                )
             latest = await self._repository.get(tenant_id, preview_id)
             if latest.expires_at <= self._clock():
                 return await self._move(latest, PreviewStatus.EXPIRED)
@@ -73,6 +98,29 @@ class PreviewController:
                 return await self._move(latest, PreviewStatus.READY)
             return latest
         return current
+
+    async def _provision_with_heartbeat(self, current: PreviewDeployment) -> None:
+        task = PreviewTask(
+            tenant_id=current.tenant_id, preview_id=current.preview_id
+        )
+        stopped = asyncio.Event()
+
+        async def heartbeat() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(
+                        stopped.wait(), timeout=self._heartbeat_seconds
+                    )
+                    return
+                except TimeoutError:
+                    await self._queue.extend_lease(task)
+
+        heartbeat_task = asyncio.create_task(heartbeat())
+        try:
+            await self._provisioner(current)
+        finally:
+            stopped.set()
+            await heartbeat_task
 
     async def reap_expired(self, *, limit: int = 100) -> int:
         due = await self._repository.list_expired_active(self._clock(), limit=limit)

@@ -10,6 +10,7 @@ import shlex
 import shutil
 import ssl
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -29,7 +30,11 @@ from harness.runtime.daytona_transport import (
     DaytonaClaudeTransport,
     RemoteClaudeSession,
 )
-from harness.sandbox.base import SandboxHandle, SandboxIsolation
+from harness.sandbox.base import (
+    SandboxCommandResult,
+    SandboxHandle,
+    SandboxIsolation,
+)
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -427,6 +432,47 @@ class DaytonaSandboxProvider:
                     raise ValueError("Daytona workspace exceeds collection size limit")
                 local.parent.mkdir(parents=True, exist_ok=True)
                 local.write_bytes(content)
+
+    async def execute(
+        self,
+        handle: SandboxHandle,
+        argv: Sequence[str],
+        *,
+        environment: Mapping[str, str] | None = None,
+        timeout_seconds: float = 30,
+    ) -> SandboxCommandResult:
+        if not argv:
+            raise ValueError("sandbox command argv must not be empty")
+        if timeout_seconds <= 0:
+            raise ValueError("sandbox command timeout must be positive")
+        sandbox, _ = self._sandboxes[handle.sandbox_id]
+        if handle.remote_workspace is None:
+            raise ValueError("Daytona command requires a remote workspace")
+        session = sandbox.remote_session()
+        await session.start(list(argv), handle.remote_workspace, dict(environment or {}))
+        try:
+            await session.end_input()
+
+            async def read(stream: str) -> bytes:
+                chunks: list[bytes] = []
+                reader = session.read_stdout if stream == "stdout" else session.read_stderr
+                while (chunk := await reader()) is not None:
+                    chunks.append(chunk)
+                return b"".join(chunks)
+
+            stdout, stderr, exit_code = await asyncio.wait_for(
+                asyncio.gather(read("stdout"), read("stderr"), session.wait()),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError:
+            raise
+        finally:
+            await session.terminate()
+        return SandboxCommandResult(
+            exit_code=exit_code,
+            stdout=stdout.decode("utf-8", errors="replace"),
+            stderr=stderr.decode("utf-8", errors="replace"),
+        )
 
     async def destroy(self, handle: SandboxHandle) -> None:
         entry = self._sandboxes.pop(handle.sandbox_id, None)

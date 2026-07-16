@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     worker_task_visibility_timeout_seconds: float = Field(default=60, gt=0)
     worker_task_retry_delay_seconds: float = Field(default=1, ge=0)
     worker_task_heartbeat_seconds: float = Field(default=20, gt=0)
+    preflight_timeout_seconds: float = Field(default=180, ge=30, le=900)
 
     daytona_api_key: SecretStr = SecretStr("")
     daytona_api_url: str = "https://app.daytona.io/api"

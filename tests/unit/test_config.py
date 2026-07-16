@@ -15,6 +15,7 @@ def test_local_defaults_disable_external_model_and_otel() -> None:
     assert settings.daytona_delete_on_destroy is True
     assert settings.daytona_auto_stop_interval_minutes == 15
     assert settings.daytona_auto_delete_interval_minutes == 60
+    assert settings.preflight_timeout_seconds == 180
 
 
 def test_daytona_cleanup_intervals_must_be_positive() -> None:

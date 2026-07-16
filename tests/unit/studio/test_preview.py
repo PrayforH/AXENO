@@ -10,7 +10,7 @@ from harness.studio.models import (
     CreateAgentDraftRequest,
     ReplaceAgentDraftRequest,
 )
-from harness.studio.preview_controller import PreviewController
+from harness.studio.preview_controller import PreviewController, PreviewProvisioningError
 from harness.studio.preview_models import (
     CreatePreviewRequest,
     PreviewDeployment,
@@ -210,3 +210,26 @@ async def test_controller_failure_is_terminal_and_never_publishes_a_version() ->
     assert failed.preview_id == preview.preview_id
     assert failed.status is PreviewStatus.FAILED
     assert failed.error_code == "preview_controller_failed"
+
+
+@pytest.mark.asyncio
+async def test_controller_preserves_stable_preflight_error_code() -> None:
+    studio, service, _controller, repository, queue, times = services()
+    await create_draft(studio)
+    await service.create(
+        tenant_id="tenant-a", user_id="builder", request=request()
+    )
+
+    async def fail(_preview: PreviewDeployment) -> None:
+        raise PreviewProvisioningError("mcp_tool_mismatch")
+
+    failed = await PreviewController(
+        repository=repository,
+        queue=queue,
+        provisioner=fail,
+        clock=lambda: times[0],
+    ).process_once()
+
+    assert failed is not None
+    assert failed.status is PreviewStatus.FAILED
+    assert failed.error_code == "mcp_tool_mismatch"

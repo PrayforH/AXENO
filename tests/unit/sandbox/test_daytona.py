@@ -189,12 +189,43 @@ async def test_remote_session_stdin_frames_reconstruct_environment_and_argv(
     assert "argument with spaces" not in process.command
 
 
+class FakeRemoteCommandSession:
+    def __init__(self) -> None:
+        self.started: tuple[list[str], str, dict[str, str]] | None = None
+        self.stdout = [b"remote-ready", None]
+        self.stderr = [None]
+        self.ended = False
+        self.terminated = False
+
+    async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
+        self.started = (argv, cwd, env)
+
+    async def write(self, data: str) -> None:
+        del data
+
+    async def end_input(self) -> None:
+        self.ended = True
+
+    async def read_stdout(self) -> bytes | None:
+        return self.stdout.pop(0)
+
+    async def read_stderr(self) -> bytes | None:
+        return self.stderr.pop(0)
+
+    async def wait(self) -> int:
+        return 0
+
+    async def terminate(self) -> None:
+        self.terminated = True
+
+
 class FakeSandbox:
     def __init__(self, sandbox_id: str) -> None:
         self.id = sandbox_id
         self.uploads: dict[str, bytes] = {}
         self.remote_files: dict[str, bytes] = {}
         self.ensured_cli: tuple[str, str] | None = None
+        self.command_session = FakeRemoteCommandSession()
 
     async def ensure_claude_cli(self, *, version: str, path: str) -> None:
         self.ensured_cli = (version, path)
@@ -219,7 +250,7 @@ class FakeSandbox:
         return self.remote_files[remote_path]
 
     def remote_session(self) -> Any:
-        return object()
+        return self.command_session
 
 
 class FakeClient:
@@ -328,6 +359,33 @@ async def test_provider_reuses_and_starts_named_sandbox(tmp_path: Path) -> None:
     assert client.started == ["daytona-existing"]
     assert client.stopped == ["daytona-existing"]
     assert client.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_provider_executes_remote_argv_without_returning_environment(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    provider = DaytonaSandboxProvider(client=client, local_root=tmp_path)
+    handle = await provider.provision(run())
+
+    result = await provider.execute(
+        handle,
+        ("bash", "-lc", "printf ready"),
+        environment={"PRIVATE_VALUE": "secret"},
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == "remote-ready"
+    assert client.sandbox.command_session.started == (
+        ["bash", "-lc", "printf ready"],
+        "/home/daytona/harness/run-a",
+        {"PRIVATE_VALUE": "secret"},
+    )
+    assert client.sandbox.command_session.ended
+    assert client.sandbox.command_session.terminated
+    assert "secret" not in result.model_dump_json()
+    await provider.destroy(handle)
 
 
 @pytest.mark.asyncio
