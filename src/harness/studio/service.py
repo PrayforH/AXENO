@@ -8,6 +8,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from harness.core.models import AgentVersion
+from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import AgentDraftCompiler, CompiledAgentDraft
 from harness.studio.factory import create_draft_spec
 from harness.studio.models import (
@@ -33,9 +34,10 @@ class AgentStudioService:
     def __init__(
         self,
         repository: AgentDraftRepository,
-        compiler: AgentDraftCompiler,
-        catalog: CapabilityCatalog,
+        compiler: AgentDraftCompiler | None = None,
+        catalog: CapabilityCatalog | None = None,
         *,
+        catalogs: CapabilityCatalogService | None = None,
         publisher: AgentBundlePublisher | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
@@ -43,13 +45,24 @@ class AgentStudioService:
         self._repository = repository
         self._compiler = compiler
         self._catalog = catalog
+        self._catalogs = catalogs
         self._publisher = publisher
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"draft_{uuid4().hex}")
 
-    @property
-    def catalog(self) -> CapabilityCatalog:
+    async def capabilities(self, tenant_id: str) -> CapabilityCatalog:
+        if self._catalogs is not None:
+            return (await self._catalogs.get(tenant_id)).catalog
+        if self._catalog is None:
+            raise RuntimeError("Agent Studio capability catalog is not configured")
         return self._catalog
+
+    async def _compiler_for(self, tenant_id: str) -> AgentDraftCompiler:
+        if self._catalogs is not None:
+            return AgentDraftCompiler((await self._catalogs.get(tenant_id)).catalog)
+        if self._compiler is None:
+            raise RuntimeError("Agent Studio compiler is not configured")
+        return self._compiler
 
     async def create(
         self,
@@ -110,10 +123,12 @@ class AgentStudioService:
     async def validate(
         self, tenant_id: str, draft_id: str
     ) -> DraftValidationResult:
-        return self._compiler.validate(await self.get(tenant_id, draft_id))
+        compiler = await self._compiler_for(tenant_id)
+        return compiler.validate(await self.get(tenant_id, draft_id))
 
     async def bundle(self, tenant_id: str, draft_id: str) -> CompiledAgentDraft:
-        return self._compiler.compile(await self.get(tenant_id, draft_id))
+        compiler = await self._compiler_for(tenant_id)
+        return compiler.compile(await self.get(tenant_id, draft_id))
 
     async def publish(
         self, *, tenant_id: str, user_id: str, draft_id: str
@@ -123,7 +138,8 @@ class AgentStudioService:
                 "Agent Studio publisher is not configured"
             )
         draft = await self.get(tenant_id, draft_id)
-        compiled = self._compiler.compile(draft)
+        compiler = await self._compiler_for(tenant_id)
+        compiled = compiler.compile(draft)
         version = await self._publisher.publish_bundle(tenant_id, compiled.bundle)
         published = draft.model_copy(
             update={

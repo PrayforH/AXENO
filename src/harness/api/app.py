@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from hmac import compare_digest
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -28,6 +29,30 @@ async def _http_error(_request: Request, error: Exception) -> JSONResponse:
     else:
         payload = {"code": "http_error", "message": str(detail)}
     return JSONResponse(status_code=error.status_code, content={"error": payload})
+
+
+async def _request_validation_error(
+    _request: Request, error: Exception
+) -> JSONResponse:
+    assert isinstance(error, RequestValidationError)
+    details = [
+        {
+            "type": item.get("type", "validation_error"),
+            "location": list(item.get("loc", ())),
+            "message": item.get("msg", "Request validation failed"),
+        }
+        for item in error.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "request_invalid",
+                "message": "Request validation failed",
+                "details": details,
+            }
+        },
+    )
 
 
 async def _domain_error(_request: Request, error: Exception) -> JSONResponse:
@@ -164,6 +189,7 @@ def create_app(container: ApiContainer) -> FastAPI:
     app.add_middleware(BaseHTTPMiddleware, dispatch=_authenticate_request)
 
     app.add_exception_handler(HTTPException, _http_error)
+    app.add_exception_handler(RequestValidationError, _request_validation_error)
     app.add_exception_handler(HarnessDomainError, _domain_error)
     app.add_exception_handler(ManifestValidationError, _manifest_error)
     app.add_exception_handler(AgentPackageCheckError, _agent_package_error)

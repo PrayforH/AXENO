@@ -116,6 +116,21 @@ class AgentDraftRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class CapabilityCatalogRow(Base):
+    __tablename__ = "capability_catalogs"
+    __table_args__ = (
+        CheckConstraint(
+            "revision >= 1", name="ck_capability_catalogs_revision_positive"
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    updated_by: Mapped[str] = mapped_column(String(128))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

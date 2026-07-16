@@ -12,14 +12,20 @@ from fastapi.responses import Response
 from harness.api.dependencies import Identity, ensure_permission, require_identity
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import AgentVersion
+from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.models import (
     AgentDraft,
     AgentDraftSummary,
     CapabilityCatalog,
+    CapabilityCatalogRecord,
+    CatalogImpact,
+    CatalogMutationResult,
     CreateAgentDraftRequest,
     DraftValidationResult,
     ReplaceAgentDraftRequest,
+    ReplaceCapabilityCatalogRequest,
+    UpsertCatalogResourceRequest,
 )
 from harness.studio.service import AgentStudioService, StudioPublisherNotConfiguredError
 
@@ -53,6 +59,12 @@ def require_studio_publisher(
     return _authorize_studio_actor(identity, "studio:publish")
 
 
+def require_studio_catalog_admin(
+    identity: Annotated[Identity, Depends(require_identity)],
+) -> StudioActor:
+    return _authorize_studio_actor(identity, "studio:catalog:write")
+
+
 def get_studio_service(request: Request) -> AgentStudioService:
     container = getattr(request.app.state, "container", None)
     service = getattr(container, "studio", None)
@@ -67,7 +79,95 @@ def get_studio_service(request: Request) -> AgentStudioService:
     return service
 
 
+def get_catalog_service(request: Request) -> CapabilityCatalogService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "capability_catalogs", None)
+    if not isinstance(service, CapabilityCatalogService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "catalog_not_configured",
+                "message": "Capability Catalog is not configured",
+            },
+        )
+    return service
+
+
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
+
+
+@router.get("/catalog", response_model=CapabilityCatalogRecord)
+async def get_catalog(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+) -> CapabilityCatalogRecord:
+    return await service.get(actor.tenant_id)
+
+
+@router.put("/catalog", response_model=CapabilityCatalogRecord)
+async def replace_catalog(
+    body: ReplaceCapabilityCatalogRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+) -> CapabilityCatalogRecord:
+    return await service.replace(
+        tenant_id=actor.tenant_id,
+        user_id=actor.user_id,
+        request=body,
+    )
+
+
+@router.get(
+    "/catalog/{resource_type}/{resource_id}/impact",
+    response_model=CatalogImpact,
+)
+async def catalog_impact(
+    resource_type: CatalogResourceType,
+    resource_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+) -> CatalogImpact:
+    return await service.impact(actor.tenant_id, resource_type, resource_id)
+
+
+@router.delete(
+    "/catalog/{resource_type}/{resource_id}",
+    response_model=CatalogMutationResult,
+)
+async def disable_catalog_resource(
+    resource_type: CatalogResourceType,
+    resource_id: str,
+    expected_revision: int,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+) -> CatalogMutationResult:
+    return await service.disable(
+        tenant_id=actor.tenant_id,
+        user_id=actor.user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        expected_revision=expected_revision,
+    )
+
+
+@router.put(
+    "/catalog/{resource_type}/{resource_id}",
+    response_model=CatalogMutationResult,
+)
+async def upsert_catalog_resource(
+    resource_type: CatalogResourceType,
+    resource_id: str,
+    body: UpsertCatalogResourceRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+) -> CatalogMutationResult:
+    return await service.upsert(
+        tenant_id=actor.tenant_id,
+        user_id=actor.user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        request=body,
+    )
 
 
 def _translate_domain_error(error: Exception) -> HTTPException:
@@ -86,10 +186,10 @@ def _translate_domain_error(error: Exception) -> HTTPException:
 
 @router.get("/capabilities", response_model=CapabilityCatalog)
 async def capabilities(
-    _actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> CapabilityCatalog:
-    return service.catalog
+    return await service.capabilities(actor.tenant_id)
 
 
 @router.get("/drafts", response_model=list[AgentDraftSummary])

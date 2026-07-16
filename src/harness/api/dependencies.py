@@ -68,8 +68,8 @@ from harness.sandbox.daytona import (
     SdkDaytonaClient,
 )
 from harness.sandbox.local import LocalSandboxProvider
-from harness.studio.catalog import default_capability_catalog
-from harness.studio.compiler import AgentDraftCompiler
+from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
+from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.repositories import (
     AgentDraftRepository,
     InMemoryAgentDraftRepository,
@@ -95,6 +95,7 @@ class ApiContainer:
     auth: AuthService
     audit: AuditService
     agent_drafts: AgentDraftRepository
+    capability_catalogs: CapabilityCatalogService
     studio: AgentStudioService
     agents: AgentService
     sessions: SessionService
@@ -154,6 +155,7 @@ def build_memory_container(
     )
     audit = AuditService(InMemoryAuditRepository())
     agent_drafts = InMemoryAgentDraftRepository()
+    capability_catalog_repository = InMemoryCapabilityCatalogRepository()
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -164,11 +166,14 @@ def build_memory_container(
     agent_service = AgentService(
         registry, clock=clock, environment=resolved_settings.environment
     )
-    studio_catalog = default_capability_catalog()
+    capability_catalogs = CapabilityCatalogService(
+        capability_catalog_repository,
+        agent_drafts,
+        clock=clock,
+    )
     studio_service = AgentStudioService(
         agent_drafts,
-        AgentDraftCompiler(studio_catalog),
-        studio_catalog,
+        catalogs=capability_catalogs,
         publisher=agent_service,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
@@ -338,6 +343,7 @@ def build_memory_container(
         auth=auth,
         audit=audit,
         agent_drafts=agent_drafts,
+        capability_catalogs=capability_catalogs,
         studio=studio_service,
         agents=agent_service,
         sessions=session_service,
@@ -420,6 +426,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:preview",
             "studio:publish",
             "studio:deploy",
+            "studio:catalog:write",
         }
     ),
     "member": frozenset(

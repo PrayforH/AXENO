@@ -65,3 +65,17 @@ def test_existing_task_and_agent_permissions_do_not_regress(
         with pytest.raises(HTTPException) as captured:
             ensure_permission(identity, permission)
         assert captured.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("role", "allowed"),
+    [("viewer", False), ("member", False), ("admin", True), ("owner", True)],
+)
+def test_catalog_management_is_admin_only(role: str, allowed: bool) -> None:
+    identity = Identity("tenant-a", "user-a", roles=frozenset({role}))
+    if allowed:
+        ensure_permission(identity, "studio:catalog:write")
+    else:
+        with pytest.raises(HTTPException) as captured:
+            ensure_permission(identity, "studio:catalog:write")
+        assert captured.value.status_code == 403

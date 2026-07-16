@@ -222,6 +222,15 @@ class AgentDraftCompiler:
                 )
             )
         else:
+            if not route.enabled:
+                issues.append(
+                    ValidationIssue(
+                        code="model_route_disabled",
+                        message=f"模型路由已禁用：{spec.model.route_id}",
+                        severity=ValidationSeverity.ERROR,
+                        path="model.routeId",
+                    )
+                )
             if route.models and spec.model.model not in route.models:
                 issues.append(
                     ValidationIssue(
@@ -255,9 +264,12 @@ class AgentDraftCompiler:
                         path="builtinTools",
                     )
                 )
-        mcp_servers = {server.reference for server in self._catalog.mcp_servers}
+        mcp_servers = {
+            server.reference: server for server in self._catalog.mcp_servers
+        }
         for reference in spec.mcp_servers:
-            if reference not in mcp_servers:
+            server = mcp_servers.get(reference)
+            if server is None:
                 issues.append(
                     ValidationIssue(
                         code="mcp_server_unknown",
@@ -266,14 +278,69 @@ class AgentDraftCompiler:
                         path="mcpServers",
                     )
                 )
-        policies = {policy.policy_id for policy in self._catalog.policies}
-        if spec.permission_policy not in policies:
+            elif not server.enabled:
+                issues.append(
+                    ValidationIssue(
+                        code="mcp_server_disabled",
+                        message=f"MCP 能力已禁用：{reference}",
+                        severity=ValidationSeverity.ERROR,
+                        path="mcpServers",
+                    )
+                )
+        policies = {policy.policy_id: policy for policy in self._catalog.policies}
+        policy = policies.get(spec.permission_policy)
+        if policy is None:
             issues.append(
                 ValidationIssue(
                     code="policy_unknown",
                     message=f"权限 Profile 未注册：{spec.permission_policy}",
                     severity=ValidationSeverity.ERROR,
                     path="permissionPolicy",
+                )
+            )
+        elif not policy.enabled:
+            issues.append(
+                ValidationIssue(
+                    code="policy_disabled",
+                    message=f"权限 Profile 已禁用：{spec.permission_policy}",
+                    severity=ValidationSeverity.ERROR,
+                    path="permissionPolicy",
+                )
+            )
+        profiles = {
+            profile.profile_id: profile
+            for profile in self._catalog.execution_profiles
+        }
+        profile = profiles.get(spec.execution_profile)
+        if profile is None:
+            issues.append(
+                ValidationIssue(
+                    code="execution_profile_unknown",
+                    message=f"执行 Profile 未注册：{spec.execution_profile}",
+                    severity=ValidationSeverity.ERROR,
+                    path="executionProfile",
+                )
+            )
+        elif not profile.enabled:
+            issues.append(
+                ValidationIssue(
+                    code="execution_profile_disabled",
+                    message=f"执行 Profile 已禁用：{spec.execution_profile}",
+                    severity=ValidationSeverity.ERROR,
+                    path="executionProfile",
+                )
+            )
+        elif any(
+            server.network_access not in profile.network_access
+            for reference in spec.mcp_servers
+            if (server := mcp_servers.get(reference)) is not None
+        ):
+            issues.append(
+                ValidationIssue(
+                    code="execution_profile_network_incompatible",
+                    message="执行 Profile 不允许所选 MCP 的网络访问级别",
+                    severity=ValidationSeverity.ERROR,
+                    path="executionProfile",
                 )
             )
         return tuple(issues)

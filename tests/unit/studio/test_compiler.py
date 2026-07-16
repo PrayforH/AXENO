@@ -135,3 +135,72 @@ def test_orchestrator_compiles_role_descriptions_and_background_mode() -> None:
     assert "description: 并行收集证据" in validation.manifest_yaml
     assert "background: true" in validation.manifest_yaml
     assert "alias: quality-reviewer" in validation.manifest_yaml
+
+
+def test_disabled_catalog_resources_fail_closed() -> None:
+    catalog = default_capability_catalog()
+    disabled = catalog.model_copy(
+        update={
+            "model_routes": tuple(
+                item.model_copy(update={"enabled": False})
+                if item.route_id == "new-api-default"
+                else item
+                for item in catalog.model_routes
+            ),
+            "policies": tuple(
+                item.model_copy(update={"enabled": False})
+                if item.policy_id == "production-read-only"
+                else item
+                for item in catalog.policies
+            ),
+            "execution_profiles": tuple(
+                item.model_copy(update={"enabled": False})
+                for item in catalog.execution_profiles
+            ),
+        }
+    )
+
+    validation = AgentDraftCompiler(disabled).validate(draft())
+
+    assert validation.ready is False
+    assert {issue.code for issue in validation.issues} >= {
+        "model_route_disabled",
+        "policy_disabled",
+        "execution_profile_disabled",
+    }
+
+
+def test_model_and_execution_profile_capabilities_must_be_compatible() -> None:
+    catalog = default_capability_catalog()
+    incompatible = catalog.model_copy(
+        update={
+            "model_routes": tuple(
+                item.model_copy(update={"capabilities": ("streaming",)})
+                if item.route_id == "new-api-default"
+                else item
+                for item in catalog.model_routes
+            ),
+            "execution_profiles": tuple(
+                item.model_copy(
+                    update={"network_access": (NetworkAccess.NONE,)}
+                )
+                for item in catalog.execution_profiles
+            ),
+        }
+    )
+    current = draft()
+    with_mcp = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={"mcp_servers": ("tavily-readonly",)}
+            )
+        }
+    )
+
+    validation = AgentDraftCompiler(incompatible).validate(with_mcp)
+
+    assert validation.ready is False
+    assert {issue.code for issue in validation.issues} >= {
+        "model_capability_missing",
+        "execution_profile_network_incompatible",
+    }

@@ -113,6 +113,9 @@ class AgentDraftSpec(StudioModel):
     mcp_servers: tuple[str, ...] = Field(default=(), alias="mcpServers")
     subagents: tuple[DraftSubagent, ...] = ()
     permission_policy: str = Field(alias="permissionPolicy", min_length=1)
+    execution_profile: str = Field(
+        default="isolated-default", alias="executionProfile", min_length=1
+    )
     workspace: DraftWorkspace = DraftWorkspace()
     limits: DraftLimits = DraftLimits()
     evaluation_cases: tuple[EvalCase, ...] = Field(
@@ -204,8 +207,15 @@ class ModelRouteCapability(StudioModel):
     label: str
     provider: str
     models: tuple[str, ...]
-    capabilities: frozenset[str]
+    capabilities: tuple[str, ...]
     credential_managed: bool = Field(default=True, alias="credentialManaged")
+    credential_reference: str | None = Field(
+        default=None,
+        alias="credentialReference",
+        pattern=r"^[A-Z][A-Z0-9_]*$",
+    )
+    version: int = Field(default=1, ge=1)
+    enabled: bool = True
 
 
 class BuiltinToolCapability(StudioModel):
@@ -228,6 +238,13 @@ class McpCapability(StudioModel):
     credential_managed: bool = Field(default=True, alias="credentialManaged")
     execution_location: str = Field(alias="executionLocation")
     preflight_required: bool = Field(default=True, alias="preflightRequired")
+    credential_reference: str | None = Field(
+        default=None,
+        alias="credentialReference",
+        pattern=r"^[A-Z][A-Z0-9_]*$",
+    )
+    version: int = Field(default=1, ge=1)
+    enabled: bool = True
 
 
 class PolicyCapability(StudioModel):
@@ -235,6 +252,21 @@ class PolicyCapability(StudioModel):
     label: str
     description: str
     risk: CapabilityRisk
+    version: int = Field(default=1, ge=1)
+    enabled: bool = True
+
+
+class ExecutionProfileMetadata(StudioModel):
+    profile_id: str = Field(alias="profileId", pattern=r"^[a-z][a-z0-9-]*$")
+    label: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=500)
+    sandbox_provider: Literal["local", "daytona", "gvisor"] = Field(
+        alias="sandboxProvider"
+    )
+    network_access: tuple[NetworkAccess, ...] = Field(alias="networkAccess")
+    risk: CapabilityRisk
+    version: int = Field(default=1, ge=1)
+    enabled: bool = True
 
 
 class TemplateCapability(StudioModel):
@@ -248,7 +280,68 @@ class CapabilityCatalog(StudioModel):
     builtin_tools: tuple[BuiltinToolCapability, ...] = Field(alias="builtinTools")
     mcp_servers: tuple[McpCapability, ...] = Field(alias="mcpServers")
     policies: tuple[PolicyCapability, ...]
+    execution_profiles: tuple[ExecutionProfileMetadata, ...] = Field(
+        default=(), alias="executionProfiles"
+    )
     templates: tuple[TemplateCapability, ...]
+
+    @model_validator(mode="after")
+    def unique_managed_ids(self) -> CapabilityCatalog:
+        collections = (
+            ("model route", [item.route_id for item in self.model_routes]),
+            ("MCP", [item.reference for item in self.mcp_servers]),
+            ("policy", [item.policy_id for item in self.policies]),
+            (
+                "execution profile",
+                [item.profile_id for item in self.execution_profiles],
+            ),
+        )
+        for label, identifiers in collections:
+            duplicates = sorted(
+                {identifier for identifier in identifiers if identifiers.count(identifier) > 1}
+            )
+            if duplicates:
+                raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
+        return self
+
+
+class CapabilityCatalogRecord(StudioModel):
+    tenant_id: str = Field(alias="tenantId", min_length=1)
+    revision: int = Field(ge=1)
+    catalog: CapabilityCatalog
+    updated_by: str = Field(alias="updatedBy", min_length=1)
+    updated_at: datetime = Field(alias="updatedAt")
+
+
+class ReplaceCapabilityCatalogRequest(StudioModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    catalog: CapabilityCatalog
+
+
+class CatalogImpact(StudioModel):
+    resource_type: Literal["modelRoute", "mcp", "policy", "executionProfile"] = Field(
+        alias="resourceType"
+    )
+    resource_id: str = Field(alias="resourceId")
+    draft_ids: tuple[str, ...] = Field(alias="draftIds")
+
+
+class CatalogMutationResult(StudioModel):
+    record: CapabilityCatalogRecord
+    impact: CatalogImpact
+
+
+CatalogManagedResource = (
+    ModelRouteCapability
+    | McpCapability
+    | PolicyCapability
+    | ExecutionProfileMetadata
+)
+
+
+class UpsertCatalogResourceRequest(StudioModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    resource: CatalogManagedResource
 
 
 class ValidationIssue(StudioModel):

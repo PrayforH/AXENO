@@ -62,13 +62,22 @@ async def test_production_studio_api_restores_draft_after_container_restart(
         async with AsyncClient(
             transport=ASGITransport(app=first_app), base_url="http://test"
         ) as client:
+            first_catalog = await client.get("/v1/studio/catalog", headers=headers())
+            second_seed = await client.get("/v1/studio/catalog", headers=headers())
             created = await client.post(
                 "/v1/studio/drafts", headers=headers(), json=draft_request()
+            )
+            disabled = await client.delete(
+                "/v1/studio/catalog/modelRoute/new-api-default",
+                headers=headers(),
+                params={"expected_revision": 1},
             )
     finally:
         await close(first)
 
     assert created.status_code == 201
+    assert first_catalog.json() == second_seed.json()
+    assert disabled.status_code == 200
     draft_id = cast(str, created.json()["draftId"])
 
     second = build_production_container(production_settings(), execution_enabled=False)
@@ -80,8 +89,19 @@ async def test_production_studio_api_restores_draft_after_container_restart(
             restored = await client.get(
                 f"/v1/studio/drafts/{draft_id}", headers=headers()
             )
+            restored_catalog = await client.get(
+                "/v1/studio/catalog", headers=headers()
+            )
     finally:
         await close(second)
 
     assert restored.status_code == 200
     assert restored.json() == created.json()
+    assert restored_catalog.status_code == 200
+    assert restored_catalog.json()["revision"] == 2
+    route = next(
+        item
+        for item in restored_catalog.json()["catalog"]["modelRoutes"]
+        if item["routeId"] == "new-api-default"
+    )
+    assert route["enabled"] is False

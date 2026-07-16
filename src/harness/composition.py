@@ -46,6 +46,7 @@ from harness.runtime.session_store import PostgresSessionStore
 from harness.sandbox.base import SandboxProvider
 from harness.sandbox.daytona import DaytonaSandboxProvider, SdkDaytonaClient
 from harness.sandbox.local import LocalSandboxProvider
+from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
 from harness.storage.minio import MinioArtifactStore
 from harness.storage.platform_repositories import (
@@ -62,8 +63,7 @@ from harness.storage.platform_repositories import (
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
-from harness.studio.catalog import default_capability_catalog
-from harness.studio.compiler import AgentDraftCompiler
+from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.service import AgentStudioService
 from harness.worker.orchestrator import RunOrchestrator
 
@@ -195,6 +195,7 @@ def build_production_container(
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
     event_repository = PostgresEventRepository(sessions)
     agent_drafts = PostgresAgentDraftRepository(sessions)
+    capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
         jwt_secret=settings.auth_jwt_secret,
@@ -239,11 +240,14 @@ def build_production_container(
         return f"{prefix}_{uuid4().hex}"
 
     agent_service = AgentService(registry, clock=clock, environment="production")
-    studio_catalog = default_capability_catalog()
+    capability_catalogs = CapabilityCatalogService(
+        capability_catalog_repository,
+        agent_drafts,
+        clock=clock,
+    )
     studio_service = AgentStudioService(
         agent_drafts,
-        AgentDraftCompiler(studio_catalog),
-        studio_catalog,
+        catalogs=capability_catalogs,
         publisher=agent_service,
         clock=clock,
         id_generator=lambda: ids("draft"),
@@ -404,6 +408,7 @@ def build_production_container(
         auth=auth,
         audit=audit,
         agent_drafts=agent_drafts,
+        capability_catalogs=capability_catalogs,
         studio=studio_service,
         agents=agent_service,
         sessions=session_service,
