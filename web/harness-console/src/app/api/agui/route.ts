@@ -1,0 +1,8 @@
+import { proxyAguiRequest } from "../../../lib/harness-proxy";
+import { getHarnessServerConfig } from "../../../lib/server-config";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  return proxyAguiRequest(request, getHarnessServerConfig());
+}

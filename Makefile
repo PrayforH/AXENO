@@ -1,0 +1,69 @@
+.PHONY: install test lint typecheck agent-check agent-pack verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e smoke-daytona
+
+DOCKER_COMPOSE = docker compose --env-file deploy/docker-compose/.env.docker -f deploy/docker-compose/compose.yaml
+
+install:
+	uv sync --group dev
+
+test:
+	uv run pytest
+
+lint:
+	uv run ruff check src tests
+
+typecheck:
+	uv run pyright
+
+agent-check:
+	uv run python scripts/check_agent_packages.py
+
+agent-pack:
+	uv run python scripts/check_agent_packages.py --output dist/agents
+
+verify: lint typecheck agent-check test
+
+dev-up:
+	bash scripts/dev_up.sh
+
+dev-up-cc-switch:
+	HARNESS_RUNTIME=claude-sdk bash scripts/dev_up.sh
+
+dev-down:
+	bash scripts/dev_down.sh
+
+migrate:
+	uv run alembic upgrade head
+
+e2e:
+	uv run python scripts/wait_for_local_services.py
+	uv run python scripts/e2e_fake_runtime.py
+
+web-test:
+	cd web/harness-console && npm test
+
+web-build:
+	cd web/harness-console && npm run build
+
+docker-config:
+	$(DOCKER_COMPOSE) config --quiet
+
+docker-build:
+	$(DOCKER_COMPOSE) build
+
+docker-up:
+	$(DOCKER_COMPOSE) up -d --wait
+
+docker-up-observability:
+	$(DOCKER_COMPOSE) --profile observability up -d --wait
+
+docker-down:
+	$(DOCKER_COMPOSE) down
+
+docker-e2e:
+	uv run python scripts/e2e_docker.py
+
+smoke-daytona:
+	@set -a; \
+	if [ -f deploy/docker-compose/.env.docker ]; then . deploy/docker-compose/.env.docker; fi; \
+	set +a; \
+	uv run python scripts/smoke_daytona.py

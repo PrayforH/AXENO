@@ -1,0 +1,114 @@
+"""Resolve a published AgentVersion before delegating to Claude Agent SDK."""
+
+from collections.abc import AsyncIterator, Callable
+
+from harness.application.agent_assets import resolve_published_agent_versions
+from harness.application.memory import UserMemoryService
+from harness.core.manifest import AgentManifestSnapshot
+from harness.core.models import ModelRoute, Session
+from harness.core.ports import AgentRegistry
+from harness.observability.provider import Observability
+from harness.runtime.base import RuntimeContext, RuntimeEvent
+from harness.runtime.cc_switch import CcSwitchClaudeConfig
+from harness.runtime.claude_sdk import ClaudeSdkRuntime, QueryFactory
+from harness.runtime.mcp_credentials import DynamicMcpCredentialProvider
+from harness.runtime.sdk_tool_gate import ToolGate
+from harness.runtime.tools import ToolResolver
+
+
+class RegistryClaudeRuntime:
+    def __init__(
+        self,
+        *,
+        registry: AgentRegistry,
+        config: CcSwitchClaudeConfig,
+        fallback_config: CcSwitchClaudeConfig | None = None,
+        query_factory: QueryFactory | None = None,
+        tool_resolver: ToolResolver | None = None,
+        mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
+        tool_gate: ToolGate | None = None,
+        memory_service: UserMemoryService | None = None,
+        session_store_factory: Callable[[Session], object] | None = None,
+        observability: Observability | None = None,
+    ) -> None:
+        self._registry = registry
+        self._config = config
+        self._fallback_config = fallback_config
+        self._query_factory = query_factory
+        self._tool_resolver = tool_resolver or ToolResolver(
+            credential_provider=mcp_credential_provider
+        )
+        self._tool_gate = tool_gate
+        self._memory_service = memory_service
+        self._session_store_factory = session_store_factory
+        self._observability = observability
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        session = context.session
+        agent_version, subagent_versions = await resolve_published_agent_versions(
+            self._registry,
+            tenant_id=session.tenant_id,
+            agent_name=session.agent_name,
+            agent_version=session.agent_version,
+        )
+        snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
+        route_id = snapshot.manifest.spec.model.route
+        route = ModelRoute(
+            route_id=route_id,
+            provider=self._config.provider,
+            base_url=self._config.base_url,
+            model=self._config.model,
+            compatibility=self._config.compatibility,
+            capabilities=self._config.capabilities,
+        )
+        routes = [route]
+        route_secrets = {route_id: self._config.credential.get_secret_value()}
+        fallback_route_id = snapshot.manifest.spec.model.fallback_route
+        if fallback_route_id is not None and self._fallback_config is not None:
+            fallback_route = ModelRoute(
+                route_id=fallback_route_id,
+                provider=self._fallback_config.provider,
+                base_url=self._fallback_config.base_url,
+                model=self._fallback_config.model,
+                compatibility=self._fallback_config.compatibility,
+                capabilities=self._fallback_config.capabilities,
+            )
+            routes.append(fallback_route)
+            route_secrets[fallback_route_id] = (
+                self._fallback_config.credential.get_secret_value()
+            )
+        if self._query_factory is None:
+            runtime = ClaudeSdkRuntime(
+                agent_version=agent_version,
+                routes=routes,
+                route_secrets=route_secrets,
+                subagent_versions=subagent_versions,
+                tool_resolver=self._tool_resolver,
+                tool_gate=self._tool_gate,
+                memory_service=self._memory_service,
+                observability=self._observability,
+                session_store=(
+                    self._session_store_factory(session)
+                    if self._session_store_factory is not None
+                    else None
+                ),
+            )
+        else:
+            runtime = ClaudeSdkRuntime(
+                agent_version=agent_version,
+                routes=routes,
+                route_secrets=route_secrets,
+                subagent_versions=subagent_versions,
+                query_factory=self._query_factory,
+                tool_resolver=self._tool_resolver,
+                tool_gate=self._tool_gate,
+                memory_service=self._memory_service,
+                observability=self._observability,
+                session_store=(
+                    self._session_store_factory(session)
+                    if self._session_store_factory is not None
+                    else None
+                ),
+            )
+        async for event in runtime.execute(context):
+            yield event

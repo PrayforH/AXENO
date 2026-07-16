@@ -1,0 +1,270 @@
+x-python-image: &python-image
+  image: claude-agent-harness-api:${HARNESS_IMAGE_TAG:-local}
+
+x-python-build: &python-build
+  context: ../..
+  dockerfile: deploy/docker/api.Dockerfile
+  args:
+    UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+
+x-harness-environment: &harness-environment
+  HARNESS_ENVIRONMENT: production
+  HARNESS_RUNTIME: claude-sdk
+  HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
+  HARNESS_REDIS_URL: redis://redis:6379/0
+  HARNESS_MINIO_ENDPOINT: minio:9000
+  HARNESS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+  HARNESS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+  HARNESS_MINIO_BUCKET: harness-artifacts
+  HARNESS_MINIO_SECURE: "false"
+  HARNESS_NEW_API_BASE_URL: ${HARNESS_NEW_API_BASE_URL:?set HARNESS_NEW_API_BASE_URL}
+  HARNESS_NEW_API_KEY: ${HARNESS_NEW_API_KEY:?set HARNESS_NEW_API_KEY}
+  HARNESS_NEW_API_MODEL: ${HARNESS_NEW_API_MODEL:?set HARNESS_NEW_API_MODEL}
+  HARNESS_NEW_API_COMPATIBILITY: ${HARNESS_NEW_API_COMPATIBILITY:-full}
+  HARNESS_NEW_API_CAPABILITIES: ${HARNESS_NEW_API_CAPABILITIES:-streaming,tool_use}
+  HARNESS_ANTHROPIC_BASE_URL: ${HARNESS_ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+  HARNESS_ANTHROPIC_API_KEY: ${HARNESS_ANTHROPIC_API_KEY:-}
+  HARNESS_ANTHROPIC_MODEL: ${HARNESS_ANTHROPIC_MODEL:-}
+  HARNESS_SANDBOX_PROVIDER: ${HARNESS_SANDBOX_PROVIDER:-daytona}
+  HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX: ${HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX:-false}
+  HARNESS_DAYTONA_API_KEY: ${HARNESS_DAYTONA_API_KEY:-}
+  HARNESS_DAYTONA_API_URL: ${HARNESS_DAYTONA_API_URL:-https://app.daytona.io/api}
+  HARNESS_DAYTONA_TARGET: ${HARNESS_DAYTONA_TARGET:-}
+  HARNESS_DAYTONA_SNAPSHOT: ${HARNESS_DAYTONA_SNAPSHOT:-}
+  HARNESS_DAYTONA_REMOTE_WORKSPACE_ROOT: ${HARNESS_DAYTONA_REMOTE_WORKSPACE_ROOT:-/home/daytona/harness}
+  HARNESS_DAYTONA_CLAUDE_CLI_VERSION: ${HARNESS_DAYTONA_CLAUDE_CLI_VERSION:-2.1.206}
+  HARNESS_DAYTONA_CLAUDE_CLI_PATH: ${HARNESS_DAYTONA_CLAUDE_CLI_PATH:-/home/daytona/.local/bin/claude}
+  HARNESS_DAYTONA_DELETE_ON_DESTROY: ${HARNESS_DAYTONA_DELETE_ON_DESTROY:-true}
+  HARNESS_DAYTONA_AUTO_STOP_INTERVAL_MINUTES: ${HARNESS_DAYTONA_AUTO_STOP_INTERVAL_MINUTES:-15}
+  HARNESS_DAYTONA_AUTO_DELETE_INTERVAL_MINUTES: ${HARNESS_DAYTONA_AUTO_DELETE_INTERVAL_MINUTES:-60}
+  HARNESS_WORKER_TASK_VISIBILITY_TIMEOUT_SECONDS: ${HARNESS_WORKER_TASK_VISIBILITY_TIMEOUT_SECONDS:-60}
+  HARNESS_WORKER_TASK_RETRY_DELAY_SECONDS: ${HARNESS_WORKER_TASK_RETRY_DELAY_SECONDS:-1}
+  HARNESS_WORKER_TASK_HEARTBEAT_SECONDS: ${HARNESS_WORKER_TASK_HEARTBEAT_SECONDS:-20}
+  HARNESS_WORKSPACE_ARCHIVE_MAX_BYTES: ${HARNESS_WORKSPACE_ARCHIVE_MAX_BYTES:-536870912}
+  HARNESS_WORKSPACE_ARCHIVE_MAX_MEMBERS: ${HARNESS_WORKSPACE_ARCHIVE_MAX_MEMBERS:-10000}
+  HARNESS_MCP_SECRET_REFERENCES_JSON: ${HARNESS_MCP_SECRET_REFERENCES_JSON:-{}}
+  HARNESS_MCP_SERVER_SECRETS_JSON: ${HARNESS_MCP_SERVER_SECRETS_JSON:-{}}
+  HARNESS_OTEL_ENABLED: ${HARNESS_OTEL_ENABLED:-false}
+  HARNESS_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+  HARNESS_OTEL_SERVICE_NAME: claude-agent-harness
+  HARNESS_OTEL_ENVIRONMENT: ${LANGFUSE_ENVIRONMENT:-production}
+
+x-control-environment: &control-environment
+  HARNESS_ENVIRONMENT: production
+  HARNESS_RUNTIME: claude-sdk
+  HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
+  HARNESS_REDIS_URL: redis://redis:6379/0
+  HARNESS_MINIO_ENDPOINT: minio:9000
+  HARNESS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+  HARNESS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+  HARNESS_MINIO_BUCKET: harness-artifacts
+  HARNESS_MINIO_SECURE: "false"
+  HARNESS_AUTH_JWT_SECRET: ${HARNESS_AUTH_JWT_SECRET:?set HARNESS_AUTH_JWT_SECRET}
+  HARNESS_AUTH_ISSUER: ${HARNESS_AUTH_ISSUER:-claude-agent-harness}
+  HARNESS_AUTH_AUDIENCE: ${HARNESS_AUTH_AUDIENCE:-claude-agent-harness-api}
+  HARNESS_AUTH_ACCESS_TOKEN_MINUTES: ${HARNESS_AUTH_ACCESS_TOKEN_MINUTES:-30}
+  HARNESS_AUTH_REFRESH_TOKEN_DAYS: ${HARNESS_AUTH_REFRESH_TOKEN_DAYS:-30}
+  HARNESS_AUTH_ALLOW_REGISTRATION: ${HARNESS_AUTH_ALLOW_REGISTRATION:-true}
+  HARNESS_AUTH_DEFAULT_TENANT_ID: ${HARNESS_AUTH_DEFAULT_TENANT_ID:-local}
+  HARNESS_AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
+  HARNESS_AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
+  HARNESS_AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
+  HARNESS_AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
+  # The control plane generates short semantic task titles. Agent execution still
+  # remains isolated in the worker, but title generation needs the same compatible
+  # model endpoint when no dedicated title gateway is configured.
+  HARNESS_NEW_API_BASE_URL: ${HARNESS_NEW_API_BASE_URL:?set HARNESS_NEW_API_BASE_URL}
+  HARNESS_NEW_API_KEY: ${HARNESS_NEW_API_KEY:?set HARNESS_NEW_API_KEY}
+  HARNESS_NEW_API_MODEL: ${HARNESS_NEW_API_MODEL:?set HARNESS_NEW_API_MODEL}
+  HARNESS_NEW_API_COMPATIBILITY: ${HARNESS_NEW_API_COMPATIBILITY:-full}
+  HARNESS_NEW_API_CAPABILITIES: ${HARNESS_NEW_API_CAPABILITIES:-streaming,tool_use}
+  HARNESS_ANTHROPIC_BASE_URL: ${HARNESS_ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+  HARNESS_ANTHROPIC_API_KEY: ${HARNESS_ANTHROPIC_API_KEY:-}
+  HARNESS_ANTHROPIC_MODEL: ${HARNESS_ANTHROPIC_MODEL:-}
+  HARNESS_OTEL_ENABLED: ${HARNESS_OTEL_ENABLED:-false}
+  HARNESS_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+  HARNESS_OTEL_SERVICE_NAME: claude-agent-harness
+  HARNESS_OTEL_ENVIRONMENT: ${LANGFUSE_ENVIRONMENT:-production}
+
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: harness
+      POSTGRES_USER: harness
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness -d harness"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing local/harness-artifacts
+    restart: "no"
+
+  migrate:
+    <<: *python-image
+    entrypoint: []
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  api:
+    <<: *python-image
+    build: *python-build
+    environment:
+      <<: *control-environment
+      HARNESS_API_BEARER_TOKEN: ${HARNESS_API_BEARER_TOKEN:?set HARNESS_API_BEARER_TOKEN}
+    ports:
+      - "${HARNESS_API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    <<: *python-image
+    entrypoint: ["entrypoint-worker"]
+    environment: *harness-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from pathlib import Path; raise SystemExit('harness-worker' not in Path('/proc/1/cmdline').read_text())"
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
+    restart: unless-stopped
+
+  seed:
+    <<: *python-image
+    entrypoint: []
+    command: ["python", "scripts/seed_docker.py"]
+    environment:
+      HARNESS_API_URL: http://api:8000
+      HARNESS_API_BEARER_TOKEN: ${HARNESS_API_BEARER_TOKEN:?set HARNESS_API_BEARER_TOKEN}
+      HARNESS_TENANT_ID: ${HARNESS_TENANT_ID:-local}
+      HARNESS_USER_ID: ${HARNESS_USER_ID:-system}
+      HARNESS_SEED_AGENT_MANIFESTS: /app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/public-opinion-agent/agent.yaml
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
+  web:
+    image: claude-agent-harness-web:${HARNESS_IMAGE_TAG:-local}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/web.Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+    environment:
+      HARNESS_API_URL: http://api:8000
+      HARNESS_API_BEARER_TOKEN: ${HARNESS_API_BEARER_TOKEN:?set HARNESS_API_BEARER_TOKEN}
+      HARNESS_AGENT_NAME: ${HARNESS_AGENT_NAME:-echo-agent}
+      HARNESS_AGENT_VERSION: ${HARNESS_AGENT_VERSION:-0.4.0}
+      AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-http://localhost:3000}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_REFRESH_COOKIE_DAYS: ${HARNESS_AUTH_REFRESH_TOKEN_DAYS:-30}
+      AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
+      AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
+      COPILOTKIT_TELEMETRY_DISABLED: "true"
+    ports:
+      - "${HARNESS_WEB_PORT:-3000}:3000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      LANGFUSE_OTLP_ENDPOINT: ${LANGFUSE_OTLP_ENDPOINT:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+    volumes:
+      - ../otel-collector/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTEL_HTTP_PORT:-4318}:4318"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec uvicorn harness.api.app:app --host 0.0.0.0 --port 8000 --proxy-headers

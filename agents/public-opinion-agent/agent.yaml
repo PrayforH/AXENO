@@ -1,0 +1,41 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: public-opinion-agent
+  version: 0.1.1
+  labels:
+    domain: public-opinion
+    template: orchestrator
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: new-api-default
+    model: claude-sonnet-4-6
+    fallbackRoute: anthropic-official
+    fallbackModel: claude-sonnet-4-6
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/public-opinion-analysis
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+    - builtin: Edit
+    - builtin: Task
+    - mcp: tavily-readonly
+  subagents:
+    - ref: helper-agent@1.0.0
+  hooks: []
+  permissions:
+    policy: production-orchestrator
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 20
+    timeoutSeconds: 1200
+    maxBudgetUsd: 2

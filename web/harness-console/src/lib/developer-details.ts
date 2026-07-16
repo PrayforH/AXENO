@@ -1,0 +1,9 @@
+export function developerRows(
+  threadId: string,
+): ReadonlyArray<readonly [string, string]> {
+  return [
+    ["THREAD", threadId || "initializing"],
+    ["AGENT", "harness-agent"],
+    ["ROUTE", "/api/agui → Harness AG-UI"],
+  ];
+}
