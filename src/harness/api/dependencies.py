@@ -1,10 +1,11 @@
 """FastAPI dependencies and the local in-memory composition root."""
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import uuid4
 
 from fastapi import Header, HTTPException, Request
@@ -90,6 +91,7 @@ from harness.sandbox.daytona import (
     DaytonaSandboxProvider,
     SdkDaytonaClient,
 )
+from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
@@ -163,6 +165,7 @@ class ApiContainer:
     worker: RunOrchestrator
     agui: AguiRunService
     auto_execute: bool
+    sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     close: Callable[[], Awaitable[None]] | None = None
 
 
@@ -382,6 +385,7 @@ def build_memory_container(
         return policy_profiles.resolve(manifest.spec.permissions.policy)
 
     policy = policy_profiles.resolve("local-standard")
+    sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     if resolved_settings.sandbox_provider == "daytona":
         daytona_api_key = resolved_settings.daytona_api_key.get_secret_value()
         if not daytona_api_key:
@@ -402,6 +406,60 @@ def build_memory_container(
             max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
             max_collect_members=resolved_settings.workspace_archive_max_members,
         )
+    elif resolved_settings.sandbox_provider == "kubernetes":
+        try:
+            selector_raw = json.loads(
+                resolved_settings.kubernetes_egress_gateway_selector_json
+            )
+        except json.JSONDecodeError:
+            raise ValueError(
+                "HARNESS_KUBERNETES_EGRESS_GATEWAY_SELECTOR_JSON must be JSON"
+            ) from None
+        if not isinstance(selector_raw, dict):
+            raise ValueError("Kubernetes egress gateway selector must map strings")
+        selector_items = cast(dict[object, object], selector_raw)
+        if not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in selector_items.items()
+        ):
+            raise ValueError("Kubernetes egress gateway selector must map strings")
+        if not resolved_settings.kubernetes_image:
+            raise ValueError("HARNESS_KUBERNETES_IMAGE is required for Kubernetes")
+        if not resolved_settings.kubernetes_egress_proxy_url:
+            raise ValueError(
+                "HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes"
+            )
+        kubernetes = KubernetesSandboxProvider(
+            client=KubectlKubernetesClient(
+                namespace=resolved_settings.kubernetes_namespace,
+                kubectl_path=resolved_settings.kubernetes_kubectl_path,
+                kubeconfig=resolved_settings.kubernetes_kubeconfig or None,
+                context=resolved_settings.kubernetes_context or None,
+            ),
+            namespace=resolved_settings.kubernetes_namespace,
+            image=resolved_settings.kubernetes_image,
+            runtime_class_name=resolved_settings.kubernetes_runtime_class_name,
+            service_account_name=resolved_settings.kubernetes_service_account_name,
+            remote_workspace=resolved_settings.kubernetes_remote_workspace,
+            cli_version=resolved_settings.kubernetes_claude_cli_version,
+            cli_path=resolved_settings.kubernetes_claude_cli_path,
+            ttl_seconds=resolved_settings.kubernetes_pod_ttl_seconds,
+            ready_timeout_seconds=resolved_settings.kubernetes_ready_timeout_seconds,
+            cpu_millis=resolved_settings.kubernetes_cpu_millis,
+            memory_mib=resolved_settings.kubernetes_memory_mib,
+            disk_mib=resolved_settings.kubernetes_disk_mib,
+            egress_gateway_namespace=(
+                resolved_settings.kubernetes_egress_gateway_namespace
+            ),
+            egress_gateway_selector=cast(dict[str, str], selector_items),
+            egress_gateway_port=resolved_settings.kubernetes_egress_gateway_port,
+            egress_proxy_url=resolved_settings.kubernetes_egress_proxy_url,
+            dns_namespace=resolved_settings.kubernetes_dns_namespace,
+            max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
+            max_collect_members=resolved_settings.workspace_archive_max_members,
+        )
+        sandbox = kubernetes
+        sandbox_maintenance = kubernetes.reap_expired
     else:
         sandbox = LocalSandboxProvider()
     if resolved_settings.runtime == "fake":
@@ -514,6 +572,7 @@ def build_memory_container(
         worker=worker,
         agui=agui,
         auto_execute=auto_execute,
+        sandbox_maintenance=sandbox_maintenance,
     )
 
 

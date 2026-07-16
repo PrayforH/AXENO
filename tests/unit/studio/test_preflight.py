@@ -86,6 +86,7 @@ async def context(
     timeout_seconds: float = 30,
     model_delay: float = 0,
     observability: Observability | None = None,
+    enforce_profile: bool = False,
 ) -> tuple[LivePreflightRunner, PreviewDeployment, StageSandbox]:
     catalog = default_capability_catalog()
     studio = AgentStudioService(
@@ -136,12 +137,25 @@ async def context(
         observability=observability,
         timeout_seconds=timeout_seconds,
         clock=lambda: NOW,
+        enforce_execution_profile_provider=enforce_profile,
     )
     return runner, preview, sandbox
 
 
 async def never_cancelled() -> bool:
     return False
+
+
+@pytest.mark.asyncio
+async def test_preflight_rejects_sandbox_that_does_not_match_pinned_profile(
+    tmp_path: Path,
+) -> None:
+    runner, preview, sandbox = await context(tmp_path, enforce_profile=True)
+
+    result = await runner.run(preview, cancelled=never_cancelled)
+
+    assert result.error_code == "execution_profile_sandbox_provider_mismatch"
+    assert sandbox.destroyed
 
 
 @pytest.mark.asyncio

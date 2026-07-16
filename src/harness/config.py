@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     environment: Literal["local", "test", "production"] = "local"
     runtime: Literal["fake", "claude-sdk"] = "fake"
-    sandbox_provider: Literal["local", "daytona"] = "local"
+    sandbox_provider: Literal["local", "daytona", "kubernetes"] = "local"
     allow_unsafe_local_sandbox: bool = False
     cc_switch_settings_path: str = "~/.claude/settings.json"
     otel_enabled: bool = False
@@ -70,6 +70,29 @@ class Settings(BaseSettings):
     daytona_delete_on_destroy: bool = True
     daytona_auto_stop_interval_minutes: int = Field(default=15, ge=1)
     daytona_auto_delete_interval_minutes: int = Field(default=60, ge=1)
+    kubernetes_namespace: str = "harness-sandboxes"
+    kubernetes_image: str = ""
+    kubernetes_runtime_class_name: str = "gvisor"
+    kubernetes_service_account_name: str = "harness-sandbox"
+    kubernetes_kubectl_path: str = "kubectl"
+    kubernetes_kubeconfig: str = ""
+    kubernetes_context: str = ""
+    kubernetes_remote_workspace: str = "/workspace"
+    kubernetes_claude_cli_version: str = "2.1.206"
+    kubernetes_claude_cli_path: str = "/usr/local/bin/claude"
+    kubernetes_pod_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+    kubernetes_ready_timeout_seconds: float = Field(default=120, ge=10, le=900)
+    kubernetes_cpu_millis: int = Field(default=2000, ge=100)
+    kubernetes_memory_mib: int = Field(default=4096, ge=256)
+    kubernetes_disk_mib: int = Field(default=20_480, ge=256)
+    kubernetes_egress_gateway_namespace: str = "harness-system"
+    kubernetes_egress_gateway_selector_json: str = (
+        '{"app.kubernetes.io/name":"harness-egress-proxy"}'
+    )
+    kubernetes_egress_proxy_url: str = ""
+    kubernetes_egress_gateway_port: int = Field(default=3128, ge=1, le=65_535)
+    kubernetes_dns_namespace: str = "kube-system"
+    kubernetes_reaper_interval_seconds: float = Field(default=30, ge=5, le=3600)
     output_artifact_max_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     workspace_archive_max_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
     workspace_archive_max_members: int = Field(default=10_000, gt=0)

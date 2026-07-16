@@ -18,6 +18,7 @@ from harness.core.models import ExecutionIdentity
 from harness.execution.credentials import BrokerMcpCredentialProvider, InMemoryCredentialBroker
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import ToolResolver
+from harness.sandbox.kubernetes import KubernetesSandboxProvider
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.redis import RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository
@@ -146,6 +147,25 @@ def test_production_container_rejects_implicit_local_sandbox() -> None:
         build_production_container(
             production_settings(allow_unsafe_local_sandbox=False)
         )
+
+
+@pytest.mark.asyncio
+async def test_production_container_wires_kubernetes_reaper_without_local_fallback() -> None:
+    container = build_production_container(
+        production_settings(
+            sandbox_provider="kubernetes",
+            allow_unsafe_local_sandbox=False,
+            kubernetes_image="registry.example/sandbox@sha256:" + "b" * 64,
+            kubernetes_egress_proxy_url="http://proxy.harness-system.svc:3128",
+        )
+    )
+    try:
+        assert isinstance(vars(container.worker)["_sandbox"], KubernetesSandboxProvider)
+        assert container.sandbox_maintenance is not None
+        assert vars(container.worker)["_sandbox_resolver"] is not None
+    finally:
+        assert container.close is not None
+        await container.close()
 
 
 @pytest.mark.asyncio

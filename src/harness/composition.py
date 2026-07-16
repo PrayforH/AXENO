@@ -1,6 +1,7 @@
 """Production composition root using PostgreSQL, Redis, MinIO and Claude SDK."""
 
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -28,7 +29,7 @@ from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepos
 from harness.auth.service import AuthService, OAuthProviderConfig
 from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import ModelCompatibility
+from harness.core.models import ModelCompatibility, Session
 from harness.core.ports import ArtifactStore, TaskQueue
 from harness.deployments.controller import DeploymentController
 from harness.deployments.queue import DeploymentTaskQueue
@@ -61,6 +62,10 @@ from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.runtime.session_store import PostgresSessionStore
 from harness.sandbox.base import SandboxProvider
 from harness.sandbox.daytona import DaytonaSandboxProvider, SdkDaytonaClient
+from harness.sandbox.kubernetes import (
+    KubectlKubernetesClient,
+    KubernetesSandboxProvider,
+)
 from harness.sandbox.local import LocalSandboxProvider
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
@@ -89,6 +94,7 @@ from harness.storage.quality_repository import PostgresQualityRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
@@ -101,7 +107,7 @@ from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_service import PreviewService
 from harness.studio.service import AgentStudioService
-from harness.worker.orchestrator import RunOrchestrator
+from harness.worker.orchestrator import RunOrchestrator, SandboxResolver
 
 
 def _gateway_capabilities(value: str) -> frozenset[str]:
@@ -158,6 +164,57 @@ def _sandbox(settings: Settings) -> SandboxProvider:
                 "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=true; use Daytona for untrusted Agents"
             )
         return LocalSandboxProvider()
+    if settings.sandbox_provider == "kubernetes":
+        if not settings.kubernetes_image:
+            raise ValueError("HARNESS_KUBERNETES_IMAGE is required for Kubernetes")
+        try:
+            selector_raw = json.loads(
+                settings.kubernetes_egress_gateway_selector_json
+            )
+        except json.JSONDecodeError:
+            raise ValueError(
+                "HARNESS_KUBERNETES_EGRESS_GATEWAY_SELECTOR_JSON must be JSON"
+            ) from None
+        if not isinstance(selector_raw, dict):
+            raise ValueError("Kubernetes egress gateway selector must map strings")
+        selector_items = cast(dict[object, object], selector_raw)
+        if not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in selector_items.items()
+        ):
+            raise ValueError("Kubernetes egress gateway selector must map strings")
+        if not settings.kubernetes_egress_proxy_url:
+            raise ValueError(
+                "HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes"
+            )
+        client = KubectlKubernetesClient(
+            namespace=settings.kubernetes_namespace,
+            kubectl_path=settings.kubernetes_kubectl_path,
+            kubeconfig=settings.kubernetes_kubeconfig or None,
+            context=settings.kubernetes_context or None,
+        )
+        return KubernetesSandboxProvider(
+            client=client,
+            namespace=settings.kubernetes_namespace,
+            image=settings.kubernetes_image,
+            runtime_class_name=settings.kubernetes_runtime_class_name,
+            service_account_name=settings.kubernetes_service_account_name,
+            remote_workspace=settings.kubernetes_remote_workspace,
+            cli_version=settings.kubernetes_claude_cli_version,
+            cli_path=settings.kubernetes_claude_cli_path,
+            ttl_seconds=settings.kubernetes_pod_ttl_seconds,
+            ready_timeout_seconds=settings.kubernetes_ready_timeout_seconds,
+            cpu_millis=settings.kubernetes_cpu_millis,
+            memory_mib=settings.kubernetes_memory_mib,
+            disk_mib=settings.kubernetes_disk_mib,
+            egress_gateway_namespace=settings.kubernetes_egress_gateway_namespace,
+            egress_gateway_selector=cast(dict[str, str], selector_items),
+            egress_gateway_port=settings.kubernetes_egress_gateway_port,
+            egress_proxy_url=settings.kubernetes_egress_proxy_url,
+            dns_namespace=settings.kubernetes_dns_namespace,
+            max_collect_bytes=settings.workspace_archive_max_bytes,
+            max_collect_members=settings.workspace_archive_max_members,
+        )
     api_key = settings.daytona_api_key.get_secret_value()
     if not api_key:
         raise ValueError("HARNESS_DAYTONA_API_KEY is required for Daytona")
@@ -200,6 +257,7 @@ def build_production_container(
         ]
         | None
     ) = None
+    sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     credential_broker: InMemoryCredentialBroker | None = None
     try:
         title_gateway, _ = _gateways(settings)
@@ -208,6 +266,8 @@ def build_production_container(
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
         sandbox = _sandbox(settings)
+        if isinstance(sandbox, KubernetesSandboxProvider):
+            sandbox_maintenance = sandbox.reap_expired
         references_raw = json.loads(settings.mcp_secret_references_json)
         secrets_raw = json.loads(settings.mcp_server_secrets_json.get_secret_value())
         if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
@@ -505,6 +565,7 @@ def build_production_container(
         return policy_profiles.resolve(manifest.spec.permissions.policy)
 
     policy = policy_profiles.resolve("local-standard")
+    sandbox_resolver: SandboxResolver | None = None
     if execution_enabled:
         assert execution_config is not None
         (
@@ -536,6 +597,38 @@ def build_production_container(
         )
         model_probe = AnthropicSandboxModelProbe(primary_gateway)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
+
+        async def resolve_runtime_sandbox(
+            tenant_id: str, session: Session
+        ) -> SandboxProvider:
+            if session.deployment_snapshot_id is None:
+                return runtime_sandbox
+            snapshot = await deployment_repository.get_snapshot(
+                tenant_id, session.deployment_snapshot_id
+            )
+            profile = next(
+                (
+                    item
+                    for item in default_capability_catalog().execution_profiles
+                    if item.profile_id == snapshot.execution_profile
+                    and item.version == snapshot.execution_profile_version
+                ),
+                None,
+            )
+            if profile is None:
+                raise RuntimeError("deployment_execution_profile_unavailable")
+            actual = (
+                "gvisor"
+                if isinstance(runtime_sandbox, KubernetesSandboxProvider)
+                else "daytona"
+                if isinstance(runtime_sandbox, DaytonaSandboxProvider)
+                else "local"
+            )
+            if profile.sandbox_provider != actual:
+                raise RuntimeError("execution_profile_sandbox_provider_mismatch")
+            return runtime_sandbox
+
+        sandbox_resolver = resolve_runtime_sandbox
     else:
         runtime = FakeRuntime()
         runtime_sandbox = LocalSandboxProvider()
@@ -550,6 +643,7 @@ def build_production_container(
         observability=observability,
         timeout_seconds=settings.preflight_timeout_seconds,
         clock=clock,
+        enforce_execution_profile_provider=True,
     )
     preview_controller = PreviewController(
         repository=preview_repository,
@@ -584,6 +678,7 @@ def build_production_container(
         credential_revoker=(
             credential_broker.revoke_run if credential_broker is not None else None
         ),
+        sandbox_resolver=sandbox_resolver,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -643,5 +738,6 @@ def build_production_container(
         worker=worker,
         agui=agui,
         auto_execute=False,
+        sandbox_maintenance=sandbox_maintenance,
         close=close,
     )

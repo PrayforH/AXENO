@@ -43,12 +43,13 @@ from harness.runtime.input_redaction import (
     staged_input_paths,
     staged_read_path,
 )
-from harness.sandbox.base import SandboxHandle, SandboxProvider
+from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
 
 RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[[str, str, str], Awaitable[PolicyEngine]]
 RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
 RunCredentialRevoker = Callable[[str, str], Awaitable[None]]
+SandboxResolver = Callable[[str, Session], Awaitable[SandboxProvider]]
 T = TypeVar("T")
 
 
@@ -102,6 +103,7 @@ class RunOrchestrator:
         cancellation_poll_interval_seconds: float = 0.25,
         quality_hook: RunQualityHook | None = None,
         credential_revoker: RunCredentialRevoker | None = None,
+        sandbox_resolver: SandboxResolver | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -123,6 +125,7 @@ class RunOrchestrator:
         self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
         self._quality_hook = quality_hook
         self._credential_revoker = credential_revoker
+        self._sandbox_resolver = sandbox_resolver
 
     def _stage(
         self,
@@ -261,7 +264,7 @@ class RunOrchestrator:
             fingerprints[relative] = hashlib.sha256(content).hexdigest()
         return fingerprints
 
-    async def _publish_daytona_outputs(
+    async def _publish_remote_outputs(
         self,
         *,
         tenant_id: str,
@@ -467,6 +470,7 @@ class RunOrchestrator:
             raise ConflictError(f"run is already owned or paused: {run_id} ({run.status.value})")
 
         handle: SandboxHandle | None = None
+        active_sandbox = self._sandbox
         try:
             if not is_resume:
                 if is_provision_recovery:
@@ -475,13 +479,15 @@ class RunOrchestrator:
                     run = await self._move(run, RunStatus.PROVISIONING)
             else:
                 run = await self._reclaim(run)
+            session = await self._sessions.get(tenant_id, run.session_id)
+            if self._sandbox_resolver is not None:
+                active_sandbox = await self._sandbox_resolver(tenant_id, session)
             with self._stage("harness.sandbox.provision", {"run.id": run_id}):
                 handle = await self._await_cancellable(
                     tenant_id,
                     run_id,
-                    self._sandbox.provision(run),
+                    active_sandbox.provision(run),
                 )
-            session = await self._sessions.get(tenant_id, run.session_id)
             active_policy = (
                 await self._policy_resolver(tenant_id, session.agent_name, session.agent_version)
                 if self._policy_resolver is not None
@@ -578,7 +584,7 @@ class RunOrchestrator:
                 await self._await_cancellable(
                     tenant_id,
                     run_id,
-                    self._sandbox.prepare(handle),
+                    active_sandbox.prepare(handle),
                 )
             staged_read_tool_calls: set[str] = set()
             if not is_resume:
@@ -592,7 +598,7 @@ class RunOrchestrator:
                 )
 
             async def sync_workspace() -> None:
-                await self._sandbox.collect(handle)
+                await active_sandbox.collect(handle)
 
             artifact_publisher = (
                 ArtifactPublisher(
@@ -629,7 +635,7 @@ class RunOrchestrator:
             )
             output_baseline = (
                 self._workspace_output_fingerprints(handle.path)
-                if handle.provider == "daytona"
+                if handle.isolation_level is SandboxIsolation.CONTAINER
                 else {}
             )
             active_message_id: str | None = context.assistant_message_id
@@ -736,8 +742,8 @@ class RunOrchestrator:
                             cast(dict[str, Any], audit_arguments),
                         )
                 if runtime_event.type == "artifact.output" and self._artifacts is not None:
-                    if handle.provider == "daytona":
-                        await self._sandbox.collect(handle)
+                    if handle.isolation_level is SandboxIsolation.CONTAINER:
+                        await active_sandbox.collect(handle)
                     relative_path = str(payload.get("path", ""))
                     artifact_path, artifact_content = read_runtime_artifact(
                         handle.path,
@@ -844,10 +850,10 @@ class RunOrchestrator:
                 if runtime_event.type == "message.completed":
                     active_message_id = None
             with self._stage("harness.sandbox.collect", {"run.id": run_id}):
-                await self._sandbox.collect(handle)
-            if handle.provider == "daytona":
+                await active_sandbox.collect(handle)
+            if handle.isolation_level is SandboxIsolation.CONTAINER:
                 with self._stage("harness.artifact.publish_outputs", {"run.id": run_id}):
-                    await self._publish_daytona_outputs(
+                    await self._publish_remote_outputs(
                         tenant_id=tenant_id,
                         run=run,
                         workspace=handle.path,
@@ -917,4 +923,4 @@ class RunOrchestrator:
                 await self._credential_revoker(tenant_id, run_id)
             if handle is not None:
                 with self._stage("harness.sandbox.destroy", {"run.id": run_id}):
-                    await self._sandbox.destroy(handle)
+                    await active_sandbox.destroy(handle)

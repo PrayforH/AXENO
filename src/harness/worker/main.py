@@ -147,7 +147,7 @@ async def serve(settings: Settings) -> None:
         async def deployment_maintenance() -> None:
             await container.deployment_controller.process_once()
 
-        control_tasks = (
+        control_tasks = [
             asyncio.create_task(
                 maintenance_loop(
                     preview_maintenance,
@@ -172,7 +172,18 @@ async def serve(settings: Settings) -> None:
                     label="deployment",
                 )
             ),
-        )
+        ]
+        if container.sandbox_maintenance is not None:
+            control_tasks.append(
+                asyncio.create_task(
+                    maintenance_loop(
+                        container.sandbox_maintenance,
+                        stop=stop,
+                        poll_interval=settings.kubernetes_reaper_interval_seconds,
+                        label="sandbox-reaper",
+                    )
+                )
+            )
         try:
             await worker_loop(
                 container.task_queue,

@@ -15,6 +15,7 @@ from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.profiles import PolicyProfileRegistry
 from harness.sandbox.base import SandboxHandle, SandboxProvider
+from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import CompiledAgentDraft, DraftCompilationError
 from harness.studio.models import AgentDraft
 from harness.studio.preflight_models import (
@@ -58,6 +59,7 @@ class LivePreflightRunner:
         observability: Observability | None = None,
         timeout_seconds: float = 180,
         clock: Callable[[], datetime] | None = None,
+        enforce_execution_profile_provider: bool = False,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("Preflight timeout must be positive")
@@ -68,6 +70,7 @@ class LivePreflightRunner:
         self._policies = policies
         self._observability = observability
         self._timeout_seconds = timeout_seconds
+        self._enforce_execution_profile_provider = enforce_execution_profile_provider
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def run(
@@ -279,6 +282,27 @@ class LivePreflightRunner:
                 input={"preflight": True},
             )
             handle = await self._sandbox.provision(run)
+            profile = next(
+                (
+                    item
+                    for item in default_capability_catalog().execution_profiles
+                    if item.profile_id == preview.execution_profile
+                    and item.version == preview.execution_profile_version
+                ),
+                None,
+            )
+            actual_provider = (
+                "gvisor"
+                if handle.provider == "kubernetes-gvisor"
+                else handle.provider
+            )
+            if self._enforce_execution_profile_provider and (
+                profile is None or profile.sandbox_provider != actual_provider
+            ):
+                raise PreflightCheckError(
+                    "execution_profile_sandbox_provider_mismatch",
+                    "Target Sandbox does not match the pinned Execution Profile",
+                )
             return PreflightEvidence(
                 summary="Target Sandbox provisioned",
                 details={

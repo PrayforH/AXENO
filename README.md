@@ -13,7 +13,7 @@
 - **前后端协议解耦。** Harness 事件是权威事实，AG-UI 只是无状态投影；assistant-ui 控制台可以替换，而不会影响 Agent 执行层。
 - **可观测但不绑定厂商。** 应用只发 OpenTelemetry；生产可由 Collector 输出到 Langfuse，本地默认完全关闭 exporter。
 
-这意味着后续开发一个新 Agent，主要工作变成“写 Manifest + prompt/skills/tools + 受控业务 MCP”，而不是每次重建会话、审批、网关、事件流、存储和 UI。Python SDK MCP 只适用于 Claude CLI 与 Worker 同进程的受信本地模式；生产 Daytona 模式应使用带执行身份认证的 HTTP MCP。
+这意味着后续开发一个新 Agent，主要工作变成“写 Manifest + prompt/skills/tools + 受控业务 MCP”，而不是每次重建会话、审批、网关、事件流、存储和 UI。Python SDK MCP 只适用于 Claude CLI 与 Worker 同进程的受信本地模式；生产 Daytona 或 Kubernetes/gVisor 模式应使用带执行身份认证的 HTTP MCP。
 
 ## 快速开始
 
@@ -99,4 +99,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-当前仓库已经具备持久化生产组合根、API 服务 Bearer、带 visibility lease/心跳/崩溃回收的 Redis Run 队列，以及单机 Docker 部署基线，但不是最终控制平面：多用户 OIDC/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、受信本地 Python SDK MCP 和服务端注册的外部 HTTP MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成基于可信 Sandbox 隔离级别的策略与审批；API/Worker 间的审批决策已经通过耐久 Repository 传播。Daytona 会拒绝无法跨进程传递的 `python_entry`，而不是静默丢失工具。subagent 自定义工具、Daytona 网络出口/凭据代理和 Worker 崩溃后的审批 continuation 压测仍是明确的后续边界。
+当前仓库已经具备持久化生产组合根、API 服务 Bearer、带 visibility lease/心跳/崩溃回收的 Redis Run 队列，以及 Docker Compose 和 Kubernetes/gVisor per-run Pod 两条部署基线。gVisor Pod 使用只读根文件系统、临时写层、无 Token ServiceAccount、默认拒绝网络和 allowlisted egress proxy；TTL Reaper 负责回收 Worker 崩溃遗留实例。Helm 资产与集群 opt-in E2E 见 `deploy/helm/agent-harness` 和 `tests/integration/sandbox/test_kubernetes_gvisor_live.py`。平台仍需继续补齐租户配额/计费和长期事件订阅。主 Agent 已能解析 builtin、受信本地 Python SDK MCP 和服务端注册的外部 HTTP MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成基于可信 Sandbox 隔离级别的策略与审批；API/Worker 间的审批决策已经通过耐久 Repository 传播。远程 Sandbox 会拒绝无法跨进程传递的 `python_entry`，而不是静默丢失工具。

@@ -153,6 +153,28 @@ def default_capability_catalog() -> CapabilityCatalog:
                     "productionAllowed": True,
                 }
             ),
+            ExecutionProfileMetadata.model_validate(
+                {
+                    "profileId": "gvisor-production",
+                    "label": "私有化 gVisor",
+                    "description": "每个 Run 在 Kubernetes gVisor Pod 中强隔离执行。",
+                    "sandboxProvider": "gvisor",
+                    "networkAccess": (
+                        NetworkAccess.NONE,
+                        NetworkAccess.INTERNAL,
+                        NetworkAccess.EXTERNAL,
+                    ),
+                    "risk": CapabilityRisk.MEDIUM,
+                    "cpuMillis": 2000,
+                    "memoryMiB": 4096,
+                    "diskMiB": 20480,
+                    "ttlSeconds": 3600,
+                    "networkPolicyId": "registered-mcp-only",
+                    "allowedMcpReferences": ("tavily-readonly",),
+                    "providerConfigReference": "kubernetes-gvisor-managed",
+                    "productionAllowed": True,
+                }
+            ),
         ),
         templates=(
             TemplateCapability(

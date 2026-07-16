@@ -13,6 +13,7 @@ from harness.runtime.cc_switch import CcSwitchConfigError
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import ToolResolver
+from harness.sandbox.kubernetes import KubernetesSandboxProvider
 
 
 def tavily_manifest() -> AgentManifest:
@@ -135,3 +136,19 @@ def test_daytona_composition_requires_explicit_credentials() -> None:
                 sandbox_provider="daytona", daytona_api_key=SecretStr("")
             )
         )
+
+
+def test_kubernetes_composition_requires_pinned_image_and_egress_gateway() -> None:
+    with pytest.raises(ValueError, match="HARNESS_KUBERNETES_IMAGE"):
+        build_memory_container(settings=Settings(sandbox_provider="kubernetes"))
+
+    container = build_memory_container(
+        settings=Settings(
+            sandbox_provider="kubernetes",
+            kubernetes_image="registry.example/sandbox@sha256:" + "a" * 64,
+            kubernetes_egress_proxy_url="http://proxy.harness-system.svc:3128",
+        )
+    )
+
+    assert isinstance(vars(container.worker)["_sandbox"], KubernetesSandboxProvider)
+    assert container.sandbox_maintenance is not None

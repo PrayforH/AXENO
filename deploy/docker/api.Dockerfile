@@ -1,3 +1,6 @@
+ARG KUBECTL_IMAGE=registry.k8s.io/kubectl:v1.33.1
+FROM ${KUBECTL_IMAGE} AS kubectl
+
 FROM python:3.12.11-slim-bookworm AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
@@ -34,6 +37,7 @@ COPY --from=builder --chown=harness:harness /app/migrations /app/migrations
 COPY --from=builder --chown=harness:harness /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=harness:harness /app/agents /app/agents
 COPY --from=builder --chown=harness:harness /app/scripts /app/scripts
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
 COPY --chown=harness:harness deploy/docker/entrypoint-api.sh /usr/local/bin/entrypoint-api
 COPY --chown=harness:harness deploy/docker/entrypoint-worker.sh /usr/local/bin/entrypoint-worker
 
