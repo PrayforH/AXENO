@@ -17,6 +17,7 @@ from harness.api.routes import agents, approvals, artifacts, auth, input_artifac
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
+from harness.studio import api as studio_routes
 
 
 async def _http_error(_request: Request, error: Exception) -> JSONResponse:
@@ -179,6 +180,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")
+    app.include_router(studio_routes.router)
     return app
 
 

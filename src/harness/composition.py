@@ -62,6 +62,9 @@ from harness.storage.platform_repositories import (
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.studio.catalog import default_capability_catalog
+from harness.studio.compiler import AgentDraftCompiler
+from harness.studio.service import AgentStudioService
 from harness.worker.orchestrator import RunOrchestrator
 
 
@@ -235,6 +238,17 @@ def build_production_container(
     def ids(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    agent_service = AgentService(registry, clock=clock, environment="production")
+    studio_catalog = default_capability_catalog()
+    studio_service = AgentStudioService(
+        agent_drafts,
+        AgentDraftCompiler(studio_catalog),
+        studio_catalog,
+        publisher=agent_service,
+        clock=clock,
+        id_generator=lambda: ids("draft"),
+    )
+
     events = EventService(event_repository, bus, clock=clock, id_generator=ids)
     session_service = SessionService(
         registry,
@@ -390,7 +404,8 @@ def build_production_container(
         auth=auth,
         audit=audit,
         agent_drafts=agent_drafts,
-        agents=AgentService(registry, clock=clock, environment="production"),
+        studio=studio_service,
+        agents=agent_service,
         sessions=session_service,
         runs=run_service,
         approvals=approval_service,

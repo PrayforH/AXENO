@@ -68,10 +68,13 @@ from harness.sandbox.daytona import (
     SdkDaytonaClient,
 )
 from harness.sandbox.local import LocalSandboxProvider
+from harness.studio.catalog import default_capability_catalog
+from harness.studio.compiler import AgentDraftCompiler
 from harness.studio.repositories import (
     AgentDraftRepository,
     InMemoryAgentDraftRepository,
 )
+from harness.studio.service import AgentStudioService
 from harness.worker.orchestrator import RunOrchestrator
 
 
@@ -92,6 +95,7 @@ class ApiContainer:
     auth: AuthService
     audit: AuditService
     agent_drafts: AgentDraftRepository
+    studio: AgentStudioService
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -156,6 +160,19 @@ def build_memory_container(
 
     def id_generator(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
+
+    agent_service = AgentService(
+        registry, clock=clock, environment=resolved_settings.environment
+    )
+    studio_catalog = default_capability_catalog()
+    studio_service = AgentStudioService(
+        agent_drafts,
+        AgentDraftCompiler(studio_catalog),
+        studio_catalog,
+        publisher=agent_service,
+        clock=clock,
+        id_generator=lambda: id_generator("draft"),
+    )
 
     event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
     run_service = RunService(
@@ -321,9 +338,8 @@ def build_memory_container(
         auth=auth,
         audit=audit,
         agent_drafts=agent_drafts,
-        agents=AgentService(
-            registry, clock=clock, environment=resolved_settings.environment
-        ),
+        studio=studio_service,
+        agents=agent_service,
         sessions=session_service,
         runs=run_service,
         approvals=approval_service,

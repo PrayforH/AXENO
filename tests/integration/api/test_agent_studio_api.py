@@ -1,5 +1,5 @@
+import hashlib
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -7,17 +7,9 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from harness.adapters.memory import InMemoryAgentRegistry
 from harness.api.app import create_app
 from harness.api.dependencies import build_memory_container
-from harness.application.agents import AgentService
-from harness.studio.api import router
-from harness.studio.catalog import default_capability_catalog
-from harness.studio.compiler import AgentDraftCompiler
-from harness.studio.repositories import InMemoryAgentDraftRepository
-from harness.studio.service import AgentStudioService
 
-NOW = datetime(2026, 7, 16, tzinfo=UTC)
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
 
@@ -27,21 +19,7 @@ def app() -> FastAPI:
         environment="production",
         api_bearer_token=SecretStr(SERVICE_TOKEN),
     )
-    catalog = default_capability_catalog()
-    registry = InMemoryAgentRegistry()
-    publisher = AgentService(registry, clock=lambda: NOW, environment="production")
-    service = AgentStudioService(
-        InMemoryAgentDraftRepository(),
-        AgentDraftCompiler(catalog),
-        catalog,
-        publisher=publisher,
-        clock=lambda: NOW,
-        id_generator=lambda: "draft_api",
-    )
-    application = create_app(container)
-    application.state.agent_studio = service
-    application.include_router(router)
-    return application
+    return create_app(container)
 
 
 async def register(client: AsyncClient, email: str) -> dict[str, Any]:
@@ -98,14 +76,15 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         created = await client.post(
             "/v1/studio/drafts", headers=headers, json=draft_request()
         )
+        draft_id = created.json()["draftId"]
         validation = await client.post(
-            "/v1/studio/drafts/draft_api/validate", headers=headers
+            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
         )
         bundle = await client.get(
-            "/v1/studio/drafts/draft_api/bundle", headers=headers
+            f"/v1/studio/drafts/{draft_id}/bundle", headers=headers
         )
         published = await client.post(
-            "/v1/studio/drafts/draft_api/publish", headers=headers
+            f"/v1/studio/drafts/{draft_id}/publish", headers=headers
         )
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
@@ -119,7 +98,16 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert validation.json()["contract"]["sandbox"] == "isolated"
     assert bundle.status_code == 200
     assert bundle.headers["content-type"] == "application/zip"
-    assert "policy-researcher-0.1.0" in bundle.headers["content-disposition"]
+    content_hash = validation.json()["contentHash"]
+    package_hash = validation.json()["packageHash"]
+    assert bundle.headers["content-disposition"] == (
+        "attachment; "
+        f'filename="policy-researcher-0.1.0-{package_hash[:12]}.zip"'
+    )
+    archive_hash = hashlib.sha256(bundle.content).hexdigest()
+    assert bundle.headers["etag"] == f'"{archive_hash}"'
+    assert bundle.headers["x-agent-content-sha256"] == content_hash
+    assert bundle.headers["x-agent-package-sha256"] == package_hash
     assert published.status_code == 200
     assert published.json()["name"] == "policy-researcher"
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
@@ -169,11 +157,12 @@ async def test_member_can_write_and_validate_but_cannot_publish() -> None:
         created = await client.post(
             "/v1/studio/drafts", headers=headers, json=draft_request()
         )
+        draft_id = created.json()["draftId"]
         validation = await client.post(
-            "/v1/studio/drafts/draft_api/validate", headers=headers
+            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
         )
         published = await client.post(
-            "/v1/studio/drafts/draft_api/publish", headers=headers
+            f"/v1/studio/drafts/{draft_id}/publish", headers=headers
         )
 
     assert member["membership"]["role"] == "member"
@@ -181,3 +170,79 @@ async def test_member_can_write_and_validate_but_cannot_publish() -> None:
     assert validation.status_code == 200
     assert published.status_code == 403
     assert published.json()["error"]["code"] == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_studio_contract_hides_tenants_and_reports_conflict_and_invalid_bundle() -> None:
+    tenant_a = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+    }
+    tenant_b = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-b",
+        "X-User-ID": "builder-b",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=app()), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=tenant_a, json=draft_request()
+        )
+        draft_id = created.json()["draftId"]
+        hidden = await client.get(
+            f"/v1/studio/drafts/{draft_id}", headers=tenant_b
+        )
+
+        first_spec = created.json()["spec"]
+        first_spec["description"] = "第一次保存。"
+        first_update = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=tenant_a,
+            json={"expectedRevision": 1, "spec": first_spec},
+        )
+        stale = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=tenant_a,
+            json={"expectedRevision": 1, "spec": first_spec},
+        )
+
+        invalid_spec = first_update.json()["spec"]
+        invalid_spec["builtinTools"] = [*invalid_spec["builtinTools"], "UnknownTool"]
+        invalid_update = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=tenant_a,
+            json={"expectedRevision": 2, "spec": invalid_spec},
+        )
+        invalid_bundle = await client.get(
+            f"/v1/studio/drafts/{draft_id}/bundle", headers=tenant_a
+        )
+
+    assert created.status_code == 201
+    assert hidden.status_code == 404
+    assert hidden.json()["error"]["code"] == "not_found"
+    assert first_update.status_code == 200
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "draft_conflict"
+    assert invalid_update.status_code == 200
+    assert invalid_bundle.status_code == 422
+    assert invalid_bundle.json()["error"]["code"] == "draft_not_ready"
+
+
+def test_studio_routes_are_exposed_once_in_openapi() -> None:
+    schema = app().openapi()
+    expected = {
+        "/v1/studio/capabilities",
+        "/v1/studio/drafts",
+        "/v1/studio/drafts/{draft_id}",
+        "/v1/studio/drafts/{draft_id}/validate",
+        "/v1/studio/drafts/{draft_id}/bundle",
+        "/v1/studio/drafts/{draft_id}/publish",
+    }
+
+    assert expected <= set(schema["paths"])
+    assert schema["paths"]["/v1/studio/drafts"]["post"]["responses"].keys() >= {
+        "201",
+        "422",
+    }

@@ -1,12 +1,8 @@
-"""Standalone Agent Studio API contract backed by trusted Harness identities.
-
-The router remains intentionally unmounted until the control-plane composition work is
-complete. Applications that mount it must provide the normal Harness API container and
-authentication middleware; Studio never accepts a client-supplied actor.
-"""
+"""Agent Studio API contract backed by trusted Harness identities."""
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Annotated
 
@@ -58,7 +54,8 @@ def require_studio_publisher(
 
 
 def get_studio_service(request: Request) -> AgentStudioService:
-    service = getattr(request.app.state, "agent_studio", None)
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "studio", None)
     if not isinstance(service, AgentStudioService):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -189,7 +186,10 @@ async def download_bundle(
         content=compiled.bundle,
         media_type="application/zip",
         headers={
-            "Content-Disposition": f'attachment; filename="{compiled.filename}"'
+            "Content-Disposition": f'attachment; filename="{compiled.filename}"',
+            "ETag": f'"{hashlib.sha256(compiled.bundle).hexdigest()}"',
+            "X-Agent-Content-SHA256": compiled.report.snapshot.content_hash,
+            "X-Agent-Package-SHA256": compiled.report.package_hash,
         },
     )
 
