@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   proxyAguiRequest,
   proxyInputArtifactRequest,
+  proxyStudioRequest,
 } from "../src/lib/harness-proxy";
 import type { HarnessServerConfig } from "../src/lib/server-config";
 
@@ -132,5 +133,44 @@ describe("Harness same-origin proxies", () => {
 
     expect(response.status).toBe(502);
     expect(await response.text()).not.toContain("harness.internal");
+  });
+
+  it("proxies Studio mutations and bundle headers through the authenticated BFF", async () => {
+    let upstreamUrl = "";
+    let upstreamInit: RequestInit | undefined;
+    const fetcher: typeof fetch = async (input, init) => {
+      upstreamUrl = String(input);
+      upstreamInit = init;
+      return new Response("bundle", {
+        status: 200,
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": 'attachment; filename="agent-0.1.0.zip"',
+          ETag: '"archive-hash"',
+          "X-Agent-Package-SHA256": "package-hash",
+        },
+      });
+    };
+    const request = new Request(
+      "http://console.test/api/studio/drafts/draft-1/bundle?download=true",
+      { headers: { Cookie: "harness_access_token=user-jwt" } },
+    );
+
+    const response = await proxyStudioRequest(
+      request,
+      config,
+      fetcher,
+      "drafts/draft-1/bundle",
+    );
+
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/v1/studio/drafts/draft-1/bundle?download=true",
+    );
+    const headers = new Headers(upstreamInit?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer user-jwt");
+    expect(headers.get("X-Harness-Service-Token")).toBe("server-only-token");
+    expect(response.headers.get("Content-Disposition")).toContain("agent-0.1.0.zip");
+    expect(response.headers.get("ETag")).toBe('"archive-hash"');
+    expect(response.headers.get("X-Agent-Package-SHA256")).toBe("package-hash");
   });
 });

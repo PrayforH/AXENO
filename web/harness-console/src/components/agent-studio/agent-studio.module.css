@@ -605,8 +605,64 @@
 
 .panelViewport {
   min-width: 0;
+  min-inline-size: 0;
+  margin: 0;
   padding: 30px clamp(24px, 4vw, 58px) 52px;
   overflow: auto;
+  border: 0;
+}
+
+.conflictBanner,
+.readonlyBanner,
+.emptyBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 30px;
+  border-bottom: 1px solid var(--studio-line);
+  font-size: 11px;
+}
+
+.conflictBanner {
+  color: #783d38;
+  background: var(--studio-red-soft);
+}
+
+.readonlyBanner {
+  color: #554b70;
+  background: var(--studio-violet-soft);
+}
+
+.emptyBanner {
+  justify-content: flex-start;
+  color: var(--studio-muted);
+  background: #f8faf7;
+}
+
+.emptyBanner strong {
+  color: var(--studio-ink);
+}
+
+.conflictBanner > div {
+  display: grid;
+  gap: 2px;
+}
+
+.conflictBanner span {
+  color: #8b5b57;
+}
+
+.conflictBanner button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d7aaa5;
+  border-radius: 8px;
+  color: #783d38;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .configPanel {

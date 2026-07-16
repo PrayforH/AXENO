@@ -40,6 +40,7 @@ export interface StudioSkill {
   name: string;
   description: string;
   instructions: string;
+  files?: Array<{ path: string; content: string }>;
 }
 
 export interface StudioEvalCase {
@@ -64,17 +65,9 @@ export interface StudioSubagent {
   background: boolean;
 }
 
-export interface PublishedAgentOption {
-  ref: string;
-  label: string;
-  description: string;
-  policy: string;
-  tools: string[];
-  status: "approved" | "deprecated";
-}
-
 export interface StudioDraft {
   id: string;
+  revision: number;
   displayName: string;
   name: string;
   description: string;
@@ -83,12 +76,14 @@ export interface StudioDraft {
   template: "analyst" | "operator" | "orchestrator";
   modelRoute: string;
   model: string;
+  requiredCapabilities: string[];
   systemPrompt: string;
   skills: StudioSkill[];
   builtinTools: string[];
   mcpServers: string[];
   subagents: StudioSubagent[];
   policy: string;
+  executionProfile: string;
   restoreSession: boolean;
   archiveOnComplete: boolean;
   maxTurns: number;
@@ -213,17 +208,6 @@ export const POLICY_OPTIONS = [
   },
 ];
 
-export const PUBLISHED_SUBAGENTS: PublishedAgentOption[] = [
-  {
-    ref: "helper-agent@1.0.0",
-    label: "通用调查助手",
-    description: "在只读隔离工作区中完成证据整理、差异比对和结构化回传。",
-    policy: "production-read-only",
-    tools: ["Read", "Glob", "Grep"],
-    status: "approved",
-  },
-];
-
 export const REQUIRED_PROMPT_HEADINGS = [
   "## Mission",
   "## Operating workflow",
@@ -234,6 +218,7 @@ export const REQUIRED_PROMPT_HEADINGS = [
 
 export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   id: "draft-public-opinion",
+  revision: 0,
   displayName: "舆情研判 Agent",
   name: "public-opinion-agent",
   description: "从用户材料和受控公网搜索中形成可追溯的中文舆情报告。",
@@ -242,6 +227,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   template: "orchestrator",
   modelRoute: "new-api-default",
   model: "claude-sonnet-4-6",
+  requiredCapabilities: ["streaming", "tool_use"],
   systemPrompt: `# Public Opinion Agent
 
 你是面向中文业务用户、以证据为基础的舆情分析 Agent。
@@ -296,6 +282,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
     },
   ],
   policy: "production-orchestrator",
+  executionProfile: "isolated-default",
   restoreSession: true,
   archiveOnComplete: true,
   maxTurns: 20,
@@ -404,9 +391,14 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
   };
 }
 
-export function evaluateStudioDraft(draft: StudioDraft): StudioContract {
+export function evaluateStudioDraft(
+  draft: StudioDraft,
+  catalog: { routes?: ModelRouteOption[]; mcp?: McpOption[] } = {},
+): StudioContract {
   const issues: string[] = [];
-  const route = MODEL_ROUTES.find((item) => item.id === draft.modelRoute);
+  const routes = catalog.routes ?? MODEL_ROUTES;
+  const mcpOptions = catalog.mcp ?? MCP_OPTIONS;
+  const route = routes.find((item) => item.id === draft.modelRoute);
   const promptSections = REQUIRED_PROMPT_HEADINGS.filter((heading) =>
     draft.systemPrompt.includes(heading),
   ).length;
@@ -468,7 +460,7 @@ export function evaluateStudioDraft(draft: StudioDraft): StudioContract {
     }
   }
 
-  const selectedMcp = MCP_OPTIONS.filter((item) =>
+  const selectedMcp = mcpOptions.filter((item) =>
     draft.mcpServers.includes(item.id),
   );
   const network: NetworkAccess = selectedMcp.some(

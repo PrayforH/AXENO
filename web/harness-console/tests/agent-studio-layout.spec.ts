@@ -21,6 +21,10 @@ const studioConfig = readFileSync(
   join(process.cwd(), "src/lib/agent-studio.ts"),
   "utf8",
 );
+const studioClient = readFileSync(
+  join(process.cwd(), "src/lib/studio-client.ts"),
+  "utf8",
+);
 const errorBoundary = readFileSync(
   join(process.cwd(), "src/app/studio/agents/error.tsx"),
   "utf8",
@@ -38,7 +42,8 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain('aria-label="工作区"');
     expect(workbench).toContain('href="/"');
     expect(workbench).toContain('href="/studio/agents"');
-    expect(workbench).toContain('data-studio-integration="pending-auth"');
+    expect(page).toContain("AuthProvider");
+    expect(workbench).toContain('data-studio-integration="api"');
   });
 
   it("organizes authoring as a capability chain instead of one giant form", () => {
@@ -68,8 +73,8 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("同一通用 Agent 版本可绑定多个职责");
     expect(workbench).toContain("从已发布目录选择");
     expect(workbench).toContain("协同运行摘要");
-    expect(studioConfig).toContain("PUBLISHED_SUBAGENTS");
-    expect(studioConfig).toContain("helper-agent@1.0.0");
+    expect(workbench).toContain("publishedSubagents");
+    expect(studioClient).toContain("publishedVersion");
     expect(styles).toContain(".orchestrationGraph");
     expect(styles).toContain(".subagentTopology");
     expect(styles).toContain(".leadAgentCard");
@@ -87,8 +92,9 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 
-  it("does not pretend publishing works before authentication integration", () => {
-    expect(workbench).toContain("等待登录与 RBAC 分支接入");
+  it("uses authenticated roles and keeps publication disabled until governance is ready", () => {
+    expect(workbench).toContain("membership.role");
+    expect(workbench).toContain("发布治理将在下一阶段接入");
     expect(workbench).toMatch(/className=\{styles\.publishButton\}[\s\S]*?disabled/);
   });
 
@@ -107,10 +113,12 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".studioStateShell");
   });
 
-  it("labels repository-backed data instead of presenting invented agents as live data", () => {
-    expect(workbench).toContain("本地目录");
-    expect(workbench).toContain("仅展示仓库内真实 Bundle");
-    expect(workbench).toContain("helper-agent-1.0.0");
+  it("renders only tenant API rows instead of invented live agents", () => {
+    expect(workbench).toContain("租户控制面");
+    expect(workbench).toContain("studioClient.listDrafts");
+    expect(workbench).toContain("studioClient.getDraft");
+    expect(workbench).not.toContain("helper-agent-1.0.0");
+    expect(workbench).not.toContain("echo-agent-0.4.0");
     expect(workbench).not.toContain("合同审查助手");
     expect(workbench).not.toContain("工单分诊助手");
   });

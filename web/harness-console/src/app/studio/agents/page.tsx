@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AgentStudioWorkbench } from "../../../components/agent-studio/agent-studio-workbench";
+import { AuthProvider } from "../../../components/auth-provider";
 
 export const metadata: Metadata = {
   title: "Agent Studio · Agent Harness",
@@ -7,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function AgentStudioPage() {
-  return <AgentStudioWorkbench />;
+  return <AuthProvider><AgentStudioWorkbench /></AuthProvider>;
 }

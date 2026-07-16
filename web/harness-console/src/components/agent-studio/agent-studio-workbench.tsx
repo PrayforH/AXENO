@@ -2,20 +2,25 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth-provider";
 import {
-  BUILTIN_TOOLS,
   DEFAULT_STUDIO_DRAFT,
-  MCP_OPTIONS,
-  MODEL_ROUTES,
-  PUBLISHED_SUBAGENTS,
-  POLICY_OPTIONS,
   REQUIRED_PROMPT_HEADINGS,
   evaluateStudioDraft,
-  restoreStudioDraft,
   type StudioDraft,
   type StudioSection,
   type StudioSubagent,
 } from "../../lib/agent-studio";
+import {
+  apiDraftToStudioDraft,
+  capabilityOptions,
+  StudioApiError,
+  studioClient,
+  type StudioCapabilities,
+  type StudioDraftSummary,
+  type StudioValidation,
+} from "../../lib/studio-client";
+import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -27,41 +32,6 @@ const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
   { id: "capabilities", label: "Tools 与联网", hint: "确定性能力" },
   { id: "runtime", label: "运行与权限", hint: "隔离和审批" },
   { id: "evaluation", label: "测试与发布", hint: "质量门禁" },
-];
-
-const agentRows = [
-  {
-    id: "draft-public-opinion",
-    name: "舆情研判 Agent",
-    version: "0.2.0",
-    status: "草稿",
-    source: "浏览器草稿",
-    active: true,
-  },
-  {
-    id: "public-opinion-agent-0.1.1",
-    name: "舆情研判 Agent",
-    version: "0.1.1",
-    status: "已发布",
-    source: "本地 Bundle",
-    active: false,
-  },
-  {
-    id: "helper-agent-1.0.0",
-    name: "通用调查助手",
-    version: "1.0.0",
-    status: "已发布",
-    source: "本地 Bundle",
-    active: false,
-  },
-  {
-    id: "echo-agent-0.4.0",
-    name: "工作区验证 Agent",
-    version: "0.4.0",
-    status: "已发布",
-    source: "本地 Bundle",
-    active: false,
-  },
 ];
 
 const lifecycleStages = [
@@ -77,41 +47,112 @@ function riskLabel(risk: "low" | "medium" | "high") {
 }
 
 export function AgentStudioWorkbench() {
+  const { membership } = useAuth();
   const [draft, setDraft] = useState<StudioDraft>(DEFAULT_STUDIO_DRAFT);
+  const [drafts, setDrafts] = useState<StudioDraftSummary[]>([]);
+  const [capabilities, setCapabilities] = useState<StudioCapabilities | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [serverValidation, setServerValidation] = useState<StudioValidation | null>(null);
   const [activeSection, setActiveSection] =
     useState<StudioSection>("capabilities");
   const [agentQuery, setAgentQuery] = useState("");
   const [inspected, setInspected] = useState(false);
-  const [notice, setNotice] = useState("草稿尚未保存到控制面");
-  const contract = useMemo(() => evaluateStudioDraft(draft), [draft]);
+  const [notice, setNotice] = useState("正在读取控制面草稿…");
+  const canEdit = membership.role !== "viewer";
+  const canPublish = membership.role === "owner" || membership.role === "admin";
+  const options = useMemo(
+    () => capabilities ? capabilityOptions(capabilities) : { routes: [], tools: [], mcp: [] },
+    [capabilities],
+  );
+  const contract = useMemo(
+    () => evaluateStudioDraft(draft, { routes: options.routes, mcp: options.mcp }),
+    [draft, options],
+  );
+  const policyOptions = useMemo(
+    () => capabilities?.policies.filter((item) => item.enabled).map((item) => ({
+      id: item.policyId,
+      label: item.label,
+      description: item.description,
+    })) ?? [],
+    [capabilities],
+  );
+  const publishedSubagents = useMemo(
+    () => drafts
+      .filter((item) => item.publishedVersion)
+      .map((item) => ({
+        ref: `${item.name}@${item.publishedVersion}`,
+        label: item.displayName,
+        description: `${item.domain} · 已发布租户版本`,
+        policy: "已发布快照",
+        tools: [] as string[],
+        status: "approved" as const,
+      })),
+    [drafts],
+  );
   const filteredAgentRows = useMemo(() => {
     const query = agentQuery.trim().toLocaleLowerCase();
-    if (!query) return agentRows;
-    return agentRows.filter((agent) =>
-      [agent.name, agent.version, agent.status, agent.source]
+    if (!query) return drafts;
+    return drafts.filter((agent) =>
+      [agent.displayName, agent.name, agent.version, agent.publishedVersion ?? "草稿"]
         .join(" ")
         .toLocaleLowerCase()
         .includes(query),
     );
-  }, [agentQuery]);
+  }, [agentQuery, drafts]);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("harness-agent-studio-draft");
-    if (!saved) return;
-    try {
-      const recovered = restoreStudioDraft(JSON.parse(saved));
-      if (recovered) {
-        setDraft(recovered);
-        setNotice("已兼容恢复浏览器草稿 · 尚未同步到控制面");
+    let active = true;
+    async function load() {
+      setLoading(true);
+      setLoadError("");
+      try {
+        const [serverDrafts, serverCapabilities] = await Promise.all([
+          studioClient.listDrafts(),
+          studioClient.capabilities(),
+        ]);
+        if (!active) return;
+        setCapabilities(serverCapabilities);
+        setDrafts(serverDrafts);
+        const migration = await migrateLegacyStudioDraft(
+          window.localStorage,
+          studioClient,
+          canEdit,
+        );
+        if (!active) return;
+        if (migration.status === "imported") {
+          setDraft(migration.draft);
+          setDrafts(await studioClient.listDrafts());
+          setNotice("旧浏览器草稿已一次性导入控制面");
+        } else if (serverDrafts.length > 0) {
+          const selected = await studioClient.getDraft(serverDrafts[0].draftId);
+          if (!active) return;
+          setDraft(apiDraftToStudioDraft(selected));
+          setNotice("已从控制面加载草稿");
+        } else {
+          setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
+          setNotice(canEdit ? "当前没有草稿，可新建第一个 Agent" : "当前没有可查看的草稿");
+        }
+      } catch (error) {
+        if (!active) return;
+        setLoadError(error instanceof Error ? error.message : "Studio API 当前不可用");
+      } finally {
+        if (active) setLoading(false);
       }
-    } catch {
-      setNotice("浏览器草稿无法恢复，已使用仓库默认配置");
     }
-  }, []);
+    void load();
+    return () => { active = false; };
+  }, [canEdit]);
 
   function updateDraft(update: Partial<StudioDraft>) {
     setDraft((current) => ({ ...current, ...update }));
     setInspected(false);
+    setServerValidation(null);
+    setDirty(true);
+    setConflict(false);
     setNotice("有尚未保存的修改");
   }
 
@@ -144,13 +185,18 @@ export function AgentStudioWorkbench() {
       setNotice("单个 Lead 最多绑定 8 个 Sub Agent");
       return;
     }
+    const published = publishedSubagents[0];
+    if (!published) {
+      setNotice("当前租户没有可绑定的已发布 Agent 版本");
+      return;
+    }
     const sequence = draft.subagents.length + 1;
     updateDraft({
       subagents: [
         ...draft.subagents,
         {
           alias: `specialist-${sequence}`,
-          ref: "helper-agent@1.0.0",
+          ref: published.ref,
           responsibility: "说明 Lead 应在什么情况下委派，以及 Sub Agent 必须返回什么。",
           background: true,
         },
@@ -178,18 +224,89 @@ export function AgentStudioWorkbench() {
     });
   }
 
-  function saveLocally() {
-    window.localStorage.setItem("harness-agent-studio-draft", JSON.stringify(draft));
-    setNotice("已保存浏览器草稿 · 接入认证后迁移到控制面");
+  async function saveDraft(): Promise<StudioDraft | null> {
+    if (!canEdit) {
+      setNotice("当前角色只有查看权限");
+      return null;
+    }
+    setSaving(true);
+    try {
+      let saved;
+      if (!draft.id) {
+        const created = await studioClient.createDraft(draft);
+        saved = await studioClient.replaceDraft({
+          ...draft,
+          id: created.draftId,
+          revision: created.revision,
+        });
+      } else {
+        saved = await studioClient.replaceDraft(draft);
+      }
+      const next = apiDraftToStudioDraft(saved);
+      setDraft(next);
+      setDrafts(await studioClient.listDrafts());
+      setDirty(false);
+      setConflict(false);
+      setNotice(`已保存到控制面 · revision ${next.revision}`);
+      return next;
+    } catch (error) {
+      if (error instanceof StudioApiError && error.status === 409) {
+        setConflict(true);
+        setNotice("保存冲突：控制面已有更新，本地修改尚未丢失");
+      } else {
+        setNotice(error instanceof Error ? error.message : "保存失败");
+      }
+      return null;
+    } finally {
+      setSaving(false);
+    }
   }
 
-  function inspectDraft() {
-    setInspected(true);
-    setNotice(
-      contract.ready
-        ? "结构检查通过 · 发布部署前仍需校验 MCP 与 Sandbox 连通性"
-        : `发现 ${contract.issues.length} 个阻塞问题`,
-    );
+  async function inspectDraft() {
+    const current = dirty || !draft.id ? await saveDraft() : draft;
+    if (!current?.id) return;
+    try {
+      const validation = await studioClient.validateDraft(current.id);
+      setServerValidation(validation);
+      setInspected(true);
+      setNotice(validation.ready ? "服务端结构检查通过" : `发现 ${validation.issues.length} 个问题`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "检查失败");
+    }
+  }
+
+  async function selectDraft(draftId: string) {
+    if (dirty && !window.confirm("当前修改尚未保存，仍要切换草稿吗？")) return;
+    try {
+      const selected = await studioClient.getDraft(draftId);
+      setDraft(apiDraftToStudioDraft(selected));
+      setDirty(false);
+      setConflict(false);
+      setServerValidation(null);
+      setNotice("已从控制面切换草稿");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "加载草稿失败");
+    }
+  }
+
+  async function reloadAfterConflict() {
+    if (!draft.id) return;
+    const selected = await studioClient.getDraft(draft.id);
+    setDraft(apiDraftToStudioDraft(selected));
+    setDirty(false);
+    setConflict(false);
+    setNotice("已加载控制面最新 revision");
+  }
+
+  async function downloadBundle() {
+    const current = dirty ? await saveDraft() : draft;
+    if (!current?.id) return;
+    try {
+      await studioClient.downloadBundle(current.id);
+      setNotice("Bundle 下载已开始");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Bundle 下载失败");
+    }
   }
 
   function sectionSummary(section: StudioSection) {
@@ -214,15 +331,23 @@ export function AgentStudioWorkbench() {
   }
 
   const selectedRoute =
-    MODEL_ROUTES.find((route) => route.id === draft.modelRoute) ?? MODEL_ROUTES[0];
+    options.routes.find((route) => route.id === draft.modelRoute) ?? options.routes[0];
   const skill = draft.skills[0];
-  const activeLifecycleStage = inspected && contract.ready ? "preview" : inspected ? "check" : "draft";
+  const validationReady = serverValidation?.ready ?? contract.ready;
+  const activeLifecycleStage = inspected && validationReady ? "preview" : inspected ? "check" : "draft";
   const activeLifecycleIndex = lifecycleStages.findIndex(
     (stage) => stage.id === activeLifecycleStage,
   );
 
+  if (loading) {
+    return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
+  }
+  if (loadError) {
+    return <main className={styles.studioStateShell}><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+  }
+
   return (
-    <main className={styles.studioShell} data-studio-integration="pending-auth">
+    <main className={styles.studioShell} data-studio-integration="api">
       <aside className={styles.agentRail} aria-label="Agent 列表">
         <div className={styles.studioBrand}>
           <span className={styles.brandMark} aria-hidden="true">
@@ -252,7 +377,13 @@ export function AgentStudioWorkbench() {
           <button
             type="button"
             aria-label="新建智能体"
-            onClick={() => setNotice("新建流程将在 Studio API 接入后启用")}
+            disabled={!canEdit}
+            onClick={() => {
+              setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
+              setDirty(true);
+              setConflict(false);
+              setNotice("新草稿尚未保存到控制面");
+            }}
           >
             +
           </button>
@@ -273,20 +404,18 @@ export function AgentStudioWorkbench() {
           {filteredAgentRows.map((agent) => (
             <button
               type="button"
-              key={agent.id}
-              className={agent.active ? styles.agentRowActive : styles.agentRow}
-              aria-current={agent.active ? "page" : undefined}
-              onClick={() =>
-                !agent.active && setNotice("版本切换将在列表 API 接入后启用")
-              }
+              key={agent.draftId}
+              className={agent.draftId === draft.id ? styles.agentRowActive : styles.agentRow}
+              aria-current={agent.draftId === draft.id ? "page" : undefined}
+              onClick={() => void selectDraft(agent.draftId)}
             >
               <span className={styles.agentMonogram} aria-hidden="true">
-                {agent.name.slice(0, 1)}
+                {agent.displayName.slice(0, 1)}
               </span>
               <span className={styles.agentRowCopy}>
-                <strong>{agent.name}</strong>
+                <strong>{agent.displayName}</strong>
                 <small>
-                  {agent.version} · {agent.status} · {agent.source}
+                  {agent.version} · {agent.publishedVersion ? `已发布 ${agent.publishedVersion}` : "草稿"} · r{agent.revision}
                 </small>
               </span>
             </button>
@@ -297,12 +426,18 @@ export function AgentStudioWorkbench() {
         </nav>
 
         <div className={styles.railFooter}>
-          <strong>本地目录</strong>
-          <span>仅展示仓库内真实 Bundle；登录与目录 API 合并后切换为租户数据。</span>
+          <strong>租户控制面</strong>
+          <span>列表与 revision 均来自 Studio API；浏览器不保存主数据。</span>
         </div>
       </aside>
 
-      <section className={styles.editorShell}>
+      <section className={styles.editorShell} data-readonly={!canEdit}>
+        {drafts.length === 0 && !draft.id && (
+          <div className={styles.emptyBanner} role="status">
+            <strong>当前租户还没有智能体草稿</strong>
+            <span>{canEdit ? "填写模板并保存，即可创建第一个草稿。" : "请联系成员或管理员创建后再查看。"}</span>
+          </div>
+        )}
         <header className={styles.editorHeader}>
           <div className={styles.titleBlock}>
             <div className={styles.eyebrow}>
@@ -316,10 +451,10 @@ export function AgentStudioWorkbench() {
             <p>{draft.description}</p>
           </div>
           <div className={styles.headerActions}>
-            <button type="button" className={styles.secondaryButton} onClick={saveLocally}>
-              保存草稿
+            <button type="button" className={styles.secondaryButton} disabled={!canEdit || saving} onClick={() => void saveDraft()}>
+              {saving ? "保存中…" : "保存草稿"}
             </button>
-            <button type="button" className={styles.checkButton} onClick={inspectDraft}>
+            <button type="button" className={styles.checkButton} disabled={!canEdit || saving} onClick={() => void inspectDraft()}>
               检查配置
             </button>
             <button
@@ -334,12 +469,27 @@ export function AgentStudioWorkbench() {
               type="button"
               className={styles.publishButton}
               disabled
-              title="等待登录与 RBAC 分支接入"
+              title={canPublish ? "发布治理将在下一阶段接入" : "当前角色没有发布权限"}
             >
               发布
             </button>
+            <button type="button" className={styles.secondaryButton} disabled={!draft.id || saving} onClick={() => void downloadBundle()}>
+              下载 Bundle
+            </button>
           </div>
         </header>
+
+        {conflict && (
+          <div className={styles.conflictBanner} role="alert">
+            <div><strong>控制面已有更新</strong><span>本地修改仍保留。加载最新 revision 后再重新编辑。</span></div>
+            <button type="button" onClick={() => void reloadAfterConflict()}>加载最新版本</button>
+          </div>
+        )}
+        {!canEdit && (
+          <div className={styles.readonlyBanner} role="status">
+            当前为只读角色。可以查看配置和下载已通过校验的 Bundle，不能修改或保存草稿。
+          </div>
+        )}
 
         <ol className={styles.lifecycleBar} aria-label="从草稿到部署的生命周期">
           {lifecycleStages.map((stage, index) => {
@@ -379,7 +529,7 @@ export function AgentStudioWorkbench() {
             ))}
           </nav>
 
-          <div className={styles.panelViewport}>
+          <fieldset className={styles.panelViewport} disabled={!canEdit}>
             {activeSection === "identity" && (
               <section className={styles.configPanel} aria-labelledby="identity-title">
                 <PanelHeading
@@ -436,7 +586,7 @@ export function AgentStudioWorkbench() {
                   description="Agent 只引用路由和模型；Endpoint 与凭据始终由平台托管。"
                 />
                 <div className={styles.routeCards}>
-                  {MODEL_ROUTES.map((route) => (
+                  {options.routes.map((route) => (
                     <button
                       type="button"
                       key={route.id}
@@ -457,7 +607,7 @@ export function AgentStudioWorkbench() {
                       value={draft.model}
                       onChange={(event) => updateDraft({ model: event.target.value })}
                     >
-                      {selectedRoute.models.map((model) => (
+                      {(selectedRoute?.models ?? [draft.model]).map((model) => (
                         <option key={model} value={model}>{model}</option>
                       ))}
                     </select>
@@ -575,7 +725,7 @@ export function AgentStudioWorkbench() {
 
                 <div className={styles.subagentEditors}>
                   {draft.subagents.map((subagent, index) => {
-                    const catalogAgent = PUBLISHED_SUBAGENTS.find(
+                    const catalogAgent = publishedSubagents.find(
                       (agent) => agent.ref === subagent.ref,
                     );
                     return (
@@ -607,10 +757,10 @@ export function AgentStudioWorkbench() {
                             value={subagent.ref}
                             onChange={(event) => updateSubagent(index, { ref: event.target.value })}
                           >
-                            {!PUBLISHED_SUBAGENTS.some((agent) => agent.ref === subagent.ref) && (
+                            {!publishedSubagents.some((agent) => agent.ref === subagent.ref) && (
                               <option value={subagent.ref}>{subagent.ref || "未识别版本"}</option>
                             )}
-                            {PUBLISHED_SUBAGENTS.map((agent) => (
+                            {publishedSubagents.map((agent) => (
                               <option key={agent.ref} value={agent.ref}>
                                 {agent.label} · {agent.ref}
                               </option>
@@ -723,7 +873,7 @@ export function AgentStudioWorkbench() {
                   <span>{draft.builtinTools.length} 项已启用</span>
                 </div>
                 <div className={styles.toolGrid}>
-                  {BUILTIN_TOOLS.map((tool) => {
+                  {options.tools.map((tool) => {
                     const enabled = draft.builtinTools.includes(tool.id);
                     return (
                       <label key={tool.id} className={enabled ? styles.toolCardEnabled : styles.toolCard}>
@@ -751,7 +901,7 @@ export function AgentStudioWorkbench() {
                   </div>
                   <span>{draft.mcpServers.length} 项已启用</span>
                 </div>
-                {MCP_OPTIONS.map((mcp) => {
+                {options.mcp.map((mcp) => {
                   const enabled = draft.mcpServers.includes(mcp.id);
                   return (
                     <label key={mcp.id} className={enabled ? styles.mcpCardEnabled : styles.mcpCard}>
@@ -840,7 +990,7 @@ export function AgentStudioWorkbench() {
                       value={draft.policy}
                       onChange={(event) => updateDraft({ policy: event.target.value })}
                     >
-                      {POLICY_OPTIONS.map((policy) => (
+                      {policyOptions.map((policy) => (
                         <option key={policy.id} value={policy.id}>
                           {policy.label} · {policy.description}
                         </option>
@@ -950,13 +1100,13 @@ export function AgentStudioWorkbench() {
                 </div>
               </section>
             )}
-          </div>
+          </fieldset>
         </div>
 
         <footer className={styles.editorFooter}>
           <span className={notice.includes("阻塞") ? styles.noticeError : styles.noticeDot} aria-hidden="true" />
           <span>{notice}</span>
-          <code>revision 7</code>
+          <code>{draft.id ? `revision ${draft.revision}` : "unsaved"}</code>
         </footer>
       </section>
 
@@ -1058,11 +1208,11 @@ export function AgentStudioWorkbench() {
 
         {inspected && (
           <section className={contract.ready ? styles.validationReady : styles.validationIssues} role="status">
-            <strong>{contract.ready ? "结构检查通过" : "发布被阻止"}</strong>
-            {contract.ready ? (
-              <p>Manifest、Prompt、Skills、工具与评测覆盖满足本地编译前条件。</p>
+            <strong>{validationReady ? "结构检查通过" : "发布被阻止"}</strong>
+            {validationReady ? (
+              <p>Manifest、Prompt、Skills、工具与评测覆盖已通过服务端编译前条件。</p>
             ) : (
-              <ul>{contract.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
+              <ul>{(serverValidation?.issues.map((issue) => issue.message) ?? contract.issues).map((issue) => <li key={issue}>{issue}</li>)}</ul>
             )}
           </section>
         )}

@@ -11,7 +11,10 @@ const RESPONSE_HEADERS = [
   "cache-control",
   "content-disposition",
   "content-type",
+  "etag",
   "x-accel-buffering",
+  "x-agent-content-sha256",
+  "x-agent-package-sha256",
 ];
 
 function upstreamHeaders(
@@ -123,4 +126,17 @@ export async function proxyInputArtifactRequest(
     config,
     fetcher,
   );
+}
+
+export async function proxyStudioRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/v1/studio${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  url.search = new URL(request.url).search;
+  return forward(request, url.toString(), config, fetcher);
 }

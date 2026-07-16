@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_STUDIO_DRAFT,
-  PUBLISHED_SUBAGENTS,
   evaluateStudioDraft,
   restoreStudioDraft,
 } from "../src/lib/agent-studio";
@@ -69,13 +68,9 @@ describe("Agent Studio effective contract", () => {
     );
   });
 
-  it("offers only immutable published versions for Sub Agent catalog binding", () => {
-    expect(PUBLISHED_SUBAGENTS.length).toBeGreaterThan(0);
-    for (const agent of PUBLISHED_SUBAGENTS) {
+  it("keeps template Sub Agent references immutable while live options come from API", () => {
+    for (const agent of DEFAULT_STUDIO_DRAFT.subagents) {
       expect(agent.ref).toMatch(/^[a-z][a-z0-9-]*@[^@]+$/);
-      expect(agent.tools.length).toBeGreaterThan(0);
-      expect(agent.policy).toMatch(/^production-/);
-      expect(agent.status).toBe("approved");
     }
   });
 
