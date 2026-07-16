@@ -25,6 +25,9 @@ from harness.core.models import ApprovalStatus
 from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult
 from harness.policy.profiles import PolicyProfileRegistry
 from harness.policy.rules import PolicyEngine
+from harness.quota.models import QuotaResource
+from harness.quota.repositories import QuotaExceededError
+from harness.quota.service import QuotaService
 from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
 from harness.runtime.base import RuntimeContext
 from harness.runtime.input_redaction import (
@@ -56,6 +59,8 @@ _APPROVAL_ARGUMENT_KEYS = (
     "pattern",
     "glob",
 )
+
+
 def _approval_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     for key in _APPROVAL_ARGUMENT_KEYS:
@@ -66,9 +71,7 @@ def _approval_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
             values = cast(list[object], value)
             if all(isinstance(item, str) for item in values):
                 summary[key] = [
-                    redact_text(item, limit=200)
-                    for item in values[:5]
-                    if isinstance(item, str)
+                    redact_text(item, limit=200) for item in values[:5] if isinstance(item, str)
                 ]
     return summary
 
@@ -164,6 +167,7 @@ class SdkToolGate:
         profiles: PolicyProfileRegistry | None = None,
         approvals: ApprovalService,
         events: EventService,
+        quotas: QuotaService | None = None,
     ) -> None:
         if (policy is None) == (profiles is None):
             raise ValueError("configure exactly one policy engine or profile registry")
@@ -171,6 +175,7 @@ class SdkToolGate:
         self._profiles = profiles
         self._approvals = approvals
         self._events = events
+        self._quotas = quotas
 
     def hooks(
         self,
@@ -181,17 +186,14 @@ class SdkToolGate:
     ) -> dict[HookEvent, list[HookMatcher]]:
         active_policy_id = policy_id or "local-standard"
         policy = (
-            self._profiles.resolve(active_policy_id)
-            if self._profiles is not None
-            else self._policy
+            self._profiles.resolve(active_policy_id) if self._profiles is not None else self._policy
         )
         assert policy is not None
         subagent_policies: dict[str, tuple[str, PolicyEngine]] = {}
         if subagent_policy_ids:
             if self._profiles is None:
                 subagent_policies = {
-                    name: (active_policy_id, policy)
-                    for name in subagent_policy_ids
+                    name: (active_policy_id, policy) for name in subagent_policy_ids
                 }
             else:
                 subagent_policies = {
@@ -215,7 +217,9 @@ class SdkToolGate:
                 key = (
                     agent_type
                     if agent_type in subagent_policies
-                    else agent_id if agent_id in subagent_policies else ""
+                    else agent_id
+                    if agent_id in subagent_policies
+                    else ""
                 )
                 if key:
                     selected_policy_id, selected_policy = subagent_policies[key]
@@ -243,18 +247,33 @@ class SdkToolGate:
             _tool_use_id: str | None,
             _hook_context: HookContext,
         ) -> HookJSONOutput:
-            file_capabilities.note_failure(
-                cast(PostToolUseFailureHookInput, hook_input)
+            file_capabilities.note_failure(cast(PostToolUseFailureHookInput, hook_input))
+            return cast(HookJSONOutput, {})
+
+        async def release_delegation(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _hook_context: HookContext,
+        ) -> HookJSONOutput:
+            typed_input = cast(
+                PostToolUseHookInput | PostToolUseFailureHookInput, hook_input
             )
+            if self._quotas is not None:
+                await self._quotas.release_idempotency(
+                    context.run.tenant_id,
+                    f"run:{context.run.run_id}:subagent:{typed_input['tool_use_id']}",
+                )
             return cast(HookJSONOutput, {})
 
         return {
-            "PreToolUse": [
-                HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=900.0)
+            "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=900.0)],
+            "PostToolUse": [
+                HookMatcher(matcher="Write", hooks=[post_tool_use]),
+                HookMatcher(matcher="Task|Agent", hooks=[release_delegation]),
             ],
-            "PostToolUse": [HookMatcher(matcher="Write", hooks=[post_tool_use])],
             "PostToolUseFailure": [
-                HookMatcher(matcher="Write", hooks=[post_tool_use_failure])
+                HookMatcher(matcher="Write", hooks=[post_tool_use_failure]),
+                HookMatcher(matcher="Task|Agent", hooks=[release_delegation]),
             ],
         }
 
@@ -321,8 +340,7 @@ class SdkToolGate:
                 rule_name="run-generated-file",
                 reason="matched run-created file capability",
             )
-            if write_target is not None
-            and file_capabilities.is_generated(write_target)
+            if write_target is not None and file_capabilities.is_generated(write_target)
             else policy.evaluate(
                 PolicyContext(
                     tenant_id=context.run.tenant_id,
@@ -354,9 +372,7 @@ class SdkToolGate:
                 risk=_approval_risk(tool_name),
             )
             try:
-                decision = await self._approvals.wait_for_decision(
-                    approval.approval_id
-                )
+                decision = await self._approvals.wait_for_decision(approval.approval_id)
             except asyncio.CancelledError:
                 await asyncio.shield(
                     self._approvals.cancel_pending(
@@ -371,6 +387,34 @@ class SdkToolGate:
 
         if tool_name == "Write" and write_target is not None:
             file_capabilities.note_authorized_write(tool_call_id, write_target)
+
+        if self._quotas is not None:
+            try:
+                if tool_name.startswith("mcp__"):
+                    await self._quotas.consume(
+                        tenant_id=context.run.tenant_id,
+                        resource=QuotaResource.MCP_REQUESTS,
+                        amount=1,
+                        subject_id=context.run.run_id,
+                        idempotency_key=(f"run:{context.run.run_id}:mcp:{tool_call_id}"),
+                        agent_name=context.session.agent_name,
+                        environment=context.session.environment,
+                    )
+                elif tool_name in {"Task", "Agent"}:
+                    await self._quotas.reserve(
+                        tenant_id=context.run.tenant_id,
+                        resource=QuotaResource.CONCURRENT_SUBAGENTS,
+                        amount=1,
+                        subject_id=context.run.run_id,
+                        idempotency_key=(f"run:{context.run.run_id}:subagent:{tool_call_id}"),
+                        agent_name=context.session.agent_name,
+                        environment=context.session.environment,
+                        ttl_seconds=3600,
+                    )
+            except QuotaExceededError as error:
+                reason = f"quota exceeded for {error.resource.value}"
+                await self._append_denied(context, tool_call_id, reason)
+                return _hook_output("deny", reason)
 
         await self._events.append(
             tenant_id=context.run.tenant_id,

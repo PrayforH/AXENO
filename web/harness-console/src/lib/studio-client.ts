@@ -10,6 +10,50 @@ import type {
 
 export type StudioRole = "owner" | "admin" | "member" | "viewer";
 
+export type QuotaResource =
+  | "concurrent_runs"
+  | "concurrent_subagents"
+  | "model_tokens"
+  | "model_cost_micro_usd"
+  | "mcp_requests"
+  | "artifact_bytes"
+  | "snapshot_bytes"
+  | "active_previews"
+  | "deployment_promotions";
+
+export type StudioQuotaPolicy = {
+  tenantId: string;
+  policyId: string;
+  revision: number;
+  scope: { agentName: string | null; environment: string | null };
+  limits: Partial<Record<QuotaResource, number>>;
+  updatedBy: string;
+  updatedAt: string;
+};
+
+export type StudioQuotaUsage = {
+  policies: StudioQuotaPolicy[];
+  counters: Array<{
+    tenantId: string;
+    scopeKey: string;
+    resource: QuotaResource;
+    windowKey: string;
+    reserved: number;
+    committed: number;
+    limit: number | null;
+  }>;
+  activeReservations: Array<{
+    reservationId: string;
+    resource: QuotaResource;
+    amount: number;
+    agentName: string | null;
+    environment: string | null;
+    subjectId: string;
+    expiresAt: string;
+  }>;
+  unknownCostEntries: number;
+};
+
 export type StudioDraftSummary = {
   draftId: string;
   name: string;
@@ -61,6 +105,7 @@ type ApiDraftSpec = {
     maxTurns: number;
     timeoutSeconds: number;
     maxBudgetUsd: number;
+    maxModelTokens: number;
     maxSubagents: number;
     maxSubagentTasks: number;
     maxConcurrentSubagents: number;
@@ -463,6 +508,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     maxTurns: spec.limits.maxTurns,
     timeoutSeconds: spec.limits.timeoutSeconds,
     maxBudgetUsd: spec.limits.maxBudgetUsd,
+    maxModelTokens: spec.limits.maxModelTokens,
     maxSubagents: spec.limits.maxSubagents,
     maxSubagentTasks: spec.limits.maxSubagentTasks,
     maxConcurrentSubagents: spec.limits.maxConcurrentSubagents,
@@ -507,6 +553,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
       maxTurns: draft.maxTurns,
       timeoutSeconds: draft.timeoutSeconds,
       maxBudgetUsd: draft.maxBudgetUsd,
+      maxModelTokens: draft.maxModelTokens,
       maxSubagents: draft.maxSubagents,
       maxSubagentTasks: draft.maxSubagentTasks,
       maxConcurrentSubagents: draft.maxConcurrentSubagents,
@@ -523,6 +570,19 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
 }
 
 export const studioClient = {
+  quotaUsage: () => request<StudioQuotaUsage>("quotas"),
+  replaceQuotaPolicy: (
+    policyId: string,
+    expectedRevision: number,
+    limits: Partial<Record<QuotaResource, number>>,
+    scope: { agentName: string | null; environment: string | null } = {
+      agentName: null,
+      environment: null,
+    },
+  ) => request<StudioQuotaPolicy>(`quotas/${encodeURIComponent(policyId)}`, {
+    method: "PUT",
+    body: JSON.stringify({ expectedRevision, scope, limits }),
+  }),
   listDrafts: () => request<StudioDraftSummary[]>("drafts"),
   getDraft: (draftId: string) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draftId)}`),

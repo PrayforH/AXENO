@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from harness.core.errors import ConflictError
+from harness.quota.service import QuotaService
 from harness.studio.preview_models import (
     PreviewDeployment,
     PreviewStatus,
@@ -37,6 +38,7 @@ class PreviewController:
         provisioner: PreviewProvisioner | None = None,
         heartbeat_seconds: float = 20,
         clock: Callable[[], datetime] | None = None,
+        quotas: QuotaService | None = None,
     ) -> None:
         if heartbeat_seconds <= 0:
             raise ValueError("Preview heartbeat interval must be positive")
@@ -45,6 +47,7 @@ class PreviewController:
         self._provisioner = provisioner or _no_op_provisioner
         self._heartbeat_seconds = heartbeat_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._quotas = quotas
 
     async def process_once(self) -> PreviewDeployment | None:
         task = await self._queue.dequeue()
@@ -67,9 +70,7 @@ class PreviewController:
         await self._queue.acknowledge(task)
         return result
 
-    async def reconcile(
-        self, tenant_id: str, preview_id: str
-    ) -> PreviewDeployment:
+    async def reconcile(self, tenant_id: str, preview_id: str) -> PreviewDeployment:
         current = await self._repository.get(tenant_id, preview_id)
         if current.status.is_terminal:
             return current
@@ -86,9 +87,7 @@ class PreviewController:
                 latest = await self._repository.get(tenant_id, preview_id)
                 if latest.status.is_terminal:
                     return latest
-                return await self._move(
-                    latest, PreviewStatus.FAILED, error_code=error.error_code
-                )
+                return await self._move(latest, PreviewStatus.FAILED, error_code=error.error_code)
             latest = await self._repository.get(tenant_id, preview_id)
             if latest.expires_at <= self._clock():
                 return await self._move(latest, PreviewStatus.EXPIRED)
@@ -100,17 +99,13 @@ class PreviewController:
         return current
 
     async def _provision_with_heartbeat(self, current: PreviewDeployment) -> None:
-        task = PreviewTask(
-            tenant_id=current.tenant_id, preview_id=current.preview_id
-        )
+        task = PreviewTask(tenant_id=current.tenant_id, preview_id=current.preview_id)
         stopped = asyncio.Event()
 
         async def heartbeat() -> None:
             while True:
                 try:
-                    await asyncio.wait_for(
-                        stopped.wait(), timeout=self._heartbeat_seconds
-                    )
+                    await asyncio.wait_for(stopped.wait(), timeout=self._heartbeat_seconds)
                     return
                 except TimeoutError:
                     await self._queue.extend_lease(task)
@@ -126,9 +121,7 @@ class PreviewController:
         due = await self._repository.list_expired_active(self._clock(), limit=limit)
         count = 0
         for preview in due:
-            current = await self._repository.get(
-                preview.tenant_id, preview.preview_id
-            )
+            current = await self._repository.get(preview.tenant_id, preview.preview_id)
             if current.status.is_terminal or current.expires_at > self._clock():
                 continue
             try:
@@ -162,4 +155,8 @@ class PreviewController:
         )
         if not await self._repository.compare_and_set(current.status, updated):
             raise ConflictError(f"Preview changed during transition: {current.preview_id}")
+        if updated.status.is_terminal and self._quotas is not None:
+            await self._quotas.release_subject(
+                updated.tenant_id, f"preview:{updated.idempotency_key}"
+            )
         return updated

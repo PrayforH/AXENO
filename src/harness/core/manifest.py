@@ -89,13 +89,10 @@ class LimitSpec(ManifestModel):
     max_turns: int = Field(default=30, alias="maxTurns", ge=1)
     timeout_seconds: int = Field(default=1800, alias="timeoutSeconds", ge=1)
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
+    max_model_tokens: int = Field(default=200_000, alias="maxModelTokens", ge=1)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
-    max_subagent_tasks: int = Field(
-        default=16, alias="maxSubagentTasks", ge=1, le=128
-    )
-    max_concurrent_subagents: int = Field(
-        default=4, alias="maxConcurrentSubagents", ge=1, le=16
-    )
+    max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
+    max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
     max_subagent_depth: Literal[1] = Field(default=1, alias="maxSubagentDepth")
     max_subagent_usage_units: int | None = Field(
         default=200_000, alias="maxSubagentUsageUnits", gt=0
@@ -117,18 +114,11 @@ class AgentSpec(ManifestModel):
     @model_validator(mode="after")
     def unique_subagent_runtime_names(self) -> AgentSpec:
         runtime_names = [subagent.runtime_name for subagent in self.subagents]
-        duplicates = sorted(
-            {name for name in runtime_names if runtime_names.count(name) > 1}
-        )
+        duplicates = sorted({name for name in runtime_names if runtime_names.count(name) > 1})
         if duplicates:
-            raise ValueError(
-                "duplicate subagent runtime name: " + ", ".join(duplicates)
-            )
+            raise ValueError("duplicate subagent runtime name: " + ", ".join(duplicates))
         if len(runtime_names) > self.limits.max_subagents:
-            raise ValueError(
-                "declared subagents exceed maxSubagents="
-                f"{self.limits.max_subagents}"
-            )
+            raise ValueError(f"declared subagents exceed maxSubagents={self.limits.max_subagents}")
         return self
 
 
@@ -162,6 +152,7 @@ class AgentManifestSnapshot(ManifestModel):
 
 
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|password|secret)", re.IGNORECASE)
+_NON_SECRET_TOKEN_FIELDS = {"maxmodeltokens"}
 _MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024
 _MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
 
@@ -171,7 +162,11 @@ def _assert_no_inline_secrets(value: object, path: str = "manifest") -> None:
         mapping = cast(dict[object, object], value)
         for key, child in mapping.items():
             key_text = str(key)
-            if _SECRET_KEY.search(key_text) and child not in (None, ""):
+            if (
+                _SECRET_KEY.search(key_text)
+                and key_text.lower() not in _NON_SECRET_TOKEN_FIELDS
+                and child not in (None, "")
+            ):
                 raise ManifestValidationError(
                     f"secret-like field is not allowed: {path}.{key_text}"
                 )
@@ -309,9 +304,7 @@ def materialize_skill_snapshot_set(
         for skill in snapshot.skill_snapshots:
             existing = skills_by_name.get(skill.name)
             if existing is not None and existing.content_hash != skill.content_hash:
-                raise ManifestValidationError(
-                    f"conflicting immutable Skill name: {skill.name}"
-                )
+                raise ManifestValidationError(f"conflicting immutable Skill name: {skill.name}")
             skills_by_name[skill.name] = skill
     for skill in sorted(skills_by_name.values(), key=lambda item: item.name):
         target_root = (skills_root / skill.name).resolve()
@@ -331,9 +324,7 @@ def materialize_skill_snapshot_set(
                 len(content) != file.size_bytes
                 or hashlib.sha256(content).hexdigest() != file.sha256
             ):
-                raise ManifestValidationError(
-                    f"corrupt Skill snapshot: {skill.name}/{file.path}"
-                )
+                raise ManifestValidationError(f"corrupt Skill snapshot: {skill.name}/{file.path}")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
         names.append(skill.name)
@@ -383,15 +374,11 @@ def load_manifest(
     digest.update(canonical.encode())
     digest.update(prompt_path.relative_to(root).as_posix().encode())
     digest.update(system_prompt.encode())
-    skill_snapshots = tuple(
-        _snapshot_skill(root, skill) for skill in sorted(manifest.spec.skills)
-    )
+    skill_snapshots = tuple(_snapshot_skill(root, skill) for skill in sorted(manifest.spec.skills))
     skill_names = [skill.name for skill in skill_snapshots]
     duplicate_names = sorted({name for name in skill_names if skill_names.count(name) > 1})
     if duplicate_names:
-        raise ManifestValidationError(
-            f"duplicate Skill name: {', '.join(duplicate_names)}"
-        )
+        raise ManifestValidationError(f"duplicate Skill name: {', '.join(duplicate_names)}")
     for skill in skill_snapshots:
         digest.update(skill.source.encode())
         digest.update(skill.content_hash.encode())

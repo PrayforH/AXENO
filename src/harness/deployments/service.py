@@ -26,14 +26,14 @@ from harness.deployments.models import (
 from harness.deployments.queue import DeploymentTask, DeploymentTaskQueue
 from harness.deployments.repositories import DeploymentRepository, EnvironmentRepository
 from harness.evals.service import EvalControlPlaneService
+from harness.quota.models import QuotaResource, ResourceReservation
+from harness.quota.service import QuotaService
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.models import ExecutionProfileMetadata
 from harness.studio.preview_service import PreviewService
 
 QualityGate = Callable[[str, str, str], Awaitable[object]]
-ExecutionProfileResolver = Callable[
-    [str, str], Awaitable[ExecutionProfileMetadata]
-]
+ExecutionProfileResolver = Callable[[str, str], Awaitable[ExecutionProfileMetadata]]
 
 
 def _id(prefix: str) -> str:
@@ -55,6 +55,7 @@ class DeploymentService:
         id_generator: Callable[[str], str] | None = None,
         quality_gate: QualityGate | None = None,
         execution_profile_resolver: ExecutionProfileResolver | None = None,
+        quotas: QuotaService | None = None,
     ) -> None:
         self._environments = environments
         self._deployments = deployments
@@ -67,10 +68,9 @@ class DeploymentService:
         self._ids = id_generator or _id
         self._quality_gate = quality_gate
         self._execution_profile_resolver = execution_profile_resolver
+        self._quotas = quotas
 
-    async def _execution_profile(
-        self, tenant_id: str, profile_id: str
-    ) -> ExecutionProfileMetadata:
+    async def _execution_profile(self, tenant_id: str, profile_id: str) -> ExecutionProfileMetadata:
         if self._execution_profile_resolver is not None:
             return await self._execution_profile_resolver(tenant_id, profile_id)
         profile = next(
@@ -175,7 +175,23 @@ class DeploymentService:
             createdBy=user_id,
             createdAt=self._clock(),
         )
-        await self._deployments.add_snapshot(snapshot)
+        reservation: ResourceReservation | None = None
+        if self._quotas is not None:
+            reservation = await self._quotas.reserve(
+                tenant_id=tenant_id,
+                resource=QuotaResource.DEPLOYMENT_PROMOTIONS,
+                amount=1,
+                subject_id=f"deployment:{request.idempotency_key}",
+                idempotency_key=f"deployment:{request.idempotency_key}:promotion",
+                agent_name=request.agent_name,
+                environment=request.environment.value,
+            )
+        try:
+            await self._deployments.add_snapshot(snapshot)
+        except Exception:
+            if reservation is not None and self._quotas is not None:
+                await self._quotas.release(reservation)
+            raise
         deployment = Deployment(
             tenantId=tenant_id,
             deploymentId=self._ids("deployment"),
@@ -199,12 +215,22 @@ class DeploymentService:
                 tenant_id, request.idempotency_key
             )
             if concurrent is None:
+                if reservation is not None and self._quotas is not None:
+                    await self._quotas.release(reservation)
                 raise
+            if reservation is not None and self._quotas is not None:
+                await self._quotas.commit(reservation)
             return await self._same_promote(concurrent, request)
+        except Exception:
+            if reservation is not None and self._quotas is not None:
+                await self._quotas.release(reservation)
+            raise
         await self._queue.enqueue(
             DeploymentTask(tenant_id=tenant_id, deployment_id=deployment.deployment_id)
         )
         await self._record(deployment, user_id, "studio.deployment.promote")
+        if reservation is not None and self._quotas is not None:
+            await self._quotas.commit(reservation)
         return DeploymentView(deployment=deployment, target=snapshot, environment=environment)
 
     async def rollback(

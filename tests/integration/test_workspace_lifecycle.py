@@ -18,6 +18,9 @@ from harness.adapters.memory import (
 from harness.application.events import EventService
 from harness.application.workspaces import WorkspaceService
 from harness.core.models import Run, RunStatus, Session, WorkspaceSnapshot
+from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.quota.repositories import InMemoryQuotaRepository, QuotaExceededError
+from harness.quota.service import QuotaService
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import RunOrchestrator
@@ -55,17 +58,13 @@ async def test_restore_latest_returns_none_then_restores_authoritative_snapshot(
     target.mkdir()
 
     assert (
-        await service.restore_latest(
-            tenant_id="tenant-a", session_id="session-a", workspace=target
-        )
+        await service.restore_latest(tenant_id="tenant-a", session_id="session-a", workspace=target)
         is None
     )
     source = tmp_path / "source"
     source.mkdir()
     (source / "state.txt").write_text("restored")
-    snapshot = await service.archive(
-        tenant_id="tenant-a", session_id="session-a", workspace=source
-    )
+    snapshot = await service.archive(tenant_id="tenant-a", session_id="session-a", workspace=source)
 
     restored = await service.restore_latest(
         tenant_id="tenant-a", session_id="session-a", workspace=target
@@ -105,10 +104,43 @@ async def test_archive_rejects_oversize_and_excessive_member_workspaces(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("member_kind", ["traversal", "symlink"])
-async def test_restore_rejects_unsafe_archive_members(
-    tmp_path: Path, member_kind: str
+async def test_snapshot_quota_rejects_before_object_and_metadata_are_persisted(
+    tmp_path: Path,
 ) -> None:
+    store = InMemoryArtifactStore()
+    snapshots = InMemoryWorkspaceSnapshotRepository()
+    quotas = QuotaService(InMemoryQuotaRepository())
+    await quotas.replace_policy(
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={QuotaResource.SNAPSHOT_BYTES: 1},
+        ),
+    )
+    workspace = tmp_path / "quota-workspace"
+    workspace.mkdir()
+    (workspace / "report.txt").write_text("evidence" * 100)
+
+    with pytest.raises(QuotaExceededError, match="snapshot_bytes"):
+        await WorkspaceService(
+            store,
+            snapshots=snapshots,
+            quotas=quotas,
+        ).archive(
+            tenant_id="tenant-a",
+            session_id="session-a",
+            workspace=workspace,
+        )
+
+    assert await snapshots.latest("tenant-a", "session-a") is None
+    assert vars(store)["_items"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("member_kind", ["traversal", "symlink"])
+async def test_restore_rejects_unsafe_archive_members(tmp_path: Path, member_kind: str) -> None:
     store = InMemoryArtifactStore()
     service = WorkspaceService(store)
     buffer = io.BytesIO()
@@ -167,9 +199,7 @@ async def test_later_run_restores_latest_snapshot_before_runtime(
             self.executions = 0
             self.restored_content: str | None = None
 
-        async def execute(
-            self, context: RuntimeContext
-        ) -> AsyncIterator[RuntimeEvent]:
+        async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
             self.executions += 1
             state = context.workspace / "state.txt"
             if self.executions == 1:
@@ -216,9 +246,7 @@ async def test_later_run_restores_latest_snapshot_before_runtime(
     orchestrator = RunOrchestrator(
         sessions=sessions,
         runs=runs,
-        events=EventService(
-            events, InMemoryEventBus(), clock=lambda: now, id_generator=ids
-        ),
+        events=EventService(events, InMemoryEventBus(), clock=lambda: now, id_generator=ids),
         runtime=runtime,
         sandbox=LocalSandboxProvider(root=tmp_path / "sandboxes"),
         clock=lambda: now,

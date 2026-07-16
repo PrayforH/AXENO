@@ -92,6 +92,7 @@ export interface StudioDraft {
   maxTurns: number;
   timeoutSeconds: number;
   maxBudgetUsd: number;
+  maxModelTokens: number;
   maxSubagents: number;
   maxSubagentTasks: number;
   maxConcurrentSubagents: number;
@@ -298,6 +299,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   maxTurns: 20,
   timeoutSeconds: 1200,
   maxBudgetUsd: 2,
+  maxModelTokens: 200000,
   maxSubagents: 8,
   maxSubagentTasks: 16,
   maxConcurrentSubagents: 4,

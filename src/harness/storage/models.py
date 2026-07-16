@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -306,6 +307,69 @@ class QualityDatasetRow(Base):
     __tablename__ = "quality_dataset_projections"
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     projection_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QuotaPolicyRow(Base):
+    __tablename__ = "quota_policies"
+    __table_args__ = (Index("ix_quota_policies_tenant_scope", "tenant_id", "scope_key"),)
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope_key: Mapped[str] = mapped_column(String(384))
+    revision: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QuotaCounterRow(Base):
+    __tablename__ = "quota_counters"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope_key: Mapped[str] = mapped_column(String(384), primary_key=True)
+    resource: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    reserved: Mapped[int] = mapped_column(BigInteger)
+    committed: Mapped[int] = mapped_column(BigInteger)
+    limit_value: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class QuotaReservationRow(Base):
+    __tablename__ = "quota_reservations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_quota_reservation_idempotency",
+        ),
+        Index("ix_quota_reservations_tenant_state", "tenant_id", "state"),
+        Index("ix_quota_reservations_expires", "expires_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reservation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256))
+    resource: Mapped[str] = mapped_column(String(64))
+    amount: Mapped[int] = mapped_column(BigInteger)
+    state: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class UsageLedgerRow(Base):
+    __tablename__ = "usage_ledger"
+    __table_args__ = (
+        Index("ix_usage_ledger_tenant_resource", "tenant_id", "resource"),
+        Index("ix_usage_ledger_tenant_occurred", "tenant_id", "occurred_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    entry_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reservation_id: Mapped[str | None] = mapped_column(String(128))
+    resource: Mapped[str] = mapped_column(String(64))
+    amount: Mapped[int | None] = mapped_column(BigInteger)
+    cost_state: Mapped[str] = mapped_column(String(32))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

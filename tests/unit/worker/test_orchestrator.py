@@ -23,6 +23,9 @@ from harness.core.models import Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.quota.repositories import InMemoryQuotaRepository
+from harness.quota.service import QuotaService
 from harness.runtime.base import (
     RuntimeContext,
     RuntimeEvent,
@@ -219,6 +222,7 @@ async def arrange(
     policy_resolver: PolicyResolver | None = None,
     enable_artifacts: bool = False,
     credential_revoker: Callable[[str, str], Awaitable[None]] | None = None,
+    quotas: QuotaService | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -273,8 +277,40 @@ async def arrange(
         policy_resolver=policy_resolver,
         artifacts=artifact_service,
         credential_revoker=credential_revoker,
+        quotas=quotas,
     )
     return orchestrator, runtime, runs, event_repository
+
+
+@pytest.mark.asyncio
+async def test_worker_admission_rejects_unadmitted_run_before_sandbox_and_converges_failed(
+    tmp_path: Path,
+) -> None:
+    quotas = QuotaService(InMemoryQuotaRepository())
+    await quotas.replace_policy(
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={QuotaResource.CONCURRENT_RUNS: 1},
+        ),
+    )
+    await quotas.reserve(
+        tenant_id="tenant-a",
+        resource=QuotaResource.CONCURRENT_RUNS,
+        amount=1,
+        subject_id="another-run",
+        idempotency_key="another-run:concurrency",
+    )
+    orchestrator, _, _, events = await arrange(tmp_path, quotas=quotas)
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    assert result.error_code == "quota_exceeded_concurrent_runs"
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert [event.type for event in emitted] == ["run.provisioning", "run.failed"]
 
 
 @pytest.mark.asyncio

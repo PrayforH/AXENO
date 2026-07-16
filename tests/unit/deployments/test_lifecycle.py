@@ -14,6 +14,8 @@ from harness.deployments.models import (
     PromoteRequest,
     RollbackRequest,
 )
+from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.quota.repositories import QuotaExceededError
 from harness.studio.models import (
     AgentDraft,
     AgentTemplate,
@@ -298,6 +300,48 @@ async def test_deployment_idempotency_and_secret_free_config_contract() -> None:
             config={"provider_url": "https://unsafe.example"},
             idempotencyKey="unsafe-provider",
         )
+
+
+@pytest.mark.asyncio
+async def test_deployment_promotion_quota_rejects_before_snapshot_is_created() -> None:
+    container = build_memory_container()
+    draft, first_version, second_version = await published_versions(
+        container, "quota-deployment-agent"
+    )
+    await container.quotas.replace_policy(
+        tenant_id=TENANT,
+        user_id=USER,
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={QuotaResource.DEPLOYMENT_PROMOTIONS: 1},
+        ),
+    )
+    await container.deployments.promote(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="quota-release-one",
+        ),
+    )
+
+    with pytest.raises(QuotaExceededError, match="deployment_promotions"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=promotion(
+                agent_name=draft.spec.name,
+                version=second_version,
+                revision=0,
+                key="quota-release-two",
+            ),
+        )
+
+    snapshots = await container.deployments.snapshots(TENANT, draft.spec.name)
+    assert len(snapshots) == 1
 
 
 @pytest.mark.asyncio
