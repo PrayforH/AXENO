@@ -1110,17 +1110,51 @@ textarea:not(.aui-composer-input):focus-visible {
 
 .task-sidebar-heading {
   min-height: 48px;
-  padding: 8px 10px 7px 14px;
+  padding: 7px 8px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   border-bottom: 1px solid #e4e7e3;
 }
 
-.task-sidebar-heading strong {
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+.task-sidebar-tabs {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.task-sidebar-tab {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #737b75;
+  font-size: 11px;
+  font-weight: 620;
+  text-decoration: none;
+}
+
+.task-sidebar-tab:hover {
+  color: #2f3732;
+  background: #e8ece8;
+}
+
+.task-sidebar-tab.is-active {
+  color: #21332a;
+  background: #fff;
+  border-color: #d5ddd7;
+  box-shadow: 0 1px 2px rgb(29 39 33 / 4%);
+}
+
+.task-sidebar-tab:last-child:hover {
+  color: #655a82;
 }
 
 .task-sidebar-heading button {
@@ -4683,6 +4717,7 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .task-sidebar-heading .task-sidebar-heading-actions button,
 .task-rail-action,
+.task-rail-studio,
 .task-rail-toggle {
   width: 34px;
   height: 34px;
@@ -4694,10 +4729,12 @@ textarea:not(.aui-composer-input):focus-visible,
   background: transparent;
   color: #626a64;
   cursor: pointer;
+  text-decoration: none;
 }
 
 .task-sidebar-heading .task-sidebar-heading-actions button:hover,
 .task-rail-action:hover,
+.task-rail-studio:hover,
 .task-rail-toggle:hover {
   background: #e6eae6;
   color: #202622;
@@ -4710,6 +4747,15 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .task-rail-toggle {
   margin-top: 4px;
+}
+
+.task-rail-studio {
+  margin-top: 8px;
+  color: #655a82;
+}
+
+.task-rail-studio:hover {
+  color: #655a82;
 }
 
 .task-rail-account {
@@ -4741,7 +4787,8 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 .task-new-icon,
-.task-toggle-icon {
+.task-toggle-icon,
+.task-tab-icon {
   width: 18px;
   height: 18px;
   fill: none;
@@ -4749,6 +4796,12 @@ textarea:not(.aui-composer-input):focus-visible,
   stroke-width: 1.65;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.task-tab-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 1100px) and (min-width: 981px) {

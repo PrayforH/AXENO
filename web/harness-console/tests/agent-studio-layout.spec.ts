@@ -27,7 +27,9 @@ describe("Agent Studio management page", () => {
     expect(page).toContain("AgentStudioWorkbench");
     expect(workbench).toContain("Agent Studio");
     expect(workbench).toContain("有效运行契约");
-    expect(workbench).toContain("返回任务工作台");
+    expect(workbench).toContain('aria-label="工作区"');
+    expect(workbench).toContain('href="/"');
+    expect(workbench).toContain('href="/studio/agents"');
     expect(workbench).toContain('data-studio-integration="pending-auth"');
   });
 

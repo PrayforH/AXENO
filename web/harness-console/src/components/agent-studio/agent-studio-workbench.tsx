@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   BUILTIN_TOOLS,
@@ -113,8 +114,21 @@ export function AgentStudioWorkbench() {
           </div>
         </div>
 
+        <nav className={styles.workspaceTabs} aria-label="工作区">
+          <Link className={styles.workspaceTab} href="/">
+            任务
+          </Link>
+          <Link
+            className={styles.workspaceTabActive}
+            href="/studio/agents"
+            aria-current="page"
+          >
+            智能体
+          </Link>
+        </nav>
+
         <div className={styles.railHeading}>
-          <span>智能体</span>
+          <span>智能体列表</span>
           <button
             type="button"
             aria-label="新建智能体"
@@ -149,7 +163,6 @@ export function AgentStudioWorkbench() {
         </nav>
 
         <div className={styles.railFooter}>
-          <a href="/">返回任务工作台</a>
           <span>Studio 发布需要 Builder 权限</span>
         </div>
       </aside>

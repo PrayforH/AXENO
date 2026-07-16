@@ -33,6 +33,15 @@ describe("full-page agent workbench", () => {
     );
   });
 
+  it("exposes Agent Studio as a primary workspace tab", () => {
+    expect(taskSidebar).toContain('aria-label="工作区"');
+    expect(taskSidebar).toContain('href="/studio/agents"');
+    expect(taskSidebar).toContain("智能体");
+    expect(taskSidebar).toContain('className="task-rail-studio"');
+    expect(styles).toContain(".task-sidebar-tabs");
+    expect(styles).toContain(".task-sidebar-tab.is-active");
+  });
+
   it("removes the decorative live rail and hard-coded agent coordinate", () => {
     expect(page).not.toContain("run-rail");
     expect(page).not.toContain(">LIVE<");

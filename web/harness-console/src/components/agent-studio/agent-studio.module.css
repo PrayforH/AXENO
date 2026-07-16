@@ -100,11 +100,47 @@
   letter-spacing: 0.02em;
 }
 
+.workspaceTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  margin: 12px 12px 2px;
+  padding: 3px;
+  border: 1px solid var(--studio-line);
+  border-radius: 10px;
+  background: #e7ebe7;
+}
+
+.workspaceTab,
+.workspaceTabActive {
+  min-height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--studio-muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.workspaceTab:hover {
+  color: var(--studio-ink);
+  background: rgb(255 255 255 / 55%);
+}
+
+.workspaceTabActive {
+  color: var(--studio-violet);
+  background: #fff;
+  border-color: var(--studio-line);
+  box-shadow: 0 1px 2px rgb(21 32 26 / 5%);
+}
+
 .railHeading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 16px 8px;
+  padding: 16px 16px 8px;
   color: var(--studio-muted);
   font-size: 12px;
   font-weight: 700;
@@ -202,19 +238,6 @@
   margin-top: auto;
   padding: 16px;
   border-top: 1px solid var(--studio-line);
-}
-
-.railFooter a {
-  width: fit-content;
-  color: var(--studio-ink);
-  font-size: 12px;
-  text-decoration: none;
-  font-weight: 650;
-}
-
-.railFooter a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .railFooter span {
