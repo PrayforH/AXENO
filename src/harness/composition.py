@@ -61,6 +61,7 @@ from harness.storage.platform_repositories import (
 )
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
+from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.worker.orchestrator import RunOrchestrator
 
 
@@ -190,6 +191,7 @@ def build_production_container(
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
     event_repository = PostgresEventRepository(sessions)
+    agent_drafts = PostgresAgentDraftRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
         jwt_secret=settings.auth_jwt_secret,
@@ -387,6 +389,7 @@ def build_production_container(
         api_bearer_token=settings.api_bearer_token,
         auth=auth,
         audit=audit,
+        agent_drafts=agent_drafts,
         agents=AgentService(registry, clock=clock, environment="production"),
         sessions=session_service,
         runs=run_service,

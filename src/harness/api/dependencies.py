@@ -68,6 +68,10 @@ from harness.sandbox.daytona import (
     SdkDaytonaClient,
 )
 from harness.sandbox.local import LocalSandboxProvider
+from harness.studio.repositories import (
+    AgentDraftRepository,
+    InMemoryAgentDraftRepository,
+)
 from harness.worker.orchestrator import RunOrchestrator
 
 
@@ -87,6 +91,7 @@ class ApiContainer:
     api_bearer_token: SecretStr
     auth: AuthService
     audit: AuditService
+    agent_drafts: AgentDraftRepository
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -144,6 +149,7 @@ def build_memory_container(
         ),
     )
     audit = AuditService(InMemoryAuditRepository())
+    agent_drafts = InMemoryAgentDraftRepository()
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -314,6 +320,7 @@ def build_memory_container(
         api_bearer_token=resolved_settings.api_bearer_token,
         auth=auth,
         audit=audit,
+        agent_drafts=agent_drafts,
         agents=AgentService(
             registry, clock=clock, environment=resolved_settings.environment
         ),

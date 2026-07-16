@@ -1,0 +1,117 @@
+"""PostgreSQL adapter for tenant-scoped Agent Studio drafts."""
+
+from typing import Any, cast
+
+from sqlalchemy import CursorResult, select, update
+from sqlalchemy.exc import IntegrityError
+
+from harness.core.errors import ConflictError, NotFoundError
+from harness.storage.database import SessionFactory
+from harness.storage.models import AgentDraftRow
+from harness.studio.models import AgentDraft
+
+AGENT_DRAFT_SCHEMA_VERSION = 1
+
+
+def _draft_payload(draft: AgentDraft) -> dict[str, Any]:
+    return draft.model_dump(mode="json", by_alias=True)
+
+
+def _load_draft(row: AgentDraftRow) -> AgentDraft:
+    if row.schema_version != AGENT_DRAFT_SCHEMA_VERSION:
+        raise ValueError(
+            "Unsupported Agent Draft schema version: "
+            f"{row.schema_version}; expected={AGENT_DRAFT_SCHEMA_VERSION}"
+        )
+    draft = AgentDraft.model_validate(row.payload)
+    if (
+        draft.tenant_id != row.tenant_id
+        or draft.draft_id != row.draft_id
+        or draft.revision != row.revision
+        or draft.spec.name != row.name
+        or draft.updated_at != row.updated_at
+    ):
+        raise ValueError(f"Corrupt Agent Draft persistence envelope: {row.draft_id}")
+    return draft
+
+
+class PostgresAgentDraftRepository:
+    """Durable Draft storage with tenant isolation and atomic revision CAS."""
+
+    def __init__(self, sessions: SessionFactory) -> None:
+        self._sessions = sessions
+
+    async def add(self, draft: AgentDraft) -> None:
+        async with self._sessions() as session:
+            session.add(
+                AgentDraftRow(
+                    tenant_id=draft.tenant_id,
+                    draft_id=draft.draft_id,
+                    name=draft.spec.name,
+                    revision=draft.revision,
+                    schema_version=AGENT_DRAFT_SCHEMA_VERSION,
+                    updated_at=draft.updated_at,
+                    payload=_draft_payload(draft),
+                )
+            )
+            try:
+                await session.commit()
+            except IntegrityError as error:
+                await session.rollback()
+                raise ConflictError(
+                    f"Agent draft already exists: {draft.draft_id}"
+                ) from error
+
+    async def get(self, tenant_id: str, draft_id: str) -> AgentDraft:
+        async with self._sessions() as session:
+            row = await session.get(AgentDraftRow, (tenant_id, draft_id))
+            if row is None:
+                raise NotFoundError(f"Agent draft not found: {draft_id}")
+            return _load_draft(row)
+
+    async def list_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
+        statement = (
+            select(AgentDraftRow)
+            .where(AgentDraftRow.tenant_id == tenant_id)
+            .order_by(AgentDraftRow.updated_at.desc(), AgentDraftRow.draft_id.desc())
+        )
+        async with self._sessions() as session:
+            rows = (await session.scalars(statement)).all()
+            return [_load_draft(row) for row in rows]
+
+    async def replace(self, expected_revision: int, draft: AgentDraft) -> None:
+        if draft.revision != expected_revision + 1:
+            raise ConflictError("Agent draft replacement must increment revision once")
+        statement = (
+            update(AgentDraftRow)
+            .where(
+                AgentDraftRow.tenant_id == draft.tenant_id,
+                AgentDraftRow.draft_id == draft.draft_id,
+                AgentDraftRow.revision == expected_revision,
+            )
+            .values(
+                name=draft.spec.name,
+                revision=draft.revision,
+                schema_version=AGENT_DRAFT_SCHEMA_VERSION,
+                updated_at=draft.updated_at,
+                payload=_draft_payload(draft),
+            )
+        )
+        async with self._sessions() as session:
+            result = await session.execute(statement)
+            if cast(CursorResult[Any], result).rowcount:
+                await session.commit()
+                return
+            actual_revision = await session.scalar(
+                select(AgentDraftRow.revision).where(
+                    AgentDraftRow.tenant_id == draft.tenant_id,
+                    AgentDraftRow.draft_id == draft.draft_id,
+                )
+            )
+            await session.rollback()
+            if actual_revision is None:
+                raise NotFoundError(f"Agent draft not found: {draft.draft_id}")
+            raise ConflictError(
+                "Agent draft revision changed: "
+                f"expected={expected_revision} actual={actual_revision}"
+            )

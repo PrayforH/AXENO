@@ -19,6 +19,7 @@ from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import ToolResolver
 from harness.storage.redis import RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository
+from harness.storage.studio_repository import PostgresAgentDraftRepository
 
 
 def production_settings(**overrides: object) -> Settings:
@@ -78,6 +79,7 @@ async def test_production_container_uses_durable_event_and_queue_adapters() -> N
 
     try:
         assert isinstance(container.events, PostgresEventRepository)
+        assert isinstance(container.agent_drafts, PostgresAgentDraftRepository)
         assert isinstance(container.task_queue, RedisTaskQueue)
         assert container.auto_execute is False
         runtime = cast(RegistryClaudeRuntime, container.runtime)

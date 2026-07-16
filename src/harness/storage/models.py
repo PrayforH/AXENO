@@ -3,7 +3,17 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -82,6 +92,27 @@ class AgentVersionRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class AgentDraftRow(Base):
+    __tablename__ = "agent_drafts"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_agent_drafts_revision_positive"),
+        CheckConstraint(
+            "schema_version >= 1",
+            name="ck_agent_drafts_schema_version_positive",
+        ),
+        Index("ix_agent_drafts_tenant_name", "tenant_id", "name"),
+        Index("ix_agent_drafts_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    revision: Mapped[int] = mapped_column(Integer)
+    schema_version: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

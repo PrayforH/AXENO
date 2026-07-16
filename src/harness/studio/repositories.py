@@ -1,4 +1,4 @@
-"""Draft persistence ports and a deterministic in-memory implementation."""
+"""Tenant-scoped Agent Draft persistence ports and adapters."""
 
 from __future__ import annotations
 
