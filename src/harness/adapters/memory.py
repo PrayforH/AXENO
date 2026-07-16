@@ -269,6 +269,9 @@ class InMemoryArtifactStore:
         except KeyError as error:
             raise NotFoundError(f"artifact not found: {artifact_id}") from error
 
+    async def delete(self, tenant_id: str, artifact_id: str) -> None:
+        self._items.pop((tenant_id, artifact_id), None)
+
 
 class InMemoryArtifactRepository:
     def __init__(self) -> None:

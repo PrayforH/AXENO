@@ -10,6 +10,64 @@ import type {
 
 export type StudioRole = "owner" | "admin" | "member" | "viewer";
 
+export type LifecycleScope = {
+  kind: "tenant" | "user" | "session" | "agent";
+  subjectId: string;
+};
+
+export type RetentionPolicy = {
+  tenantId: string;
+  policyId: string;
+  revision: number;
+  sessionDays: number;
+  artifactDays: number;
+  traceDays: number;
+  evalDays: number;
+  updatedBy: string;
+  updatedAt: string;
+};
+
+export type LegalHold = {
+  tenantId: string;
+  holdId: string;
+  scope: LifecycleScope;
+  reason: string;
+  active: boolean;
+  createdBy: string;
+  createdAt: string;
+  releasedBy: string | null;
+  releasedAt: string | null;
+};
+
+export type DataLifecycleJob = {
+  tenantId: string;
+  jobId: string;
+  kind: "export" | "delete" | "retention";
+  scope: LifecycleScope;
+  requestedBy: string;
+  idempotencyKey: string;
+  status: "queued" | "running" | "succeeded" | "partial_failed" | "failed";
+  adapters: Array<{
+    adapter: string;
+    status: "pending" | "running" | "succeeded" | "failed" | "skipped";
+    attempts: number;
+    processedItems: number;
+    errorCode: string | null;
+    errorMessage: string | null;
+    updatedAt: string;
+  }>;
+  exportFilename: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type DataLifecycleOverview = {
+  policy: RetentionPolicy;
+  holds: LegalHold[];
+  jobs: DataLifecycleJob[];
+};
+
 export type QuotaResource =
   | "concurrent_runs"
   | "concurrent_subagents"
@@ -478,6 +536,62 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (!response.ok) throw await errorFrom(response);
   return response.json() as Promise<T>;
 }
+
+async function lifecycleRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = requireAuthenticatedResponse(
+    await fetch(`/api/data-lifecycle/${path.replace(/^\//, "")}`, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    }),
+  );
+  if (!response.ok) throw await errorFrom(response);
+  return response.json() as Promise<T>;
+}
+
+export const lifecycleClient = {
+  overview: () => lifecycleRequest<DataLifecycleOverview>("overview"),
+  selfJobs: () => lifecycleRequest<DataLifecycleJob[]>("self/jobs"),
+  replacePolicy: (
+    policy: RetentionPolicy,
+    values: Pick<RetentionPolicy, "sessionDays" | "artifactDays" | "traceDays" | "evalDays">,
+  ) => lifecycleRequest<RetentionPolicy>("retention-policy", {
+    method: "PUT",
+    body: JSON.stringify({
+      expectedRevision: policy.revision,
+      sessionDays: values.sessionDays,
+      artifactDays: values.artifactDays,
+      traceDays: values.traceDays,
+      evalDays: values.evalDays,
+    }),
+  }),
+  createHold: (scope: LifecycleScope, reason: string) =>
+    lifecycleRequest<LegalHold>("legal-holds", {
+      method: "POST",
+      body: JSON.stringify({ scope, reason }),
+    }),
+  releaseHold: (holdId: string) =>
+    lifecycleRequest<LegalHold>(`legal-holds/${encodeURIComponent(holdId)}/release`, {
+      method: "POST",
+    }),
+  createJob: (
+    kind: DataLifecycleJob["kind"],
+    scope: LifecycleScope,
+    idempotencyKey: string,
+  ) => lifecycleRequest<DataLifecycleJob>("jobs", {
+    method: "POST",
+    body: JSON.stringify({ kind, scope, idempotencyKey }),
+  }),
+  getJob: (jobId: string) =>
+    lifecycleRequest<DataLifecycleJob>(`jobs/${encodeURIComponent(jobId)}`),
+  retryJob: (jobId: string) =>
+    lifecycleRequest<DataLifecycleJob>(`jobs/${encodeURIComponent(jobId)}/retry`, {
+      method: "POST",
+    }),
+};
 
 export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
   const spec = source.spec;

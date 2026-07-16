@@ -74,3 +74,7 @@ class MinioArtifactStore:
                 raise
 
         return await asyncio.to_thread(download)
+
+    async def delete(self, tenant_id: str, artifact_id: str) -> None:
+        key = f"{tenant_id}/{artifact_id}"
+        await asyncio.to_thread(self._client.remove_object, self._bucket, key)

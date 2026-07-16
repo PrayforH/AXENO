@@ -140,3 +140,16 @@ export async function proxyStudioRequest(
   url.search = new URL(request.url).search;
   return forward(request, url.toString(), config, fetcher);
 }
+
+export async function proxyDataLifecycleRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/v1/data-lifecycle${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  url.search = new URL(request.url).search;
+  return forward(request, url.toString(), config, fetcher);
+}
