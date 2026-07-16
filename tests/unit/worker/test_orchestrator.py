@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
@@ -218,6 +218,7 @@ async def arrange(
     runtime_asset_stager: RuntimeAssetStager | None = None,
     policy_resolver: PolicyResolver | None = None,
     enable_artifacts: bool = False,
+    credential_revoker: Callable[[str, str], Awaitable[None]] | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -271,8 +272,29 @@ async def arrange(
         runtime_asset_stager=runtime_asset_stager,
         policy_resolver=policy_resolver,
         artifacts=artifact_service,
+        credential_revoker=credential_revoker,
     )
     return orchestrator, runtime, runs, event_repository
+
+
+@pytest.mark.asyncio
+async def test_run_completion_revokes_every_run_scoped_credential(
+    tmp_path: Path,
+) -> None:
+    revoked: list[tuple[str, str]] = []
+
+    async def revoke(tenant_id: str, run_id: str) -> None:
+        revoked.append((tenant_id, run_id))
+
+    orchestrator, _, _, _ = await arrange(
+        tmp_path,
+        credential_revoker=revoke,
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert revoked == [("tenant-a", "run-1")]
 
 
 @pytest.mark.asyncio

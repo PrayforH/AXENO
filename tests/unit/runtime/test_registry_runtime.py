@@ -19,10 +19,98 @@ from harness.config import Settings
 from harness.core.errors import ConflictError
 from harness.core.manifest import SubagentSpec, load_manifest
 from harness.core.models import AgentVersion, AgentVersionStatus, Run, RunStatus, Session
+from harness.execution.credentials import CredentialResourceKind, InMemoryCredentialBroker
 from harness.observability.provider import build_observability
 from harness.runtime.base import RuntimeContext
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
+
+
+@pytest.mark.asyncio
+async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("agents/helper-agent/agent.yaml")
+    registry = InMemoryAgentRegistry()
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="helper-agent",
+            version="1.0.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=snapshot.content_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=datetime.now(UTC),
+        )
+    )
+    broker_secret = "broker-model-secret"
+    broker = InMemoryCredentialBroker(
+        {
+            ("tenant-a", CredentialResourceKind.MODEL, "new-api-default"): (
+                "vault://tenant-a/model/default",
+                {"api_key": SecretStr(broker_secret)},
+            )
+        },
+        id_generator=lambda: "model-lease-one",
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str, options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            base_url="https://gateway.example",
+            model="gateway-model",
+            provider="new-api",
+            credential=SecretStr("static-secret-must-not-be-used"),
+        ),
+        query_factory=fake_query,
+        credential_broker=broker,
+    )
+    now = datetime.now(UTC)
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-broker",
+            session_id="session-broker",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="broker",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "private request"},
+        ),
+        session=Session(
+            session_id="session-broker",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="helper-agent",
+            agent_version="1.0.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    events = [event async for event in runtime.execute(context)]
+
+    assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == broker_secret
+    lease_event = events[0]
+    assert lease_event.type == "credential.lease.issued"
+    assert lease_event.payload["lease_id"] == "model-lease-one"
+    assert lease_event.payload["secret_reference"] == "vault://tenant-a/model/default"
+    assert broker_secret not in repr(events)
+    assert "static-secret-must-not-be-used" not in repr(captured[0].env)
 
 
 @pytest.mark.asyncio

@@ -292,6 +292,24 @@ class ExecutionProfileMetadata(StudioModel):
     )
     network_access: tuple[NetworkAccess, ...] = Field(alias="networkAccess")
     risk: CapabilityRisk
+    cpu_millis: int = Field(default=1000, alias="cpuMillis", ge=100, le=16_000)
+    memory_mib: int = Field(default=2048, alias="memoryMiB", ge=128, le=65_536)
+    disk_mib: int = Field(default=10_240, alias="diskMiB", ge=512, le=1_048_576)
+    ttl_seconds: int = Field(default=3600, alias="ttlSeconds", ge=60, le=86_400)
+    network_policy_id: str = Field(
+        default="deny-by-default",
+        alias="networkPolicyId",
+        pattern=r"^[a-z][a-z0-9-]*$",
+    )
+    allowed_mcp_references: tuple[str, ...] = Field(
+        default=(), alias="allowedMcpReferences"
+    )
+    provider_config_reference: str = Field(
+        default="platform-default",
+        alias="providerConfigReference",
+        pattern=r"^[a-z][a-z0-9-]*$",
+    )
+    production_allowed: bool = Field(default=True, alias="productionAllowed")
     version: int = Field(default=1, ge=1)
     enabled: bool = True
 

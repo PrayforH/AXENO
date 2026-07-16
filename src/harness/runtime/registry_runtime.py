@@ -7,6 +7,11 @@ from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelRoute, Session
 from harness.core.ports import AgentRegistry
+from harness.execution.credentials import (
+    CredentialBroker,
+    CredentialLease,
+    CredentialResourceKind,
+)
 from harness.observability.provider import Observability
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
@@ -30,6 +35,7 @@ class RegistryClaudeRuntime:
         memory_service: UserMemoryService | None = None,
         session_store_factory: Callable[[Session], object] | None = None,
         observability: Observability | None = None,
+        credential_broker: CredentialBroker | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
@@ -42,6 +48,7 @@ class RegistryClaudeRuntime:
         self._memory_service = memory_service
         self._session_store_factory = session_store_factory
         self._observability = observability
+        self._credential_broker = credential_broker
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
@@ -62,7 +69,23 @@ class RegistryClaudeRuntime:
             capabilities=self._config.capabilities,
         )
         routes = [route]
-        route_secrets = {route_id: self._config.credential.get_secret_value()}
+        issued_leases: list[CredentialLease] = []
+        if self._credential_broker is None:
+            route_secret = self._config.credential.get_secret_value()
+        else:
+            assert context.identity is not None
+            lease = await self._credential_broker.issue(
+                identity=context.identity,
+                resource_kind=CredentialResourceKind.MODEL,
+                resource_reference=route_id,
+                required_keys=frozenset({"api_key"}),
+            )
+            issued_leases.append(lease)
+            values = await self._credential_broker.resolve(
+                lease.lease_id, context.identity
+            )
+            route_secret = values["api_key"].get_secret_value()
+        route_secrets = {route_id: route_secret}
         fallback_route_id = snapshot.manifest.spec.model.fallback_route
         if fallback_route_id is not None and self._fallback_config is not None:
             fallback_route = ModelRoute(
@@ -74,9 +97,22 @@ class RegistryClaudeRuntime:
                 capabilities=self._fallback_config.capabilities,
             )
             routes.append(fallback_route)
-            route_secrets[fallback_route_id] = (
-                self._fallback_config.credential.get_secret_value()
-            )
+            if self._credential_broker is None:
+                fallback_secret = self._fallback_config.credential.get_secret_value()
+            else:
+                assert context.identity is not None
+                fallback_lease = await self._credential_broker.issue(
+                    identity=context.identity,
+                    resource_kind=CredentialResourceKind.MODEL,
+                    resource_reference=fallback_route_id,
+                    required_keys=frozenset({"api_key"}),
+                )
+                issued_leases.append(fallback_lease)
+                fallback_values = await self._credential_broker.resolve(
+                    fallback_lease.lease_id, context.identity
+                )
+                fallback_secret = fallback_values["api_key"].get_secret_value()
+            route_secrets[fallback_route_id] = fallback_secret
         if self._query_factory is None:
             runtime = ClaudeSdkRuntime(
                 agent_version=agent_version,
@@ -109,6 +145,11 @@ class RegistryClaudeRuntime:
                     if self._session_store_factory is not None
                     else None
                 ),
+            )
+        for lease in issued_leases:
+            yield RuntimeEvent(
+                type="credential.lease.issued",
+                payload=lease.audit_record(),
             )
         async for event in runtime.execute(context):
             yield event

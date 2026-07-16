@@ -42,6 +42,12 @@ class PreviewDeployment(StudioModel):
     status: PreviewStatus
     identity_kind: Literal["test"] = Field(default="test", alias="identityKind")
     environment: Literal["preview"] = "preview"
+    execution_profile: str = Field(
+        default="isolated-default", alias="executionProfile", min_length=1
+    )
+    execution_profile_version: int = Field(
+        default=1, alias="executionProfileVersion", ge=1
+    )
     fencing_token: int = Field(default=0, alias="fencingToken", ge=0)
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")

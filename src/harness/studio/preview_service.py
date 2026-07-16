@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError
+from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.preview_models import (
     CreatePreviewRequest,
@@ -66,6 +67,18 @@ class PreviewService:
         if validation.content_hash is None or validation.package_hash is None:
             raise RuntimeError("ready Draft validation did not produce immutable hashes")
         now = self._clock()
+        profile = next(
+            (
+                item
+                for item in default_capability_catalog().execution_profiles
+                if item.profile_id == draft.spec.execution_profile and item.enabled
+            ),
+            None,
+        )
+        if profile is None:
+            raise ConflictError(
+                f"Execution Profile is unavailable: {draft.spec.execution_profile}"
+            )
         preview = PreviewDeployment(
             previewId=self._id_generator(),
             tenantId=tenant_id,
@@ -76,6 +89,8 @@ class PreviewService:
             requestedBy=user_id,
             idempotencyKey=request.idempotency_key,
             status=PreviewStatus.QUEUED,
+            executionProfile=profile.profile_id,
+            executionProfileVersion=profile.version,
             createdAt=now,
             updatedAt=now,
             expiresAt=now + timedelta(seconds=request.ttl_seconds),

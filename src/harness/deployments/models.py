@@ -61,6 +61,14 @@ class DeploymentSnapshot(StudioModel):
     package_hash: str = Field(alias="packageHash", pattern=r"^[a-f0-9]{64}$")
     image_digest: str = Field(alias="imageDigest", pattern=r"^sha256:[a-f0-9]{64}$")
     execution_profile: str = Field(alias="executionProfile", min_length=1)
+    execution_profile_version: int = Field(
+        default=1, alias="executionProfileVersion", ge=1
+    )
+    execution_profile_hash: str = Field(
+        default="0" * 64,
+        alias="executionProfileHash",
+        pattern=r"^[a-f0-9]{64}$",
+    )
     config: dict[str, str | int | bool] = Field(default_factory=dict)
     eval_gate_passed: bool = Field(alias="evalGatePassed")
     eval_required_datasets: int = Field(alias="evalRequiredDatasets", ge=0)
@@ -103,12 +111,29 @@ class PromoteRequest(StudioModel):
 
     @model_validator(mode="after")
     def config_is_non_secret(self) -> PromoteRequest:
-        forbidden = ("secret", "token", "password", "credential", "api_key", "apikey")
+        forbidden = (
+            "secret",
+            "token",
+            "password",
+            "credential",
+            "api_key",
+            "apikey",
+            "provider",
+            "sandbox",
+            "cpu",
+            "memory",
+            "disk",
+            "network",
+            "egress",
+            "ttl",
+        )
         unsafe = sorted(
             key for key in self.config if any(word in key.lower() for word in forbidden)
         )
         if unsafe:
-            raise ValueError("deployment config contains secret-like keys")
+            raise ValueError(
+                "deployment config contains secret-like or platform-managed keys"
+            )
         return self
 
 

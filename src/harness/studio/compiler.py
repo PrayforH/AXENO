@@ -352,6 +352,17 @@ class AgentDraftCompiler:
                     path="executionProfile",
                 )
             )
+        elif {
+            reference for reference in spec.mcp_servers if reference in mcp_servers
+        }.difference(profile.allowed_mcp_references):
+            issues.append(
+                ValidationIssue(
+                    code="execution_profile_egress_incompatible",
+                    message="执行 Profile 的 Egress Policy 未关联所选 MCP",
+                    severity=ValidationSeverity.ERROR,
+                    path="executionProfile",
+                )
+            )
         return tuple(issues)
 
     def _deployment_warnings(self, draft: AgentDraft) -> tuple[ValidationIssue, ...]:

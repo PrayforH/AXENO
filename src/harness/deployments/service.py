@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -25,9 +26,14 @@ from harness.deployments.models import (
 from harness.deployments.queue import DeploymentTask, DeploymentTaskQueue
 from harness.deployments.repositories import DeploymentRepository, EnvironmentRepository
 from harness.evals.service import EvalControlPlaneService
+from harness.studio.catalog import default_capability_catalog
+from harness.studio.models import ExecutionProfileMetadata
 from harness.studio.preview_service import PreviewService
 
 QualityGate = Callable[[str, str, str], Awaitable[object]]
+ExecutionProfileResolver = Callable[
+    [str, str], Awaitable[ExecutionProfileMetadata]
+]
 
 
 def _id(prefix: str) -> str:
@@ -48,6 +54,7 @@ class DeploymentService:
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[str], str] | None = None,
         quality_gate: QualityGate | None = None,
+        execution_profile_resolver: ExecutionProfileResolver | None = None,
     ) -> None:
         self._environments = environments
         self._deployments = deployments
@@ -59,6 +66,24 @@ class DeploymentService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ids = id_generator or _id
         self._quality_gate = quality_gate
+        self._execution_profile_resolver = execution_profile_resolver
+
+    async def _execution_profile(
+        self, tenant_id: str, profile_id: str
+    ) -> ExecutionProfileMetadata:
+        if self._execution_profile_resolver is not None:
+            return await self._execution_profile_resolver(tenant_id, profile_id)
+        profile = next(
+            (
+                item
+                for item in default_capability_catalog().execution_profiles
+                if item.profile_id == profile_id
+            ),
+            None,
+        )
+        if profile is None or not profile.enabled:
+            raise ConflictError(f"Execution Profile is unavailable: {profile_id}")
+        return profile
 
     async def environment(
         self, tenant_id: str, agent_name: str, name: EnvironmentName
@@ -116,6 +141,21 @@ class DeploymentService:
                 or preview.package_hash != version.package_hash
             ):
                 raise ConflictError("Promotion Preview does not prove this Agent package")
+        profile = await self._execution_profile(tenant_id, request.execution_profile)
+        if not profile.enabled:
+            raise ConflictError("Execution Profile is disabled")
+        if request.environment is EnvironmentName.PRODUCTION and (
+            profile.sandbox_provider == "local" or not profile.production_allowed
+        ):
+            raise ConflictError("Local or unsafe Execution Profile cannot target production")
+        profile_payload = profile.model_dump(mode="json", by_alias=True)
+        profile_hash = hashlib.sha256(
+            json.dumps(
+                profile_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         snapshot = DeploymentSnapshot(
             tenantId=tenant_id,
             snapshotId=self._ids("deployment_snapshot"),
@@ -126,6 +166,8 @@ class DeploymentService:
             packageHash=version.package_hash,
             imageDigest=request.image_digest,
             executionProfile=request.execution_profile,
+            executionProfileVersion=profile.version,
+            executionProfileHash=profile_hash,
             config=request.config,
             evalGatePassed=gate.passed,
             evalRequiredDatasets=gate.required_datasets,

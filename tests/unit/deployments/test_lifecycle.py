@@ -17,7 +17,10 @@ from harness.deployments.models import (
 from harness.studio.models import (
     AgentDraft,
     AgentTemplate,
+    CapabilityRisk,
     CreateAgentDraftRequest,
+    ExecutionProfileMetadata,
+    NetworkAccess,
     ReplaceAgentDraftRequest,
 )
 
@@ -282,4 +285,79 @@ async def test_deployment_idempotency_and_secret_free_config_contract() -> None:
             executionProfile="isolated-default",
             config={"api_token": "not-allowed"},
             idempotencyKey="unsafe-release",
+        )
+
+    with pytest.raises(ValidationError, match="platform-managed"):
+        PromoteRequest(
+            agentName=draft.spec.name,
+            agentVersion=first_version,
+            environment=EnvironmentName.PRODUCTION,
+            expectedEnvironmentRevision=0,
+            imageDigest=IMAGE,
+            executionProfile="isolated-default",
+            config={"provider_url": "https://unsafe.example"},
+            idempotencyKey="unsafe-provider",
+        )
+
+
+@pytest.mark.asyncio
+async def test_profile_version_is_pinned_and_local_is_rejected_for_production() -> None:
+    container = build_memory_container()
+    draft, first_version, second_version = await published_versions(
+        container, "profile-deployment-agent"
+    )
+    current_version = 1
+
+    async def resolve_profile(
+        _tenant_id: str, profile_id: str
+    ) -> ExecutionProfileMetadata:
+        return ExecutionProfileMetadata(
+            profileId=profile_id,
+            label="Managed profile",
+            description="Platform-owned execution boundary.",
+            sandboxProvider=("local" if profile_id == "local-dev" else "daytona"),
+            networkAccess=(NetworkAccess.NONE,),
+            risk=CapabilityRisk.LOW,
+            version=current_version,
+            productionAllowed=profile_id != "local-dev",
+        )
+
+    container.deployments._execution_profile_resolver = resolve_profile  # pyright: ignore[reportPrivateUsage]
+    first = await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="profile-v1",
+        ),
+    )
+    current_version = 2
+    second = await container.deployments.promote(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=promotion(
+            agent_name=draft.spec.name,
+            version=second_version,
+            revision=1,
+            key="profile-v2",
+        ),
+    )
+
+    assert first.execution_profile_version == 1
+    assert second.target.execution_profile_version == 2
+    assert first.execution_profile_hash != second.target.execution_profile_hash
+    assert first.execution_profile_version == 1
+
+    unsafe = promotion(
+        agent_name=draft.spec.name,
+        version=second_version,
+        revision=1,
+        key="local-production",
+    ).model_copy(update={"execution_profile": "local-dev"})
+    with pytest.raises(ConflictError, match="cannot target production"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=unsafe,
         )

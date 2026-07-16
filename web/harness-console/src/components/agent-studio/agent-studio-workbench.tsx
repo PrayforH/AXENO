@@ -116,7 +116,9 @@ export function AgentStudioWorkbench() {
   const canEdit = membership.role !== "viewer";
   const canPublish = membership.role === "owner" || membership.role === "admin";
   const options = useMemo(
-    () => capabilities ? capabilityOptions(capabilities) : { routes: [], tools: [], mcp: [] },
+    () => capabilities
+      ? capabilityOptions(capabilities)
+      : { routes: [], tools: [], mcp: [], profiles: [] },
     [capabilities],
   );
   const contract = useMemo(
@@ -1486,6 +1488,35 @@ export function AgentStudioWorkbench() {
                   </article>
                 </div>
                 <div className={styles.formGrid}>
+                  <Field label="Execution Profile" hint="平台托管 · 版本固定">
+                    <select
+                      value={draft.executionProfile}
+                      onChange={(event) => updateDraft({ executionProfile: event.target.value })}
+                    >
+                      {options.profiles.map((profile) => (
+                        <option key={`${profile.profileId}@${profile.version}`} value={profile.profileId}>
+                          {profile.label} · v{profile.version} · {profile.sandboxProvider}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  {options.profiles.find((profile) => profile.profileId === draft.executionProfile) && (
+                    <div className={styles.profileFacts}>
+                      {(() => {
+                        const profile = options.profiles.find(
+                          (item) => item.profileId === draft.executionProfile,
+                        );
+                        if (!profile) return null;
+                        return <>
+                          <span>{profile.cpuMillis}m CPU</span>
+                          <span>{profile.memoryMiB} MiB 内存</span>
+                          <span>{profile.diskMiB} MiB 磁盘</span>
+                          <span>TTL {profile.ttlSeconds}s</span>
+                          <span>{profile.networkPolicyId}</span>
+                        </>;
+                      })()}
+                    </div>
+                  )}
                   <Field label="权限 Profile" wide>
                     <select
                       value={draft.policy}

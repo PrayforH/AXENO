@@ -48,6 +48,7 @@ from harness.sandbox.base import SandboxHandle, SandboxProvider
 RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[[str, str, str], Awaitable[PolicyEngine]]
 RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
+RunCredentialRevoker = Callable[[str, str], Awaitable[None]]
 T = TypeVar("T")
 
 
@@ -100,6 +101,7 @@ class RunOrchestrator:
         output_artifact_max_bytes: int = 50 * 1024 * 1024,
         cancellation_poll_interval_seconds: float = 0.25,
         quality_hook: RunQualityHook | None = None,
+        credential_revoker: RunCredentialRevoker | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -120,6 +122,7 @@ class RunOrchestrator:
         self._output_artifact_max_bytes = output_artifact_max_bytes
         self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
         self._quality_hook = quality_hook
+        self._credential_revoker = credential_revoker
 
     def _stage(
         self,
@@ -910,6 +913,8 @@ class RunOrchestrator:
         except Exception as error:  # noqa: BLE001 - boundary converts failures to Run state
             return await self._handle_unexpected_error(tenant_id, run_id, error)
         finally:
+            if self._credential_revoker is not None:
+                await self._credential_revoker(tenant_id, run_id)
             if handle is not None:
                 with self._stage("harness.sandbox.destroy", {"run.id": run_id}):
                     await self._sandbox.destroy(handle)

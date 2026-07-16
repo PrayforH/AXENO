@@ -204,3 +204,29 @@ def test_model_and_execution_profile_capabilities_must_be_compatible() -> None:
         "model_capability_missing",
         "execution_profile_network_incompatible",
     }
+
+
+def test_execution_profile_egress_allows_only_registered_mcp_associations() -> None:
+    catalog = default_capability_catalog()
+    restricted = catalog.model_copy(
+        update={
+            "execution_profiles": tuple(
+                item.model_copy(update={"allowed_mcp_references": ()})
+                for item in catalog.execution_profiles
+            )
+        }
+    )
+    current = draft()
+    with_mcp = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={"mcp_servers": ("tavily-readonly",)}
+            )
+        }
+    )
+
+    validation = AgentDraftCompiler(restricted).validate(with_mcp)
+
+    assert "execution_profile_egress_incompatible" in {
+        issue.code for issue in validation.issues
+    }

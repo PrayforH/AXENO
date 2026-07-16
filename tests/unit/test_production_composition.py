@@ -15,6 +15,7 @@ from harness.composition import build_production_container
 from harness.config import Settings
 from harness.core.manifest import AgentManifest
 from harness.core.models import ExecutionIdentity
+from harness.execution.credentials import BrokerMcpCredentialProvider, InMemoryCredentialBroker
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import ToolResolver
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
@@ -111,6 +112,11 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
     try:
         runtime = cast(RegistryClaudeRuntime, container.runtime)
         resolver = cast(ToolResolver, vars(runtime)["_tool_resolver"])
+        provider = vars(resolver)["_credential_provider"]
+
+        assert isinstance(provider, BrokerMcpCredentialProvider)
+        assert isinstance(vars(runtime)["_credential_broker"], InMemoryCredentialBroker)
+        assert vars(container.worker)["_credential_revoker"] is not None
 
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 

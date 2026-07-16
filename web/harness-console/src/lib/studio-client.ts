@@ -147,6 +147,8 @@ export type StudioPreview = {
   status: "queued" | "provisioning" | "ready" | "cancelling" | "cancelled" | "failed" | "expired";
   identityKind: "test";
   environment: "preview";
+  executionProfile: string;
+  executionProfileVersion: number;
   fencingToken: number;
   createdAt: string;
   updatedAt: string;
@@ -263,6 +265,8 @@ export type StudioDeploymentSnapshot = {
   packageHash: string;
   imageDigest: string;
   executionProfile: string;
+  executionProfileVersion: number;
+  executionProfileHash: string;
   config: Record<string, string | number | boolean>;
   evalGatePassed: boolean;
   evalRequiredDatasets: number;
@@ -372,6 +376,23 @@ export type StudioCapabilities = {
     enabled: boolean;
   }>;
   policies: Array<{ policyId: string; label: string; description: string; enabled: boolean }>;
+  executionProfiles: Array<{
+    profileId: string;
+    label: string;
+    description: string;
+    sandboxProvider: "local" | "daytona" | "gvisor";
+    networkAccess: Array<"none" | "internal" | "external">;
+    cpuMillis: number;
+    memoryMiB: number;
+    diskMiB: number;
+    ttlSeconds: number;
+    networkPolicyId: string;
+    allowedMcpReferences: string[];
+    providerConfigReference: string;
+    productionAllowed: boolean;
+    version: number;
+    enabled: boolean;
+  }>;
 };
 
 export class StudioApiError extends Error {
@@ -700,6 +721,7 @@ export function capabilityOptions(catalog: StudioCapabilities): {
   routes: ModelRouteOption[];
   tools: BuiltinToolOption[];
   mcp: McpOption[];
+  profiles: StudioCapabilities["executionProfiles"];
 } {
   return {
     routes: catalog.modelRoutes.filter((item) => item.enabled).map((item) => ({
@@ -724,5 +746,6 @@ export function capabilityOptions(catalog: StudioCapabilities): {
       network: item.networkAccess,
       sendsUserData: item.sendsUserData,
     })),
+    profiles: catalog.executionProfiles.filter((item) => item.enabled),
   };
 }

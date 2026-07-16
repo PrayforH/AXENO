@@ -131,17 +131,27 @@ def default_capability_catalog() -> CapabilityCatalog:
             ),
         ),
         executionProfiles=(
-            ExecutionProfileMetadata(
-                profileId="isolated-default",
-                label="生产隔离执行",
-                description="在平台托管的隔离 Sandbox 中执行文件、命令和工具。",
-                sandboxProvider="daytona",
-                networkAccess=(
-                    NetworkAccess.NONE,
-                    NetworkAccess.INTERNAL,
-                    NetworkAccess.EXTERNAL,
-                ),
-                risk=CapabilityRisk.MEDIUM,
+            ExecutionProfileMetadata.model_validate(
+                {
+                    "profileId": "isolated-default",
+                    "label": "生产隔离执行",
+                    "description": "在平台托管的隔离 Sandbox 中执行文件、命令和工具。",
+                    "sandboxProvider": "daytona",
+                    "networkAccess": (
+                        NetworkAccess.NONE,
+                        NetworkAccess.INTERNAL,
+                        NetworkAccess.EXTERNAL,
+                    ),
+                    "risk": CapabilityRisk.MEDIUM,
+                    "cpuMillis": 2000,
+                    "memoryMiB": 4096,
+                    "diskMiB": 20480,
+                    "ttlSeconds": 3600,
+                    "networkPolicyId": "registered-mcp-only",
+                    "allowedMcpReferences": ("tavily-readonly",),
+                    "providerConfigReference": "daytona-managed",
+                    "productionAllowed": True,
+                }
             ),
         ),
         templates=(

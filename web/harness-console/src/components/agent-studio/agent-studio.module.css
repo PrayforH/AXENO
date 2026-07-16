@@ -866,6 +866,22 @@
   line-height: 1.6;
 }
 
+.profileFacts {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profileFacts span {
+  padding: 5px 8px;
+  border: 1px solid var(--studio-line);
+  border-radius: 999px;
+  color: var(--studio-muted);
+  background: var(--studio-soft);
+  font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .field > span,
 .fieldWide > span {
   display: flex;

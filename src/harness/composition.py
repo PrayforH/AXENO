@@ -1,5 +1,6 @@
 """Production composition root using PostgreSQL, Redis, MinIO and Claude SDK."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -35,6 +36,12 @@ from harness.deployments.service import DeploymentService
 from harness.evals.controller import EvalController
 from harness.evals.queue import EvalTaskQueue
 from harness.evals.service import EvalControlPlaneService
+from harness.execution.credentials import (
+    BrokerMcpCredentialProvider,
+    CredentialResourceKind,
+    CredentialSourceKey,
+    InMemoryCredentialBroker,
+)
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
@@ -46,7 +53,6 @@ from harness.quality.service import QualityService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     default_tool_resolver,
-    server_secret_credential_provider,
 )
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.mcp_credentials import DynamicMcpCredentialProvider
@@ -190,9 +196,11 @@ def build_production_container(
             CcSwitchClaudeConfig | None,
             SandboxProvider,
             DynamicMcpCredentialProvider,
+            InMemoryCredentialBroker,
         ]
         | None
     ) = None
+    credential_broker: InMemoryCredentialBroker | None = None
     try:
         title_gateway, _ = _gateways(settings)
     except ValueError:
@@ -200,15 +208,48 @@ def build_production_container(
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
         sandbox = _sandbox(settings)
-        credential_provider = server_secret_credential_provider(
-            references_json=settings.mcp_secret_references_json,
-            secrets_json=settings.mcp_server_secrets_json.get_secret_value(),
+        references_raw = json.loads(settings.mcp_secret_references_json)
+        secrets_raw = json.loads(settings.mcp_server_secrets_json.get_secret_value())
+        if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
+            raise ValueError("MCP credential settings must be JSON objects")
+        typed_secrets = cast(dict[object, object], secrets_raw)
+        sources: dict[
+            CredentialSourceKey, tuple[str, dict[str, SecretStr]]
+        ] = {
+            ("*", CredentialResourceKind.MODEL, "new-api-default"): (
+                f"settings://{primary_gateway.provider}/primary",
+                {"api_key": primary_gateway.credential},
+            ),
+            ("*", CredentialResourceKind.MODEL, "anthropic-official"): (
+                f"settings://{(fallback_gateway or primary_gateway).provider}/fallback",
+                {"api_key": (fallback_gateway or primary_gateway).credential},
+            ),
+        }
+        for server, raw_references in cast(dict[object, object], references_raw).items():
+            if not isinstance(raw_references, dict):
+                continue
+            values = {
+                str(key): SecretStr(str(typed_secrets[secret_reference]))
+                for key, secret_reference in cast(
+                    dict[object, object], raw_references
+                ).items()
+                if secret_reference in typed_secrets
+            }
+            sources[("*", CredentialResourceKind.MCP, str(server))] = (
+                f"settings://mcp/{server}",
+                values,
+            )
+        credential_broker = InMemoryCredentialBroker(
+            sources,
+            clock=lambda: datetime.now(UTC),
         )
+        credential_provider = BrokerMcpCredentialProvider(credential_broker)
         execution_config = (
             primary_gateway,
             fallback_gateway,
             sandbox,
             credential_provider,
+            credential_broker,
         )
 
     engine, sessions = create_database(settings.database_url)
@@ -466,7 +507,13 @@ def build_production_container(
     policy = policy_profiles.resolve("local-standard")
     if execution_enabled:
         assert execution_config is not None
-        primary_gateway, fallback_gateway, runtime_sandbox, credential_provider = execution_config
+        (
+            primary_gateway,
+            fallback_gateway,
+            runtime_sandbox,
+            credential_provider,
+            credential_broker,
+        ) = execution_config
         tool_resolver = default_tool_resolver(credential_provider)
         runtime = RegistryClaudeRuntime(
             registry=registry,
@@ -485,6 +532,7 @@ def build_production_container(
                 project_id=session.session_id,
             ),
             observability=observability,
+            credential_broker=credential_broker,
         )
         model_probe = AnthropicSandboxModelProbe(primary_gateway)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
@@ -533,6 +581,9 @@ def build_production_container(
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=settings.output_artifact_max_bytes,
         quality_hook=quality_service.record_terminal_run,
+        credential_revoker=(
+            credential_broker.revoke_run if credential_broker is not None else None
+        ),
     )
     agui = AguiRunService(
         sessions=session_service,
