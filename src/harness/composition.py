@@ -249,6 +249,8 @@ def build_production_container(
         agent_drafts,
         catalogs=capability_catalogs,
         publisher=agent_service,
+        registry=registry,
+        audit=audit,
         clock=clock,
         id_generator=lambda: ids("draft"),
     )

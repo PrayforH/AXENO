@@ -68,6 +68,9 @@ export interface StudioSubagent {
 export interface StudioDraft {
   id: string;
   revision: number;
+  publishedVersion: string | null;
+  publishedHash: string | null;
+  publishedPackageHash: string | null;
   displayName: string;
   name: string;
   description: string;
@@ -219,6 +222,9 @@ export const REQUIRED_PROMPT_HEADINGS = [
 export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   id: "draft-public-opinion",
   revision: 0,
+  publishedVersion: null,
+  publishedHash: null,
+  publishedPackageHash: null,
   displayName: "舆情研判 Agent",
   name: "public-opinion-agent",
   description: "从用户材料和受控公网搜索中形成可追溯的中文舆情报告。",

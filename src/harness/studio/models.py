@@ -161,6 +161,9 @@ class AgentDraft(StudioModel):
     published_hash: str | None = Field(
         default=None, alias="publishedHash", pattern=r"^[a-f0-9]{64}$"
     )
+    published_package_hash: str | None = Field(
+        default=None, alias="publishedPackageHash", pattern=r"^[a-f0-9]{64}$"
+    )
 
 
 class CreateAgentDraftRequest(StudioModel):
@@ -174,6 +177,20 @@ class CreateAgentDraftRequest(StudioModel):
 class ReplaceAgentDraftRequest(StudioModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     spec: AgentDraftSpec
+
+
+class PublishAgentDraftRequest(StudioModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class PublishedAgentVersion(StudioModel):
+    tenant_id: str
+    name: str
+    version: str
+    status: Literal["published"]
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    package_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    created_at: datetime
 
 
 class AgentDraftSummary(StudioModel):

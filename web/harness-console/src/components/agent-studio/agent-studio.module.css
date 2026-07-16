@@ -380,6 +380,30 @@
   line-height: 1.55;
 }
 
+.publicationBadge {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 5px 8px;
+  color: var(--studio-muted);
+  background: #f5f4f8;
+  border: 1px solid #ddd9e7;
+  border-radius: 7px;
+  font-size: 10px;
+}
+
+.publicationBadge[data-current="true"] {
+  color: var(--studio-green);
+  background: var(--studio-green-soft);
+  border-color: #bcd2c8;
+}
+
+.publicationBadge code {
+  font: 600 9px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .headerActions {
   display: flex;
   align-items: center;

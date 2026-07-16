@@ -92,10 +92,15 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 
-  it("uses authenticated roles and keeps publication disabled until governance is ready", () => {
+  it("uses authenticated roles and gates immutable publication on server validation", () => {
     expect(workbench).toContain("membership.role");
-    expect(workbench).toContain("发布治理将在下一阶段接入");
-    expect(workbench).toMatch(/className=\{styles\.publishButton\}[\s\S]*?disabled/);
+    expect(workbench).toContain("studioClient.publishDraft");
+    expect(workbench).toContain("请先通过服务端检查");
+    expect(workbench).toContain("发布为不可覆盖的 Agent 版本");
+    expect(workbench).toMatch(
+      /className=\{styles\.publishButton\}[\s\S]*?disabled=\{!canPublish/,
+    );
+    expect(styles).toContain(".publicationBadge");
   });
 
   it("makes the draft-to-deployment lifecycle explicit without hiding failures", () => {

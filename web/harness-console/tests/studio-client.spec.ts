@@ -25,6 +25,7 @@ function apiDraft(): ApiAgentDraft {
     updatedAt: "2026-07-16T00:01:00Z",
     publishedVersion: null,
     publishedHash: null,
+    publishedPackageHash: null,
   };
 }
 
@@ -66,5 +67,26 @@ describe("Studio typed API mapping", () => {
       status: 409,
       code: "draft_conflict",
     } satisfies Partial<StudioApiError>);
+  });
+
+  it("publishes the exact server revision and preserves a version conflict", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 7 });
+      return Response.json(
+        { error: { code: "version_conflict", message: "immutable release exists" } },
+        { status: 409 },
+      );
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(studioClient.publishDraft("draft-api", 7)).rejects.toMatchObject({
+      status: 409,
+      code: "version_conflict",
+    } satisfies Partial<StudioApiError>);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/studio/drafts/draft-api/publish",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 });

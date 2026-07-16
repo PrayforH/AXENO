@@ -175,6 +175,8 @@ def build_memory_container(
         agent_drafts,
         catalogs=capability_catalogs,
         publisher=agent_service,
+        registry=registry,
+        audit=audit,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
     )

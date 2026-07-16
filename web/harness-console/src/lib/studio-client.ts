@@ -72,6 +72,17 @@ export type ApiAgentDraft = {
   updatedAt: string;
   publishedVersion: string | null;
   publishedHash: string | null;
+  publishedPackageHash: string | null;
+};
+
+export type ApiAgentVersion = {
+  tenant_id: string;
+  name: string;
+  version: string;
+  status: "published";
+  manifest_hash: string;
+  package_hash: string | null;
+  created_at: string;
 };
 
 export type StudioValidation = {
@@ -154,6 +165,9 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
   return {
     id: source.draftId,
     revision: source.revision,
+    publishedVersion: source.publishedVersion,
+    publishedHash: source.publishedHash,
+    publishedPackageHash: source.publishedPackageHash,
     displayName: spec.displayName,
     name: spec.name,
     description: spec.description,
@@ -253,6 +267,11 @@ export const studioClient = {
   validateDraft: (draftId: string) =>
     request<StudioValidation>(`drafts/${encodeURIComponent(draftId)}/validate`, {
       method: "POST",
+    }),
+  publishDraft: (draftId: string, expectedRevision: number) =>
+    request<ApiAgentVersion>(`drafts/${encodeURIComponent(draftId)}/publish`, {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision }),
     }),
   async downloadBundle(draftId: string): Promise<void> {
     const response = requireAuthenticatedResponse(

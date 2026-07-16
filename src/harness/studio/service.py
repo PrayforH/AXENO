@@ -7,9 +7,16 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
-from harness.core.models import AgentVersion
+from harness.auth.audit import AuditService
+from harness.core.errors import ConflictError, NotFoundError
+from harness.core.models import AgentVersion, AgentVersionStatus
+from harness.core.ports import AgentRegistry
 from harness.studio.catalog_service import CapabilityCatalogService
-from harness.studio.compiler import AgentDraftCompiler, CompiledAgentDraft
+from harness.studio.compiler import (
+    AgentDraftCompiler,
+    CompiledAgentDraft,
+    DraftCompilationError,
+)
 from harness.studio.factory import create_draft_spec
 from harness.studio.models import (
     AgentDraft,
@@ -18,6 +25,8 @@ from harness.studio.models import (
     CreateAgentDraftRequest,
     DraftValidationResult,
     ReplaceAgentDraftRequest,
+    ValidationIssue,
+    ValidationSeverity,
 )
 from harness.studio.repositories import AgentDraftRepository
 
@@ -30,6 +39,10 @@ class StudioPublisherNotConfiguredError(RuntimeError):
     pass
 
 
+class StudioPublicationConflictError(ConflictError):
+    pass
+
+
 class AgentStudioService:
     def __init__(
         self,
@@ -39,6 +52,8 @@ class AgentStudioService:
         *,
         catalogs: CapabilityCatalogService | None = None,
         publisher: AgentBundlePublisher | None = None,
+        registry: AgentRegistry | None = None,
+        audit: AuditService | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
     ) -> None:
@@ -47,6 +62,8 @@ class AgentStudioService:
         self._catalog = catalog
         self._catalogs = catalogs
         self._publisher = publisher
+        self._registry = registry
+        self._audit = audit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"draft_{uuid4().hex}")
 
@@ -124,14 +141,29 @@ class AgentStudioService:
         self, tenant_id: str, draft_id: str
     ) -> DraftValidationResult:
         compiler = await self._compiler_for(tenant_id)
-        return compiler.validate(await self.get(tenant_id, draft_id))
+        draft = await self.get(tenant_id, draft_id)
+        validation = compiler.validate(draft)
+        dependency_issues = await self._dependency_issues(tenant_id, draft)
+        if not dependency_issues:
+            return validation
+        return validation.model_copy(
+            update={
+                "ready": False,
+                "issues": (*validation.issues, *dependency_issues),
+            }
+        )
 
     async def bundle(self, tenant_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id)
         return compiler.compile(await self.get(tenant_id, draft_id))
 
     async def publish(
-        self, *, tenant_id: str, user_id: str, draft_id: str
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_revision: int | None = None,
     ) -> AgentVersion:
         if self._publisher is None:
             raise StudioPublisherNotConfiguredError(
@@ -139,8 +171,47 @@ class AgentStudioService:
             )
         draft = await self.get(tenant_id, draft_id)
         compiler = await self._compiler_for(tenant_id)
-        compiled = compiler.compile(draft)
-        version = await self._publisher.publish_bundle(tenant_id, compiled.bundle)
+        try:
+            if expected_revision is not None and draft.revision != expected_revision:
+                raise ConflictError(
+                    "Agent draft revision changed before publish: "
+                    f"expected={expected_revision} actual={draft.revision}"
+                )
+            compiled = compiler.compile(draft)
+            dependency_issues = await self._dependency_issues(tenant_id, draft)
+            if dependency_issues:
+                raise DraftCompilationError(dependency_issues)
+            existing = await self._idempotent_version(tenant_id, draft, compiled)
+            if existing is not None:
+                await self._record_publish_audit(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    draft_id=draft_id,
+                    draft_revision=draft.revision,
+                    version=existing,
+                    dependencies=tuple(
+                        sorted({item.ref for item in draft.spec.subagents})
+                    ),
+                    idempotent=True,
+                )
+                return existing
+            try:
+                version = await self._publisher.publish_bundle(
+                    tenant_id, compiled.bundle
+                )
+            except ConflictError as error:
+                raise StudioPublicationConflictError(
+                    f"Agent version content conflicts with existing immutable release: "
+                    f"{draft.spec.name}@{draft.spec.version}"
+                ) from error
+        except Exception as error:
+            await self._record_publish_failure(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                draft=draft,
+                error=error,
+            )
+            raise
         published = draft.model_copy(
             update={
                 "revision": draft.revision + 1,
@@ -148,7 +219,196 @@ class AgentStudioService:
                 "updated_at": self._clock(),
                 "published_version": version.version,
                 "published_hash": version.manifest_hash,
+                "published_package_hash": version.package_hash,
             }
         )
-        await self._repository.replace(draft.revision, published)
+        try:
+            await self._repository.replace(draft.revision, published)
+        except Exception as error:
+            await self._record_publish_failure(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                draft=draft,
+                error=error,
+            )
+            raise
+        await self._record_publish_audit(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            draft_id=draft_id,
+            draft_revision=published.revision,
+            version=version,
+            dependencies=tuple(sorted({item.ref for item in draft.spec.subagents})),
+            idempotent=False,
+        )
         return version
+
+    async def _dependency_issues(
+        self, tenant_id: str, draft: AgentDraft
+    ) -> tuple[ValidationIssue, ...]:
+        references = tuple(sorted({item.ref for item in draft.spec.subagents}))
+        if not references:
+            return ()
+        if self._registry is None:
+            return (
+                ValidationIssue(
+                    code="subagent_registry_unavailable",
+                    message="无法复验固定版本 Sub Agent",
+                    severity=ValidationSeverity.ERROR,
+                    path="subagents",
+                ),
+            )
+        tenant_drafts = await self._repository.list_for_tenant(tenant_id)
+        issues: list[ValidationIssue] = []
+        for reference in references:
+            name, version_id = reference.rsplit("@", 1)
+            try:
+                version = await self._registry.get(tenant_id, name, version_id)
+            except NotFoundError:
+                issues.append(
+                    ValidationIssue(
+                        code="subagent_not_published",
+                        message=f"Sub Agent 尚未发布：{reference}",
+                        severity=ValidationSeverity.ERROR,
+                        path="subagents",
+                    )
+                )
+                continue
+            if version.status is not AgentVersionStatus.PUBLISHED:
+                issues.append(
+                    ValidationIssue(
+                        code="subagent_not_published",
+                        message=f"Sub Agent 不是已发布状态：{reference}",
+                        severity=ValidationSeverity.ERROR,
+                        path="subagents",
+                    )
+                )
+                continue
+            studio_source = next(
+                (
+                    item
+                    for item in tenant_drafts
+                    if item.spec.name == name
+                    and item.published_version == version_id
+                ),
+                None,
+            )
+            if (
+                studio_source is not None
+                and (
+                    studio_source.published_hash != version.manifest_hash
+                    or studio_source.published_package_hash != version.package_hash
+                )
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="subagent_version_drift",
+                        message=f"Sub Agent 发布哈希漂移：{reference}",
+                        severity=ValidationSeverity.ERROR,
+                        path="subagents",
+                    )
+                )
+        return tuple(issues)
+
+    async def _idempotent_version(
+        self,
+        tenant_id: str,
+        draft: AgentDraft,
+        compiled: CompiledAgentDraft,
+    ) -> AgentVersion | None:
+        if (
+            draft.published_version != draft.spec.version
+            or draft.published_hash != compiled.report.snapshot.content_hash
+            or draft.published_package_hash != compiled.report.package_hash
+        ):
+            return None
+        if self._registry is None:
+            raise StudioPublicationConflictError(
+                "Published Draft cannot be verified against the Agent Registry"
+            )
+        try:
+            existing = await self._registry.get(
+                tenant_id, draft.spec.name, draft.spec.version
+            )
+        except NotFoundError as error:
+            raise StudioPublicationConflictError(
+                "Draft publication metadata points to a missing Agent version"
+            ) from error
+        if (
+            existing.status is not AgentVersionStatus.PUBLISHED
+            or existing.manifest_hash != compiled.report.snapshot.content_hash
+            or existing.package_hash != compiled.report.package_hash
+        ):
+            raise StudioPublicationConflictError(
+                "Draft publication metadata differs from the immutable Agent version"
+            )
+        return existing
+
+    async def _record_publish_audit(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        draft_revision: int,
+        version: AgentVersion,
+        dependencies: tuple[str, ...],
+        idempotent: bool,
+    ) -> None:
+        if self._audit is None:
+            return
+        await self._audit.record(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="studio.publish",
+            resource_type="agent_draft",
+            resource_id=draft_id,
+            outcome="success",
+            details={
+                "name": version.name,
+                "version": version.version,
+                "manifest_hash": version.manifest_hash,
+                "package_hash": version.package_hash or "",
+                "draft_revision": draft_revision,
+                "dependencies": list(dependencies),
+                "idempotent": idempotent,
+            },
+        )
+
+    async def _record_publish_failure(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft: AgentDraft,
+        error: Exception,
+    ) -> None:
+        if self._audit is None:
+            return
+        if isinstance(error, DraftCompilationError):
+            error_code = "draft_not_ready"
+        elif isinstance(error, StudioPublicationConflictError):
+            error_code = "version_conflict"
+        elif isinstance(error, ConflictError):
+            error_code = "draft_conflict"
+        else:
+            error_code = "publish_failed"
+        try:
+            await self._audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.publish",
+                resource_type="agent_draft",
+                resource_id=draft.draft_id,
+                outcome="denied",
+                details={
+                    "name": draft.spec.name,
+                    "version": draft.spec.version,
+                    "draft_revision": draft.revision,
+                    "error_code": error_code,
+                },
+            )
+        except Exception:
+            # Preserve the authoritative publication failure. The request-level audit
+            # middleware still records the denied HTTP result.
+            pass

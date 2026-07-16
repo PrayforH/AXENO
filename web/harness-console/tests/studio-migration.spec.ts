@@ -33,6 +33,7 @@ function apiDraft(revision: number): ApiAgentDraft {
     updatedAt: "2026-07-16T00:00:00Z",
     publishedVersion: null,
     publishedHash: null,
+    publishedPackageHash: null,
   };
 }
 

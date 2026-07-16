@@ -4,9 +4,12 @@ import pytest
 
 from harness.adapters.memory import InMemoryAgentRegistry
 from harness.application.agents import AgentService
+from harness.auth.audit import AuditService
+from harness.auth.repositories import InMemoryAuditRepository
 from harness.core.errors import ConflictError, NotFoundError
+from harness.core.models import AgentVersion
 from harness.studio.catalog import default_capability_catalog
-from harness.studio.compiler import AgentDraftCompiler
+from harness.studio.compiler import AgentDraftCompiler, DraftCompilationError
 from harness.studio.models import (
     AgentTemplate,
     CreateAgentDraftRequest,
@@ -18,23 +21,35 @@ from harness.studio.service import AgentStudioService
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
 
 
-def create_request() -> CreateAgentDraftRequest:
+def create_request(
+    *,
+    name: str = "contract-reviewer",
+    template: AgentTemplate = AgentTemplate.ANALYST,
+) -> CreateAgentDraftRequest:
     return CreateAgentDraftRequest(
-        name="contract-reviewer",
+        name=name,
         domain="contract-review",
         displayName="合同审查助手",
         description="检查上传合同并生成有出处的风险清单。",
-        template=AgentTemplate.ANALYST,
+        template=template,
     )
 
 
-def studio(*, publisher: AgentService | None = None) -> AgentStudioService:
+def studio(
+    *,
+    publisher: AgentService | None = None,
+    registry: InMemoryAgentRegistry | None = None,
+    repository: InMemoryAgentDraftRepository | None = None,
+    audit: AuditService | None = None,
+) -> AgentStudioService:
     catalog = default_capability_catalog()
     return AgentStudioService(
-        InMemoryAgentDraftRepository(),
+        repository or InMemoryAgentDraftRepository(),
         AgentDraftCompiler(catalog),
         catalog,
         publisher=publisher,
+        registry=registry,
+        audit=audit,
         clock=lambda: NOW,
         id_generator=lambda: "draft_contract",
     )
@@ -90,7 +105,7 @@ async def test_publish_reuses_production_bundle_gate_and_marks_draft() -> None:
         clock=lambda: NOW + timedelta(seconds=1),
         environment="production",
     )
-    service = studio(publisher=publisher)
+    service = studio(publisher=publisher, registry=registry)
     created = await service.create(
         tenant_id="tenant-a", user_id="builder", request=create_request()
     )
@@ -105,5 +120,135 @@ async def test_publish_reuses_production_bundle_gate_and_marks_draft() -> None:
     assert version.package_hash is not None
     assert stored.published_version == "0.1.0"
     assert stored.published_hash == version.manifest_hash
+    assert stored.published_package_hash == version.package_hash
     assert stored.updated_by == "publisher"
     assert stored.revision == 2
+
+
+@pytest.mark.asyncio
+async def test_exact_studio_publish_retry_is_idempotent_and_audited() -> None:
+    registry = InMemoryAgentRegistry()
+    publisher = AgentService(
+        registry,
+        clock=lambda: NOW + timedelta(seconds=1),
+        environment="production",
+    )
+    audit_repository = InMemoryAuditRepository()
+    service = studio(
+        publisher=publisher,
+        registry=registry,
+        audit=AuditService(audit_repository),
+    )
+    created = await service.create(
+        tenant_id="tenant-a", user_id="builder", request=create_request()
+    )
+
+    first = await service.publish(
+        tenant_id="tenant-a",
+        user_id="publisher",
+        draft_id=created.draft_id,
+        expected_revision=1,
+    )
+    repeated = await service.publish(
+        tenant_id="tenant-a",
+        user_id="publisher",
+        draft_id=created.draft_id,
+        expected_revision=2,
+    )
+
+    assert repeated == first
+    assert (await service.get("tenant-a", created.draft_id)).revision == 2
+    audits = await audit_repository.list_for_tenant("tenant-a", limit=10)
+    assert [entry.action for entry in audits] == ["studio.publish", "studio.publish"]
+    assert {entry.details["idempotent"] for entry in audits} == {False, True}
+
+
+@pytest.mark.asyncio
+async def test_unpublished_subagent_blocks_validation_and_publication() -> None:
+    registry = InMemoryAgentRegistry()
+    publisher = AgentService(registry, clock=lambda: NOW, environment="production")
+    service = studio(publisher=publisher, registry=registry)
+    created = await service.create(
+        tenant_id="tenant-a",
+        user_id="builder",
+        request=create_request(template=AgentTemplate.ORCHESTRATOR),
+    )
+
+    validation = await service.validate("tenant-a", created.draft_id)
+
+    assert validation.ready is False
+    assert {issue.code for issue in validation.issues} >= {"subagent_not_published"}
+    with pytest.raises(DraftCompilationError, match="尚未发布"):
+        await service.publish(
+            tenant_id="tenant-a",
+            user_id="publisher",
+            draft_id=created.draft_id,
+        )
+
+
+class DriftRegistry:
+    def __init__(self, delegate: InMemoryAgentRegistry) -> None:
+        self._delegate = delegate
+
+    async def add(self, version: AgentVersion) -> None:
+        await self._delegate.add(version)
+
+    async def get(self, tenant_id: str, name: str, version: str) -> AgentVersion:
+        stored = await self._delegate.get(tenant_id, name, version)
+        if name == "helper-agent":
+            return stored.model_copy(update={"manifest_hash": "f" * 64})
+        return stored
+
+
+@pytest.mark.asyncio
+async def test_subagent_hash_drift_blocks_lead_publication() -> None:
+    registry = InMemoryAgentRegistry()
+    publisher = AgentService(registry, clock=lambda: NOW, environment="production")
+    repository = InMemoryAgentDraftRepository()
+    child_service = AgentStudioService(
+        repository,
+        AgentDraftCompiler(default_capability_catalog()),
+        default_capability_catalog(),
+        publisher=publisher,
+        registry=registry,
+        clock=lambda: NOW,
+        id_generator=lambda: "draft_helper",
+    )
+    child = await child_service.create(
+        tenant_id="tenant-a",
+        user_id="builder",
+        request=create_request(name="helper-agent"),
+    )
+    child = await child_service.replace(
+        tenant_id="tenant-a",
+        user_id="builder",
+        draft_id=child.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=child.revision,
+            spec=child.spec.model_copy(update={"version": "1.0.0"}),
+        ),
+    )
+    await child_service.publish(
+        tenant_id="tenant-a", user_id="publisher", draft_id=child.draft_id
+    )
+    lead_service = AgentStudioService(
+        repository,
+        AgentDraftCompiler(default_capability_catalog()),
+        default_capability_catalog(),
+        publisher=publisher,
+        registry=DriftRegistry(registry),
+        clock=lambda: NOW,
+        id_generator=lambda: "draft_lead",
+    )
+    lead = await lead_service.create(
+        tenant_id="tenant-a",
+        user_id="builder",
+        request=create_request(
+            name="contract-lead", template=AgentTemplate.ORCHESTRATOR
+        ),
+    )
+
+    validation = await lead_service.validate("tenant-a", lead.draft_id)
+
+    assert validation.ready is False
+    assert {issue.code for issue in validation.issues} >= {"subagent_version_drift"}

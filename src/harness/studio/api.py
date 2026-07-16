@@ -11,7 +11,6 @@ from fastapi.responses import Response
 
 from harness.api.dependencies import Identity, ensure_permission, require_identity
 from harness.core.errors import ConflictError, NotFoundError
-from harness.core.models import AgentVersion
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.models import (
@@ -23,11 +22,17 @@ from harness.studio.models import (
     CatalogMutationResult,
     CreateAgentDraftRequest,
     DraftValidationResult,
+    PublishAgentDraftRequest,
+    PublishedAgentVersion,
     ReplaceAgentDraftRequest,
     ReplaceCapabilityCatalogRequest,
     UpsertCatalogResourceRequest,
 )
-from harness.studio.service import AgentStudioService, StudioPublisherNotConfiguredError
+from harness.studio.service import (
+    AgentStudioService,
+    StudioPublicationConflictError,
+    StudioPublisherNotConfiguredError,
+)
 
 
 @dataclass(frozen=True)
@@ -294,24 +299,41 @@ async def download_bundle(
     )
 
 
-@router.post("/drafts/{draft_id}/publish", response_model=AgentVersion)
+@router.post("/drafts/{draft_id}/publish", response_model=PublishedAgentVersion)
 async def publish_draft(
     draft_id: str,
     actor: Annotated[StudioActor, Depends(require_studio_publisher)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
-) -> AgentVersion:
+    body: PublishAgentDraftRequest | None = None,
+) -> PublishedAgentVersion:
     try:
-        return await service.publish(
+        version = await service.publish(
             tenant_id=actor.tenant_id,
             user_id=actor.user_id,
             draft_id=draft_id,
+            expected_revision=(body.expected_revision if body is not None else None),
         )
+        return PublishedAgentVersion.model_validate(
+            version.model_dump(exclude={"snapshot"})
+        )
+    except StudioPublicationConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "version_conflict", "message": str(error)},
+        ) from error
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
     except DraftCompilationError as error:
         raise HTTPException(
             status_code=422,
-            detail={"code": "draft_not_ready", "message": str(error)},
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [
+                    issue.model_dump(mode="json", by_alias=True)
+                    for issue in error.issues
+                ],
+            },
         ) from error
     except StudioPublisherNotConfiguredError as error:
         raise HTTPException(

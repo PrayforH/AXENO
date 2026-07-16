@@ -1,4 +1,5 @@
 import hashlib
+import json
 from dataclasses import replace
 from typing import Any, cast
 
@@ -120,7 +121,164 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert bundle.headers["x-agent-package-sha256"] == package_hash
     assert published.status_code == 200
     assert published.json()["name"] == "policy-researcher"
+    assert "snapshot" not in published.json()
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_publish_is_idempotent_and_writes_secret_free_domain_audit() -> None:
+    application, container = app_and_container()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    prompt_sentinel = "PROMPT_BODY_MUST_NOT_ENTER_AUDIT"
+    file_sentinel = "PRIVATE_SKILL_FILE_MUST_NOT_ENTER_AUDIT"
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request()
+        )
+        spec = created.json()["spec"]
+        spec["systemPrompt"] += f"\n{prompt_sentinel}\n"
+        spec["skills"][0]["files"] = [
+            {"path": "references/private.md", "content": file_sentinel}
+        ]
+        replaced = await client.put(
+            f"/v1/studio/drafts/{created.json()['draftId']}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": spec},
+        )
+        first = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/publish",
+            headers=headers,
+            json={"expectedRevision": 2},
+        )
+        repeated = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/publish",
+            headers=headers,
+            json={"expectedRevision": 3},
+        )
+        stored = await client.get(
+            f"/v1/studio/drafts/{created.json()['draftId']}", headers=headers
+        )
+
+    assert replaced.status_code == 200
+    assert first.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json() == first.json()
+    assert stored.json()["revision"] == 3
+    domain_audits = [
+        entry
+        for entry in await container.audit.list_for_tenant("tenant-a", limit=20)
+        if entry.action == "studio.publish"
+    ]
+    assert len(domain_audits) == 2
+    assert {entry.details["idempotent"] for entry in domain_audits} == {
+        False,
+        True,
+    }
+    audit_json = json.dumps(
+        [entry.model_dump(mode="json") for entry in domain_audits]
+    )
+    assert prompt_sentinel not in audit_json
+    assert file_sentinel not in audit_json
+    assert "systemPrompt" not in audit_json
+    assert "files" not in audit_json
+
+
+@pytest.mark.asyncio
+async def test_changed_content_reusing_version_is_rejected_and_audited() -> None:
+    application, container = app_and_container()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request()
+        )
+        draft_id = created.json()["draftId"]
+        first = await client.post(
+            f"/v1/studio/drafts/{draft_id}/publish",
+            headers=headers,
+            json={"expectedRevision": 1},
+        )
+        changed_spec = (await client.get(
+            f"/v1/studio/drafts/{draft_id}", headers=headers
+        )).json()["spec"]
+        changed_spec["description"] = "版本号未变化，但内容已经变化。"
+        changed = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=headers,
+            json={"expectedRevision": 2, "spec": changed_spec},
+        )
+        conflicting = await client.post(
+            f"/v1/studio/drafts/{draft_id}/publish",
+            headers=headers,
+            json={"expectedRevision": 3},
+        )
+
+    assert first.status_code == 200
+    assert changed.status_code == 200
+    assert conflicting.status_code == 409
+    assert conflicting.json()["error"]["code"] == "version_conflict"
+    audits = await container.audit.list_for_tenant("tenant-a", limit=20)
+    denied = next(
+        entry
+        for entry in audits
+        if entry.action == "studio.publish" and entry.outcome == "denied"
+    )
+    assert denied.details["error_code"] == "version_conflict"
+    assert set(denied.details) == {
+        "name",
+        "version",
+        "draft_revision",
+        "error_code",
+    }
+
+
+@pytest.mark.asyncio
+async def test_unpublished_subagent_blocks_validation_and_publish_api() -> None:
+    application = app()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json={**draft_request("lead-agent"), "template": "orchestrator"},
+        )
+        draft_id = created.json()["draftId"]
+        validation = await client.post(
+            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
+        )
+        published = await client.post(
+            f"/v1/studio/drafts/{draft_id}/publish",
+            headers=headers,
+            json={"expectedRevision": 1},
+        )
+
+    assert validation.status_code == 200
+    assert validation.json()["ready"] is False
+    assert {issue["code"] for issue in validation.json()["issues"]} >= {
+        "subagent_not_published"
+    }
+    assert published.status_code == 422
+    assert published.json()["error"]["code"] == "draft_not_ready"
+    assert {issue["code"] for issue in published.json()["error"]["issues"]} >= {
+        "subagent_not_published"
+    }
 
 
 @pytest.mark.asyncio

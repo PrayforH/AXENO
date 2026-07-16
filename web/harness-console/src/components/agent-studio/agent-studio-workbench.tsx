@@ -54,8 +54,10 @@ export function AgentStudioWorkbench() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [versionConflict, setVersionConflict] = useState(false);
   const [serverValidation, setServerValidation] = useState<StudioValidation | null>(null);
   const [activeSection, setActiveSection] =
     useState<StudioSection>("capabilities");
@@ -153,6 +155,7 @@ export function AgentStudioWorkbench() {
     setServerValidation(null);
     setDirty(true);
     setConflict(false);
+    setVersionConflict(false);
     setNotice("有尚未保存的修改");
   }
 
@@ -247,6 +250,7 @@ export function AgentStudioWorkbench() {
       setDrafts(await studioClient.listDrafts());
       setDirty(false);
       setConflict(false);
+      setVersionConflict(false);
       setNotice(`已保存到控制面 · revision ${next.revision}`);
       return next;
     } catch (error) {
@@ -282,6 +286,7 @@ export function AgentStudioWorkbench() {
       setDraft(apiDraftToStudioDraft(selected));
       setDirty(false);
       setConflict(false);
+      setVersionConflict(false);
       setServerValidation(null);
       setNotice("已从控制面切换草稿");
     } catch (error) {
@@ -295,6 +300,7 @@ export function AgentStudioWorkbench() {
     setDraft(apiDraftToStudioDraft(selected));
     setDirty(false);
     setConflict(false);
+    setVersionConflict(false);
     setNotice("已加载控制面最新 revision");
   }
 
@@ -306,6 +312,33 @@ export function AgentStudioWorkbench() {
       setNotice("Bundle 下载已开始");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Bundle 下载失败");
+    }
+  }
+
+  async function publishDraft() {
+    if (!draft.id || dirty || !serverValidation?.ready || !canPublish) return;
+    setPublishing(true);
+    try {
+      const version = await studioClient.publishDraft(draft.id, draft.revision);
+      const [refreshed, rows] = await Promise.all([
+        studioClient.getDraft(draft.id),
+        studioClient.listDrafts(),
+      ]);
+      setDraft(apiDraftToStudioDraft(refreshed));
+      setDrafts(rows);
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setNotice(`已发布不可变版本 ${version.name}@${version.version}`);
+    } catch (error) {
+      if (error instanceof StudioApiError && error.code === "version_conflict") {
+        setVersionConflict(true);
+      } else if (error instanceof StudioApiError && error.status === 409) {
+        setConflict(true);
+      }
+      setNotice(error instanceof Error ? error.message : "发布失败");
+    } finally {
+      setPublishing(false);
     }
   }
 
@@ -334,7 +367,20 @@ export function AgentStudioWorkbench() {
     options.routes.find((route) => route.id === draft.modelRoute) ?? options.routes[0];
   const skill = draft.skills[0];
   const validationReady = serverValidation?.ready ?? contract.ready;
-  const activeLifecycleStage = inspected && validationReady ? "preview" : inspected ? "check" : "draft";
+  const publishedCurrent = Boolean(
+    draft.publishedVersion === draft.version
+    && draft.publishedHash
+    && serverValidation?.contentHash === draft.publishedHash
+    && draft.publishedPackageHash
+    && serverValidation?.packageHash === draft.publishedPackageHash
+  );
+  const activeLifecycleStage = publishedCurrent
+    ? "version"
+    : inspected && validationReady
+      ? "preview"
+      : inspected
+        ? "check"
+        : "draft";
   const activeLifecycleIndex = lifecycleStages.findIndex(
     (stage) => stage.id === activeLifecycleStage,
   );
@@ -382,6 +428,7 @@ export function AgentStudioWorkbench() {
               setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
               setDirty(true);
               setConflict(false);
+              setVersionConflict(false);
               setNotice("新草稿尚未保存到控制面");
             }}
           >
@@ -442,13 +489,20 @@ export function AgentStudioWorkbench() {
           <div className={styles.titleBlock}>
             <div className={styles.eyebrow}>
               <span className={styles.draftDot} />
-              草稿 · {draft.domain}
+              {publishedCurrent ? "已发布" : "草稿"} · {draft.domain}
             </div>
             <div className={styles.titleLine}>
               <h1>{draft.displayName}</h1>
               <code>{draft.name}@{draft.version}</code>
             </div>
             <p>{draft.description}</p>
+            {draft.publishedVersion && (
+              <div className={styles.publicationBadge} data-current={publishedCurrent}>
+                <span>{publishedCurrent ? "不可变版本已发布" : "存在历史发布版本"}</span>
+                <code>{draft.name}@{draft.publishedVersion}</code>
+                {draft.publishedHash && <code>{draft.publishedHash.slice(0, 12)}</code>}
+              </div>
+            )}
           </div>
           <div className={styles.headerActions}>
             <button type="button" className={styles.secondaryButton} disabled={!canEdit || saving} onClick={() => void saveDraft()}>
@@ -468,10 +522,19 @@ export function AgentStudioWorkbench() {
             <button
               type="button"
               className={styles.publishButton}
-              disabled
-              title={canPublish ? "发布治理将在下一阶段接入" : "当前角色没有发布权限"}
+              disabled={!canPublish || !draft.id || dirty || !serverValidation?.ready || publishing}
+              title={
+                !canPublish
+                  ? "当前角色没有发布权限"
+                  : dirty
+                    ? "请先保存草稿"
+                    : !serverValidation?.ready
+                      ? "请先通过服务端检查"
+                      : "发布为不可覆盖的 Agent 版本"
+              }
+              onClick={() => void publishDraft()}
             >
-              发布
+              {publishing ? "发布中…" : publishedCurrent ? "重新核验发布" : "发布"}
             </button>
             <button type="button" className={styles.secondaryButton} disabled={!draft.id || saving} onClick={() => void downloadBundle()}>
               下载 Bundle
@@ -483,6 +546,15 @@ export function AgentStudioWorkbench() {
           <div className={styles.conflictBanner} role="alert">
             <div><strong>控制面已有更新</strong><span>本地修改仍保留。加载最新 revision 后再重新编辑。</span></div>
             <button type="button" onClick={() => void reloadAfterConflict()}>加载最新版本</button>
+          </div>
+        )}
+        {versionConflict && (
+          <div className={styles.conflictBanner} role="alert">
+            <div>
+              <strong>该版本号已存在其他不可变内容</strong>
+              <span>已发布版本不能覆盖。请修改版本号、保存并重新检查后再发布。</span>
+            </div>
+            <button type="button" onClick={() => setActiveSection("identity")}>修改版本号</button>
           </div>
         )}
         {!canEdit && (
@@ -1104,7 +1176,7 @@ export function AgentStudioWorkbench() {
         </div>
 
         <footer className={styles.editorFooter}>
-          <span className={notice.includes("阻塞") ? styles.noticeError : styles.noticeDot} aria-hidden="true" />
+          <span className={conflict || versionConflict || notice.includes("阻塞") ? styles.noticeError : styles.noticeDot} aria-hidden="true" />
           <span>{notice}</span>
           <code>{draft.id ? `revision ${draft.revision}` : "unsaved"}</code>
         </footer>
@@ -1175,9 +1247,15 @@ export function AgentStudioWorkbench() {
           <ContractNode
             index="R"
             label="Release"
-            value={contract.ready ? "可生成不可变 Bundle" : "配置未通过"}
-            detail="发布后版本不可覆盖"
-            state={contract.ready ? "ready" : "error"}
+            value={
+              publishedCurrent
+                ? `已发布 ${draft.name}@${draft.publishedVersion}`
+                : contract.ready
+                  ? "可生成不可变 Bundle"
+                  : "配置未通过"
+            }
+            detail={publishedCurrent ? `hash ${draft.publishedHash?.slice(0, 12)}` : "发布后版本不可覆盖"}
+            state={publishedCurrent || contract.ready ? "ready" : "error"}
           />
         </div>
 
