@@ -28,7 +28,12 @@ const activity = runActivitySchema.parse({
       summary: "分析依赖关系",
       timestamp: "2026-07-14T00:00:02Z",
       sequence: 2,
-      metadata: { task_id: "task-a", parent_tool_use_id: "root" },
+      metadata: {
+        task_id: "task-a",
+        parent_tool_use_id: "root",
+        alias: "fact-checker",
+        agent_version: "1.0.0",
+      },
     },
     {
       id: "task-a-complete",
@@ -39,7 +44,14 @@ const activity = runActivitySchema.parse({
       summary: "分析依赖关系",
       timestamp: "2026-07-14T00:00:03Z",
       sequence: 3,
-      metadata: { task_id: "task-a", parent_tool_use_id: "root" },
+      metadata: {
+        task_id: "task-a",
+        parent_tool_use_id: "root",
+        alias: "fact-checker",
+        agent_version: "1.0.0",
+        duration_ms: 1000,
+        usage: { tool_uses: 2 },
+      },
     },
     {
       id: "task-b-start",
@@ -50,7 +62,12 @@ const activity = runActivitySchema.parse({
       summary: "检查审批边界",
       timestamp: "2026-07-14T00:00:04Z",
       sequence: 4,
-      metadata: { task_id: "task-b", parent_tool_use_id: "root" },
+      metadata: {
+        task_id: "task-b",
+        parent_tool_use_id: "root",
+        alias: "risk-reviewer",
+        agent_version: "1.0.0",
+      },
     },
     {
       id: "tool-one",
@@ -99,6 +116,10 @@ describe("execution ribbon", () => {
     );
     expect(html).toContain("分析依赖关系");
     expect(html).toContain("检查审批边界");
+    expect(html).toContain("fact-checker");
+    expect(html).toContain("risk-reviewer");
+    expect(html).toContain("fact-checker@1.0.0");
+    expect(html).toContain("2 个工具");
     expect(html).toContain("Read");
     expect(html).toContain("Grep");
     expect(html).not.toContain("subagent.started");

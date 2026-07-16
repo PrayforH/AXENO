@@ -858,6 +858,14 @@
   grid-column: 1 / -1;
 }
 
+.fieldHint {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  color: var(--studio-faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .field > span,
 .fieldWide > span {
   display: flex;

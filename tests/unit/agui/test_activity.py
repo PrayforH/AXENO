@@ -120,6 +120,13 @@ def test_subagent_activity_keeps_parent_and_summary() -> None:
                 "parent_tool_use_id": "tool-1",
                 "summary": "Found two issues",
                 "status": "completed",
+                "alias": "fact-checker",
+                "agent_name": "helper",
+                "agent_version": "1.0.0",
+                "policy_profile": "read-only",
+                "depth": 1,
+                "duration_ms": 40,
+                "usage": {"total_tokens": 9, "tool_uses": 2},
                 "secret": "never-show",
             },
             4,
@@ -132,6 +139,13 @@ def test_subagent_activity_keeps_parent_and_summary() -> None:
     assert item["metadata"] == {
         "task_id": "task-1",
         "parent_tool_use_id": "tool-1",
+        "alias": "fact-checker",
+        "agent_name": "helper",
+        "agent_version": "1.0.0",
+        "policy_profile": "read-only",
+        "depth": 1,
+        "duration_ms": 40,
+        "usage": {"total_tokens": 9, "tool_uses": 2},
     }
     assert "never-show" not in repr(projected)
 

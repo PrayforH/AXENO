@@ -3086,6 +3086,18 @@ textarea:not(.aui-composer-input):focus-visible,
   white-space: nowrap;
 }
 
+.execution-task > summary > span:nth-of-type(2) strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.execution-task > summary > span:nth-of-type(2) em {
+  margin-left: 8px;
+  color: var(--muted-ink);
+  font-style: normal;
+  font-weight: 400;
+}
+
 .execution-task small,
 .execution-tool small {
   color: #85918b;

@@ -90,6 +90,16 @@ class DraftLimits(StudioModel):
     max_turns: int = Field(default=15, alias="maxTurns", ge=1, le=200)
     timeout_seconds: int = Field(default=900, alias="timeoutSeconds", ge=1, le=86_400)
     max_budget_usd: float = Field(default=1, alias="maxBudgetUsd", gt=0)
+    max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
+    max_subagent_tasks: int = Field(
+        default=16, alias="maxSubagentTasks", ge=1, le=128
+    )
+    max_concurrent_subagents: int = Field(
+        default=4, alias="maxConcurrentSubagents", ge=1, le=16
+    )
+    max_subagent_usage_units: int | None = Field(
+        default=200_000, alias="maxSubagentUsageUnits", gt=0
+    )
 
 
 class DraftSubagent(StudioModel):

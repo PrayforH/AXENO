@@ -124,6 +124,10 @@ class EvalCaseResult(StudioModel):
     failures: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     approval_requested: bool = Field(default=False, alias="approvalRequested")
+    subagents: tuple[str, ...] = ()
+    peak_concurrent_subagents: int = Field(
+        default=0, alias="peakConcurrentSubagents", ge=0
+    )
     completed_at: datetime = Field(alias="completedAt")
 
 

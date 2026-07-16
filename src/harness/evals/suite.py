@@ -23,6 +23,18 @@ class EvalExpectation(EvalModel):
     )
     required_tools: tuple[str, ...] = Field(default=(), alias="requiredTools")
     forbidden_tools: tuple[str, ...] = Field(default=(), alias="forbiddenTools")
+    required_subagents: tuple[str, ...] = Field(
+        default=(), alias="requiredSubagents"
+    )
+    forbidden_subagents: tuple[str, ...] = Field(
+        default=(), alias="forbiddenSubagents"
+    )
+    min_concurrent_subagents: int | None = Field(
+        default=None, alias="minConcurrentSubagents", ge=1
+    )
+    max_concurrent_subagents: int | None = Field(
+        default=None, alias="maxConcurrentSubagents", ge=1
+    )
     output_contains: tuple[str, ...] = Field(default=(), alias="outputContains")
     approval_required: bool = Field(default=False, alias="approvalRequired")
     max_duration_seconds: float = Field(default=120, alias="maxDurationSeconds", gt=0)
@@ -33,6 +45,22 @@ class EvalExpectation(EvalModel):
         if overlap:
             raise ValueError(
                 f"tools cannot be both required and forbidden: {', '.join(overlap)}"
+            )
+        subagent_overlap = sorted(
+            set(self.required_subagents) & set(self.forbidden_subagents)
+        )
+        if subagent_overlap:
+            raise ValueError(
+                "subagents cannot be both required and forbidden: "
+                + ", ".join(subagent_overlap)
+            )
+        if (
+            self.min_concurrent_subagents is not None
+            and self.max_concurrent_subagents is not None
+            and self.min_concurrent_subagents > self.max_concurrent_subagents
+        ):
+            raise ValueError(
+                "minConcurrentSubagents cannot exceed maxConcurrentSubagents"
             )
         return self
 

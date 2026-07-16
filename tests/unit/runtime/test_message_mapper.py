@@ -167,7 +167,7 @@ def test_maps_task_lifecycle_to_safe_subagent_events() -> None:
 
     assert [event.type for event in events] == [
         "subagent.started",
-        "subagent.progress",
+        "subagent.updated",
         "subagent.completed",
         "subagent.failed",
     ]

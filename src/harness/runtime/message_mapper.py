@@ -182,7 +182,7 @@ def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
         )
     if isinstance(message, TaskProgressMessage):
         return RuntimeEvent(
-            type="subagent.progress",
+            type="subagent.updated",
             payload={
                 "task_id": message.task_id,
                 "description": message.description,
@@ -218,7 +218,7 @@ def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
                 if status == "completed"
                 else "subagent.failed"
                 if terminal
-                else "subagent.progress"
+                else "subagent.updated"
             ),
             payload={"task_id": message.task_id, "status": status or "running"},
         )

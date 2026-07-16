@@ -278,6 +278,8 @@ class EvalController:
                 failures=scored.failures,
                 tools=scored.tools,
                 approvalRequested=scored.approval_requested,
+                subagents=scored.subagents,
+                peakConcurrentSubagents=scored.peak_concurrent_subagents,
                 completedAt=self._clock(),
             ),
         )
@@ -369,6 +371,8 @@ class EvalController:
                     failures=item.failures,
                     tools=item.tools,
                     approval_requested=item.approval_requested,
+                    subagents=item.subagents,
+                    peak_concurrent_subagents=item.peak_concurrent_subagents,
                 )
                 for item in records
             ),

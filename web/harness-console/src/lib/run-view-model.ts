@@ -17,6 +17,10 @@ export interface RunTaskNode {
   title: string;
   status: WorkStatus;
   sequence: number;
+  alias?: string;
+  agentVersion?: string;
+  durationMs?: number;
+  toolUses?: number;
 }
 
 export interface RunToolNode {
@@ -141,6 +145,21 @@ function taskNodes(items: readonly ActivityItem[]): RunTaskNode[] {
       title: item.summary || item.title,
       status: workStatus(item),
       sequence: item.sequence,
+      alias: typeof item.metadata.alias === "string" ? item.metadata.alias : undefined,
+      agentVersion:
+        typeof item.metadata.agent_version === "string"
+          ? item.metadata.agent_version
+          : undefined,
+      durationMs:
+        typeof item.metadata.duration_ms === "number"
+          ? item.metadata.duration_ms
+          : undefined,
+      toolUses:
+        typeof item.metadata.usage === "object" &&
+        item.metadata.usage !== null &&
+        typeof (item.metadata.usage as { tool_uses?: unknown }).tool_uses === "number"
+          ? (item.metadata.usage as { tool_uses: number }).tool_uses
+          : undefined,
     });
   }
   return [...tasks.values()].sort((left, right) => left.sequence - right.sequence);

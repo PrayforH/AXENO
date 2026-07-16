@@ -57,7 +57,15 @@ type ApiDraftSpec = {
   permissionPolicy: string;
   executionProfile: string;
   workspace: { restoreSession: boolean; archiveOnComplete: boolean };
-  limits: { maxTurns: number; timeoutSeconds: number; maxBudgetUsd: number };
+  limits: {
+    maxTurns: number;
+    timeoutSeconds: number;
+    maxBudgetUsd: number;
+    maxSubagents: number;
+    maxSubagentTasks: number;
+    maxConcurrentSubagents: number;
+    maxSubagentUsageUnits: number;
+  };
   evaluationCases: ApiEvalCase[];
 };
 
@@ -434,6 +442,10 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     maxTurns: spec.limits.maxTurns,
     timeoutSeconds: spec.limits.timeoutSeconds,
     maxBudgetUsd: spec.limits.maxBudgetUsd,
+    maxSubagents: spec.limits.maxSubagents,
+    maxSubagentTasks: spec.limits.maxSubagentTasks,
+    maxConcurrentSubagents: spec.limits.maxConcurrentSubagents,
+    maxSubagentUsageUnits: spec.limits.maxSubagentUsageUnits,
     evalCases: spec.evaluationCases.map((item) => ({
       id: item.id,
       label: item.id,
@@ -474,6 +486,10 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
       maxTurns: draft.maxTurns,
       timeoutSeconds: draft.timeoutSeconds,
       maxBudgetUsd: draft.maxBudgetUsd,
+      maxSubagents: draft.maxSubagents,
+      maxSubagentTasks: draft.maxSubagentTasks,
+      maxConcurrentSubagents: draft.maxConcurrentSubagents,
+      maxSubagentUsageUnits: draft.maxSubagentUsageUnits,
     },
     evaluationCases: draft.evalCases.map((item) => ({
       id: item.id,

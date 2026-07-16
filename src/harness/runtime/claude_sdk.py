@@ -43,6 +43,7 @@ from harness.runtime.memory_tools import create_memory_mcp_server, memory_execut
 from harness.runtime.message_mapper import map_sdk_message, result_subtype, result_usage
 from harness.runtime.model_router import ModelRouter
 from harness.runtime.sdk_tool_gate import ToolGate
+from harness.runtime.subagent_governance import SubagentRuntimeGovernor
 from harness.runtime.tools import ResolvedTools, ToolResolutionError, ToolResolver
 
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
@@ -377,6 +378,11 @@ class ClaudeSdkRuntime:
                         ),
                     }
                 )
+        subagent_governor = SubagentRuntimeGovernor(
+            root=self._snapshot,
+            subagent_versions=self._subagent_versions,
+            observability=self._observability,
+        )
         partial_text_seen = False
         stream_message_open = False
         pending_text = ""
@@ -434,6 +440,23 @@ class ClaudeSdkRuntime:
                 if isinstance(message, ResultMessage) and pending_task_terminals:
                     mapped = [*pending_task_terminals.values(), *mapped]
                     pending_task_terminals.clear()
+                governed: list[RuntimeEvent] = []
+                for event in mapped:
+                    governed.extend(
+                        subagent_governor.process(
+                            event,
+                            run_id=context.run.run_id,
+                        )
+                    )
+                mapped = governed
+                if isinstance(message, ResultMessage) and subagent_governor.active_tasks:
+                    mapped = [
+                        *subagent_governor.fail_unfinished(
+                            reason="missing_terminal_event",
+                            run_id=context.run.run_id,
+                        ),
+                        *mapped,
+                    ]
                 if self._tool_gate is not None:
                     mapped = [event for event in mapped if event.type != "tool.request"]
                 if isinstance(message, StreamEvent):
@@ -508,6 +531,15 @@ class ClaudeSdkRuntime:
                 for event in mapped:
                     yield event
         for event in pending_task_terminals.values():
+            for governed_event in subagent_governor.process(
+                event,
+                run_id=context.run.run_id,
+            ):
+                yield governed_event
+        for event in subagent_governor.fail_unfinished(
+            reason="stream_closed",
+            run_id=context.run.run_id,
+        ):
             yield event
         if stream_message_open:
             if pending_text:

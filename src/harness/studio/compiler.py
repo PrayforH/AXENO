@@ -99,6 +99,15 @@ class AgentDraftCompiler:
                         "maxTurns": spec.limits.max_turns,
                         "timeoutSeconds": spec.limits.timeout_seconds,
                         "maxBudgetUsd": spec.limits.max_budget_usd,
+                        "maxSubagents": spec.limits.max_subagents,
+                        "maxSubagentTasks": spec.limits.max_subagent_tasks,
+                        "maxConcurrentSubagents": (
+                            spec.limits.max_concurrent_subagents
+                        ),
+                        "maxSubagentDepth": 1,
+                        "maxSubagentUsageUnits": (
+                            spec.limits.max_subagent_usage_units
+                        ),
                     },
                 },
             }

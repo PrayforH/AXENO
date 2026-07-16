@@ -92,6 +92,10 @@ export interface StudioDraft {
   maxTurns: number;
   timeoutSeconds: number;
   maxBudgetUsd: number;
+  maxSubagents: number;
+  maxSubagentTasks: number;
+  maxConcurrentSubagents: number;
+  maxSubagentUsageUnits: number;
   evalCases: StudioEvalCase[];
 }
 
@@ -294,6 +298,10 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   maxTurns: 20,
   timeoutSeconds: 1200,
   maxBudgetUsd: 2,
+  maxSubagents: 8,
+  maxSubagentTasks: 16,
+  maxConcurrentSubagents: 4,
+  maxSubagentUsageUnits: 200000,
   evalCases: [
     {
       id: "evidence-backed-brief",
@@ -423,6 +431,12 @@ export function evaluateStudioDraft(
     issues.push("配置 Sub Agent 必须启用 Task 工具");
   }
   if (draft.subagents.length > 8) issues.push("单个 Lead 最多绑定 8 个 Sub Agent");
+  if (draft.subagents.length > draft.maxSubagents) {
+    issues.push(`当前角色数超过运行上限 ${draft.maxSubagents}`);
+  }
+  if (draft.maxConcurrentSubagents > draft.maxSubagents) {
+    issues.push("并发 Sub 上限不能高于可绑定 Sub 上限");
+  }
   const subagentAliases = draft.subagents.map((subagent) => subagent.alias);
   if (new Set(subagentAliases).size !== subagentAliases.length) {
     issues.push("Sub Agent 角色别名不能重复");

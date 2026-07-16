@@ -4,8 +4,16 @@ from pathlib import Path
 import pytest
 
 from harness.adapters.memory import InMemoryAgentRegistry
-from harness.application.agent_assets import stage_published_agent_assets
-from harness.core.manifest import load_manifest
+from harness.application.agent_assets import (
+    resolve_published_agent_versions,
+    stage_published_agent_assets,
+)
+from harness.core.manifest import (
+    ManifestValidationError,
+    SubagentSpec,
+    ToolSpec,
+    load_manifest,
+)
 from harness.core.models import AgentVersion, AgentVersionStatus
 
 
@@ -44,3 +52,51 @@ async def test_stages_main_and_pinned_subagent_skills(tmp_path: Path) -> None:
         tmp_path / ".claude/skills/delegated-investigation/SKILL.md"
     ).is_file()
     assert (tmp_path / ".claude/skills/workspace-validation/SKILL.md").is_file()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsupported", ["nested", "python"])
+async def test_pinned_subagent_rejects_nested_or_custom_capabilities(
+    unsupported: str,
+) -> None:
+    registry = InMemoryAgentRegistry()
+    root = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    child = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    if unsupported == "nested":
+        child_spec = child.manifest.spec.model_copy(
+            update={"subagents": (SubagentSpec(ref="leaf@1.0.0"),)}
+        )
+    else:
+        child_spec = child.manifest.spec.model_copy(
+            update={
+                "tools": child.manifest.spec.tools
+                + (ToolSpec.model_validate({"python": "package:tool"}),)
+            }
+        )
+    child = child.model_copy(
+        update={
+            "manifest": child.manifest.model_copy(update={"spec": child_spec})
+        }
+    )
+    now = datetime.now(UTC)
+    for snapshot in (child, root):
+        metadata = snapshot.manifest.metadata
+        await registry.add(
+            AgentVersion(
+                tenant_id="tenant-a",
+                name=metadata.name,
+                version=metadata.version,
+                status=AgentVersionStatus.PUBLISHED,
+                manifest_hash=snapshot.content_hash,
+                snapshot=snapshot.model_dump(mode="json"),
+                created_at=now,
+            )
+        )
+
+    with pytest.raises(ManifestValidationError, match="nested|MCP/Python"):
+        await resolve_published_agent_versions(
+            registry,
+            tenant_id="tenant-a",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+        )

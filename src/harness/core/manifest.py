@@ -89,6 +89,17 @@ class LimitSpec(ManifestModel):
     max_turns: int = Field(default=30, alias="maxTurns", ge=1)
     timeout_seconds: int = Field(default=1800, alias="timeoutSeconds", ge=1)
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
+    max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
+    max_subagent_tasks: int = Field(
+        default=16, alias="maxSubagentTasks", ge=1, le=128
+    )
+    max_concurrent_subagents: int = Field(
+        default=4, alias="maxConcurrentSubagents", ge=1, le=16
+    )
+    max_subagent_depth: Literal[1] = Field(default=1, alias="maxSubagentDepth")
+    max_subagent_usage_units: int | None = Field(
+        default=200_000, alias="maxSubagentUsageUnits", gt=0
+    )
 
 
 class AgentSpec(ManifestModel):
@@ -112,6 +123,11 @@ class AgentSpec(ManifestModel):
         if duplicates:
             raise ValueError(
                 "duplicate subagent runtime name: " + ", ".join(duplicates)
+            )
+        if len(runtime_names) > self.limits.max_subagents:
+            raise ValueError(
+                "declared subagents exceed maxSubagents="
+                f"{self.limits.max_subagents}"
             )
         return self
 

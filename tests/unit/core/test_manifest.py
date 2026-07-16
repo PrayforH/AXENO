@@ -126,6 +126,28 @@ def test_rejects_duplicate_subagent_role_aliases(tmp_path: Path) -> None:
         load_manifest(path, environment="production")
 
 
+def test_rejects_subagent_count_and_depth_beyond_one_level(tmp_path: Path) -> None:
+    manifest = yaml.safe_load(FIXTURE.read_text())
+    manifest["spec"]["limits"]["maxSubagents"] = 1
+    manifest["spec"]["subagents"] = [
+        {"ref": "helper@1.0.0", "alias": "one"},
+        {"ref": "helper@1.0.0", "alias": "two"},
+    ]
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts/system.md").write_text("prompt")
+
+    with pytest.raises(ManifestValidationError, match="maxSubagents"):
+        load_manifest(path, environment="production")
+
+    manifest["spec"]["limits"]["maxSubagents"] = 2
+    manifest["spec"]["limits"]["maxSubagentDepth"] = 2
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    with pytest.raises(ManifestValidationError, match="maxSubagentDepth"):
+        load_manifest(path, environment="production")
+
+
 def test_rejects_missing_prompt(tmp_path: Path) -> None:
     path = tmp_path / "agent.yaml"
     path.write_text(FIXTURE.read_text())

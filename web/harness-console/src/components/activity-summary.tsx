@@ -45,12 +45,17 @@ function TaskRow({ task }: { task: RunTaskNode }) {
     >
       <summary>
         <span className="execution-node" aria-hidden="true" />
-        <span>{task.title}</span>
+        <span>
+          {task.alias && <strong>{task.alias}</strong>}
+          {task.alias && task.title !== task.alias ? <em>{task.title}</em> : task.title}
+        </span>
         <small>{workLabels[task.status]}</small>
       </summary>
       <div className="execution-task-detail">
-        <code>{task.id}</code>
+        <code>{task.agentVersion ? `${task.alias}@${task.agentVersion}` : task.id}</code>
         {task.parentId && <span>父任务 {task.parentId}</span>}
+        {task.durationMs !== undefined && <span>{durationLabel(task.durationMs)}</span>}
+        {task.toolUses !== undefined && <span>{task.toolUses} 个工具</span>}
       </div>
     </details>
   );

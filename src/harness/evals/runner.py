@@ -36,6 +36,8 @@ class EvalCaseResult:
     failures: tuple[str, ...]
     tools: tuple[str, ...]
     approval_requested: bool
+    subagents: tuple[str, ...] = ()
+    peak_concurrent_subagents: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -47,6 +49,8 @@ class EvalCaseResult:
             "failures": list(self.failures),
             "tools": list(self.tools),
             "approval_requested": self.approval_requested,
+            "subagents": list(self.subagents),
+            "peak_concurrent_subagents": self.peak_concurrent_subagents,
         }
 
 
@@ -157,6 +161,30 @@ def evaluate_recorded_run(case: EvalCase, run: RecordedRun) -> EvalCaseResult:
     approval_requested = any(
         event.get("type") == "approval.requested" for event in run.events
     )
+    subagents: list[str] = []
+    active_subagents: set[str] = set()
+    peak_concurrent_subagents = 0
+    for event in run.events:
+        event_type = event.get("type")
+        if event_type not in {
+            "subagent.started",
+            "subagent.completed",
+            "subagent.failed",
+        }:
+            continue
+        payload = _event_payload(event)
+        task_id = payload.get("task_id")
+        alias = payload.get("alias") or payload.get("task_type")
+        if event_type == "subagent.started":
+            if isinstance(alias, str) and alias and alias not in subagents:
+                subagents.append(alias)
+            if isinstance(task_id, str) and task_id:
+                active_subagents.add(task_id)
+                peak_concurrent_subagents = max(
+                    peak_concurrent_subagents, len(active_subagents)
+                )
+        elif isinstance(task_id, str):
+            active_subagents.discard(task_id)
     output = "\n".join(
         str(_event_payload(event).get("text", ""))
         for event in run.events
@@ -172,6 +200,28 @@ def evaluate_recorded_run(case: EvalCase, run: RecordedRun) -> EvalCaseResult:
     for tool in case.expect.forbidden_tools:
         if tool in tools:
             failures.append(f"forbidden tool used: {tool}")
+    for alias in case.expect.required_subagents:
+        if alias not in subagents:
+            failures.append(f"missing required subagent: {alias}")
+    for alias in case.expect.forbidden_subagents:
+        if alias in subagents:
+            failures.append(f"forbidden subagent used: {alias}")
+    if (
+        case.expect.min_concurrent_subagents is not None
+        and peak_concurrent_subagents < case.expect.min_concurrent_subagents
+    ):
+        failures.append(
+            "subagent peak concurrency below "
+            f"{case.expect.min_concurrent_subagents}: {peak_concurrent_subagents}"
+        )
+    if (
+        case.expect.max_concurrent_subagents is not None
+        and peak_concurrent_subagents > case.expect.max_concurrent_subagents
+    ):
+        failures.append(
+            "subagent peak concurrency exceeded "
+            f"{case.expect.max_concurrent_subagents}: {peak_concurrent_subagents}"
+        )
     for expected_text in case.expect.output_contains:
         if expected_text not in output:
             failures.append(f"output missing text: {expected_text}")
@@ -193,6 +243,8 @@ def evaluate_recorded_run(case: EvalCase, run: RecordedRun) -> EvalCaseResult:
         failures=tuple(failures),
         tools=tools,
         approval_requested=approval_requested,
+        subagents=tuple(subagents),
+        peak_concurrent_subagents=peak_concurrent_subagents,
     )
 
 
@@ -269,6 +321,8 @@ class EvalRunner:
                         ),
                         tools=(),
                         approval_requested=False,
+                        subagents=(),
+                        peak_concurrent_subagents=0,
                     )
                 )
         return EvalReport(

@@ -30,6 +30,7 @@ const noisyEventTypes = new Set([
   "message.delta",
   "subagent.delta",
   "subagent.progress",
+  "subagent.updated",
   "runtime.system",
 ]);
 

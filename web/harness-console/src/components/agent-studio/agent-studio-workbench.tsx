@@ -1523,6 +1523,45 @@ export function AgentStudioWorkbench() {
                       onChange={(event) => updateDraft({ maxBudgetUsd: Number(event.target.value) })}
                     />
                   </Field>
+                  <Field label="可绑定 Sub 上限">
+                    <input
+                      type="number"
+                      min={1}
+                      max={32}
+                      value={draft.maxSubagents}
+                      onChange={(event) => updateDraft({ maxSubagents: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <Field label="单 Run 子任务上限">
+                    <input
+                      type="number"
+                      min={1}
+                      max={128}
+                      value={draft.maxSubagentTasks}
+                      onChange={(event) => updateDraft({ maxSubagentTasks: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <Field label="Sub 并发上限">
+                    <input
+                      type="number"
+                      min={1}
+                      max={16}
+                      value={draft.maxConcurrentSubagents}
+                      onChange={(event) => updateDraft({ maxConcurrentSubagents: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <Field label="单 Sub Usage 上限">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1000}
+                      value={draft.maxSubagentUsageUnits}
+                      onChange={(event) => updateDraft({ maxSubagentUsageUnits: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <p className={styles.fieldHint}>
+                    委派深度固定为 1；Sub 不启用 MCP 或 Python Tool。
+                  </p>
                 </div>
               </section>
             )}

@@ -1,0 +1,166 @@
+from datetime import UTC, datetime
+
+import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from harness.config import Settings
+from harness.core.manifest import SubagentSpec, load_manifest
+from harness.core.models import AgentVersion, AgentVersionStatus
+from harness.observability.provider import build_observability
+from harness.runtime.base import RuntimeEvent
+from harness.runtime.subagent_governance import (
+    SUBAGENT_EVENT_SCHEMA,
+    SubagentGovernanceError,
+    SubagentRuntimeGovernor,
+)
+
+
+def _version(name: str = "helper", version: str = "1.0.0") -> AgentVersion:
+    snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    return AgentVersion(
+        tenant_id="tenant-a",
+        name=name,
+        version=version,
+        status=AgentVersionStatus.PUBLISHED,
+        manifest_hash=snapshot.content_hash,
+        snapshot=snapshot.model_dump(mode="json"),
+        created_at=datetime.now(UTC),
+    )
+
+
+def _root(*, concurrency: int = 2, tokens: int = 100):
+    snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    bindings = (
+        SubagentSpec(ref="helper@1.0.0", alias="fact-checker"),
+        SubagentSpec(ref="helper@1.0.0", alias="risk-reviewer"),
+    )
+    limits = snapshot.manifest.spec.limits.model_copy(
+        update={
+            "max_concurrent_subagents": concurrency,
+            "max_subagent_usage_units": tokens,
+        }
+    )
+    spec = snapshot.manifest.spec.model_copy(
+        update={"subagents": bindings, "limits": limits}
+    )
+    manifest = snapshot.manifest.model_copy(update={"spec": spec})
+    return snapshot.model_copy(update={"manifest": manifest})
+
+
+def _started(task_id: str, alias: str) -> RuntimeEvent:
+    return RuntimeEvent(
+        type="subagent.started",
+        payload={
+            "task_id": task_id,
+            "task_type": alias,
+            "parent_tool_use_id": f"call-{task_id}",
+            "description": "private delegated request",
+        },
+    )
+
+
+def test_same_version_multiple_aliases_keep_distinct_runtime_identity() -> None:
+    version = _version()
+    governor = SubagentRuntimeGovernor(
+        root=_root(),
+        subagent_versions={"fact-checker": version, "risk-reviewer": version},
+    )
+
+    first = governor.process(_started("one", "fact-checker"), run_id="run-1")[0]
+    second = governor.process(_started("two", "risk-reviewer"), run_id="run-1")[0]
+    terminal = governor.process(
+        RuntimeEvent(
+            type="subagent.completed",
+            payload={
+                "task_id": "one",
+                "status": "completed",
+                "usage": {"total_tokens": 20, "duration_ms": 30},
+                "summary": "private child output",
+            },
+        ),
+        run_id="run-1",
+    )[0]
+
+    assert first.payload["alias"] == "fact-checker"
+    assert second.payload["alias"] == "risk-reviewer"
+    assert terminal.payload["agent_version"] == "1.0.0"
+    assert terminal.payload["policy_profile"] == "local-standard"
+    assert terminal.payload["event_schema"] == SUBAGENT_EVENT_SCHEMA
+    assert terminal.payload["depth"] == 1
+
+
+def test_unbound_alias_and_concurrency_fail_closed() -> None:
+    version = _version()
+    governor = SubagentRuntimeGovernor(
+        root=_root(concurrency=1),
+        subagent_versions={"fact-checker": version, "risk-reviewer": version},
+    )
+
+    with pytest.raises(SubagentGovernanceError, match="not bound"):
+        governor.process(_started("unknown", "writer"), run_id="run-1")
+
+    governor.process(_started("one", "fact-checker"), run_id="run-1")
+    with pytest.raises(SubagentGovernanceError, match="concurrent"):
+        governor.process(_started("two", "risk-reviewer"), run_id="run-1")
+
+
+def test_subagent_budget_and_missing_terminal_are_explicit() -> None:
+    version = _version()
+    governor = SubagentRuntimeGovernor(
+        root=_root(tokens=10),
+        subagent_versions={"fact-checker": version, "risk-reviewer": version},
+    )
+    governor.process(_started("one", "fact-checker"), run_id="run-1")
+
+    with pytest.raises(SubagentGovernanceError, match="token budget"):
+        governor.process(
+            RuntimeEvent(
+                type="subagent.updated",
+                payload={"task_id": "one", "usage": {"total_tokens": 11}},
+            ),
+            run_id="run-1",
+        )
+
+    failed = governor.fail_unfinished(reason="stream_closed", run_id="run-1")
+    assert [(event.type, event.payload["error_code"]) for event in failed] == [
+        ("subagent.failed", "stream_closed")
+    ]
+
+
+def test_subagent_span_contains_identity_and_usage_but_no_child_content() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    version = _version()
+    governor = SubagentRuntimeGovernor(
+        root=_root(),
+        subagent_versions={"fact-checker": version, "risk-reviewer": version},
+        observability=observability,
+    )
+    governor.process(_started("one", "fact-checker"), run_id="run-1")
+    governor.process(
+        RuntimeEvent(
+            type="subagent.completed",
+            payload={
+                "task_id": "one",
+                "status": "completed",
+                "summary": "PRIVATE CHILD BODY",
+                "usage": {"total_tokens": 9, "tool_uses": 2, "duration_ms": 40},
+            },
+        ),
+        run_id="run-1",
+    )
+
+    span = next(
+        item for item in exporter.get_finished_spans()
+        if item.name == "harness.subagent.run"
+    )
+    assert span.attributes is not None
+    assert span.attributes["harness.subagent.alias"] == "fact-checker"
+    assert span.attributes["harness.subagent.agent_version"] == "1.0.0"
+    assert span.attributes["harness.subagent.usage.total_units"] == 9
+    assert "PRIVATE CHILD BODY" not in repr(span.attributes)

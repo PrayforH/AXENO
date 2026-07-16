@@ -4,8 +4,14 @@ from xml.etree import ElementTree
 
 import pytest
 
-from harness.evals.runner import EvalCaseResult, EvalReport, EvalRunner, RecordedRun
-from harness.evals.suite import EvalSuite
+from harness.evals.runner import (
+    EvalCaseResult,
+    EvalReport,
+    EvalRunner,
+    RecordedRun,
+    evaluate_recorded_run,
+)
+from harness.evals.suite import EvalCase, EvalSuite
 
 
 class FakeEvalClient:
@@ -273,3 +279,77 @@ def test_eval_report_emits_junit_xml() -> None:
     assert root.attrib["tests"] == "1"
     assert root.attrib["failures"] == "1"
     assert root.find("./testcase/failure") is not None
+
+
+def test_eval_scores_required_forbidden_and_concurrent_subagent_trajectory() -> None:
+    case = EvalCase.model_validate(
+        {
+            "id": "delegation",
+            "tags": ["multi-agent"],
+            "prompt": "delegate",
+            "expect": {
+                "requiredSubagents": ["fact-checker", "risk-reviewer"],
+                "forbiddenSubagents": ["writer"],
+                "minConcurrentSubagents": 2,
+                "maxConcurrentSubagents": 2,
+            },
+        }
+    )
+    run = RecordedRun(
+        run_id="run-delegation",
+        status="succeeded",
+        duration_seconds=1,
+        events=(
+            {
+                "type": "subagent.started",
+                "payload": {"task_id": "one", "alias": "fact-checker"},
+            },
+            {
+                "type": "subagent.started",
+                "payload": {"task_id": "two", "alias": "risk-reviewer"},
+            },
+            {"type": "subagent.completed", "payload": {"task_id": "one"}},
+            {"type": "subagent.failed", "payload": {"task_id": "two"}},
+        ),
+    )
+
+    result = evaluate_recorded_run(case, run)
+
+    assert result.passed is True
+    assert result.subagents == ("fact-checker", "risk-reviewer")
+    assert result.peak_concurrent_subagents == 2
+
+
+def test_eval_reports_subagent_trajectory_failures() -> None:
+    case = EvalCase.model_validate(
+        {
+            "id": "delegation",
+            "tags": ["multi-agent"],
+            "prompt": "delegate",
+            "expect": {
+                "requiredSubagents": ["fact-checker"],
+                "forbiddenSubagents": ["writer"],
+                "minConcurrentSubagents": 2,
+            },
+        }
+    )
+    run = RecordedRun(
+        run_id="run-delegation",
+        status="succeeded",
+        duration_seconds=1,
+        events=(
+            {
+                "type": "subagent.started",
+                "payload": {"task_id": "one", "alias": "writer"},
+            },
+            {"type": "subagent.completed", "payload": {"task_id": "one"}},
+        ),
+    )
+
+    result = evaluate_recorded_run(case, run)
+
+    assert set(result.failures) == {
+        "missing required subagent: fact-checker",
+        "forbidden subagent used: writer",
+        "subagent peak concurrency below 2: 1",
+    }

@@ -74,6 +74,18 @@ describe("Agent Studio effective contract", () => {
     }
   });
 
+  it("fails closed when the Studio collaboration graph exceeds runtime limits", () => {
+    const contract = evaluateStudioDraft({
+      ...DEFAULT_STUDIO_DRAFT,
+      maxSubagents: 2,
+      maxConcurrentSubagents: 3,
+    });
+
+    expect(contract.ready).toBe(false);
+    expect(contract.issues).toContain("当前角色数超过运行上限 2");
+    expect(contract.issues).toContain("并发 Sub 上限不能高于可绑定 Sub 上限");
+  });
+
   it("fails closed when an eval trajectory contradicts the runtime contract", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,

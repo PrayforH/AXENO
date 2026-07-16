@@ -41,6 +41,17 @@ async def resolve_published_agent_versions(
             raise ConflictError(
                 f"subagent must be published before use: {name}@{version_id}"
             )
+        child_snapshot = AgentManifestSnapshot.model_validate(child.snapshot)
+        if child_snapshot.manifest.spec.subagents:
+            raise ManifestValidationError(
+                f"nested subagent delegation is not supported: {runtime_name}"
+            )
+        if any(
+            tool.builtin is None for tool in child_snapshot.manifest.spec.tools
+        ):
+            raise ManifestValidationError(
+                f"subagent MCP/Python tools are not supported: {runtime_name}"
+            )
         children[runtime_name] = child
     return root, children
 

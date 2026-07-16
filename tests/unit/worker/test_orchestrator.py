@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -547,6 +548,69 @@ class PausableRuntime:
         yield RuntimeEvent(type="message.delta", payload={"text": "too late"})
 
 
+class BackgroundSubRuntime:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(
+            type="subagent.started",
+            payload={
+                "event_schema": "harness.subagent.v1",
+                "task_id": "background-one",
+                "alias": "researcher",
+                "agent_name": "helper",
+                "agent_version": "1.0.0",
+                "policy_profile": "read-only",
+                "depth": 1,
+            },
+        )
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+class FailureAfterSubRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(
+            type="subagent.started",
+            payload={
+                "event_schema": "harness.subagent.v1",
+                "task_id": "failed-child",
+                "alias": "researcher",
+                "agent_name": "helper",
+                "agent_version": "1.0.0",
+                "policy_profile": "read-only",
+                "depth": 1,
+            },
+        )
+        raise RuntimeError("injected parent failure")
+
+
+class ContextBoundRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self._marker: ContextVar[str] = ContextVar("runtime_context_marker")
+        self.closed_cleanly = False
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        token = self._marker.set("active")
+        try:
+            yield RuntimeEvent(type="message.start")
+            await asyncio.sleep(0)
+            yield RuntimeEvent(type="message.completed")
+        finally:
+            self._marker.reset(token)
+            self.closed_cleanly = True
+
+
 @pytest.mark.asyncio
 async def test_policy_keeps_tool_request_for_ui_before_decision(tmp_path: Path) -> None:
     orchestrator, _, _, event_repository = await arrange(
@@ -621,6 +685,104 @@ async def test_cancellation_during_runtime_stops_at_next_event_boundary(
     emitted = await events.list_after("tenant-a", "run-1", 0)
     assert result.status is RunStatus.CANCELLED
     assert "message.delta" not in [item.type for item in emitted]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_interrupts_background_sub_and_emits_child_terminal(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    events = InMemoryEventRepository()
+    runtime = BackgroundSubRuntime()
+    session = Session(
+        session_id="session-1",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-1",
+        session_id=session.session_id,
+        tenant_id=session.tenant_id,
+        status=RunStatus.QUEUED,
+        idempotency_key="cancel-background",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await sessions.add(session)
+    await runs.add(run)
+    orchestrator = RunOrchestrator(
+        sessions=sessions,
+        runs=runs,
+        events=EventService(
+            events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
+        ),
+        runtime=runtime,
+        sandbox=LocalSandboxProvider(root=tmp_path),
+        clock=lambda: NOW,
+        cancellation_poll_interval_seconds=0.01,
+    )
+
+    execution = asyncio.create_task(orchestrator.execute("tenant-a", "run-1"))
+    await runtime.started.wait()
+    current = await runs.get("tenant-a", "run-1")
+    cancelling = current.model_copy(
+        update={
+            "status": RunStatus.CANCELLING,
+            "fencing_token": current.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.RUNNING, cancelling)
+
+    result = await asyncio.wait_for(execution, timeout=1)
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    child_terminal = next(
+        event for event in emitted if event.type == "subagent.failed"
+    )
+
+    assert result.status is RunStatus.CANCELLED
+    assert runtime.cancelled is True
+    assert child_terminal.payload["task_id"] == "background-one"
+    assert child_terminal.payload["error_code"] == "parent_cancelled"
+    assert emitted[-1].type == "run.cancelled"
+
+
+@pytest.mark.asyncio
+async def test_parent_failure_emits_terminal_for_every_started_subagent(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=FailureAfterSubRuntime(),
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    child_terminal = next(
+        event for event in emitted if event.type == "subagent.failed"
+    )
+
+    assert result.status is RunStatus.FAILED
+    assert child_terminal.payload["task_id"] == "failed-child"
+    assert child_terminal.payload["error_code"] == "parent_failed"
+    assert emitted.index(child_terminal) < len(emitted) - 1
+    assert emitted[-1].type == "run.failed"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_polling_keeps_runtime_context_on_one_producer_task(
+    tmp_path: Path,
+) -> None:
+    runtime = ContextBoundRuntime()
+    orchestrator, _, _, _ = await arrange(tmp_path, runtime_override=runtime)
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert runtime.closed_cleanly is True
 
 
 @pytest.mark.asyncio

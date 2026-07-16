@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import mimetypes
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AbstractContextManager, nullcontext, suppress
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -141,6 +141,101 @@ class RunOrchestrator:
         ):
             async for event in self._runtime.execute(context):
                 yield event
+
+    async def _cancellable_runtime_events(
+        self, context: RuntimeContext
+    ) -> AsyncGenerator[Any, None]:
+        """Poll durable cancellation while the SDK waits on background children."""
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        async def produce() -> None:
+            try:
+                async for event in self._runtime_events(context):
+                    await queue.put(("event", event))
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 - forwarded to orchestrator
+                await queue.put(("error", error))
+            else:
+                await queue.put(("done", None))
+
+        producer = asyncio.create_task(produce())
+        try:
+            while True:
+                try:
+                    kind, value = await self._await_cancellable(
+                        context.run.tenant_id,
+                        context.run.run_id,
+                        queue.get(),
+                    )
+                except _RunCancellationRequestedError:
+                    # An event can be produced just before the durable cancel is
+                    # observed. Surface already-produced lifecycle facts before
+                    # propagating cancellation so started children get terminals.
+                    while not queue.empty():
+                        queued_kind, queued_value = queue.get_nowait()
+                        if queued_kind == "event":
+                            yield queued_value
+                    raise
+                if kind == "done":
+                    return
+                if kind == "error":
+                    if not isinstance(value, Exception):
+                        raise RuntimeError("runtime producer returned an invalid error")
+                    raise value
+                yield value
+        finally:
+            if not producer.done():
+                producer.cancel()
+            with suppress(asyncio.CancelledError):
+                await producer
+
+    async def _fail_active_subagents(
+        self,
+        *,
+        tenant_id: str,
+        run: Run,
+        error_code: str,
+    ) -> None:
+        """Give every started child a durable terminal before its parent terminates."""
+        events = await self._events.list_after(tenant_id, run.run_id, 0)
+        active: dict[str, dict[str, Any]] = {}
+        for event in events:
+            if not event.type.startswith("subagent."):
+                continue
+            task_id = event.payload.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                continue
+            if event.type == "subagent.started":
+                active[task_id] = event.payload
+            elif event.type in {"subagent.completed", "subagent.failed"}:
+                active.pop(task_id, None)
+        for task_id, started in active.items():
+            safe = {
+                key: started[key]
+                for key in (
+                    "event_schema",
+                    "alias",
+                    "agent_name",
+                    "agent_version",
+                    "policy_profile",
+                    "depth",
+                    "parent_tool_use_id",
+                )
+                if key in started
+            }
+            await self._events.append(
+                tenant_id=tenant_id,
+                run_id=run.run_id,
+                session_id=run.session_id,
+                event_type="subagent.failed",
+                payload={
+                    **safe,
+                    "task_id": task_id,
+                    "status": "cancelled",
+                    "error_code": error_code,
+                },
+            )
 
     def _workspace_output_fingerprints(self, workspace: Path) -> dict[str, str]:
         output_root = workspace / "outputs"
@@ -280,6 +375,11 @@ class RunOrchestrator:
             return latest
         if latest.status.is_terminal:
             return latest
+        await self._fail_active_subagents(
+            tenant_id=tenant_id,
+            run=latest,
+            error_code="parent_failed",
+        )
         return await self._move(
             latest,
             RunStatus.FAILED,
@@ -530,11 +630,27 @@ class RunOrchestrator:
                 else {}
             )
             active_message_id: str | None = context.assistant_message_id
-            async for runtime_event in self._runtime_events(context):
+            runtime_events = self._cancellable_runtime_events(context)
+            async for runtime_event in runtime_events:
                 latest = await self._runs.get(tenant_id, run_id)
                 if latest.status is RunStatus.CANCELLING:
+                    if runtime_event.type == "subagent.started":
+                        await self._events.append(
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            session_id=run.session_id,
+                            event_type=runtime_event.type,
+                            payload=dict(runtime_event.payload),
+                        )
+                    await runtime_events.aclose()
+                    await self._fail_active_subagents(
+                        tenant_id=tenant_id,
+                        run=latest,
+                        error_code="parent_cancelled",
+                    )
                     return await self._move(latest, RunStatus.CANCELLED)
                 if latest.status.is_terminal:
+                    await runtime_events.aclose()
                     return latest
                 run = latest
                 payload = dict(runtime_event.payload)
@@ -705,6 +821,7 @@ class RunOrchestrator:
                                     event_type="message.completed",
                                     payload={"message_id": active_message_id},
                                 )
+                            await runtime_events.aclose()
                             return await self._runs.get(tenant_id, run_id)
                     await self._events.append(
                         tenant_id=tenant_id,
@@ -756,9 +873,19 @@ class RunOrchestrator:
         except RuntimeExecutionTimeoutError:
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:
+                await self._fail_active_subagents(
+                    tenant_id=tenant_id,
+                    run=latest,
+                    error_code="parent_cancelled",
+                )
                 return await self._move(latest, RunStatus.CANCELLED)
             if latest.status.is_terminal:
                 return latest
+            await self._fail_active_subagents(
+                tenant_id=tenant_id,
+                run=latest,
+                error_code="parent_timed_out",
+            )
             return await self._move(
                 latest,
                 RunStatus.TIMED_OUT,
