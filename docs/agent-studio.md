@@ -7,6 +7,9 @@ bundle gate and immutable `AgentVersion` registry.
 
 The cross-platform production-line comparison and the reasons behind these boundaries
 are recorded in [`agent-production-line-benchmark.md`](agent-production-line-benchmark.md).
+The complete Chinese platform design, including architecture, runtime, security,
+multi-agent collaboration, evaluation and delivery phases, is recorded in
+[`agent-production-platform-design.md`](agent-production-platform-design.md).
 
 ## Current parallel-work boundary
 
