@@ -4,6 +4,7 @@ from harness.application.types import Clock
 from harness.core.errors import ConflictError
 from harness.core.models import ExecutionIdentity, UserMemory
 from harness.core.ports import UserMemoryRepository
+from harness.memory_bank.service import MemoryBankService
 
 
 class UserMemoryService:
@@ -15,6 +16,7 @@ class UserMemoryService:
         projection_limit: int = 4_000,
         content_limit: int = 20_000,
         max_retries: int = 3,
+        memory_bank: MemoryBankService | None = None,
     ) -> None:
         if projection_limit < 1 or content_limit < projection_limit:
             raise ValueError("invalid user memory limits")
@@ -25,6 +27,7 @@ class UserMemoryService:
         self._projection_limit = projection_limit
         self._content_limit = content_limit
         self._max_retries = max_retries
+        self._memory_bank = memory_bank
 
     async def get(self, identity: ExecutionIdentity) -> UserMemory | None:
         return await self._repository.get(
@@ -33,7 +36,15 @@ class UserMemoryService:
 
     async def projection(self, identity: ExecutionIdentity) -> str:
         memory = await self.get(identity)
-        return "" if memory is None else memory.content[: self._projection_limit]
+        legacy = "" if memory is None else memory.content
+        managed = (
+            await self._memory_bank.projection(identity)
+            if self._memory_bank is not None
+            else ""
+        )
+        return "\n\n".join(value for value in (legacy, managed) if value)[
+            : self._projection_limit
+        ]
 
     async def update(
         self,
@@ -86,4 +97,3 @@ class UserMemoryService:
                 raise ValueError("user memory version conflict")
 
         raise ConflictError("user memory update retry limit exceeded")
-

@@ -3,6 +3,7 @@ import {
   proxyAguiRequest,
   proxyDataLifecycleRequest,
   proxyInputArtifactRequest,
+  proxyMemoryBankRequest,
   proxyStudioRequest,
 } from "../src/lib/harness-proxy";
 import type { HarnessServerConfig } from "../src/lib/server-config";
@@ -197,5 +198,37 @@ describe("Harness same-origin proxies", () => {
       "http://harness.internal:8000/v1/data-lifecycle/jobs/job-1/artifact",
     );
     expect(response.headers.get("Content-Disposition")).toContain("data-export.zip");
+  });
+
+  it("keeps memory scope and optimistic version behind the authenticated BFF", async () => {
+    let upstreamUrl = "";
+    let upstreamInit: RequestInit | undefined;
+    await proxyMemoryBankRequest(
+      new Request("http://console.test/api/memory-bank/entries/memory-1", {
+        method: "PUT",
+        headers: {
+          Cookie: "harness_access_token=user-jwt",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expectedVersion: 4, content: "偏好中文" }),
+      }),
+      config,
+      async (input, init) => {
+        upstreamUrl = String(input);
+        upstreamInit = init;
+        return Response.json({ version: 5 });
+      },
+      "entries/memory-1",
+    );
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/v1/memory-bank/entries/memory-1",
+    );
+    expect(new Headers(upstreamInit?.headers).get("Authorization")).toBe(
+      "Bearer user-jwt",
+    );
+    expect(JSON.parse(new TextDecoder().decode(upstreamInit?.body as ArrayBuffer))).toEqual({
+      expectedVersion: 4,
+      content: "偏好中文",
+    });
   });
 });

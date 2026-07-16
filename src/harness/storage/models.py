@@ -582,6 +582,51 @@ class UserMemoryRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class MemoryEntryRow(Base):
+    __tablename__ = "memory_entries"
+    __table_args__ = (
+        Index(
+            "ix_memory_entries_scope_status",
+            "tenant_id",
+            "user_id",
+            "agent_name",
+            "status",
+            "updated_at",
+        ),
+        Index("ix_memory_entries_expiry", "status", "expires_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    entry_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32))
+    version: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class MemoryConsentRow(Base):
+    __tablename__ = "memory_consents"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class MemoryRetentionRow(Base):
+    __tablename__ = "memory_retentions"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class ThreadFileRow(Base):
     __tablename__ = "thread_files"
 

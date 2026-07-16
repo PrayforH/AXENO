@@ -12,7 +12,7 @@ from harness.sandbox.base import SandboxIsolation
         ("Task", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
         ("Agent", {"subagent_type": "helper"}, PolicyDecision.ALLOW),
         (
-            "mcp__harness-memory__update_user_memory",
+            "mcp__harness-memory__propose_memory",
             {"content": "remember this"},
             PolicyDecision.ALLOW,
         ),

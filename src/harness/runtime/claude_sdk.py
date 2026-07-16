@@ -26,6 +26,8 @@ from harness.core.manifest import (
     materialize_skill_snapshot_set,
 )
 from harness.core.models import AgentVersion, ModelRoute
+from harness.memory_bank.service import MemoryBankService
+from harness.memory_bank.workload import RemoteMemoryMcpProvider
 from harness.observability.provider import Observability
 from harness.runtime.artifact_tools import (
     artifact_execution_context,
@@ -70,6 +72,8 @@ class ClaudeSdkRuntime:
         tool_resolver: ToolResolver | None = None,
         tool_gate: ToolGate | None = None,
         memory_service: UserMemoryService | None = None,
+        memory_bank: MemoryBankService | None = None,
+        remote_memory_mcp: RemoteMemoryMcpProvider | None = None,
         observability: Observability | None = None,
     ) -> None:
         self._agent_version = agent_version
@@ -82,6 +86,8 @@ class ClaudeSdkRuntime:
         self._tool_resolver = tool_resolver or ToolResolver()
         self._tool_gate = tool_gate
         self._memory_service = memory_service
+        self._memory_bank = memory_bank
+        self._remote_memory_mcp = remote_memory_mcp
         self._observability = observability
 
     def _span(
@@ -201,6 +207,16 @@ class ClaudeSdkRuntime:
         mcp_servers = dict(resolved_tools.mcp_servers)
         allowed_tools = list(resolved_tools.allowed_tools)
         remote_transport = context.runtime_transport_factory is not None
+        if (
+            remote_transport
+            and self._remote_memory_mcp is not None
+            and context.identity is not None
+        ):
+            resolved_tools = self._remote_memory_mcp.attach(
+                resolved_tools, context.identity
+            )
+            mcp_servers = dict(resolved_tools.mcp_servers)
+            allowed_tools = list(resolved_tools.allowed_tools)
         if not remote_transport:
             # The production container runs as an unprivileged user whose HOME
             # is the read-only application directory. Claude CLI needs a
@@ -227,11 +243,11 @@ class ClaudeSdkRuntime:
         # Claude CLI is a child of this worker. A Daytona CLI is a separate
         # process on a separate host, so durable memory is projected read-only
         # and artifacts are collected from files unless an HTTP MCP is used.
-        if self._memory_service is not None and not remote_transport:
+        if self._memory_bank is not None and not remote_transport:
             if "harness-memory" in mcp_servers:
                 raise ToolResolutionError("duplicate MCP server name: harness-memory")
             mcp_servers["harness-memory"] = create_memory_mcp_server()
-            allowed_tools.append("mcp__harness-memory__update_user_memory")
+            allowed_tools.append("mcp__harness-memory__propose_memory")
         if context.artifact_publisher is not None and not remote_transport:
             if "harness-artifacts" in mcp_servers:
                 raise ToolResolutionError("duplicate MCP server name: harness-artifacts")
@@ -393,9 +409,9 @@ class ClaudeSdkRuntime:
                 context.workspace / ".harness-runtime",
                 ignore_errors=True,
             )
-            if self._memory_service is not None and context.identity is not None:
+            if self._memory_bank is not None and context.identity is not None:
                 execution_context.enter_context(
-                    memory_execution_context(self._memory_service, context.identity)
+                    memory_execution_context(self._memory_bank, context.identity)
                 )
             if context.artifact_publisher is not None:
                 execution_context.enter_context(

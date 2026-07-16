@@ -31,7 +31,7 @@ def test_read_only_profile_allows_evidence_tools_and_denies_mutation() -> None:
     assert _decision("production-read-only", "Write") is PolicyDecision.DENY
     assert _decision("production-read-only", "Bash") is PolicyDecision.DENY
     assert (
-        _decision("production-read-only", "mcp__harness-memory__update_user_memory")
+        _decision("production-read-only", "mcp__harness-memory__propose_memory")
         is PolicyDecision.DENY
     )
 

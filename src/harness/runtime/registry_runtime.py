@@ -12,6 +12,8 @@ from harness.execution.credentials import (
     CredentialLease,
     CredentialResourceKind,
 )
+from harness.memory_bank.service import MemoryBankService
+from harness.memory_bank.workload import RemoteMemoryMcpProvider
 from harness.observability.provider import Observability
 from harness.runtime.base import RuntimeContext, RuntimeEvent
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
@@ -33,6 +35,8 @@ class RegistryClaudeRuntime:
         mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
         tool_gate: ToolGate | None = None,
         memory_service: UserMemoryService | None = None,
+        memory_bank: MemoryBankService | None = None,
+        remote_memory_mcp: RemoteMemoryMcpProvider | None = None,
         session_store_factory: Callable[[Session], object] | None = None,
         observability: Observability | None = None,
         credential_broker: CredentialBroker | None = None,
@@ -46,6 +50,8 @@ class RegistryClaudeRuntime:
         )
         self._tool_gate = tool_gate
         self._memory_service = memory_service
+        self._memory_bank = memory_bank
+        self._remote_memory_mcp = remote_memory_mcp
         self._session_store_factory = session_store_factory
         self._observability = observability
         self._credential_broker = credential_broker
@@ -122,6 +128,8 @@ class RegistryClaudeRuntime:
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
                 memory_service=self._memory_service,
+                memory_bank=self._memory_bank,
+                remote_memory_mcp=self._remote_memory_mcp,
                 observability=self._observability,
                 session_store=(
                     self._session_store_factory(session)
@@ -139,6 +147,8 @@ class RegistryClaudeRuntime:
                 tool_resolver=self._tool_resolver,
                 tool_gate=self._tool_gate,
                 memory_service=self._memory_service,
+                memory_bank=self._memory_bank,
+                remote_memory_mcp=self._remote_memory_mcp,
                 observability=self._observability,
                 session_store=(
                     self._session_store_factory(session)

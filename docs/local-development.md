@@ -162,6 +162,25 @@ LANGFUSE_ENVIRONMENT=development
 
 Collector 使用 Basic Auth extension 从公钥和私钥生成认证头，并设置 Langfuse ingestion v4 Header；应用进程不会收到这两个密钥。
 
+## Managed long-term memory
+
+登录后从“设置 → 长期记忆”进入 `/settings/memory`。Agent 的 `propose_memory` 只会创建
+待确认建议；用户确认后才进入后续对话的只读记忆投影。页面支持按 Agent 查看来源、采集
+时间、置信度和到期时间，并可编辑、删除、导出 JSON 或为单个 Agent 开启一般偏好自动保存。
+敏感信息不会因为该开关而自动激活，凭据与 Prompt Injection 始终拒绝。
+
+Local Runtime 直接使用进程内 MCP。Daytona/Kubernetes 需要设置一个从 Sandbox 可访问的
+完整 Streamable HTTP MCP URL，例如：
+
+```dotenv
+HARNESS_MEMORY_WORKLOAD_TOKEN_SECRET=replace-with-an-independent-32-character-secret
+HARNESS_MEMORY_MCP_PUBLIC_URL=https://harness.example.com/mcp/memory/mcp
+```
+
+API 验证 5 分钟短令牌，Worker 只负责按当前 Run 身份签发；该密钥不要与
+`HARNESS_AUTH_JWT_SECRET` 复用。URL 留空时远端执行仍可读取既有记忆，但不会暴露远端写入
+工具。记忆过期由 Worker maintenance loop 回收；数据导出/删除也已纳入用户生命周期任务。
+
 ## Common commands
 
 ```bash

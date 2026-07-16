@@ -89,7 +89,7 @@ def default_policy_rules() -> list[PolicyRule]:
         PolicyRule(name="delegate-agent", tool="Agent", decision=PolicyDecision.ALLOW),
         PolicyRule(
             name="harness-memory-update",
-            tool="mcp__harness-memory__update_user_memory",
+            tool="mcp__harness-memory__propose_memory",
             decision=PolicyDecision.ALLOW,
         ),
         PolicyRule(
