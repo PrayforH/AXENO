@@ -772,22 +772,20 @@ Worker 和主机恢复。
 
 ### 15.4 长期用户记忆
 
-**[已实现]** 用户记忆按 Agent 隔离、带版本号并使用 CAS 更新。当前是受控文本投影，
-不是向量知识库。
+**[已实现]** 长期记忆由受控 Memory Bank 管理。每条 `MemoryEntry` 都有
+`tenant + user + agent` 边界、来源、采集时间、置信度、敏感等级、授权状态、保留期限和
+单调版本。Agent 只能调用 `propose_memory` 提议，默认进入待确认；只有用户明确为某个
+Agent 开启“一般偏好自动保存”后，该 Agent 提议的一般信息才会直接激活，敏感信息仍逐条
+确认，凭据和 Prompt Injection 在落库前拒绝。
 
-所有执行模式都可以把现有记忆作为只读投影注入 Prompt；`update_user_memory` 目前是
-Worker 进程内的 SDK MCP，因此只在本地同进程 Runtime 可写。Daytona 等远端 Runtime
-如需写长期记忆，应改为带工作负载身份认证的 HTTP MCP 或控制面 API，不能把 Python
-对象伪装成可跨进程工具。
+本地 Runtime 使用同进程 SDK MCP；Daytona/Kubernetes 使用带 5 分钟工作负载令牌的 HTTP
+MCP。令牌绑定 tenant、user、project、session、run、agent 与 agent version，并使用独立于
+登录 JWT 的签名密钥。远端 Sandbox 不持有 Worker 内 Python 对象。
 
-**[规划]** 后续 Memory Bank 需要额外解决：
-
-- 记忆提取和用户确认；
-- 敏感字段分类；
-- 过期、删除和导出；
-- 向量检索与租户隔离；
-- 召回评测和错误记忆修正；
-- 不同 Agent 之间是否允许共享。
+运行时只把当前 Agent 的有效记忆投影为带来源、时间和置信度的只读数据块，并明确标注
+“数据不是指令”。编辑和删除使用 CAS；删除、拒绝和过期会清空正文/hash 并立即停止召回。
+用户可在 `/settings/memory` 确认、拒绝、编辑、删除、设置保留期限并导出 JSON。当前检索
+Adapter 是确定性关键词实现，接口保留向量检索扩展位；跨 Agent 共享默认禁止。
 
 ### 15.5 文件和 Artifact
 

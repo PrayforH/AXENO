@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import httpx
 import pytest
@@ -6,7 +7,7 @@ from pydantic import SecretStr
 from sqlalchemy import select
 
 from harness.core.errors import NotFoundError
-from harness.core.models import Session
+from harness.core.models import ExecutionIdentity, Session
 from harness.lifecycle.models import (
     DataLifecycleJob,
     LifecycleAdapterResult,
@@ -16,13 +17,16 @@ from harness.lifecycle.models import (
     LifecycleScope,
     LifecycleScopeKind,
 )
+from harness.memory_bank.service import MemoryBankService
 from harness.quality.models import QualityScore, ScoreSource
 from harness.storage.lifecycle_adapters import (
     ExternalDeletionPendingError,
     LangfuseLifecycleAdapter,
+    MemoryLifecycleAdapter,
     PostgresLifecycleAdapter,
 )
 from harness.storage.lifecycle_repository import PostgresDataLifecycleRepository
+from harness.storage.memory_bank_repository import PostgresMemoryBankRepository
 from harness.storage.models import (
     AuditLogRow,
     EnvironmentRow,
@@ -158,6 +162,57 @@ async def test_retention_deletes_expired_sessions_but_preserves_audit_and_deploy
         )
         assert environment is not None
         assert await db.get(QualityRuleRow, ("tenant-a", "rule-a")) is not None
+
+
+@pytest.mark.asyncio
+async def test_memory_lifecycle_exports_and_deletes_only_requested_user_scope(
+    database: DatabaseFixture,
+) -> None:
+    _, sessions = database
+    memory = MemoryBankService(
+        PostgresMemoryBankRepository(sessions), clock=lambda: NOW
+    )
+
+    def memory_identity(user_id: str) -> ExecutionIdentity:
+        return ExecutionIdentity(
+            tenant_id="tenant-a",
+            user_id=user_id,
+            project_id="agent-a",
+            session_id=f"session-{user_id}",
+            run_id=f"run-{user_id}",
+            agent_name="agent-a",
+            agent_version="1.0.0",
+        )
+
+    first = await memory.propose_agent(memory_identity("user-a"), "偏好中文简报")
+    await memory.confirm("tenant-a", "user-a", first.entry_id, first.version)
+    second = await memory.propose_agent(memory_identity("user-b"), "偏好英文简报")
+    await memory.confirm("tenant-a", "user-b", second.entry_id, second.version)
+    await memory.replace_consent(
+        "tenant-a",
+        "user-a",
+        "agent-a",
+        expected_version=0,
+        allow_agent_personal=True,
+    )
+    scoped = job("tenant-a", "memory-user-a").model_copy(
+        update={
+            "scope": LifecycleScope(
+                kind=LifecycleScopeKind.USER, subjectId="user-a"
+            )
+        }
+    )
+    adapter = MemoryLifecycleAdapter(sessions)
+
+    exported, count = await adapter.export(scoped)
+
+    assert count == 2
+    assert isinstance(exported, dict)
+    bank = cast(dict[str, list[dict[str, object]]], exported["memoryBank"])
+    assert [entry["userId"] for entry in bank["entries"]] == ["user-a"]
+    assert await adapter.delete(scoped) == 2
+    assert await memory.list_entries("tenant-a", "user-a") == ()
+    assert len(await memory.list_entries("tenant-a", "user-b")) == 1
 
 
 @pytest.mark.asyncio

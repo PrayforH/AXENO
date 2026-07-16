@@ -49,6 +49,12 @@ from harness.lifecycle.adapters import EmptyLifecycleAdapter, LifecycleAdapter
 from harness.lifecycle.controller import DataLifecycleController
 from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
 from harness.lifecycle.service import DataLifecycleService
+from harness.memory_bank.service import MemoryBankService
+from harness.memory_bank.workload import (
+    MemoryWorkloadTokenService,
+    RemoteMemoryMcpProvider,
+    build_memory_mcp_app,
+)
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
@@ -97,6 +103,7 @@ from harness.storage.lifecycle_adapters import (
     SdkSessionLifecycleAdapter,
 )
 from harness.storage.lifecycle_repository import PostgresDataLifecycleRepository
+from harness.storage.memory_bank_repository import PostgresMemoryBankRepository
 from harness.storage.minio import MinioArtifactStore
 from harness.storage.models import UsageLedgerRow
 from harness.storage.platform_repositories import (
@@ -336,6 +343,7 @@ def build_production_container(
     artifact_repository = PostgresArtifactRepository(sessions)
     input_repository = PostgresInputArtifactRepository(sessions)
     memory_repository = PostgresUserMemoryRepository(sessions)
+    memory_bank_repository = PostgresMemoryBankRepository(sessions)
     file_repository = PostgresThreadFileRepository(sessions)
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
@@ -617,7 +625,20 @@ def build_production_container(
         queue=deployment_queue,
         clock=clock,
     )
-    memory_service = UserMemoryService(memory_repository, clock=clock)
+    memory_bank = MemoryBankService(
+        memory_bank_repository,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
+    memory_tokens = MemoryWorkloadTokenService(settings.memory_workload_token_secret)
+    memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
+    remote_memory_mcp = RemoteMemoryMcpProvider(
+        settings.memory_mcp_public_url, memory_tokens
+    )
+    memory_service = UserMemoryService(
+        memory_repository, clock=clock, memory_bank=memory_bank
+    )
     workspace_service = WorkspaceService(
         store,
         snapshots=snapshot_repository,
@@ -682,6 +703,8 @@ def build_production_container(
                 quotas=quotas,
             ),
             memory_service=memory_service,
+            memory_bank=memory_bank,
+            remote_memory_mcp=remote_memory_mcp,
             session_store_factory=lambda session: PostgresSessionStore(
                 sessions,
                 tenant_id=session.tenant_id,
@@ -857,6 +880,7 @@ def build_production_container(
         MaintenanceReaper("preview-expiry", "preview", preview_controller.reap_expired),
         MaintenanceReaper("quota-reservation", "quota", quotas.reap_expired_all),
         MaintenanceReaper("workspace-retention", "workspace", lifecycle_reap),
+        MaintenanceReaper("memory-expiry", "memory", memory_bank.reap_expired),
     ]
     if credential_broker is not None:
         maintenance.append(
@@ -927,6 +951,9 @@ def build_production_container(
         input_artifacts=input_service,
         file_catalog=file_service,
         memory=memory_service,
+        memory_bank=memory_bank,
+        memory_mcp_app=memory_mcp_app,
+        memory_workload_tokens=memory_tokens,
         events=raw_event_repository,
         observed_events=observed_event_repository,
         task_queue=queue,

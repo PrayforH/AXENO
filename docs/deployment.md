@@ -188,13 +188,15 @@ HARNESS_DAYTONA_CLAUDE_CLI_PATH=/home/daytona/.local/bin/claude
 HARNESS_DAYTONA_DELETE_ON_DESTROY=true
 HARNESS_DAYTONA_AUTO_STOP_INTERVAL_MINUTES=15
 HARNESS_DAYTONA_AUTO_DELETE_INTERVAL_MINUTES=60
+HARNESS_MEMORY_WORKLOAD_TOKEN_SECRET=replace-with-an-independent-32-character-secret
+HARNESS_MEMORY_MCP_PUBLIC_URL=https://harness.example.com/mcp/memory/mcp
 ```
 
 Daytona 容器是 Harness 的强隔离边界：Manifest 已声明的 `Write/Edit` 自动允许，`Bash` 仍需审批。本地 workspace 中 `Write/Edit/Bash` 均需审批。隔离级别来自实际 provision 结果；不得从用户请求或 Agent Manifest 接受该字段。
 
 Daytona 隔离宿主机，但同一 Claude CLI 进程内的 `Bash` 仍可能读取该进程可见的环境变量。Harness 已通过关闭回显的 stdin 帧传入 CLI 参数与环境，避免把系统提示词、模型/MCP secret 写入 Daytona 命令行与 session metadata；但“需要审批”并不等于“凭据不可见”。面向不受信 Agent 时，应进一步使用 Daytona Secrets、域名级出口白名单或凭据注入型 egress proxy，让通用 shell 不直接持有模型网关和业务 MCP 的原始密钥。
 
-Claude SDK 的 `create_sdk_mcp_server()` 保存的是 worker 进程内 Python 对象，不能穿过自定义 Transport 搬到 Daytona。Daytona 模式会拒绝 Manifest 的 `python_entry`，并不注入 worker 本地的 memory/artifact SDK MCP；业务工具应部署为带租户身份认证、可从 sandbox 访问的 HTTP MCP。内置文件工具仍在 Daytona 内执行，Run 结束时 workspace 会同步回受信控制面；Agent 写入 `outputs/` 的普通文件会在大小、数量和路径复核后自动发布为可下载 Artifact。
+Claude SDK 的 `create_sdk_mcp_server()` 保存的是 worker 进程内 Python 对象，不能穿过自定义 Transport 搬到 Daytona。Daytona 模式会拒绝 Manifest 的 `python_entry`，并不注入 worker 本地的 artifact SDK MCP；业务工具应部署为带租户身份认证、可从 sandbox 访问的 HTTP MCP。内置 Memory Bank 是该模式的参考实现：Worker 用独立密钥签发绑定完整 Run 身份、5 分钟有效的令牌，Sandbox 通过 `HARNESS_MEMORY_MCP_PUBLIC_URL` 访问 API 的 `/mcp/memory/mcp`，且只能提议、不能直接写入永久记忆。该密钥不能复用登录 JWT 密钥，公网入口必须使用 TLS 并限制到所需 MCP 路径。内置文件工具仍在 Daytona 内执行，Run 结束时 workspace 会同步回受信控制面；Agent 写入 `outputs/` 的普通文件会在大小、数量和路径复核后自动发布为可下载 Artifact。
 
 从 Daytona 同步回来的 workspace 仍是不可信输入。控制面在归档前重新拒绝 symlink/特殊文件，并限制解压大小、文件总量和归档大小；不要绕过 WorkspaceService 直接把 sandbox 目录挂载或解包到宿主机。
 

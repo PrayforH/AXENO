@@ -153,3 +153,16 @@ export async function proxyDataLifecycleRequest(
   url.search = new URL(request.url).search;
   return forward(request, url.toString(), config, fetcher);
 }
+
+export async function proxyMemoryBankRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/v1/memory-bank${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  url.search = new URL(request.url).search;
+  return forward(request, url.toString(), config, fetcher);
+}

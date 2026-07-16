@@ -20,6 +20,7 @@ from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
 from harness.lifecycle import api as lifecycle_routes
+from harness.memory_bank import api as memory_bank_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
 from harness.studio import api as studio_routes
@@ -206,11 +207,14 @@ def create_app(container: ApiContainer) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-        try:
-            yield
-        finally:
-            if container.close is not None:
-                await container.close()
+        async with container.memory_mcp_app.router.lifespan_context(
+            container.memory_mcp_app
+        ):
+            try:
+                yield
+            finally:
+                if container.close is not None:
+                    await container.close()
 
     app = FastAPI(
         title="Claude Agent Harness",
@@ -218,6 +222,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.container = container
+    app.mount("/mcp/memory", container.memory_mcp_app)
     app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
     app.add_api_route(
         "/metrics",
@@ -254,6 +259,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         artifacts.router,
         input_artifacts.router,
         lifecycle_routes.router,
+        memory_bank_routes.router,
         reliability_routes.router,
         agui_routes.router,
     ):

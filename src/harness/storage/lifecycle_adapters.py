@@ -19,6 +19,7 @@ from harness.lifecycle.models import (
     LifecycleJobKind,
     LifecycleScopeKind,
 )
+from harness.memory_bank.models import MemoryEntry
 from harness.quality.models import QualityScore
 from harness.storage.database import SessionFactory
 from harness.storage.models import (
@@ -31,6 +32,9 @@ from harness.storage.models import (
     EvalRunRow,
     EventRow,
     InputArtifactRow,
+    MemoryConsentRow,
+    MemoryEntryRow,
+    MemoryRetentionRow,
     QualityIncidentRow,
     QualityRuleRow,
     QualityScoreRow,
@@ -306,12 +310,20 @@ class MemoryLifecycleAdapter:
 
     async def export(self, job: DataLifecycleJob) -> tuple[object, int]:
         rows = await self._rows(job)
-        return {"memories": [row.payload for row in rows]}, len(rows)
+        managed, consents, retentions = await self._managed(job)
+        count = len(rows) + len(managed) + len(consents) + len(retentions)
+        return {
+            "memories": [row.payload for row in rows],
+            "memoryBank": {
+                "entries": [row.payload for row in managed],
+                "consents": [row.payload for row in consents],
+                "retentions": [row.payload for row in retentions],
+            },
+        }, count
 
     async def delete(self, job: DataLifecycleJob) -> int:
         rows = await self._rows(job)
-        if not rows:
-            return 0
+        managed, consents, retentions = await self._managed(job)
         keys = [(row.user_id, row.agent_name) for row in rows]
         async with self._sessions() as db:
             for user_id, agent_name in keys:
@@ -322,8 +334,60 @@ class MemoryLifecycleAdapter:
                         UserMemoryRow.agent_name == agent_name,
                     )
                 )
+            for row in managed:
+                await db.delete(row)
+            for row in (*consents, *retentions):
+                await db.delete(row)
             await db.commit()
-        return len(keys)
+        return len(keys) + len(managed) + len(consents) + len(retentions)
+
+    async def _managed(
+        self, job: DataLifecycleJob
+    ) -> tuple[list[MemoryEntryRow], list[MemoryConsentRow], list[MemoryRetentionRow]]:
+        entry_filters = [MemoryEntryRow.tenant_id == job.tenant_id]
+        policy_subject: str | None = None
+        if job.scope.kind is LifecycleScopeKind.USER:
+            entry_filters.append(MemoryEntryRow.user_id == job.scope.subject_id)
+            policy_subject = job.scope.subject_id
+        elif job.scope.kind is LifecycleScopeKind.AGENT:
+            entry_filters.append(MemoryEntryRow.agent_name == job.scope.subject_id)
+            policy_subject = job.scope.subject_id
+        async with self._sessions() as db:
+            entries = list(
+                (await db.scalars(select(MemoryEntryRow).where(*entry_filters))).all()
+            )
+            if job.scope.kind is LifecycleScopeKind.SESSION:
+                entries = [
+                    row
+                    for row in entries
+                    if MemoryEntry.model_validate(row.payload).source.session_id
+                    == job.scope.subject_id
+                ]
+                return entries, [], []
+            consent_statement = select(MemoryConsentRow).where(
+                MemoryConsentRow.tenant_id == job.tenant_id
+            )
+            retention_statement = select(MemoryRetentionRow).where(
+                MemoryRetentionRow.tenant_id == job.tenant_id
+            )
+            if policy_subject is not None:
+                if job.scope.kind is LifecycleScopeKind.USER:
+                    consent_statement = consent_statement.where(
+                        MemoryConsentRow.user_id == policy_subject
+                    )
+                    retention_statement = retention_statement.where(
+                        MemoryRetentionRow.user_id == policy_subject
+                    )
+                else:
+                    consent_statement = consent_statement.where(
+                        MemoryConsentRow.agent_name == policy_subject
+                    )
+                    retention_statement = retention_statement.where(
+                        MemoryRetentionRow.agent_name == policy_subject
+                    )
+            consents = list((await db.scalars(consent_statement)).all())
+            retentions = list((await db.scalars(retention_statement)).all())
+        return entries, consents, retentions
 
 
 class PostgresLifecycleAdapter:

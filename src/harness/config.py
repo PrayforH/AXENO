@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     auth_github_client_id: str = ""
     auth_github_client_secret: SecretStr = SecretStr("")
 
+    memory_workload_token_secret: SecretStr = SecretStr(
+        "local-development-memory-workload-secret-change-before-production"
+    )
+
     database_url: str = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
     redis_url: str = "redis://localhost:6379/0"
 
@@ -115,3 +119,4 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: SecretStr = SecretStr("")
     langfuse_dashboard_url: str = ""
+    memory_mcp_public_url: str = ""

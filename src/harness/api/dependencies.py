@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from fastapi import Header, HTTPException, Request
 from pydantic import SecretStr
+from starlette.applications import Starlette
 
 from harness.adapters.memory import (
     InMemoryAgentRegistry,
@@ -74,6 +75,13 @@ from harness.lifecycle.controller import DataLifecycleController
 from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
 from harness.lifecycle.repositories import InMemoryDataLifecycleRepository
 from harness.lifecycle.service import DataLifecycleService
+from harness.memory_bank.repositories import InMemoryMemoryBankRepository
+from harness.memory_bank.service import MemoryBankService
+from harness.memory_bank.workload import (
+    MemoryWorkloadTokenService,
+    RemoteMemoryMcpProvider,
+    build_memory_mcp_app,
+)
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
@@ -177,6 +185,9 @@ class ApiContainer:
     input_artifacts: InputArtifactService
     file_catalog: FileCatalogService
     memory: UserMemoryService
+    memory_bank: MemoryBankService
+    memory_mcp_app: Starlette
+    memory_workload_tokens: MemoryWorkloadTokenService
     events: EventRepository
     observed_events: EventRepository
     task_queue: TaskQueue
@@ -202,6 +213,7 @@ def build_memory_container(
     artifact_repository = InMemoryArtifactRepository()
     input_artifact_repository = InMemoryInputArtifactRepository()
     memory_repository = InMemoryUserMemoryRepository()
+    memory_bank_repository = InMemoryMemoryBankRepository()
     thread_file_repository = InMemoryThreadFileRepository()
     workspace_snapshot_repository = InMemoryWorkspaceSnapshotRepository()
     artifact_store = InMemoryArtifactStore()
@@ -430,7 +442,22 @@ def build_memory_container(
         queue=deployment_queue,
         clock=clock,
     )
-    memory_service = UserMemoryService(memory_repository, clock=clock)
+    memory_bank = MemoryBankService(
+        memory_bank_repository,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    memory_tokens = MemoryWorkloadTokenService(
+        resolved_settings.memory_workload_token_secret
+    )
+    memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
+    remote_memory_mcp = RemoteMemoryMcpProvider(
+        resolved_settings.memory_mcp_public_url, memory_tokens
+    )
+    memory_service = UserMemoryService(
+        memory_repository, clock=clock, memory_bank=memory_bank
+    )
     workspace_service = WorkspaceService(
         artifact_store,
         snapshots=workspace_snapshot_repository,
@@ -564,6 +591,8 @@ def build_memory_container(
                 quotas=quotas,
             ),
             memory_service=memory_service,
+            memory_bank=memory_bank,
+            remote_memory_mcp=remote_memory_mcp,
             observability=observability,
         )
         model_probe = AnthropicSandboxModelProbe(gateway)
@@ -645,6 +674,7 @@ def build_memory_container(
         MaintenanceReaper("preview-expiry", "preview", preview_controller.reap_expired),
         MaintenanceReaper("quota-reservation", "quota", quotas.reap_expired_all),
         MaintenanceReaper("workspace-retention", "workspace", lifecycle_reap),
+        MaintenanceReaper("memory-expiry", "memory", memory_bank.reap_expired),
     ]
     if sandbox_maintenance is not None:
         maintenance.append(
@@ -703,6 +733,9 @@ def build_memory_container(
         input_artifacts=input_artifact_service,
         file_catalog=file_catalog_service,
         memory=memory_service,
+        memory_bank=memory_bank,
+        memory_mcp_app=memory_mcp_app,
+        memory_workload_tokens=memory_tokens,
         events=raw_events,
         observed_events=observed_events,
         task_queue=queue,

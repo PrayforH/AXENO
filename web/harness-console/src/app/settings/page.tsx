@@ -109,6 +109,7 @@ function SettingsContent() {
           <a href="#profile">个人资料</a>
           <a href="#security">账户安全</a>
           <a href="#data">我的数据</a>
+          <a href="#memory">长期记忆</a>
           <a href="#session">登录会话</a>
         </aside>
 
@@ -176,6 +177,17 @@ function SettingsContent() {
             <div className="settings-form settings-session">
               <div><span className="settings-session-dot" aria-hidden="true" /><span><strong>数据生命周期</strong><small>删除操作会先检查 Legal Hold，再按外部系统逐项执行。</small></span></div>
               <a href="/studio/data">管理我的数据</a>
+            </div>
+          </section>
+
+          <section className="settings-section" id="memory">
+            <div className="settings-section-copy">
+              <h2>长期记忆</h2>
+              <p>查看智能体建议保存的内容，并逐条确认、纠正或删除。</p>
+            </div>
+            <div className="settings-form settings-session">
+              <div><span className="settings-session-dot" aria-hidden="true" /><span><strong>受管记忆</strong><small>默认不自动保存敏感信息；每条记录保留来源与到期时间。</small></span></div>
+              <a href="/settings/memory">管理长期记忆</a>
             </div>
           </section>
 

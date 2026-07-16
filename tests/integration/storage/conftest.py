@@ -1,3 +1,4 @@
+import os
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
@@ -16,7 +17,10 @@ DatabaseFixture = tuple[AsyncEngine, SessionFactory]
 @pytest_asyncio.fixture
 async def database() -> AsyncIterator[DatabaseFixture]:
     engine, sessions = create_database(
-        "postgresql+asyncpg://harness:harness@localhost:5432/harness"
+        os.getenv(
+            "HARNESS_TEST_DATABASE_URL",
+            "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+        )
     )
     await drop_schema(engine)
     await create_schema(engine)

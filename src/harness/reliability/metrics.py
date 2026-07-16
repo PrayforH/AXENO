@@ -84,6 +84,7 @@ LABEL_VALUE_ALLOWLISTS: dict[tuple[str, str], frozenset[str]] = {
             "workspace-retention",
             "credential-lease",
             "sandbox-expiry",
+            "memory-expiry",
         }
     ),
     ("harness_reaper_actions_total", "outcome"): frozenset(
