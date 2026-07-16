@@ -30,12 +30,36 @@ async def _wait_for_work(stop: asyncio.Event, poll_interval: float) -> None:
         pass
 
 
+async def _renew_task_lease(
+    queue: TaskQueue,
+    task: RunTask,
+    *,
+    stop: asyncio.Event,
+    interval: float,
+) -> None:
+    while not stop.is_set():
+        await _wait_for_work(stop, interval)
+        if not stop.is_set():
+            try:
+                await queue.extend_lease(task)
+            except Exception:
+                # A transient Redis failure must not terminate the worker while
+                # the executor is still producing a terminal Run state. The
+                # visibility lease may expire and cause a duplicate delivery,
+                # which is safe because Run fencing rejects the stale owner.
+                logger.exception(
+                    "run task lease renewal failed",
+                    extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
+                )
+
+
 async def worker_loop(
     queue: TaskQueue,
     executor: RunExecutor,
     *,
     stop: asyncio.Event,
     poll_interval: float,
+    lease_heartbeat_interval: float = 20,
 ) -> None:
     """Consume durable run tasks until shutdown is requested.
 
@@ -48,6 +72,15 @@ async def worker_loop(
         if task is None:
             await _wait_for_work(stop, poll_interval)
             continue
+        heartbeat_stop = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            _renew_task_lease(
+                queue,
+                task,
+                stop=heartbeat_stop,
+                interval=lease_heartbeat_interval,
+            )
+        )
         try:
             await executor.execute(task.tenant_id, task.run_id)
         except Exception:
@@ -55,8 +88,13 @@ async def worker_loop(
                 "run task execution escaped unexpectedly",
                 extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
             )
-            await queue.enqueue(task)
+            await queue.retry(task)
             await _wait_for_work(stop, poll_interval)
+        else:
+            await queue.acknowledge(task)
+        finally:
+            heartbeat_stop.set()
+            await heartbeat
 
 
 async def serve(settings: Settings) -> None:
@@ -78,6 +116,7 @@ async def serve(settings: Settings) -> None:
             container.worker,
             stop=stop,
             poll_interval=settings.worker_poll_interval_seconds,
+            lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
         )
     finally:
         if container.close is not None:

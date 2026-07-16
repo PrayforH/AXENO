@@ -26,6 +26,8 @@ def test_loads_anthropic_compatible_provider_without_exposing_token(tmp_path: Pa
     assert config.base_url == "https://gateway.example"
     assert config.model == "gateway-model"
     assert config.provider == "new-api"
+    assert config.compatibility.value == "full"
+    assert config.capabilities == frozenset({"streaming", "tool_use"})
     assert config.credential.get_secret_value() == "sensitive-token"
     assert "sensitive-token" not in repr(config)
 

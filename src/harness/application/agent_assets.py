@@ -1,0 +1,63 @@
+"""Stage immutable main and subagent runtime assets from the registry."""
+
+from pathlib import Path
+
+from harness.core.errors import ConflictError
+from harness.core.manifest import (
+    AgentManifestSnapshot,
+    ManifestValidationError,
+    materialize_skill_snapshot_set,
+)
+from harness.core.models import AgentVersion, AgentVersionStatus
+from harness.core.ports import AgentRegistry
+
+
+async def resolve_published_agent_versions(
+    registry: AgentRegistry,
+    *,
+    tenant_id: str,
+    agent_name: str,
+    agent_version: str,
+) -> tuple[AgentVersion, dict[str, AgentVersion]]:
+    """Resolve a fixed one-level SDK delegation graph and enforce publication state."""
+    root = await registry.get(tenant_id, agent_name, agent_version)
+    if root.status is not AgentVersionStatus.PUBLISHED:
+        raise ConflictError("sessions can only use a published Agent version")
+    snapshot = AgentManifestSnapshot.model_validate(root.snapshot)
+    children: dict[str, AgentVersion] = {}
+    for subagent in snapshot.manifest.spec.subagents:
+        name, separator, version_id = subagent.ref.rpartition("@")
+        if not separator or not name or not version_id:
+            raise ManifestValidationError(
+                f"subagent reference requires name@version: {subagent.ref}"
+            )
+        if name in children:
+            raise ManifestValidationError(f"duplicate subagent name: {name}")
+        child = await registry.get(tenant_id, name, version_id)
+        if child.status is not AgentVersionStatus.PUBLISHED:
+            raise ConflictError(
+                f"subagent must be published before use: {name}@{version_id}"
+            )
+        children[name] = child
+    return root, children
+
+
+async def stage_published_agent_assets(
+    registry: AgentRegistry,
+    *,
+    tenant_id: str,
+    agent_name: str,
+    agent_version: str,
+    workspace: Path,
+) -> tuple[str, ...]:
+    version, children = await resolve_published_agent_versions(
+        registry,
+        tenant_id=tenant_id,
+        agent_name=agent_name,
+        agent_version=agent_version,
+    )
+    snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+    snapshots = [snapshot]
+    for child in children.values():
+        snapshots.append(AgentManifestSnapshot.model_validate(child.snapshot))
+    return materialize_skill_snapshot_set(snapshots, workspace)

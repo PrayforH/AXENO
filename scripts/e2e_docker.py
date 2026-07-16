@@ -1,14 +1,19 @@
-"""Black-box Docker E2E for upload, processing, memory, artifact and restart durability."""
+"""Black-box Daytona E2E for upload, workspace output and restart durability."""
 
 import argparse
 import json
+import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import httpx
+from dotenv import dotenv_values
+
+from harness.agent_package import pack_agent_package
 
 ROOT = Path(__file__).parents[1]
 COMPOSE = ROOT / "deploy/docker-compose/compose.yaml"
@@ -35,6 +40,18 @@ def _wait_for_health(client: httpx.Client, timeout: float = 90) -> None:
     raise TimeoutError("Harness API did not become healthy")
 
 
+def _publish_agent_bundle(client: httpx.Client, manifest: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="harness-e2e-bundle-") as directory:
+        archive, _ = pack_agent_package(manifest, output_directory=directory)
+        published = client.post(
+            "/v1/agents/bundles",
+            content=archive.read_bytes(),
+            headers={"Content-Type": "application/zip"},
+        )
+    if published.status_code not in {201, 409}:
+        published.raise_for_status()
+
+
 def _agui_request(
     client: httpx.Client,
     *,
@@ -43,7 +60,7 @@ def _agui_request(
     content: str | list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     response = client.post(
-        "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+        "/v1/agui?agent_name=echo-agent&agent_version=0.4.0",
         json={
             "threadId": thread_id,
             "runId": run_id,
@@ -83,7 +100,7 @@ def _artifact_id(events: list[dict[str, Any]]) -> str:
         artifact_id = arguments.get("artifact_id")
         if isinstance(artifact_id, str):
             return artifact_id
-    raise AssertionError("publish_artifact did not produce an artifact")
+    raise AssertionError("Daytona outputs/ collection did not produce an artifact")
 
 
 def _session_id(events: list[dict[str, Any]]) -> str:
@@ -127,23 +144,25 @@ def _restart(compose_env: Path) -> None:
 def run(*, api_url: str, compose_env: Path, restart: bool) -> dict[str, Any]:
     unique = uuid4().hex[:12]
     marker = f"docker-e2e-{unique}"
-    memory_marker = f"docker-memory-{unique}"
     headers = {
         "X-Tenant-ID": "docker-e2e",
         "X-User-ID": "docker-e2e-user",
     }
+    api_token = os.getenv("HARNESS_API_BEARER_TOKEN") or dotenv_values(
+        compose_env
+    ).get("HARNESS_API_BEARER_TOKEN")
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
     with httpx.Client(
         base_url=api_url,
         headers=headers,
         trust_env=False,
     ) as client:
         _wait_for_health(client)
-        published = client.post(
-            "/v1/agents",
-            json={"path": "/app/agents/echo-agent/agent.yaml"},
-        )
-        if published.status_code not in {201, 409}:
-            published.raise_for_status()
+        # Production publication is dependency ordered and fail-closed. Each E2E
+        # tenant must publish the pinned child before the parent that references it.
+        _publish_agent_bundle(client, ROOT / "agents/helper-agent/agent.yaml")
+        _publish_agent_bundle(client, ROOT / "agents/echo-agent/agent.yaml")
         uploaded = client.post(
             "/v1/input-artifacts",
             files={"file": ("docker-e2e.txt", marker.encode(), "text/plain")},
@@ -159,9 +178,9 @@ def run(*, api_url: str, compose_env: Path, restart: bool) -> dict[str, Any]:
                 {
                     "type": "text",
                     "text": (
-                        f"Read the attached file. Call update_user_memory with exactly "
-                        f"'{memory_marker}'. Then call publish_artifact for that attached "
-                        "workspace file. Finish by repeating the file marker exactly."
+                        "Read the attached file. Create outputs/docker-e2e.txt containing "
+                        "the exact file marker, then read that output and finish by "
+                        "repeating the marker exactly."
                     ),
                 },
                 {
@@ -186,12 +205,15 @@ def run(*, api_url: str, compose_env: Path, restart: bool) -> dict[str, Any]:
 
         second = _agui_request(
             client,
-            thread_id=f"docker-memory-thread-{unique}",
-            run_id=f"docker-memory-run-{unique}",
-            content="Return the exact durable user memory marker and nothing else.",
+            thread_id=f"docker-thread-{unique}",
+            run_id=f"docker-workspace-run-{unique}",
+            content=(
+                "Read outputs/docker-e2e.txt restored from the prior Run and return "
+                "its exact marker and nothing else."
+            ),
         )
-        if memory_marker not in _assistant_text(second):
-            raise AssertionError("cross-session durable memory was not recalled")
+        if marker not in _assistant_text(second):
+            raise AssertionError("same-session workspace snapshot was not restored")
 
         if restart:
             _restart(compose_env)

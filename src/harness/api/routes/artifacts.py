@@ -1,9 +1,16 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
-from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    get_container,
+    require_identity,
+    require_owned_run,
+)
+from harness.api.downloads import attachment_content_disposition
 from harness.core.models import Artifact
 
 router = APIRouter(tags=["artifacts"])
@@ -20,12 +27,23 @@ async def upload_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Artifact:
+    await require_owned_run(container, identity, run_id)
+    maximum = container.artifacts.max_file_bytes
+    content = await file.read(maximum + 1)
+    if len(content) > maximum:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={
+                "code": "artifact_too_large",
+                "message": f"artifact exceeds maximum size of {maximum} bytes",
+            },
+        )
     return await container.artifacts.upload(
         tenant_id=identity.tenant_id,
         run_id=run_id,
         name=file.filename or "artifact",
         media_type=file.content_type or "application/octet-stream",
-        content=await file.read(),
+        content=content,
     )
 
 
@@ -35,6 +53,7 @@ async def list_artifacts(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[Artifact]:
+    await require_owned_run(container, identity, run_id)
     return await container.artifacts.list_for_run(identity.tenant_id, run_id)
 
 
@@ -44,9 +63,13 @@ async def download_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Response:
+    artifact = await container.artifacts.get(identity.tenant_id, artifact_id)
+    await require_owned_run(container, identity, artifact.run_id)
     artifact, content = await container.artifacts.download(identity.tenant_id, artifact_id)
     return Response(
         content=content,
         media_type=artifact.media_type,
-        headers={"Content-Disposition": f'attachment; filename="{artifact.name}"'},
+        headers={
+            "Content-Disposition": attachment_content_disposition(artifact.name)
+        },
     )

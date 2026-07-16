@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
+import shutil
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -97,13 +100,31 @@ class AgentManifest(ManifestModel):
     spec: AgentSpec
 
 
+class SkillFileSnapshot(ManifestModel):
+    path: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size_bytes: int = Field(ge=0)
+
+
+class SkillSnapshot(ManifestModel):
+    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
+    description: str = Field(min_length=1)
+    source: str = Field(min_length=1)
+    files: tuple[SkillFileSnapshot, ...] = ()
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class AgentManifestSnapshot(ManifestModel):
     manifest: AgentManifest
     system_prompt: str
+    skill_snapshots: tuple[SkillSnapshot, ...] = ()
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|password|secret)", re.IGNORECASE)
+_MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024
+_MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
 
 
 def _assert_no_inline_secrets(value: object, path: str = "manifest") -> None:
@@ -131,18 +152,153 @@ def _resolve_file(root: Path, relative: str, label: str) -> Path:
     return candidate
 
 
-def _hash_skill_path(digest: Any, root: Path, relative: str) -> None:
+def _parse_skill_frontmatter(path: Path) -> tuple[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ManifestValidationError(f"cannot read Skill frontmatter: {error}") from error
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise ManifestValidationError("SKILL.md must start with YAML frontmatter")
+    try:
+        end = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration as error:
+        raise ManifestValidationError("SKILL.md frontmatter is not closed") from error
+    try:
+        raw = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError as error:
+        raise ManifestValidationError(f"invalid SKILL.md frontmatter: {error}") from error
+    if not isinstance(raw, dict):
+        raise ManifestValidationError("SKILL.md frontmatter must be a YAML object")
+    frontmatter = cast(dict[str, object], raw)
+    name = frontmatter.get("name")
+    description = frontmatter.get("description")
+    if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9-]*", name) is None:
+        raise ManifestValidationError("Skill name must be lowercase kebab-case")
+    if not isinstance(description, str) or not description.strip():
+        raise ManifestValidationError("Skill description must be a non-empty string")
+    return name, description.strip()
+
+
+def _snapshot_skill(root: Path, relative: str) -> SkillSnapshot:
     skill_path = (root / relative).resolve()
     if not skill_path.is_relative_to(root) or not skill_path.exists():
         raise ManifestValidationError(f"skill path does not exist: {relative}")
-    paths = (
-        [skill_path]
-        if skill_path.is_file()
-        else sorted(path for path in skill_path.rglob("*") if path.is_file())
-    )
+    if not skill_path.is_dir():
+        raise ManifestValidationError(f"skill path must be a directory: {relative}")
+    source_path = root / relative
+    if source_path.is_symlink():
+        raise ManifestValidationError(f"Skill path cannot be a symlink: {relative}")
+    paths = sorted(path for path in skill_path.rglob("*") if path.is_file() or path.is_symlink())
+    if not paths:
+        raise ManifestValidationError(f"Skill directory is empty: {relative}")
     for path in paths:
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
+        if path.is_symlink():
+            raise ManifestValidationError(
+                f"Skill files cannot be symlinks: {path.relative_to(skill_path).as_posix()}"
+            )
+        if not path.is_file():
+            raise ManifestValidationError(
+                f"Skill contains an unsupported file: {path.relative_to(skill_path).as_posix()}"
+            )
+    skill_md = skill_path / "SKILL.md"
+    if not skill_md.is_file():
+        raise ManifestValidationError(f"Skill directory must contain SKILL.md: {relative}")
+    name, description = _parse_skill_frontmatter(skill_md)
+    if skill_path.name != name:
+        raise ManifestValidationError(
+            f"Skill directory name must match frontmatter name: {skill_path.name} != {name}"
+        )
+    skill_digest = hashlib.sha256()
+    snapshots: list[SkillFileSnapshot] = []
+    total_bytes = 0
+    for path in paths:
+        content = path.read_bytes()
+        if len(content) > _MAX_SKILL_FILE_BYTES:
+            raise ManifestValidationError(
+                f"Skill file exceeds {_MAX_SKILL_FILE_BYTES} bytes: "
+                f"{path.relative_to(skill_path).as_posix()}"
+            )
+        total_bytes += len(content)
+        if total_bytes > _MAX_SKILL_TOTAL_BYTES:
+            raise ManifestValidationError(
+                f"Skill exceeds {_MAX_SKILL_TOTAL_BYTES} total bytes: {relative}"
+            )
+        relative_file = path.relative_to(skill_path).as_posix()
+        file_hash = hashlib.sha256(content).hexdigest()
+        skill_digest.update(relative_file.encode())
+        skill_digest.update(content)
+        snapshots.append(
+            SkillFileSnapshot(
+                path=relative_file,
+                content_base64=base64.b64encode(content).decode("ascii"),
+                sha256=file_hash,
+                size_bytes=len(content),
+            )
+        )
+    return SkillSnapshot(
+        name=name,
+        description=description,
+        source=relative,
+        files=tuple(snapshots),
+        content_hash=skill_digest.hexdigest(),
+    )
+
+
+def materialize_skill_snapshots(
+    snapshot: AgentManifestSnapshot, workspace: str | Path
+) -> tuple[str, ...]:
+    """Materialize immutable Skills using the layout discovered by Claude Agent SDK."""
+
+    return materialize_skill_snapshot_set((snapshot,), workspace)
+
+
+def materialize_skill_snapshot_set(
+    snapshots: Sequence[AgentManifestSnapshot], workspace: str | Path
+) -> tuple[str, ...]:
+    """Materialize main/subagent Skills once, rejecting conflicting names."""
+
+    skills_root = Path(workspace).resolve() / ".claude" / "skills"
+    if skills_root.exists():
+        if skills_root.is_symlink():
+            raise ManifestValidationError("workspace Skill root cannot be a symlink")
+        shutil.rmtree(skills_root)
+    skills_root.mkdir(parents=True, exist_ok=True)
+    names: list[str] = []
+    skills_by_name: dict[str, SkillSnapshot] = {}
+    for snapshot in snapshots:
+        for skill in snapshot.skill_snapshots:
+            existing = skills_by_name.get(skill.name)
+            if existing is not None and existing.content_hash != skill.content_hash:
+                raise ManifestValidationError(
+                    f"conflicting immutable Skill name: {skill.name}"
+                )
+            skills_by_name[skill.name] = skill
+    for skill in sorted(skills_by_name.values(), key=lambda item: item.name):
+        target_root = (skills_root / skill.name).resolve()
+        if not target_root.is_relative_to(skills_root):
+            raise ManifestValidationError(f"unsafe Skill name: {skill.name}")
+        for file in skill.files:
+            target = (target_root / file.path).resolve()
+            if not target.is_relative_to(target_root):
+                raise ManifestValidationError(f"unsafe Skill snapshot path: {file.path}")
+            try:
+                content = base64.b64decode(file.content_base64, validate=True)
+            except ValueError as error:
+                raise ManifestValidationError(
+                    f"invalid base64 Skill snapshot: {skill.name}/{file.path}"
+                ) from error
+            if (
+                len(content) != file.size_bytes
+                or hashlib.sha256(content).hexdigest() != file.sha256
+            ):
+                raise ManifestValidationError(
+                    f"corrupt Skill snapshot: {skill.name}/{file.path}"
+                )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        names.append(skill.name)
+    return tuple(names)
 
 
 def load_manifest(
@@ -188,11 +344,22 @@ def load_manifest(
     digest.update(canonical.encode())
     digest.update(prompt_path.relative_to(root).as_posix().encode())
     digest.update(system_prompt.encode())
-    for skill in sorted(manifest.spec.skills):
-        _hash_skill_path(digest, root, skill)
+    skill_snapshots = tuple(
+        _snapshot_skill(root, skill) for skill in sorted(manifest.spec.skills)
+    )
+    skill_names = [skill.name for skill in skill_snapshots]
+    duplicate_names = sorted({name for name in skill_names if skill_names.count(name) > 1})
+    if duplicate_names:
+        raise ManifestValidationError(
+            f"duplicate Skill name: {', '.join(duplicate_names)}"
+        )
+    for skill in skill_snapshots:
+        digest.update(skill.source.encode())
+        digest.update(skill.content_hash.encode())
 
     return AgentManifestSnapshot(
         manifest=manifest,
         system_prompt=system_prompt,
+        skill_snapshots=skill_snapshots,
         content_hash=digest.hexdigest(),
     )

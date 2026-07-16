@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
+import re
 import shlex
 import shutil
 import ssl
@@ -29,11 +31,16 @@ from harness.runtime.daytona_transport import (
 )
 from harness.sandbox.base import SandboxHandle, SandboxIsolation
 
+_ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 def configure_default_ca_bundle() -> None:
     """Use certifi when this Python installation has no usable default CA file."""
     default_ca_file: object = getattr(ssl.get_default_verify_paths(), "cafile", None)
-    if "SSL_CERT_FILE" not in os.environ and default_ca_file is None:
+    default_ca_is_usable = isinstance(default_ca_file, str) and Path(
+        default_ca_file
+    ).is_file()
+    if "SSL_CERT_FILE" not in os.environ and not default_ca_is_usable:
         os.environ["SSL_CERT_FILE"] = certifi.where()
 
 
@@ -46,7 +53,9 @@ class DaytonaRemoteSandbox(Protocol):
 
     async def upload(self, remote_path: str, content: bytes) -> None: ...
 
-    async def list_files(self, remote_path: str) -> list[tuple[str, bool]]: ...
+    async def list_files(
+        self, remote_path: str
+    ) -> list[tuple[str, bool, int | None]]: ...
 
     async def download(self, remote_path: str) -> bytes: ...
 
@@ -76,14 +85,46 @@ class SdkDaytonaRemoteSession:
         self._logs_task: asyncio.Task[None] | None = None
 
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
+        if not argv:
+            raise ValueError("remote command argv must not be empty")
+        environment_lines: list[str] = []
+        for key, value in sorted(env.items()):
+            if _ENVIRONMENT_NAME.fullmatch(key) is None:
+                raise ValueError(f"invalid remote environment variable name: {key}")
+            encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+            environment_lines.append(f"{key}={encoded}")
+        argument_lines = [
+            base64.b64encode(argument.encode("utf-8")).decode("ascii")
+            for argument in argv
+        ]
         await self._sandbox.process.create_session(self._session_id)
-        environment = " ".join(
-            f"{key}={shlex.quote(value)}" for key, value in sorted(env.items())
-        )
+        environment_marker = f"__HARNESS_END_ENV_{uuid4().hex}__"
+        argument_marker = f"__HARNESS_END_ARGV_{uuid4().hex}__"
         stdin_wrapper = (
-            'marker="$1"; shift; '
+            'env_marker="$1"; arg_marker="$2"; input_marker="$3"; shift 3; '
+            "while IFS= read -r env_line; do "
+            '[ "$env_line" = "$env_marker" ] && break; '
+            'key="${env_line%%=*}"; encoded="${env_line#*=}"; '
+            'value="$(printf "%s" "$encoded" | base64 -d)" || exit 70; '
+            'export "$key=$value"; '
+            "done; "
+            "while IFS= read -r encoded; do "
+            '[ "$encoded" = "$arg_marker" ] && break; '
+            'value="$(printf "%s" "$encoded" | base64 -d)" || exit 70; '
+            'set -- "$@" "$value"; '
+            "done; "
+            '[ "$#" -gt 0 ] || exit 64; '
+            'mcp_config_path=""; '
+            'if [ -n "${HARNESS_CLAUDE_MCP_CONFIG:-}" ]; then '
+            'mcp_config_path="$(mktemp)"; chmod 600 "$mcp_config_path"; '
+            'printf "%s" "$HARNESS_CLAUDE_MCP_CONFIG" > "$mcp_config_path"; '
+            "unset HARNESS_CLAUDE_MCP_CONFIG; "
+            'set -- "$@" --mcp-config "$mcp_config_path"; '
+            "fi; "
+            "trap '[ -z \"$mcp_config_path\" ] || "
+            "rm -f -- \"$mcp_config_path\"' EXIT; "
             "while IFS= read -r line; do "
-            'if [ "$line" = "$marker" ]; then break; fi; '
+            'if [ "$line" = "$input_marker" ]; then break; fi; '
             'printf "%s\\n" "$line"; '
             'done | "$@"'
         )
@@ -94,18 +135,28 @@ class SdkDaytonaRemoteSession:
             "-c",
             stdin_wrapper,
             "harness-stdin",
+            environment_marker,
+            argument_marker,
             self._end_input_marker,
-            *argv,
         ]
-        command = (
-            f"cd {shlex.quote(cwd)} && env {environment} "
-            f"{shlex.join(wrapped_argv)}"
-        )
+        command = f"cd {shlex.quote(cwd)} && {shlex.join(wrapped_argv)}"
         response = await self._sandbox.process.execute_session_command(
             self._session_id,
-            SessionExecuteRequest(command=command, run_async=True),
+            SessionExecuteRequest(
+                command=command,
+                run_async=True,
+                suppress_input_echo=True,
+            ),
         )
         self._command_id = response.cmd_id
+        environment_lines.append(environment_marker)
+        environment_lines.extend(argument_lines)
+        environment_lines.append(argument_marker)
+        await self._sandbox.process.send_session_command_input(
+            self._session_id,
+            self._command_id,
+            "\n".join(environment_lines) + "\n",
+        )
         self._logs_task = asyncio.create_task(self._stream_logs())
 
     async def _stream_logs(self) -> None:
@@ -196,10 +247,16 @@ class SdkDaytonaRemoteSandbox:
     async def upload(self, remote_path: str, content: bytes) -> None:
         await self._sandbox.fs.upload_file(content, remote_path)
 
-    async def list_files(self, remote_path: str) -> list[tuple[str, bool]]:
+    async def list_files(
+        self, remote_path: str
+    ) -> list[tuple[str, bool, int | None]]:
         files = await self._sandbox.fs.list_files(remote_path, depth=100)
         return [
-            (file.path or str(PurePosixPath(remote_path) / file.name), file.is_dir)
+            (
+                file.path or str(PurePosixPath(remote_path) / file.name),
+                file.is_dir,
+                file.size if file.size >= 0 else None,
+            )
             for file in files
         ]
 
@@ -259,7 +316,13 @@ class DaytonaSandboxProvider:
         cli_version: str = "2.1.206",
         cli_path: str = "/home/daytona/.local/bin/claude",
         delete_on_destroy: bool = False,
+        auto_stop_interval_minutes: int = 15,
+        auto_delete_interval_minutes: int = 60,
+        max_collect_bytes: int = 512 * 1024 * 1024,
+        max_collect_members: int = 10_000,
     ) -> None:
+        if max_collect_bytes <= 0 or max_collect_members <= 0:
+            raise ValueError("Daytona collection limits must be positive")
         self._client = client
         self._local_root = local_root
         self._snapshot = snapshot
@@ -267,29 +330,40 @@ class DaytonaSandboxProvider:
         self._cli_version = cli_version
         self._cli_path = cli_path
         self._delete_on_destroy = delete_on_destroy
-        self._sandboxes: dict[str, DaytonaRemoteSandbox] = {}
+        self._auto_stop_interval_minutes = auto_stop_interval_minutes
+        self._auto_delete_interval_minutes = auto_delete_interval_minutes
+        self._max_collect_bytes = max_collect_bytes
+        self._max_collect_members = max_collect_members
+        self._sandboxes: dict[str, tuple[DaytonaRemoteSandbox, bool]] = {}
 
     async def provision(self, run: Run) -> SandboxHandle:
         existing = run.input.get("daytona_sandbox_id")
         if isinstance(existing, str) and existing:
             sandbox = await self._client.get(existing)
             await self._client.start(sandbox)
+            owned = False
         else:
             sandbox = await self._client.create(
                 snapshot=self._snapshot,
-                name=f"harness-{run.run_id}"[:64],
+                name=f"harness-{run.run_id}-{run.fencing_token}"[:64],
                 labels={
                     "harness.tenant": run.tenant_id,
                     "harness.session": run.session_id,
                     "harness.run": run.run_id,
                 },
-                auto_stop_interval=0,
+                auto_stop_interval=self._auto_stop_interval_minutes,
+                auto_delete_interval=(
+                    self._auto_delete_interval_minutes
+                    if self._delete_on_destroy
+                    else None
+                ),
             )
+            owned = True
         path = Path(
             tempfile.mkdtemp(prefix=f"{run.run_id}-", dir=self._local_root)
         )
         remote_workspace = f"{self._remote_workspace_root}/{run.run_id}"
-        self._sandboxes[sandbox.id] = sandbox
+        self._sandboxes[sandbox.id] = (sandbox, owned)
 
         def transport_factory(raw_options: object) -> object:
             options = cast(ClaudeAgentOptions, raw_options)
@@ -310,7 +384,7 @@ class DaytonaSandboxProvider:
         )
 
     async def prepare(self, handle: SandboxHandle) -> None:
-        sandbox = self._sandboxes[handle.sandbox_id]
+        sandbox, _ = self._sandboxes[handle.sandbox_id]
         assert handle.remote_workspace is not None
         await sandbox.ensure_claude_cli(
             version=self._cli_version,
@@ -326,9 +400,18 @@ class DaytonaSandboxProvider:
                 await sandbox.upload(remote, path.read_bytes())
 
     async def collect(self, handle: SandboxHandle) -> None:
-        sandbox = self._sandboxes[handle.sandbox_id]
+        sandbox, _ = self._sandboxes[handle.sandbox_id]
         assert handle.remote_workspace is not None
-        for remote_path, is_dir in await sandbox.list_files(handle.remote_workspace):
+        remote_files = await sandbox.list_files(handle.remote_workspace)
+        if len(remote_files) > self._max_collect_members:
+            raise ValueError("Daytona workspace exceeds collection member limit")
+        declared_size = sum(
+            size for _, is_dir, size in remote_files if not is_dir and size is not None
+        )
+        if declared_size > self._max_collect_bytes:
+            raise ValueError("Daytona workspace exceeds collection size limit")
+        collected_size = 0
+        for remote_path, is_dir, _ in remote_files:
             relative = PurePosixPath(remote_path).relative_to(
                 PurePosixPath(handle.remote_workspace)
             )
@@ -338,13 +421,18 @@ class DaytonaSandboxProvider:
             if is_dir:
                 local.mkdir(parents=True, exist_ok=True)
             else:
+                content = await sandbox.download(remote_path)
+                collected_size += len(content)
+                if collected_size > self._max_collect_bytes:
+                    raise ValueError("Daytona workspace exceeds collection size limit")
                 local.parent.mkdir(parents=True, exist_ok=True)
-                local.write_bytes(await sandbox.download(remote_path))
+                local.write_bytes(content)
 
     async def destroy(self, handle: SandboxHandle) -> None:
-        sandbox = self._sandboxes.pop(handle.sandbox_id, None)
-        if sandbox is not None:
+        entry = self._sandboxes.pop(handle.sandbox_id, None)
+        if entry is not None:
+            sandbox, owned = entry
             await self._client.stop(sandbox)
-            if self._delete_on_destroy:
+            if self._delete_on_destroy and owned:
                 await self._client.delete(sandbox)
         shutil.rmtree(handle.path, ignore_errors=True)

@@ -21,7 +21,7 @@ make dev-up-cc-switch
 
 真实模式在 API 启动时读取 `~/.claude/settings.json` 中的 Anthropic endpoint、model 和 credential。凭据不会复制到仓库文件或日志；cc-switch 切换 Provider 后执行 `make dev-down && make dev-up-cc-switch`。
 
-`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布正式验证包 `echo-agent@0.3.0`。测试目录中的 deterministic echo Manifest 只供自动化测试使用，不会发布给网页。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
+`dev-up` 会启动 PostgreSQL 17、Redis 7、MinIO，执行 Alembic，随后启动 API 和 Next.js 控制台，并幂等发布正式验证包 `echo-agent@0.4.0`。测试目录中的 deterministic echo Manifest 只供自动化测试使用，不会发布给网页。日志位于 `work/api.log` 与 `work/web.log`。为方便 Web 验证，它仅在本地启动命令中设置 `HARNESS_LOCAL_AUTO_EXECUTE=true`；测试和默认配置仍为显式 Worker 驱动。`dev-up-cc-switch` 只额外选择 `claude-sdk` Runtime，不会在配置缺失时回退 Fake Runtime。
 
 如果本机 Docker 配置引用了缺失的 `docker-credential-osxkeychain`，脚本只对本次公共镜像拉取临时使用仓库内的匿名 helper，不修改全局 Docker 配置。
 
@@ -62,7 +62,10 @@ Langfuse 和 OTel Collector 不在本地 Compose 中，也不是启动前提。
 
 ### Tavily web research
 
-正式验证 Agent 通过逻辑引用 `mcp: tavily-readonly` 使用服务端注册的 Tavily remote MCP。只允许 search 和 extract；Manifest 与 URL 都不保存凭据。在忽略的 `.env` 中配置：
+`echo-agent` 默认不依赖外部检索凭据。需要联网检索的领域 Agent（仓库示例为
+`public-opinion-agent`）通过逻辑引用 `mcp: tavily-readonly` 使用服务端注册的 Tavily
+remote MCP。只允许 search 和 extract；Manifest 与 URL 都不保存凭据。在忽略的
+`.env` 中配置：
 
 ```dotenv
 HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"authorization":"TAVILY_AUTHORIZATION"}}
@@ -102,7 +105,11 @@ HARNESS_DAYTONA_CLAUDE_CLI_PATH=/home/daytona/.local/bin/claude
 
 随后执行 `make dev-down && make dev-up-cc-switch`。Daytona provisioning 失败时运行会失败，不会降级到 local 后继续使用容器权限。
 
-Daytona sandbox 运行在云端，因此 cc-switch 的 `ANTHROPIC_BASE_URL` 必须能从公网访问；`127.0.0.1`、`localhost` 和 `10/172.16-31/192.168` 私网地址只能用于 local sandbox。网关应启用 TLS、鉴权和来源限制，不要为了验证而直接暴露无保护的 new-api 端口。默认 sandbox 会通过 Anthropic 官方安装器校验并安装固定版本的 Linux 原生 Claude CLI；生产建议把相同版本预装进 `HARNESS_DAYTONA_SNAPSHOT`，避免每个 run 重复下载。
+Daytona Cloud sandbox 运行在云端，因此 `HARNESS_NEW_API_BASE_URL`（或官方回退端点）必须能从 sandbox 访问；`127.0.0.1`、`localhost` 和 `10/172.16-31/192.168` 私网地址默认不可达。网关应启用 TLS、鉴权和来源限制，不要为了验证而直接暴露无保护的 new-api 端口。默认 sandbox 会通过 Anthropic 官方安装器校验并安装固定版本的 Linux 原生 Claude CLI；生产建议把相同版本预装进 `HARNESS_DAYTONA_SNAPSHOT`，避免每个 run 重复下载。
+
+如果 new-api 只在内网开放，推荐把 Daytona 自托管到同一内网或已打通 VPN/VPC 路由的机器，并把 `HARNESS_DAYTONA_API_URL` 改成自托管 API 地址。需要同时验证两段网络：Docker worker 到 Daytona API，以及 Daytona 创建出的 sandbox 到 new-api；仅 Docker 宿主机能访问 new-api 并不代表 sandbox 能访问。
+
+在启动真实 Run 前执行 `make smoke-daytona`。该检查会创建一个一次性 Daytona sandbox，从 sandbox 内探测 `HARNESS_NEW_API_BASE_URL` 的网络连通性，然后停止并删除 sandbox；它不会发送模型凭据或模型请求。HTTP `401/403/404` 仍表示网络可达，连接超时或拒绝则表示需要公网 HTTPS 网关、同 VPC Daytona target 或 VPN/私网路由。
 
 验证停止生成与后端取消：
 
@@ -153,10 +160,13 @@ Collector 使用 Basic Auth extension 从公钥和私钥生成认证头，并设
 ## Common commands
 
 ```bash
-uv run harness agent init invoice-reviewer
+uv run harness agent init invoice-reviewer --template analyst --domain accounts-payable
 uv run harness agent validate agents/invoice-reviewer/agent.yaml
+uv run harness agent check agents/invoice-reviewer/agent.yaml --environment production
+uv run harness agent pack agents/invoice-reviewer/agent.yaml --output dist/agents
 make migrate
 make verify
+make agent-pack
 make e2e
 make web-test
 make web-build
@@ -172,5 +182,5 @@ make web-build
 - 容器未就绪：运行 `uv run python scripts/wait_for_local_services.py`。
 - API/Web 退出：查看 `work/*.log`，删除陈旧的 `work/*.pid` 后重启。
 - bootstrap 提示 SOCKS 依赖：确认使用仓库最新脚本；本地 bootstrap 显式 `trust_env=false`，不会把 loopback 请求发送到系统代理。
-- new-api 只返回文本但工具失败：网关必须兼容 Anthropic streaming 与 tool use；Manifest 的 required capabilities 会阻止不兼容路由。
+- new-api 只返回文本但工具失败：网关必须兼容 Anthropic streaming 与 tool use；先运行 `scripts/smoke_new_api.py`，再把证实的能力写入 `HARNESS_NEW_API_CAPABILITIES`。Manifest 的 required capabilities 会在发起模型请求前阻止不兼容路由。
 - 不要将 `.env`、模型 key 或 Langfuse secret 提交；所有事件与 trace 属性都应先经过脱敏。

@@ -81,6 +81,9 @@ async def test_run_repository_compare_and_set_prevents_stale_writes() -> None:
 
     assert await repository.compare_and_set(RunStatus.QUEUED, provisioning) is True
     assert await repository.compare_and_set(RunStatus.QUEUED, provisioning) is False
+    reclaimed = provisioning.model_copy(update={"fencing_token": 2})
+    assert await repository.compare_and_set(RunStatus.PROVISIONING, reclaimed) is True
+    assert await repository.compare_and_set(RunStatus.PROVISIONING, reclaimed) is False
     assert (await repository.get("tenant-a", "run-1")).status is RunStatus.PROVISIONING
 
 
@@ -94,3 +97,6 @@ async def test_task_queue_is_idempotent() -> None:
 
     assert await queue.dequeue() == task
     assert await queue.dequeue() is None
+    await queue.acknowledge(task)
+    await queue.enqueue(task)
+    assert await queue.dequeue() == task

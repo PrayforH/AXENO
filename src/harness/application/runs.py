@@ -85,7 +85,13 @@ class RunService:
         if current.status is RunStatus.CANCELLING or current.status.is_terminal:
             return current
         target = transition(current.status, RunStatus.CANCELLING)
-        updated = current.model_copy(update={"status": target, "updated_at": self._clock()})
+        updated = current.model_copy(
+            update={
+                "status": target,
+                "updated_at": self._clock(),
+                "fencing_token": current.fencing_token + 1,
+            }
+        )
         if not await self._runs.compare_and_set(current.status, updated):
             raise ConflictError(f"run changed while cancellation was requested: {run_id}")
         await self._events.append(

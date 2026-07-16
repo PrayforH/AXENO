@@ -20,7 +20,7 @@ describe("full-page agent workbench", () => {
     expect(page).not.toContain("run-rail");
     expect(page).not.toContain(">LIVE<");
     expect(page).not.toContain("echo-agent");
-    expect(page).not.toContain("0.3.0");
+    expect(page).not.toContain("0.4.0");
   });
 
   it("uses a dense centered conversation and compact sticky controls", () => {

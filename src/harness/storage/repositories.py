@@ -61,6 +61,7 @@ class PostgresRunRepository:
                 RunRow.tenant_id == updated.tenant_id,
                 RunRow.run_id == updated.run_id,
                 RunRow.status == expected_status.value,
+                RunRow.fencing_token == updated.fencing_token - 1,
             )
             .values(
                 status=updated.status.value,

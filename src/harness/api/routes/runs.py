@@ -5,7 +5,14 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, status
 from fastapi.responses import StreamingResponse
 
-from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    get_container,
+    require_identity,
+    require_owned_run,
+    require_owned_session,
+)
 from harness.api.schemas import CreateRunRequest
 from harness.core.models import Run
 
@@ -25,11 +32,15 @@ async def create_run(
     container: Annotated[ApiContainer, Depends(get_container)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Run:
+    await require_owned_session(container, identity, session_id)
+    run_input: dict[str, object] = {"prompt": body.prompt}
+    if body.input_artifact_ids:
+        run_input["input_artifact_ids"] = list(body.input_artifact_ids)
     run = await container.runs.create(
         identity.tenant_id,
         session_id,
         idempotency_key,
-        input={"prompt": body.prompt},
+        input=run_input,
     )
     if container.auto_execute:
         background_tasks.add_task(container.worker.execute, identity.tenant_id, run.run_id)
@@ -42,7 +53,7 @@ async def get_run(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Run:
-    return await container.runs.get(identity.tenant_id, run_id)
+    return await require_owned_run(container, identity, run_id)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=Run)
@@ -51,6 +62,7 @@ async def cancel_run(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Run:
+    await require_owned_run(container, identity, run_id)
     return await container.runs.cancel(identity.tenant_id, run_id)
 
 
@@ -61,7 +73,7 @@ async def replay_events(
     container: Annotated[ApiContainer, Depends(get_container)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
-    await container.runs.get(identity.tenant_id, run_id)
+    await require_owned_run(container, identity, run_id)
     after_sequence = int(last_event_id or "0")
     events = await container.events.list_after(identity.tenant_id, run_id, after_sequence)
 

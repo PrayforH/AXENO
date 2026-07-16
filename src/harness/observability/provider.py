@@ -77,6 +77,12 @@ class Observability:
         for key, value in _safe_attributes(attributes).items():
             span.set_attribute(key, value)
 
+    def mark_current_span_error(self, error_type: str) -> None:
+        safe_type = str(redact(error_type))
+        span = get_current_span()
+        span.add_event("error", {"error.type": safe_type})
+        span.set_status(Status(StatusCode.ERROR, safe_type))
+
     @contextmanager
     def span(
         self,

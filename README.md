@@ -8,24 +8,25 @@
 - **保留 Claude Agent SDK 的能力边界。** 直接使用官方 SDK、SessionStore 和消息类型，不用 LangGraph 重写 Claude Code 的执行语义。
 - **new-api 可以作为优先模型网关。** 通过 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN` 注入 Anthropic-compatible 网关；能力不满足时只走 Manifest 明确声明的官方回退，绝不静默切换。
 - **复杂 Agent 可安全落地。** 工具调用经过 `allow / deny / ask` 策略，审批可暂停、过期、拒绝或恢复；Run 有幂等键、状态机和 fencing token。
-- **通用能力可以按需组合。** 内置验证包可使用只读 Tavily 检索和受限 helper 子 Agent；领域 Agent 通过 Manifest 引用能力，共享同一套策略、审批和运行界面。
+- **通用能力可以按需组合。** 默认验证包只依赖模型网关；舆情等领域包再显式组合只读 Tavily 与受限 helper 子 Agent，共享同一套策略、审批和运行界面。
 - **从单机验证平滑走向生产。** 核心依赖端口抽象；本地用 Fake Runtime/内存组合，持久化契约已在 PostgreSQL、Redis、MinIO 上验证。
 - **前后端协议解耦。** Harness 事件是权威事实，AG-UI 只是无状态投影；assistant-ui 控制台可以替换，而不会影响 Agent 执行层。
 - **可观测但不绑定厂商。** 应用只发 OpenTelemetry；生产可由 Collector 输出到 Langfuse，本地默认完全关闭 exporter。
 
-这意味着后续开发一个新 Agent，主要工作变成“写 Manifest + prompt/skills/tools + 少量 Python 扩展”，而不是每次重建会话、审批、网关、事件流、存储和 UI。
+这意味着后续开发一个新 Agent，主要工作变成“写 Manifest + prompt/skills/tools + 受控业务 MCP”，而不是每次重建会话、审批、网关、事件流、存储和 UI。Python SDK MCP 只适用于 Claude CLI 与 Worker 同进程的受信本地模式；生产 Daytona 模式应使用带执行身份认证的 HTTP MCP。
 
 ## 快速开始
 
 ```bash
 uv sync --group dev
-uv run harness agent init invoice-reviewer
-uv run harness agent validate agents/invoice-reviewer/agent.yaml
-cd web/harness-console && npm install && cd ../..
+uv run harness agent init invoice-reviewer --template analyst --domain accounts-payable
+uv run harness agent check agents/invoice-reviewer/agent.yaml --environment production
+uv run harness agent pack agents/invoice-reviewer/agent.yaml --output dist/agents
+cd web/harness-console && npm ci --registry=https://registry.npmmirror.com && cd ../..
 make dev-up
 ```
 
-领域 Agent 的 prompt、Python Tool、外部 MCP、发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)。
+领域 Agent 的 prompt、Skill、Python Tool、外部 MCP、权限、bundle 发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)，上线检查和回滚见 [docs/production-agent-runbook.md](docs/production-agent-runbook.md)。仓库中的 `public-opinion-agent` 是可运行的编排型参考实现。
 
 生产形态 Docker Compose（API、Worker、Web、PostgreSQL、Redis、MinIO、migration、可选 Langfuse Collector）见 [docs/deployment.md](docs/deployment.md)。构建默认使用清华 PyPI 与 npmmirror，可通过 `.env.docker` 覆盖：
 
@@ -55,6 +56,7 @@ make dev-up-cc-switch
 
 ```bash
 make verify
+make agent-pack
 make e2e
 make web-test
 make web-build
@@ -62,7 +64,9 @@ make web-build
 
 无模型密钥的 E2E 会验证：Manifest 发布、Session/Run、SSE/AG-UI、工具审批、恢复、Artifact 下载与哈希、终态成功，以及本地 OTel exporter 关闭。
 
-Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以一行可展开的执行条呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper-agent@1.0.0` 与正式验证包 `echo-agent@0.3.0`，不会再把 deterministic test fixture 发布给网页。以下审批与产物标记仅用于 Fake Runtime 验收：
+`make verify` 还会对 `agents/*/agent.yaml` 执行生产门禁；`make agent-pack` 为所有通过门禁的 Agent 生成确定性 ZIP。生产发布 API 只接受 `/v1/agents/bundles`，不会读取客户端提交的服务器本地路径。
+
+Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以一行可展开的执行条呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper-agent@1.0.0` 与正式验证包 `echo-agent@0.4.0`，不会再把 deterministic test fixture 发布给网页。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程
@@ -78,7 +82,7 @@ Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markd
 在当前工作区创建 outputs/hello.md，写入一段中文说明，然后读取文件确认内容。
 ```
 
-`echo-agent@0.3.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task` 和 `mcp: tavily-readonly`。本地 workspace 不是真正安全隔离，因此 `Write/Edit/Bash` 会进入网页审批；Daytona 容器中 `Write/Edit` 自动允许，`Bash` 因模型网关凭据和网络出口风险仍需审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
+`echo-agent@0.4.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task`，只配置模型网关即可运行；需要联网检索的领域包（例如 `public-opinion-agent`）再显式声明 `mcp: tavily-readonly`。本地 workspace 不是真正安全隔离，因此 `Write/Edit/Bash` 会进入网页审批；Daytona 容器中 `Write/Edit` 自动允许，`Bash` 因模型网关凭据和网络出口风险仍需审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
 
 输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、同源 AG-UI BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 
@@ -95,4 +99,4 @@ uv run python scripts/smoke_new_api.py
 
 ## 当前边界
 
-当前仓库已经具备持久化生产组合根和单机 Docker 部署基线，但不是最终控制平面：公网认证/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、Python SDK MCP 和服务端注册的外部 MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成基于可信 Sandbox 隔离级别的策略与审批；subagent 自定义工具、字段级工具参数脱敏、Daytona 网络出口控制和多进程持久化审批 continuation 仍是明确的后续边界。
+当前仓库已经具备持久化生产组合根、API 服务 Bearer、带 visibility lease/心跳/崩溃回收的 Redis Run 队列，以及单机 Docker 部署基线，但不是最终控制平面：多用户 OIDC/TLS、Kubernetes per-run Pod、配额/计费和长期事件订阅仍应在后续阶段实现。主 Agent 已能解析 builtin、受信本地 Python SDK MCP 和服务端注册的外部 HTTP MCP，并通过 `PreToolUse` 在真实 SDK 执行前完成基于可信 Sandbox 隔离级别的策略与审批；API/Worker 间的审批决策已经通过耐久 Repository 传播。Daytona 会拒绝无法跨进程传递的 `python_entry`，而不是静默丢失工具。subagent 自定义工具、Daytona 网络出口/凭据代理和 Worker 崩溃后的审批 continuation 压测仍是明确的后续边界。

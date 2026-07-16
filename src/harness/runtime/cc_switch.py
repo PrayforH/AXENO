@@ -6,6 +6,8 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from harness.core.models import ModelCompatibility
+
 
 class CcSwitchConfigError(ValueError):
     """The applied cc-switch Claude configuration cannot start the SDK runtime."""
@@ -18,6 +20,8 @@ class CcSwitchClaudeConfig(BaseModel):
     model: str
     provider: Literal["new-api", "anthropic"]
     credential: SecretStr
+    compatibility: ModelCompatibility = ModelCompatibility.FULL
+    capabilities: frozenset[str] = frozenset({"streaming", "tool_use"})
 
 
 def load_cc_switch_claude_config(path: str | Path) -> CcSwitchClaudeConfig:

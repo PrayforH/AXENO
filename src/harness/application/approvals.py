@@ -22,36 +22,164 @@ class ApprovalService:
         clock: Clock,
         id_generator: IdGenerator,
         ttl: timedelta = timedelta(minutes=15),
+        decision_poll_interval_seconds: float = 0.25,
     ) -> None:
+        if decision_poll_interval_seconds <= 0:
+            raise ValueError("approval decision poll interval must be positive")
         self._runs = runs
         self._approvals = approvals
         self._events = events
         self._clock = clock
         self._id_generator = id_generator
         self._ttl = ttl
+        self._decision_poll_interval = decision_poll_interval_seconds
         self._inline_waiters: dict[str, asyncio.Future[ApprovalStatus]] = {}
+        self._inline_tenants: dict[str, str] = {}
 
     def has_inline_waiter(self, approval_id: str) -> bool:
         return approval_id in self._inline_waiters
 
-    def _register_inline_waiter(self, approval_id: str) -> None:
+    async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
+        return await self._approvals.get(tenant_id, approval_id)
+
+    def _register_inline_waiter(self, tenant_id: str, approval_id: str) -> None:
         if approval_id not in self._inline_waiters:
             self._inline_waiters[approval_id] = (
                 asyncio.get_running_loop().create_future()
             )
+            self._inline_tenants[approval_id] = tenant_id
 
     async def wait_for_decision(self, approval_id: str) -> ApprovalStatus:
         future = self._inline_waiters.get(approval_id)
-        if future is None:
+        tenant_id = self._inline_tenants.get(approval_id)
+        if future is None or tenant_id is None:
             raise ConflictError(f"inline approval waiter is not registered: {approval_id}")
         try:
-            return await future
+            while True:
+                current = await self._approvals.get(tenant_id, approval_id)
+                if current.status is not ApprovalStatus.PENDING:
+                    if current.inline:
+                        await self._ensure_inline_run_resumed(current)
+                    return current.status
+                run = await self._runs.get(tenant_id, current.run_id)
+                if run.status is RunStatus.CANCELLING:
+                    cancelled = await self._cancel_pending(current, run)
+                    return cancelled.status
+                if self._clock() >= current.expires_at:
+                    expired = await self._expire(current)
+                    return expired.status
+                completed, _ = await asyncio.wait(
+                    {future}, timeout=self._decision_poll_interval
+                )
+                if completed:
+                    return future.result()
         finally:
             self._inline_waiters.pop(approval_id, None)
+            self._inline_tenants.pop(approval_id, None)
+
+    async def _cancel_pending(
+        self,
+        current: ApprovalRequest,
+        run: Run,
+        *,
+        reason: str = "run cancellation requested",
+    ) -> ApprovalRequest:
+        cancelled = current.model_copy(update={"status": ApprovalStatus.CANCELLED})
+        changed = await self._approvals.compare_and_set(
+            ApprovalStatus.PENDING, cancelled
+        )
+        if not changed:
+            return await self._approvals.get(
+                current.tenant_id, current.approval_id
+            )
+        await self._events.append(
+            tenant_id=current.tenant_id,
+            run_id=run.run_id,
+            session_id=run.session_id,
+            event_type="approval.cancelled",
+            payload={
+                "approval_id": current.approval_id,
+                "reason": reason,
+            },
+        )
+        waiter = self._inline_waiters.get(current.approval_id)
+        if waiter is not None and not waiter.done():
+            waiter.set_result(ApprovalStatus.CANCELLED)
+        return cancelled
+
+    async def cancel_pending(
+        self,
+        *,
+        tenant_id: str,
+        approval_id: str,
+        reason: str,
+    ) -> ApprovalRequest:
+        """Close a pending approval when its owning SDK wait is interrupted."""
+        current = await self._approvals.get(tenant_id, approval_id)
+        if current.status is not ApprovalStatus.PENDING:
+            return current
+        run = await self._runs.get(tenant_id, current.run_id)
+        return await self._cancel_pending(current, run, reason=reason)
+
+    async def _ensure_inline_run_resumed(self, approval: ApprovalRequest) -> None:
+        run = await self._runs.get(approval.tenant_id, approval.run_id)
+        if run.status is not RunStatus.WAITING_APPROVAL:
+            return
+        try:
+            await self._move(run, RunStatus.RUNNING)
+        except ConflictError:
+            # Another process may have completed the same durable transition.
+            refreshed = await self._runs.get(approval.tenant_id, approval.run_id)
+            if refreshed.status is RunStatus.WAITING_APPROVAL:
+                raise
+
+    async def _expire(self, current: ApprovalRequest) -> ApprovalRequest:
+        expired = current.model_copy(update={"status": ApprovalStatus.EXPIRED})
+        changed = await self._approvals.compare_and_set(
+            ApprovalStatus.PENDING, expired
+        )
+        if not changed:
+            return await self._approvals.get(
+                current.tenant_id, current.approval_id
+            )
+        run = await self._runs.get(current.tenant_id, current.run_id)
+        await self._events.append(
+            tenant_id=current.tenant_id,
+            run_id=run.run_id,
+            session_id=run.session_id,
+            event_type="approval.expired",
+            payload={"approval_id": current.approval_id},
+        )
+        if current.inline:
+            await self._ensure_inline_run_resumed(expired)
+        else:
+            await self._events.append(
+                tenant_id=current.tenant_id,
+                run_id=run.run_id,
+                session_id=run.session_id,
+                event_type="tool.result",
+                payload={
+                    "tool_call_id": current.tool_call_id,
+                    "is_error": True,
+                    "error": {
+                        "code": "approval_expired",
+                        "message": "tool approval expired",
+                    },
+                },
+            )
+            await self._move(run, RunStatus.REJECTED)
+        waiter = self._inline_waiters.get(current.approval_id)
+        if waiter is not None and not waiter.done():
+            waiter.set_result(ApprovalStatus.EXPIRED)
+        return expired
 
     async def _move(self, run: Run, status: RunStatus) -> Run:
         updated = run.model_copy(
-            update={"status": transition(run.status, status), "updated_at": self._clock()}
+            update={
+                "status": transition(run.status, status),
+                "updated_at": self._clock(),
+                "fencing_token": run.fencing_token + 1,
+            }
         )
         if not await self._runs.compare_and_set(run.status, updated):
             raise ConflictError(f"run changed during approval: {run.run_id}")
@@ -82,7 +210,7 @@ class ApprovalService:
         existing = await self._approvals.find_by_tool_call(tenant_id, run_id, tool_call_id)
         if existing is not None:
             if inline and existing.status is ApprovalStatus.PENDING:
-                self._register_inline_waiter(existing.approval_id)
+                self._register_inline_waiter(tenant_id, existing.approval_id)
             return existing
         run = await self._runs.get(tenant_id, run_id)
         if run.status is not RunStatus.RUNNING:
@@ -97,6 +225,7 @@ class ApprovalService:
             reason=reason,
             expires_at=now + self._ttl,
             created_at=now,
+            inline=inline,
             tool_name=tool_name,
             argument_summary=argument_summary or {},
             sandbox_provider=sandbox_provider,
@@ -105,7 +234,7 @@ class ApprovalService:
             risk=risk,
         )
         if inline:
-            self._register_inline_waiter(approval.approval_id)
+            self._register_inline_waiter(tenant_id, approval.approval_id)
         await self._approvals.add(approval)
         payload = approval.model_dump(mode="json")
         if message_id is not None:
@@ -131,12 +260,13 @@ class ApprovalService:
             raise ConflictError("approval decision must be approved or rejected")
         current = await self._approvals.get(tenant_id, approval_id)
         if current.status is decision:
+            if current.inline:
+                await self._ensure_inline_run_resumed(current)
             return current
         if current.status is not ApprovalStatus.PENDING:
             raise ConflictError(f"approval is already {current.status.value}")
         if self._clock() >= current.expires_at:
-            expired = current.model_copy(update={"status": ApprovalStatus.EXPIRED})
-            await self._approvals.compare_and_set(ApprovalStatus.PENDING, expired)
+            await self._expire(current)
             raise ConflictError("approval has expired")
         updated = current.model_copy(update={"status": decision})
         if not await self._approvals.compare_and_set(ApprovalStatus.PENDING, updated):
@@ -149,7 +279,7 @@ class ApprovalService:
             event_type=f"approval.{decision.value}",
             payload={"approval_id": approval_id},
         )
-        inline = approval_id in self._inline_waiters
+        inline = current.inline
         if decision is ApprovalStatus.APPROVED or inline:
             await self._move(run, RunStatus.RUNNING)
         else:

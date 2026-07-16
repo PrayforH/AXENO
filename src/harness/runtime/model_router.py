@@ -18,6 +18,8 @@ class RoutingDecision(BaseModel):
             "route_id": self.route.route_id,
             "provider": self.route.provider,
             "model": self.route.model,
+            "compatibility": self.route.compatibility.value,
+            "capabilities": sorted(self.route.capabilities),
             "used_fallback": self.used_fallback,
         }
 
@@ -49,7 +51,12 @@ class ModelRouter:
         if self._supports(primary, required_capabilities):
             return RoutingDecision(route=primary, used_fallback=False)
         if fallback_route_id is not None:
-            fallback = self._get(fallback_route_id)
+            fallback = self._routes.get(fallback_route_id)
+            if fallback is None:
+                raise ConflictError(
+                    "model route does not satisfy required capabilities and "
+                    f"fallback route is not configured: {fallback_route_id}"
+                )
             if self._supports(fallback, required_capabilities):
                 return RoutingDecision(route=fallback, used_fallback=True)
         missing = sorted(required_capabilities - primary.capabilities)

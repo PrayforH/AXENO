@@ -13,6 +13,19 @@ from harness.sandbox.base import SandboxIsolation
 RuntimeTransportFactory = Callable[[object], object]
 
 
+class RuntimeExecutionTimeoutError(TimeoutError):
+    """Raised when a Manifest runtime timeout is exhausted."""
+
+
+class RuntimeResultError(RuntimeError):
+    """Raised when Claude SDK returns a terminal error result."""
+
+    def __init__(self, subtype: str, api_error_status: int | None = None) -> None:
+        self.subtype = subtype
+        self.api_error_status = api_error_status
+        super().__init__(f"Claude SDK returned an error result: {subtype}")
+
+
 class RuntimeContext(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 

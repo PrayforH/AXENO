@@ -29,10 +29,24 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     } <= services.keys()
     assert services["api"]["environment"]["HARNESS_ENVIRONMENT"] == "production"
     assert services["api"]["environment"]["HARNESS_RUNTIME"] == "claude-sdk"
+    assert "build" in services["api"]
+    for name in ("migrate", "worker", "seed"):
+        assert "build" not in services[name]
+        assert services[name]["image"] == services["api"]["image"]
     assert services["worker"]["environment"]["HARNESS_ENVIRONMENT"] == "production"
+    assert "HARNESS_NEW_API_KEY" in services["worker"]["environment"]
+    assert "HARNESS_DAYTONA_API_KEY" in services["worker"]["environment"]
+    assert "HARNESS_MCP_SERVER_SECRETS_JSON" in services["worker"]["environment"]
+    assert "HARNESS_NEW_API_KEY" not in services["api"]["environment"]
+    assert "HARNESS_DAYTONA_API_KEY" not in services["api"]["environment"]
+    assert "HARNESS_MCP_SERVER_SECRETS_JSON" not in services["api"]["environment"]
+    assert set(services["migrate"]["environment"]) == {"HARNESS_DATABASE_URL"}
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert services["api"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
     assert services["web"]["depends_on"]["seed"]["condition"] == "service_completed_successfully"
+    assert "public-opinion-agent/agent.yaml" in services["seed"]["environment"][
+        "HARNESS_SEED_AGENT_MANIFESTS"
+    ]
     assert services["otel-collector"]["profiles"] == ["observability"]
     assert "postgres-data" in compose()["volumes"]
     assert "redis-data" in compose()["volumes"]
@@ -64,16 +78,23 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "harness-worker" in worker_entrypoint.read_text()
     values = environment.read_text()
     assert "HARNESS_NEW_API_BASE_URL=" in values
+    assert "HARNESS_API_BEARER_TOKEN=" in values
+    assert "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=false" in values
+    assert "HARNESS_SANDBOX_PROVIDER=daytona" in values
     assert "MINIO_ROOT_PASSWORD=" in values
     assert "LANGFUSE_OTLP_ENDPOINT=" in values
     assert "LANGFUSE_PUBLIC_KEY=" in values
     assert "LANGFUSE_SECRET_KEY=" in values
     assert "LANGFUSE_ENVIRONMENT=" in values
     assert "LANGFUSE_AUTHORIZATION=" not in values
-    assert "HARNESS_AGENT_VERSION=0.2.0" in values
+    assert "HARNESS_AGENT_VERSION=0.4.0" in values
     assert compose()["services"]["web"]["environment"]["HARNESS_AGENT_VERSION"] == (
-        "${HARNESS_AGENT_VERSION:-0.2.0}"
+        "${HARNESS_AGENT_VERSION:-0.4.0}"
     )
+    services = cast(dict[str, Any], compose()["services"])
+    for name in ("api", "seed", "web"):
+        assert "HARNESS_API_BEARER_TOKEN" in services[name]["environment"]
+    assert "HARNESS_API_BEARER_TOKEN" not in services["worker"]["environment"]
 
 
 def test_external_langfuse_collector_uses_basic_auth() -> None:

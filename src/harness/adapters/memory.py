@@ -96,7 +96,10 @@ class InMemoryRunRepository:
             current = self._items.get(key)
             if current is None:
                 raise NotFoundError(f"run not found: {updated.run_id}")
-            if current.status is not expected_status:
+            if (
+                current.status is not expected_status
+                or current.fencing_token != updated.fencing_token - 1
+            ):
                 return False
             self._items[key] = updated
             return True
@@ -410,6 +413,7 @@ class InMemoryTaskQueue:
     def __init__(self) -> None:
         self._items: deque[RunTask] = deque()
         self._pending: set[tuple[str, str]] = set()
+        self._leased: set[tuple[str, str]] = set()
 
     async def enqueue(self, task: RunTask) -> None:
         key = (task.tenant_id, task.run_id)
@@ -421,5 +425,19 @@ class InMemoryTaskQueue:
         if not self._items:
             return None
         task = self._items.popleft()
-        self._pending.remove((task.tenant_id, task.run_id))
+        self._leased.add((task.tenant_id, task.run_id))
         return task
+
+    async def acknowledge(self, task: RunTask) -> None:
+        key = (task.tenant_id, task.run_id)
+        self._leased.discard(key)
+        self._pending.discard(key)
+
+    async def retry(self, task: RunTask) -> None:
+        key = (task.tenant_id, task.run_id)
+        if key in self._leased:
+            self._leased.remove(key)
+            self._items.append(task)
+
+    async def extend_lease(self, task: RunTask) -> None:
+        del task

@@ -40,11 +40,11 @@ def _mcp_config(options: ClaudeAgentOptions) -> str | None:
     servers: dict[str, object] = {}
     for name, raw in options.mcp_servers.items():
         if raw.get("type") == "sdk":
-            serialized = dict(raw)
-            serialized.pop("instance", None)
-            servers[name] = serialized
-        else:
-            servers[name] = raw
+            raise DaytonaTransportError(
+                "in-process SDK MCP servers cannot be serialized into Daytona; "
+                f"configure an authenticated HTTP MCP server instead ({name})"
+            )
+        servers[name] = raw
     return json.dumps({"mcpServers": servers}, separators=(",", ":"))
 
 
@@ -75,9 +75,6 @@ def build_remote_claude_command(
         command.extend(["--permission-mode", options.permission_mode])
     if options.resume:
         command.extend(["--resume", options.resume])
-    mcp_config = _mcp_config(options)
-    if mcp_config is not None:
-        command.extend(["--mcp-config", mcp_config])
     if options.include_partial_messages:
         command.append("--include-partial-messages")
     if options.strict_mcp_config:
@@ -113,6 +110,9 @@ class DaytonaClaudeTransport(Transport):
             **self._options.env,
             "CLAUDE_CODE_ENTRYPOINT": "sdk-py",
         }
+        mcp_config = _mcp_config(self._options)
+        if mcp_config is not None:
+            environment["HARNESS_CLAUDE_MCP_CONFIG"] = mcp_config
         await self._session.start(
             build_remote_claude_command(
                 self._options, cli_path=self._cli_path

@@ -41,6 +41,8 @@ def test_new_api_primary_is_selected_when_capabilities_match() -> None:
         "route_id": "new-api-default",
         "provider": "new-api",
         "model": "claude-sonnet-4-6",
+        "compatibility": "full",
+        "capabilities": ["streaming", "tool_use"],
         "used_fallback": False,
     }
 

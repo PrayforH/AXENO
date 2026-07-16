@@ -54,6 +54,7 @@ class ApprovalStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class ArtifactStatus(StrEnum):
@@ -98,6 +99,7 @@ class AgentVersion(FrozenModel):
     version: str
     status: AgentVersionStatus
     manifest_hash: str
+    package_hash: str | None = None
     snapshot: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
@@ -154,6 +156,7 @@ class ApprovalRequest(FrozenModel):
     reason: str
     expires_at: datetime
     created_at: datetime
+    inline: bool = False
     tool_name: str | None = None
     argument_summary: dict[str, Any] = Field(default_factory=dict)
     sandbox_provider: str | None = None

@@ -19,6 +19,37 @@ from claude_agent_sdk import (
 
 from harness.runtime.base import RuntimeEvent
 
+_RESULT_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+_PROVIDER_ERROR_PREFIXES = (
+    "failed to authenticate. api error:",
+    "failed to connect to api:",
+)
+_SAFE_PROVIDER_ERROR_TEXT = (
+    "The model provider rejected the request. Open run details for the status code."
+)
+
+
+def _safe_model_text(text: str) -> str:
+    """Suppress SDK-generated provider diagnostics that can contain quota or request IDs."""
+    if text.strip().lower().startswith(_PROVIDER_ERROR_PREFIXES):
+        return _SAFE_PROVIDER_ERROR_TEXT
+    return text
+
+
+def result_subtype(message: ResultMessage) -> str:
+    """Normalize gateways that report an error result with the SDK success subtype."""
+    if not message.is_error:
+        return message.subtype
+    if message.api_error_status is not None and message.subtype in {"", "success"}:
+        return f"api_error_{message.api_error_status}"
+    return message.subtype or "provider_error"
+
 
 def _safe_tool_result_content(content: object) -> object:
     """Hide Claude SDK coordination metadata while preserving normal tool output."""
@@ -37,7 +68,7 @@ def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
                 type="subagent.delta",
                 payload={
                     "parent_tool_use_id": message.parent_tool_use_id,
-                    "text": block.text,
+                    "text": _safe_model_text(block.text),
                 },
             )
             for block in message.content
@@ -46,7 +77,11 @@ def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
     events: list[RuntimeEvent] = []
     for block in message.content:
         if isinstance(block, TextBlock):
-            events.append(RuntimeEvent(type="message.delta", payload={"text": block.text}))
+            events.append(
+                RuntimeEvent(
+                    type="message.delta", payload={"text": _safe_model_text(block.text)}
+                )
+            )
         elif isinstance(block, ToolUseBlock):
             events.append(
                 RuntimeEvent(
@@ -85,7 +120,7 @@ def _map_stream(message: StreamEvent) -> list[RuntimeEvent]:
                         type="subagent.delta",
                         payload={
                             "parent_tool_use_id": message.parent_tool_use_id,
-                            "text": str(typed_delta.get("text", "")),
+                            "text": _safe_model_text(str(typed_delta.get("text", ""))),
                         },
                     )
                 ]
@@ -101,7 +136,9 @@ def _map_stream(message: StreamEvent) -> list[RuntimeEvent]:
             events.append(
                 RuntimeEvent(
                     type="message.delta",
-                    payload={"text": str(typed_delta.get("text", ""))},
+                    payload={
+                        "text": _safe_model_text(str(typed_delta.get("text", "")))
+                    },
                 )
             )
     return events
@@ -115,6 +152,19 @@ def _task_usage(usage: object) -> dict[str, int]:
         key: int(typed[key])
         for key in ("total_tokens", "tool_uses", "duration_ms")
         if isinstance(typed.get(key), int)
+    }
+
+
+def result_usage(message: ResultMessage) -> dict[str, int]:
+    """Return only aggregate numeric usage fields safe for events and traces."""
+    if not isinstance(message.usage, dict):
+        return {}
+    return {
+        key: value
+        for key in _RESULT_USAGE_KEYS
+        if isinstance((value := message.usage.get(key)), int)
+        and not isinstance(value, bool)
+        and value >= 0
     }
 
 
@@ -185,12 +235,15 @@ def map_sdk_message(message: object) -> list[RuntimeEvent]:
             RuntimeEvent(
                 type="runtime.result",
                 payload={
-                    "subtype": message.subtype,
+                    "subtype": result_subtype(message),
                     "is_error": message.is_error,
                     "num_turns": message.num_turns,
                     "session_id": message.session_id,
                     "total_cost_usd": message.total_cost_usd,
                     "stop_reason": message.stop_reason,
+                    "duration_ms": message.duration_ms,
+                    "duration_api_ms": message.duration_api_ms,
+                    "usage": result_usage(message),
                 },
             )
         ]
@@ -198,6 +251,8 @@ def map_sdk_message(message: object) -> list[RuntimeEvent]:
         task_event = _map_task_message(message)
         if task_event is not None:
             return [task_event]
+        if message.subtype not in {"init", "status"}:
+            return []
         safe: dict[str, Any] = {"subtype": message.subtype}
         for key in ("session_id", "status"):
             if key in message.data and isinstance(message.data[key], (str, int, float, bool)):

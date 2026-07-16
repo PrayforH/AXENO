@@ -15,6 +15,7 @@ dependencies = [
     "certifi>=2025.6",
     "daytona>=0.196,<1",
     "fastapi>=0.116,<1",
+    "httpx>=0.28,<1",
     "minio>=7.2,<8",
     "openpyxl>=3.1,<4",
     "opentelemetry-api>=1.34,<2",
@@ -37,7 +38,6 @@ harness-worker = "harness.worker.main:entrypoint"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28,<1",
     "pyright>=1.1.400",
     "pytest>=8.4",
     "pytest-asyncio>=1.0",

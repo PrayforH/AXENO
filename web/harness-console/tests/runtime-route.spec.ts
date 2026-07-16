@@ -23,8 +23,8 @@ describe("assistant-ui AG-UI runtime", () => {
     );
 
     expect(page).not.toContain("echo-agent");
-    expect(page).not.toContain("0.3.0");
+    expect(page).not.toContain("0.4.0");
     expect(config).toContain('environment.HARNESS_AGENT_NAME ?? "echo-agent"');
-    expect(config).toContain('environment.HARNESS_AGENT_VERSION ?? "0.3.0"');
+    expect(config).toContain('environment.HARNESS_AGENT_VERSION ?? "0.4.0"');
   });
 });

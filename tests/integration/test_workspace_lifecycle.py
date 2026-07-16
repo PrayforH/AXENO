@@ -76,6 +76,35 @@ async def test_restore_latest_returns_none_then_restores_authoritative_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_archive_rejects_oversize_and_excessive_member_workspaces(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    oversized = tmp_path / "oversized"
+    oversized.mkdir()
+    (oversized / "large.bin").write_bytes(b"x" * 9)
+
+    with pytest.raises(ValueError, match="size limit"):
+        await WorkspaceService(store, max_archive_bytes=8).archive(
+            tenant_id="tenant-a",
+            session_id="session-a",
+            workspace=oversized,
+        )
+
+    crowded = tmp_path / "crowded"
+    crowded.mkdir()
+    (crowded / "one").touch()
+    (crowded / "two").touch()
+
+    with pytest.raises(ValueError, match="member limit"):
+        await WorkspaceService(store, max_archive_members=1).archive(
+            tenant_id="tenant-a",
+            session_id="session-a",
+            workspace=crowded,
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("member_kind", ["traversal", "symlink"])
 async def test_restore_rejects_unsafe_archive_members(
     tmp_path: Path, member_kind: str

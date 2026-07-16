@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e
+.PHONY: install test lint typecheck agent-check agent-pack verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e smoke-daytona
 
 DOCKER_COMPOSE = docker compose --env-file deploy/docker-compose/.env.docker -f deploy/docker-compose/compose.yaml
 
@@ -14,7 +14,13 @@ lint:
 typecheck:
 	uv run pyright
 
-verify: lint typecheck test
+agent-check:
+	uv run python scripts/check_agent_packages.py
+
+agent-pack:
+	uv run python scripts/check_agent_packages.py --output dist/agents
+
+verify: lint typecheck agent-check test
 
 dev-up:
 	bash scripts/dev_up.sh
@@ -55,3 +61,9 @@ docker-down:
 
 docker-e2e:
 	uv run python scripts/e2e_docker.py
+
+smoke-daytona:
+	@set -a; \
+	if [ -f deploy/docker-compose/.env.docker ]; then . deploy/docker-compose/.env.docker; fi; \
+	set +a; \
+	uv run python scripts/smoke_daytona.py

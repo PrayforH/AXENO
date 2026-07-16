@@ -2,8 +2,9 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: echo-agent
-  version: 0.3.0
+  version: 0.4.0
   labels:
+    domain: harness-validation
     purpose: local-validation
 spec:
   runtime: claude-agent-sdk
@@ -15,7 +16,8 @@ spec:
     requiredCapabilities: [streaming, tool_use]
   prompt:
     system: prompts/system.md
-  skills: []
+  skills:
+    - skills/workspace-validation
   tools:
     - builtin: Read
     - builtin: Glob
@@ -24,12 +26,11 @@ spec:
     - builtin: Edit
     - builtin: Bash
     - builtin: Task
-    - mcp: tavily-readonly
   subagents:
     - ref: helper-agent@1.0.0
   hooks: []
   permissions:
-    policy: local-standard
+    policy: production-orchestrator
   workspace:
     mode: isolated
     restoreSession: true

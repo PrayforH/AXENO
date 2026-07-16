@@ -8,23 +8,61 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from harness.adapters.memory import (
+    InMemoryArtifactRepository,
+    InMemoryArtifactStore,
     InMemoryEventBus,
     InMemoryEventRepository,
     InMemoryRunRepository,
     InMemorySessionRepository,
 )
+from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.config import Settings
 from harness.core.models import Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
+from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine, default_policy_rules
-from harness.runtime.base import RuntimeContext, RuntimeEvent
+from harness.runtime.base import (
+    RuntimeContext,
+    RuntimeEvent,
+    RuntimeExecutionTimeoutError,
+    RuntimeResultError,
+)
 from harness.runtime.fake import FakeRuntime
 from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
-from harness.worker.orchestrator import RunOrchestrator
+from harness.worker.orchestrator import (
+    PolicyResolver,
+    RunOrchestrator,
+    RuntimeAssetStager,
+    read_runtime_artifact,
+)
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
+
+
+def test_runtime_artifact_reader_is_workspace_scoped_and_bounded(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "valid.txt").write_bytes(b"valid")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside")
+    (workspace / "link.txt").symlink_to(outside)
+
+    path, content = read_runtime_artifact(
+        workspace, "valid.txt", max_bytes=5
+    )
+
+    assert path == workspace / "valid.txt"
+    assert content == b"valid"
+    with pytest.raises(ValueError, match="escaped"):
+        read_runtime_artifact(workspace, "../outside.txt", max_bytes=100)
+    with pytest.raises(ValueError, match="escaped|regular file"):
+        read_runtime_artifact(workspace, "link.txt", max_bytes=100)
+    with pytest.raises(ValueError, match="size limit"):
+        read_runtime_artifact(workspace, "valid.txt", max_bytes=4)
 
 
 def ids() -> Callable[[str], str]:
@@ -56,6 +94,23 @@ class ToolRuntime(FakeRuntime):
         yield RuntimeEvent(type="message.completed")
 
 
+class TimedOutRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        raise RuntimeExecutionTimeoutError("test runtime timeout")
+        yield
+
+
+class ErrorResultRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"is_error": True, "subtype": "error_max_budget_usd"},
+        )
+        raise RuntimeResultError("error_max_budget_usd", api_error_status=429)
+
+
 class CapturingRuntime(FakeRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -65,6 +120,14 @@ class CapturingRuntime(FakeRuntime):
         self.contexts.append(context)
         async for event in super().execute(context):
             yield event
+
+
+class WorkspaceOutputRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        output = context.workspace / "outputs" / "report.md"
+        output.parent.mkdir(parents=True)
+        output.write_text("verified output")
+        yield RuntimeEvent(type="message.completed")
 
 
 class ContainerSandboxProvider(LocalSandboxProvider):
@@ -78,6 +141,33 @@ class ContainerSandboxProvider(LocalSandboxProvider):
         )
 
 
+class AssetCheckingSandboxProvider(LocalSandboxProvider):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root=root)
+        self.asset_was_ready = False
+
+    async def prepare(self, handle: SandboxHandle) -> None:
+        self.asset_was_ready = (
+            handle.path / ".claude/skills/domain-core/SKILL.md"
+        ).is_file()
+        await super().prepare(handle)
+
+
+class PausablePrepareSandboxProvider(LocalSandboxProvider):
+    def __init__(self, root: Path) -> None:
+        super().__init__(root=root)
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def prepare(self, handle: SandboxHandle) -> None:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
 async def arrange(
     tmp_path: Path,
     *,
@@ -86,6 +176,9 @@ async def arrange(
     policy: PolicyEngine | None = None,
     observability: Observability | None = None,
     sandbox_override: SandboxProvider | None = None,
+    runtime_asset_stager: RuntimeAssetStager | None = None,
+    policy_resolver: PolicyResolver | None = None,
+    enable_artifacts: bool = False,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -112,6 +205,16 @@ async def arrange(
     )
     await sessions.add(session)
     await runs.add(run)
+    artifact_service = (
+        ArtifactService(
+            runs=runs,
+            repository=InMemoryArtifactRepository(),
+            store=InMemoryArtifactStore(),
+            id_generator=ids(),
+        )
+        if enable_artifacts
+        else None
+    )
     orchestrator = RunOrchestrator(
         sessions=sessions,
         runs=runs,
@@ -126,8 +229,89 @@ async def arrange(
         clock=lambda: NOW,
         policy=policy,
         observability=observability,
+        runtime_asset_stager=runtime_asset_stager,
+        policy_resolver=policy_resolver,
+        artifacts=artifact_service,
     )
     return orchestrator, runtime, runs, event_repository
+
+
+@pytest.mark.asyncio
+async def test_daytona_workspace_outputs_are_published_as_artifacts(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=WorkspaceOutputRuntime(),
+        sandbox_override=ContainerSandboxProvider(root=tmp_path),
+        enable_artifacts=True,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+    artifact_events = [event for event in recorded if event.type == "artifact.ready"]
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert len(artifact_events) == 1
+    assert artifact_events[0].payload["name"] == "report.md"
+    assert artifact_events[0].payload["source"] == "workspace-output"
+
+
+@pytest.mark.asyncio
+async def test_runtime_assets_are_staged_before_sandbox_prepare(tmp_path: Path) -> None:
+    sandbox = AssetCheckingSandboxProvider(tmp_path)
+
+    async def stage_assets(
+        _tenant_id: str,
+        _agent_name: str,
+        _agent_version: str,
+        workspace: Path,
+    ) -> tuple[str, ...]:
+        target = workspace / ".claude/skills/domain-core"
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text("immutable")
+        return ("domain-core",)
+
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        sandbox_override=sandbox,
+        runtime_asset_stager=stage_assets,
+    )
+
+    await orchestrator.execute("tenant-a", "run-1")
+
+    assert sandbox.asset_was_ready is True
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    staged = [event for event in emitted if event.type == "agent.assets.staged"]
+    assert staged[0].payload == {"skills": ["domain-core"]}
+
+
+@pytest.mark.asyncio
+async def test_manifest_policy_resolver_overrides_generic_worker_policy(
+    tmp_path: Path,
+) -> None:
+    async def resolve_policy(
+        _tenant_id: str, _agent_name: str, _agent_version: str
+    ) -> PolicyEngine:
+        return default_policy_profiles().resolve("production-read-only")
+
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=ToolRuntime(),
+        policy=PolicyEngine(default_policy_rules()),
+        policy_resolver=resolve_policy,
+    )
+
+    await orchestrator.execute("tenant-a", "run-1")
+
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    denied = [
+        event
+        for event in emitted
+        if event.type == "tool.result"
+        and event.payload.get("error", {}).get("code") == "policy_denied"
+    ]
+    assert denied
 
 
 @pytest.mark.asyncio
@@ -149,6 +333,41 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
         "run.succeeded",
     ]
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_runtime_timeout_has_a_distinct_terminal_status(tmp_path: Path) -> None:
+    orchestrator, _, runs, events = await arrange(
+        tmp_path, runtime_override=TimedOutRuntime()
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.TIMED_OUT
+    assert result.error_code == "runtime_timeout"
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.TIMED_OUT
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-1].type == "run.timed_out"
+
+
+@pytest.mark.asyncio
+async def test_sdk_error_result_cannot_be_recorded_as_success(tmp_path: Path) -> None:
+    orchestrator, _, runs, events = await arrange(
+        tmp_path, runtime_override=ErrorResultRuntime()
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    assert result.error_code == "runtime_result_error"
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.FAILED
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-2].type == "runtime.result"
+    assert emitted[-1].type == "run.failed"
+    assert emitted[-1].payload == {
+        "subtype": "error_max_budget_usd",
+        "api_error_status": 429,
+    }
 
 
 @pytest.mark.asyncio
@@ -303,7 +522,12 @@ async def test_cancellation_during_runtime_stops_at_next_event_boundary(
     while (await runs.get("tenant-a", "run-1")).status is not RunStatus.RUNNING:
         await asyncio.sleep(0)
     current = await runs.get("tenant-a", "run-1")
-    cancelling = current.model_copy(update={"status": RunStatus.CANCELLING})
+    cancelling = current.model_copy(
+        update={
+            "status": RunStatus.CANCELLING,
+            "fencing_token": current.fencing_token + 1,
+        }
+    )
     assert await runs.compare_and_set(RunStatus.RUNNING, cancelling)
     runtime.resume.set()
 
@@ -311,3 +535,118 @@ async def test_cancellation_during_runtime_stops_at_next_event_boundary(
     emitted = await events.list_after("tenant-a", "run-1", 0)
     assert result.status is RunStatus.CANCELLED
     assert "message.delta" not in [item.type for item in emitted]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_interrupts_sandbox_prepare(tmp_path: Path) -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    events = InMemoryEventRepository()
+    sandbox = PausablePrepareSandboxProvider(tmp_path)
+    session = Session(
+        session_id="session-1",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-1",
+        session_id=session.session_id,
+        tenant_id=session.tenant_id,
+        status=RunStatus.QUEUED,
+        idempotency_key="cancel-prepare",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await sessions.add(session)
+    await runs.add(run)
+    orchestrator = RunOrchestrator(
+        sessions=sessions,
+        runs=runs,
+        events=EventService(
+            events,
+            InMemoryEventBus(),
+            clock=lambda: NOW,
+            id_generator=ids(),
+        ),
+        runtime=FakeRuntime(),
+        sandbox=sandbox,
+        clock=lambda: NOW,
+        cancellation_poll_interval_seconds=0.01,
+    )
+
+    execution = asyncio.create_task(orchestrator.execute("tenant-a", "run-1"))
+    await sandbox.started.wait()
+    current = await runs.get("tenant-a", "run-1")
+    assert current.status is RunStatus.PROVISIONING
+    cancelling = current.model_copy(
+        update={
+            "status": RunStatus.CANCELLING,
+            "fencing_token": current.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.PROVISIONING, cancelling)
+
+    result = await asyncio.wait_for(execution, timeout=1)
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert result.status is RunStatus.CANCELLED
+    assert sandbox.cancelled is True
+    assert [item.type for item in emitted][-1] == "run.cancelled"
+
+
+@pytest.mark.asyncio
+async def test_recovered_provisioning_run_is_reclaimed_and_completed(
+    tmp_path: Path,
+) -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    events = InMemoryEventRepository()
+    session = Session(
+        session_id="session-1",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-1",
+        session_id=session.session_id,
+        tenant_id=session.tenant_id,
+        status=RunStatus.PROVISIONING,
+        fencing_token=1,
+        idempotency_key="recover-provisioning",
+        created_at=NOW,
+        updated_at=NOW,
+    )
+    await sessions.add(session)
+    await runs.add(run)
+    orchestrator = RunOrchestrator(
+        sessions=sessions,
+        runs=runs,
+        events=EventService(
+            events,
+            InMemoryEventBus(),
+            clock=lambda: NOW,
+            id_generator=ids(),
+        ),
+        runtime=FakeRuntime(),
+        sandbox=LocalSandboxProvider(root=tmp_path),
+        clock=lambda: NOW,
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert result.fencing_token == 4
+    assert [item.type for item in emitted] == [
+        "run.recovered",
+        "run.running",
+        "message.start",
+        "message.delta",
+        "message.completed",
+        "run.succeeded",
+    ]

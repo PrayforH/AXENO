@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.downloads import attachment_content_disposition
 from harness.core.errors import NotFoundError
 from harness.core.models import InputArtifact, ThreadFile
 
@@ -67,5 +68,7 @@ async def download_input_artifact(
     return Response(
         content=content,
         media_type=artifact.media_type,
-        headers={"Content-Disposition": f'attachment; filename="{artifact.name}"'},
+        headers={
+            "Content-Disposition": attachment_content_disposition(artifact.name)
+        },
     )

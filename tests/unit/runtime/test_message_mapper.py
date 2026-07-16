@@ -36,6 +36,34 @@ def test_maps_assistant_text_and_tool_use() -> None:
     }
 
 
+def test_sdk_provider_diagnostics_do_not_enter_message_events() -> None:
+    diagnostic = (
+        "Failed to authenticate. API Error: 403 token quota is not enough "
+        "(request id: private-request-id)"
+    )
+    assistant = AssistantMessage(
+        content=[TextBlock(text=diagnostic)],
+        model="synthetic",
+    )
+    stream = StreamEvent(
+        uuid="event-provider-error",
+        session_id="session-1",
+        parent_tool_use_id=None,
+        event={
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": diagnostic},
+        },
+    )
+
+    events = [*map_sdk_message(assistant), *map_sdk_message(stream)]
+
+    assert {event.payload["text"] for event in events} == {
+        "The model provider rejected the request. Open run details for the status code."
+    }
+    assert "private-request-id" not in repr(events)
+    assert "quota" not in repr(events)
+
+
 def test_maps_partial_text_and_subagent_lifecycle() -> None:
     partial = StreamEvent(
         uuid="event-1",
@@ -175,6 +203,16 @@ def test_generic_system_message_whitelists_status_metadata() -> None:
     assert "never-show" not in repr(events)
 
 
+def test_noisy_or_unknown_system_messages_are_not_persisted() -> None:
+    for subtype in ("thinking_tokens", "background_tasks_changed", "future_noise"):
+        message = SystemMessage(
+            subtype=subtype,
+            data={"session_id": "session-1", "detail": "never-show"},
+        )
+
+        assert map_sdk_message(message) == []
+
+
 def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
     result = ResultMessage(
         subtype="success",
@@ -184,6 +222,13 @@ def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
         num_turns=1,
         session_id="claude-session",
         total_cost_usd=0.01,
+        usage={
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 3,
+            "service_tier": "standard",
+            "secret": "never-show",
+        },
     )
 
     events = map_sdk_message(result)
@@ -196,7 +241,31 @@ def test_result_event_contains_cost_but_not_prompt_or_secret() -> None:
         "session_id": "claude-session",
         "total_cost_usd": 0.01,
         "stop_reason": None,
+        "duration_ms": 10,
+        "duration_api_ms": 8,
+        "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "cache_read_input_tokens": 3,
+        },
     }
+    assert "never-show" not in repr(events)
+
+
+def test_error_result_normalizes_inconsistent_success_subtype() -> None:
+    result = ResultMessage(
+        subtype="success",
+        duration_ms=10,
+        duration_api_ms=0,
+        is_error=True,
+        num_turns=1,
+        session_id="claude-session",
+        api_error_status=403,
+    )
+
+    event = map_sdk_message(result)[0]
+
+    assert event.payload["subtype"] == "api_error_403"
 
 
 def test_internal_task_result_metadata_is_redacted() -> None:

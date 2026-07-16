@@ -1,7 +1,9 @@
 import asyncio
+from dataclasses import replace
+from typing import Any, cast
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server
 
 from harness.runtime.daytona_transport import (
     DaytonaClaudeTransport,
@@ -81,6 +83,59 @@ def test_command_uses_native_cli_and_contains_required_streaming_flags() -> None
     assert command[command.index("--tools") + 1] == "Read,Bash"
     assert "--include-partial-messages" in command
     assert "--strict-mcp-config" in command
+
+
+@pytest.mark.asyncio
+async def test_transport_moves_mcp_credentials_out_of_command_metadata() -> None:
+    configured = replace(
+        options(),
+        mcp_servers=cast(
+            Any,
+            {
+                "remote": {
+                    "type": "http",
+                    "url": "https://mcp.example",
+                    "headers": {"Authorization": "private-mcp-token"},
+                }
+            },
+        ),
+    )
+    session = FakeRemoteSession([None])
+    transport = DaytonaClaudeTransport(
+        session=session,
+        options=configured,
+        remote_workspace="/workspace/run-a",
+        cli_path="/home/daytona/.local/bin/claude",
+    )
+
+    await transport.connect()
+
+    assert session.started is not None
+    argv, _cwd, environment = session.started
+    assert "--mcp-config" not in argv
+    assert "private-mcp-token" not in " ".join(argv)
+    assert "private-mcp-token" in environment["HARNESS_CLAUDE_MCP_CONFIG"]
+    await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_transport_rejects_in_process_sdk_mcp_server() -> None:
+    configured = replace(
+        options(),
+        mcp_servers={"local-python": create_sdk_mcp_server("local-python", tools=[])},
+    )
+    session = FakeRemoteSession([None])
+    transport = DaytonaClaudeTransport(
+        session=session,
+        options=configured,
+        remote_workspace="/workspace/run-a",
+        cli_path="/home/daytona/.local/bin/claude",
+    )
+
+    with pytest.raises(DaytonaTransportError, match="authenticated HTTP MCP"):
+        await transport.connect()
+
+    assert session.started is None
 
 
 @pytest.mark.asyncio

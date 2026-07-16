@@ -4,6 +4,7 @@ metadata:
   name: helper-agent
   version: 1.0.0
   labels:
+    domain: delegated-investigation
     purpose: delegated-investigation
 spec:
   runtime: claude-agent-sdk
@@ -15,7 +16,8 @@ spec:
     requiredCapabilities: [streaming, tool_use]
   prompt:
     system: prompts/system.md
-  skills: []
+  skills:
+    - skills/delegated-investigation
   tools:
     - builtin: Read
     - builtin: Glob
@@ -23,7 +25,7 @@ spec:
   subagents: []
   hooks: []
   permissions:
-    policy: local-standard
+    policy: production-read-only
   workspace:
     mode: isolated
     restoreSession: false

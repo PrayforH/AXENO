@@ -1,5 +1,6 @@
 """Session lifecycle use cases."""
 
+from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
 from harness.core.models import AgentVersionStatus, Session
@@ -14,11 +15,13 @@ class SessionService:
         *,
         clock: Clock,
         id_generator: IdGenerator,
+        require_published_dependencies: bool = False,
     ) -> None:
         self._registry = registry
         self._sessions = sessions
         self._clock = clock
         self._id_generator = id_generator
+        self._require_published_dependencies = require_published_dependencies
 
     async def create(
         self,
@@ -30,6 +33,13 @@ class SessionService:
         version = await self._registry.get(tenant_id, agent_name, agent_version)
         if version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("sessions can only use a published Agent version")
+        if self._require_published_dependencies:
+            await resolve_published_agent_versions(
+                self._registry,
+                tenant_id=tenant_id,
+                agent_name=agent_name,
+                agent_version=agent_version,
+            )
         session = Session(
             session_id=self._id_generator("session"),
             tenant_id=tenant_id,

@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -11,6 +12,9 @@ from claude_agent_sdk import (
     McpServerConfig,
     ResultMessage,
     StreamEvent,
+    SystemMessage,
+    TaskNotificationMessage,
+    TaskUpdatedMessage,
     TextBlock,
 )
 from claude_agent_sdk.types import HookEvent
@@ -30,7 +34,12 @@ from harness.core.models import (
     Session,
 )
 from harness.observability.provider import build_observability
-from harness.runtime.base import RuntimeContext
+from harness.runtime.base import (
+    RuntimeContext,
+    RuntimeEvent,
+    RuntimeExecutionTimeoutError,
+    RuntimeResultError,
+)
 from harness.runtime.claude_sdk import ClaudeSdkRuntime
 from harness.runtime.mcp_credentials import RequestMcpCredentialProvider
 from harness.runtime.tools import (
@@ -44,7 +53,13 @@ class RecordingToolGate:
     def __init__(self) -> None:
         self.contexts: list[RuntimeContext] = []
 
-    def hooks(self, context: RuntimeContext) -> dict[HookEvent, list[HookMatcher]]:
+    def hooks(
+        self,
+        context: RuntimeContext,
+        *,
+        policy_id: str | None = None,
+        subagent_policy_ids: Mapping[str, str] | None = None,
+    ) -> dict[HookEvent, list[HookMatcher]]:
         self.contexts.append(context)
         return {"PreToolUse": []}
 
@@ -149,6 +164,238 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
 
 
 @pytest.mark.asyncio
+async def test_manifest_timeout_cancels_sdk_query(tmp_path: Path) -> None:
+    snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    limits = snapshot.manifest.spec.limits.model_copy(update={"timeout_seconds": 1})
+    spec = snapshot.manifest.spec.model_copy(update={"limits": limits})
+    snapshot = snapshot.model_copy(
+        update={"manifest": snapshot.manifest.model_copy(update={"spec": spec})}
+    )
+    version = AgentVersion(
+        tenant_id="tenant-a",
+        name="helper",
+        version="1.0.0",
+        status=AgentVersionStatus.PUBLISHED,
+        manifest_hash=snapshot.content_hash,
+        snapshot=snapshot.model_dump(mode="json"),
+        created_at=datetime.now(UTC),
+    )
+    route = ModelRoute(
+        route_id="new-api-default",
+        provider="new-api",
+        base_url="https://new-api.example/v1",
+        model="gateway-model",
+        compatibility=ModelCompatibility.FULL,
+        capabilities=frozenset({"streaming", "tool_use"}),
+    )
+
+    async def slow_query(
+        _prompt: str, _options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        await asyncio.sleep(2)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="too-late",
+        )
+
+    runtime = ClaudeSdkRuntime(
+        agent_version=version,
+        routes=[route],
+        route_secrets={"new-api-default": "secret"},
+        query_factory=slow_query,
+    )
+    now = datetime.now(UTC)
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-timeout",
+            session_id="session-timeout",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="timeout",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "wait"},
+        ),
+        session=Session(
+            session_id="session-timeout",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="helper",
+            agent_version="1.0.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(RuntimeExecutionTimeoutError, match="exceeded"):
+        _events = [event async for event in runtime.execute(context)]
+
+
+@pytest.mark.asyncio
+async def test_provider_timeout_is_not_mislabeled_as_manifest_timeout(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    version = AgentVersion(
+        tenant_id="tenant-a",
+        name="helper",
+        version="1.0.0",
+        status=AgentVersionStatus.PUBLISHED,
+        manifest_hash=snapshot.content_hash,
+        snapshot=snapshot.model_dump(mode="json"),
+        created_at=datetime.now(UTC),
+    )
+    route = ModelRoute(
+        route_id="new-api-default",
+        provider="new-api",
+        base_url="https://new-api.example/v1",
+        model="gateway-model",
+        compatibility=ModelCompatibility.FULL,
+        capabilities=frozenset({"streaming", "tool_use"}),
+    )
+
+    async def provider_timeout(
+        _prompt: str, _options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        raise TimeoutError("gateway connection timeout")
+        if False:
+            yield object()
+
+    runtime = ClaudeSdkRuntime(
+        agent_version=version,
+        routes=[route],
+        route_secrets={"new-api-default": "secret"},
+        query_factory=provider_timeout,
+    )
+    now = datetime.now(UTC)
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-provider-timeout",
+            session_id="session-provider-timeout",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="provider-timeout",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "wait"},
+        ),
+        session=Session(
+            session_id="session-provider-timeout",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="helper",
+            agent_version="1.0.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    with pytest.raises(TimeoutError, match="gateway connection timeout") as captured:
+        _events = [event async for event in runtime.execute(context)]
+
+    assert not isinstance(captured.value, RuntimeExecutionTimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_sdk_error_result_is_emitted_then_raises_and_marks_model_span(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    version = AgentVersion(
+        tenant_id="tenant-a",
+        name="helper",
+        version="1.0.0",
+        status=AgentVersionStatus.PUBLISHED,
+        manifest_hash=snapshot.content_hash,
+        snapshot=snapshot.model_dump(mode="json"),
+        created_at=datetime.now(UTC),
+    )
+    route = ModelRoute(
+        route_id="new-api-default",
+        provider="new-api",
+        base_url="https://new-api.example/v1",
+        model="gateway-model",
+        compatibility=ModelCompatibility.FULL,
+        capabilities=frozenset({"streaming", "tool_use"}),
+    )
+
+    async def error_query(
+        _prompt: str, _options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        yield ResultMessage(
+            subtype="error_max_budget_usd",
+            duration_ms=50,
+            duration_api_ms=40,
+            is_error=True,
+            num_turns=2,
+            session_id="error-session",
+            total_cost_usd=0.25,
+            usage={"input_tokens": 100, "output_tokens": 10},
+            api_error_status=429,
+            errors=["private provider detail"],
+        )
+
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    runtime = ClaudeSdkRuntime(
+        agent_version=version,
+        routes=[route],
+        route_secrets={"new-api-default": "secret"},
+        query_factory=error_query,
+        observability=observability,
+    )
+    now = datetime.now(UTC)
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-result-error",
+            session_id="session-result-error",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="result-error",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "wait"},
+        ),
+        session=Session(
+            session_id="session-result-error",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="helper",
+            agent_version="1.0.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+    events: list[RuntimeEvent] = []
+
+    with pytest.raises(RuntimeResultError, match="error_max_budget_usd"):
+        async for event in runtime.execute(context):
+            events.append(event)
+
+    result_event = next(event for event in events if event.type == "runtime.result")
+    assert result_event.payload["is_error"] is True
+    assert result_event.payload["usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 10,
+    }
+    assert "private provider detail" not in repr(events)
+    model_span = next(
+        span for span in exporter.get_finished_spans() if span.name == "harness.model.run"
+    )
+    assert model_span.status.status_code.name == "ERROR"
+    assert model_span.attributes is not None
+    assert model_span.attributes["harness.model.api_error_status"] == 429
+
+
+@pytest.mark.asyncio
 async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_text(
     tmp_path: Path,
 ) -> None:
@@ -181,15 +428,16 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
             parent_tool_use_id=None,
             event={"type": "message_start", "message": {}},
         )
-        yield StreamEvent(
-            uuid="delta",
-            session_id="sdk-session",
-            parent_tool_use_id=None,
-            event={
-                "type": "content_block_delta",
-                "delta": {"type": "text_delta", "text": "streamed"},
-            },
-        )
+        for index, character in enumerate("streamed"):
+            yield StreamEvent(
+                uuid=f"delta-{index}",
+                session_id="sdk-session",
+                parent_tool_use_id=None,
+                event={
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": character},
+                },
+            )
         yield StreamEvent(
             uuid="stop",
             session_id="sdk-session",
@@ -197,6 +445,30 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
             event={"type": "message_stop"},
         )
         yield AssistantMessage(content=[TextBlock(text="streamed")], model="gateway-model")
+        yield SystemMessage(
+            subtype="thinking_tokens",
+            data={"session_id": "sdk-session", "tokens": 100},
+        )
+        yield TaskUpdatedMessage(
+            subtype="task_updated",
+            data={},
+            task_id="task-1",
+            patch={"status": "completed"},
+            status="completed",
+            session_id="sdk-session",
+        )
+        yield TaskNotificationMessage(
+            subtype="task_notification",
+            data={},
+            task_id="task-1",
+            status="completed",
+            output_file="/private/never-show",
+            summary="Safe final summary",
+            uuid="task-complete",
+            session_id="sdk-session",
+            tool_use_id="tool-task-1",
+            usage={"total_tokens": 10, "tool_uses": 1, "duration_ms": 25},
+        )
         yield ResultMessage(
             subtype="success",
             duration_ms=1,
@@ -242,9 +514,13 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
         "message.start",
         "message.delta",
         "message.completed",
+        "subagent.completed",
         "runtime.result",
     ]
     assert [event.payload.get("text") for event in events].count("streamed") == 1
+    terminal = next(event for event in events if event.type == "subagent.completed")
+    assert terminal.payload["summary"] == "Safe final summary"
+    assert "never-show" not in repr(events)
 
 
 @pytest.mark.asyncio

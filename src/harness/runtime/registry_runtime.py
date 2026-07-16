@@ -2,9 +2,10 @@
 
 from collections.abc import AsyncIterator, Callable
 
+from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import AgentVersion, ModelCompatibility, ModelRoute
+from harness.core.models import ModelRoute
 from harness.core.ports import AgentRegistry
 from harness.observability.provider import Observability
 from harness.runtime.base import RuntimeContext, RuntimeEvent
@@ -21,6 +22,7 @@ class RegistryClaudeRuntime:
         *,
         registry: AgentRegistry,
         config: CcSwitchClaudeConfig,
+        fallback_config: CcSwitchClaudeConfig | None = None,
         query_factory: QueryFactory | None = None,
         tool_resolver: ToolResolver | None = None,
         mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
@@ -31,6 +33,7 @@ class RegistryClaudeRuntime:
     ) -> None:
         self._registry = registry
         self._config = config
+        self._fallback_config = fallback_config
         self._query_factory = query_factory
         self._tool_resolver = tool_resolver or ToolResolver(
             credential_provider=mcp_credential_provider
@@ -42,38 +45,42 @@ class RegistryClaudeRuntime:
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
-        agent_version = await self._registry.get(
-            session.tenant_id,
-            session.agent_name,
-            session.agent_version,
+        agent_version, subagent_versions = await resolve_published_agent_versions(
+            self._registry,
+            tenant_id=session.tenant_id,
+            agent_name=session.agent_name,
+            agent_version=session.agent_version,
         )
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         route_id = snapshot.manifest.spec.model.route
-        subagent_versions: dict[str, AgentVersion] = {}
-        for subagent in snapshot.manifest.spec.subagents:
-            name, separator, version = subagent.ref.rpartition("@")
-            if not separator or not name or not version:
-                raise ValueError(
-                    f"subagent reference requires name@version: {subagent.ref}"
-                )
-            subagent_versions[name] = await self._registry.get(
-                session.tenant_id,
-                name,
-                version,
-            )
         route = ModelRoute(
             route_id=route_id,
             provider=self._config.provider,
             base_url=self._config.base_url,
             model=self._config.model,
-            compatibility=ModelCompatibility.FULL,
-            capabilities=frozenset({"streaming", "tool_use"}),
+            compatibility=self._config.compatibility,
+            capabilities=self._config.capabilities,
         )
+        routes = [route]
         route_secrets = {route_id: self._config.credential.get_secret_value()}
+        fallback_route_id = snapshot.manifest.spec.model.fallback_route
+        if fallback_route_id is not None and self._fallback_config is not None:
+            fallback_route = ModelRoute(
+                route_id=fallback_route_id,
+                provider=self._fallback_config.provider,
+                base_url=self._fallback_config.base_url,
+                model=self._fallback_config.model,
+                compatibility=self._fallback_config.compatibility,
+                capabilities=self._fallback_config.capabilities,
+            )
+            routes.append(fallback_route)
+            route_secrets[fallback_route_id] = (
+                self._fallback_config.credential.get_secret_value()
+            )
         if self._query_factory is None:
             runtime = ClaudeSdkRuntime(
                 agent_version=agent_version,
-                routes=[route],
+                routes=routes,
                 route_secrets=route_secrets,
                 subagent_versions=subagent_versions,
                 tool_resolver=self._tool_resolver,
@@ -89,7 +96,7 @@ class RegistryClaudeRuntime:
         else:
             runtime = ClaudeSdkRuntime(
                 agent_version=agent_version,
-                routes=[route],
+                routes=routes,
                 route_secrets=route_secrets,
                 subagent_versions=subagent_versions,
                 query_factory=self._query_factory,

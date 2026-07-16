@@ -1,6 +1,7 @@
 """Artifact metadata and object lifecycle use cases."""
 
 from harness.application.types import IdGenerator
+from harness.core.errors import ConflictError
 from harness.core.models import Artifact, ArtifactStatus
 from harness.core.ports import ArtifactRepository, ArtifactStore, RunRepository
 
@@ -13,11 +14,13 @@ class ArtifactService:
         repository: ArtifactRepository,
         store: ArtifactStore,
         id_generator: IdGenerator,
+        max_file_bytes: int = 50 * 1024 * 1024,
     ) -> None:
         self._runs = runs
         self._repository = repository
         self._store = store
         self._id_generator = id_generator
+        self.max_file_bytes = max_file_bytes
 
     async def upload(
         self,
@@ -28,6 +31,10 @@ class ArtifactService:
         media_type: str,
         content: bytes,
     ) -> Artifact:
+        if len(content) > self.max_file_bytes:
+            raise ConflictError(
+                f"artifact exceeds maximum size of {self.max_file_bytes} bytes"
+            )
         await self._runs.get(tenant_id, run_id)
         artifact_id = self._id_generator("artifact")
         pending = Artifact(
@@ -61,6 +68,9 @@ class ArtifactService:
     async def list_for_run(self, tenant_id: str, run_id: str) -> list[Artifact]:
         await self._runs.get(tenant_id, run_id)
         return await self._repository.list_for_run(tenant_id, run_id)
+
+    async def get(self, tenant_id: str, artifact_id: str) -> Artifact:
+        return await self._repository.get(tenant_id, artifact_id)
 
     async def download(self, tenant_id: str, artifact_id: str) -> tuple[Artifact, bytes]:
         artifact = await self._repository.get(tenant_id, artifact_id)

@@ -15,6 +15,9 @@ const config: HarnessServerConfig = {
     "X-Tenant-ID": "local",
     "X-User-ID": "developer",
   },
+  serviceHeaders: {
+    Authorization: "Bearer server-only-token",
+  },
 };
 
 describe("Harness same-origin proxies", () => {
@@ -48,6 +51,7 @@ describe("Harness same-origin proxies", () => {
     const headers = new Headers(upstreamInit?.headers);
     expect(headers.get("X-Tenant-ID")).toBe("local");
     expect(headers.get("X-User-ID")).toBe("developer");
+    expect(headers.get("Authorization")).toBe("Bearer server-only-token");
     expect(headers.get("Cookie")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");

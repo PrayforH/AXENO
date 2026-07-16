@@ -8,7 +8,10 @@ const RESPONSE_HEADERS = [
 ];
 
 function upstreamHeaders(request: Request, config: HarnessServerConfig) {
-  const headers = new Headers(config.identityHeaders);
+  const headers = new Headers({
+    ...config.identityHeaders,
+    ...config.serviceHeaders,
+  });
   for (const name of ["accept", "content-type", "last-event-id"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);

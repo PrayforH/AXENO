@@ -6,6 +6,7 @@ export interface HarnessServerConfig {
   agentVersion: string;
   aguiUrl: string;
   identityHeaders: Record<string, string>;
+  serviceHeaders: Record<string, string>;
 }
 
 export function getHarnessServerConfig(
@@ -16,7 +17,7 @@ export function getHarnessServerConfig(
     "",
   );
   const agentName = environment.HARNESS_AGENT_NAME ?? "echo-agent";
-  const agentVersion = environment.HARNESS_AGENT_VERSION ?? "0.3.0";
+  const agentVersion = environment.HARNESS_AGENT_VERSION ?? "0.4.0";
   const query = new URLSearchParams({
     agent_name: agentName,
     agent_version: agentVersion,
@@ -31,5 +32,8 @@ export function getHarnessServerConfig(
       "X-Tenant-ID": environment.HARNESS_TENANT_ID ?? "local",
       "X-User-ID": environment.HARNESS_USER_ID ?? "developer",
     },
+    serviceHeaders: environment.HARNESS_API_BEARER_TOKEN
+      ? { Authorization: `Bearer ${environment.HARNESS_API_BEARER_TOKEN}` }
+      : {},
   };
 }

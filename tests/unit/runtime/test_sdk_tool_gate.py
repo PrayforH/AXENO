@@ -16,7 +16,9 @@ from harness.adapters.memory import (
 )
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
+from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus, Session
+from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.runtime.base import RuntimeContext
 from harness.runtime.sdk_tool_gate import SdkToolGate
@@ -40,6 +42,7 @@ async def _arrange(
     tmp_path: Path,
     *,
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE,
+    use_profiles: bool = False,
 ):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -68,10 +71,18 @@ async def _arrange(
         id_generator=_ids(),
         ttl=timedelta(minutes=5),
     )
-    gate = SdkToolGate(
-        policy=PolicyEngine(default_policy_rules()),
-        approvals=approval_service,
-        events=events,
+    gate = (
+        SdkToolGate(
+            profiles=default_policy_profiles(),
+            approvals=approval_service,
+            events=events,
+        )
+        if use_profiles
+        else SdkToolGate(
+            policy=PolicyEngine(default_policy_rules()),
+            approvals=approval_service,
+            events=events,
+        )
     )
     context = RuntimeContext(
         run=run,
@@ -95,7 +106,13 @@ async def _arrange(
     return gate, approval_service, runs, event_repository, context
 
 
-def _input(name: str, arguments: dict[str, object], tool_use_id: str):
+def _input(
+    name: str,
+    arguments: dict[str, object],
+    tool_use_id: str,
+    *,
+    agent_type: str = "",
+):
     return cast(
         PreToolUseHookInput,
         {
@@ -107,7 +124,7 @@ def _input(name: str, arguments: dict[str, object], tool_use_id: str):
             "tool_input": arguments,
             "tool_use_id": tool_use_id,
             "agent_id": "",
-            "agent_type": "",
+            "agent_type": agent_type,
         },
     )
 
@@ -116,8 +133,10 @@ async def _invoke(
     gate: SdkToolGate,
     context: RuntimeContext,
     hook_input: PreToolUseHookInput,
+    *,
+    policy_id: str | None = None,
 ) -> SyncHookJSONOutput:
-    matcher = gate.hooks(context)["PreToolUse"][0]
+    matcher = gate.hooks(context, policy_id=policy_id)["PreToolUse"][0]
     output = await matcher.hooks[0](
         hook_input,
         hook_input["tool_use_id"],
@@ -129,6 +148,73 @@ async def _invoke(
 def _decision(output: SyncHookJSONOutput) -> str:
     specific = cast(dict[str, object], output.get("hookSpecificOutput", {}))
     return str(specific.get("permissionDecision", ""))
+
+
+@pytest.mark.asyncio
+async def test_manifest_policy_profile_controls_the_sdk_gate(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path, use_profiles=True)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input("Write", {"file_path": "result.txt"}, "tool-profile"),
+        policy_id="production-read-only",
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[-1].payload["error"]["code"] == "policy_denied"
+
+
+@pytest.mark.asyncio
+async def test_subagent_uses_its_own_policy_profile(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path, use_profiles=True)
+    matcher = gate.hooks(
+        context,
+        policy_id="production-orchestrator",
+        subagent_policy_ids={"helper-agent": "production-read-only"},
+    )["PreToolUse"][0]
+
+    output = await matcher.hooks[0](
+        _input(
+            "Write",
+            {"file_path": "result.txt"},
+            "tool-subagent",
+            agent_type="helper-agent",
+        ),
+        "tool-subagent",
+        {"signal": None},
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, output)) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["policy_profile"] == "production-read-only"
+    assert not any(event.type == "approval.requested" for event in emitted)
+
+
+@pytest.mark.asyncio
+async def test_unknown_subagent_identity_fails_closed(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path, use_profiles=True)
+    matcher = gate.hooks(
+        context,
+        policy_id="production-orchestrator",
+        subagent_policy_ids={"helper-agent": "production-read-only"},
+    )["PreToolUse"][0]
+
+    output = await matcher.hooks[0](
+        _input(
+            "Read",
+            {"file_path": "evidence.txt"},
+            "tool-unknown-subagent",
+            agent_type="unregistered-agent",
+        ),
+        "tool-unknown-subagent",
+        {"signal": None},
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, output)) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["policy_profile"] == "unknown-subagent"
 
 
 @pytest.mark.asyncio
@@ -184,6 +270,7 @@ async def test_ask_waits_inline_and_continues_only_after_approval(tmp_path: Path
         _invoke(gate, context, _input("Bash", {"command": "ls"}, "tool-3"))
     )
     requested = []
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
     for _ in range(20):
         emitted = await events.list_after("tenant-a", "run-sdk", 0)
         requested = [event for event in emitted if event.type == "approval.requested"]
@@ -320,6 +407,38 @@ async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
 
 
 @pytest.mark.asyncio
+async def test_cancelled_sdk_wait_closes_pending_approval(tmp_path: Path) -> None:
+    gate, approvals, runs, events, context = await _arrange(tmp_path)
+    task = asyncio.create_task(
+        _invoke(gate, context, _input("Bash", {"command": "pwd"}, "tool-timeout"))
+    )
+    requested = []
+    for _ in range(20):
+        emitted = await events.list_after("tenant-a", "run-sdk", 0)
+        requested = [event for event in emitted if event.type == "approval.requested"]
+        if requested:
+            break
+        await asyncio.sleep(0)
+    assert requested
+    approval_id = str(requested[0].payload["approval_id"])
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[-1].type == "approval.cancelled"
+    assert emitted[-1].payload["reason"] == "tool authorization wait interrupted"
+    assert (await runs.get("tenant-a", "run-sdk")).status is RunStatus.WAITING_APPROVAL
+    with pytest.raises(ConflictError, match="already cancelled"):
+        await approvals.decide(
+            tenant_id="tenant-a",
+            approval_id=approval_id,
+            decision=ApprovalStatus.APPROVED,
+        )
+
+
+@pytest.mark.asyncio
 async def test_approval_command_summary_redacts_inline_credentials(
     tmp_path: Path,
 ) -> None:
@@ -337,6 +456,7 @@ async def test_approval_command_summary_redacts_inline_credentials(
         )
     )
     requested = []
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
     for _ in range(20):
         emitted = await events.list_after("tenant-a", "run-sdk", 0)
         requested = [event for event in emitted if event.type == "approval.requested"]
@@ -348,6 +468,8 @@ async def test_approval_command_summary_redacts_inline_credentials(
     approval_payload = requested[0].payload
     assert private_token not in repr(approval_payload)
     assert "[REDACTED]" in str(approval_payload["argument_summary"]["command"])
+    tool_request = next(event for event in emitted if event.type == "tool.request")
+    assert private_token not in repr(tool_request.payload)
 
     await approvals.decide(
         tenant_id="tenant-a",

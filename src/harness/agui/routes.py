@@ -10,7 +10,13 @@ from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 
 from harness.agui.mapper import map_harness_event
-from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    get_container,
+    require_identity,
+    require_owned_run,
+)
 from harness.core.models import Run
 
 router = APIRouter(prefix="/agui", tags=["ag-ui"])
@@ -114,7 +120,7 @@ async def stream_agui_events(
     container: Annotated[ApiContainer, Depends(get_container)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
-    await container.runs.get(identity.tenant_id, run_id)
+    await require_owned_run(container, identity, run_id)
     raw_id = (last_event_id or "0").split(":", 1)[0]
     events = await container.events.list_after(identity.tenant_id, run_id, int(raw_id))
 

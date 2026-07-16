@@ -25,7 +25,7 @@ def test_content_hash_is_deterministic() -> None:
 def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:
     snapshot = load_manifest(VALIDATION_AGENT)
 
-    assert snapshot.manifest.metadata.version == "0.3.0"
+    assert snapshot.manifest.metadata.version == "0.4.0"
     assert tuple(tool.builtin for tool in snapshot.manifest.spec.tools) == (
         "Read",
         "Glob",
@@ -34,17 +34,14 @@ def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:
         "Edit",
         "Bash",
         "Task",
-        None,
     )
-    assert snapshot.manifest.spec.tools[-1].mcp == "tavily-readonly"
+    assert all(tool.mcp is None for tool in snapshot.manifest.spec.tools)
     assert tuple(item.ref for item in snapshot.manifest.spec.subagents) == (
         "helper-agent@1.0.0",
     )
     assert "only when the user requests" in snapshot.system_prompt.lower()
     assert "run workspace" in snapshot.system_prompt.lower()
     assert "untrusted" in snapshot.system_prompt.lower()
-    assert "source title" in snapshot.system_prompt.lower()
-    assert "url" in snapshot.system_prompt.lower()
     assert "echo the user's request" not in snapshot.system_prompt.lower()
 
 

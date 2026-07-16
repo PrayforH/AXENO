@@ -31,6 +31,29 @@ def test_redacts_memory_and_file_content_keys() -> None:
     }
 
 
+def test_allows_only_known_non_negative_numeric_token_metrics() -> None:
+    assert redact(
+        {
+            "gen_ai.usage.input_tokens": 12,
+            "gen_ai.usage.output_tokens": 4,
+            "harness.usage.cache_read_input_tokens": 3,
+            "harness.usage.cache_creation_input_tokens": 2,
+            "gen_ai.usage.input_tokens.secret": 99,
+            "access_token": "never-show",
+        }
+    ) == {
+        "gen_ai.usage.input_tokens": 12,
+        "gen_ai.usage.output_tokens": 4,
+        "harness.usage.cache_read_input_tokens": 3,
+        "harness.usage.cache_creation_input_tokens": 2,
+        "gen_ai.usage.input_tokens.secret": "[REDACTED]",
+        "access_token": "[REDACTED]",
+    }
+    assert redact({"gen_ai.usage.input_tokens": "secret"}) == {
+        "gen_ai.usage.input_tokens": "[REDACTED]"
+    }
+
+
 def test_correlation_hash_is_stable_and_does_not_expose_identity() -> None:
     first = correlation_hash("tenant-a")
 

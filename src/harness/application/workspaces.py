@@ -34,10 +34,14 @@ class WorkspaceService:
         *,
         snapshots: WorkspaceSnapshotRepository | None = None,
         max_archive_bytes: int = 512 * 1024 * 1024,
+        max_archive_members: int = 10_000,
     ) -> None:
+        if max_archive_bytes <= 0 or max_archive_members <= 0:
+            raise ValueError("workspace archive limits must be positive")
         self._store = store
         self._snapshots = snapshots
         self._max_archive_bytes = max_archive_bytes
+        self._max_archive_members = max_archive_members
 
     async def archive(
         self, *, tenant_id: str, session_id: str, workspace: Path
@@ -45,17 +49,32 @@ class WorkspaceService:
         snapshot_id = f"snapshot_{uuid4().hex}"
 
         def pack() -> bytes:
+            paths: list[Path] = []
+            total_size = 0
+            for path in workspace.rglob("*"):
+                if len(paths) >= self._max_archive_members:
+                    raise ValueError("workspace archive exceeds member limit")
+                if path.is_symlink():
+                    raise ValueError("workspace contains an unsafe symlink")
+                if not (path.is_dir() or path.is_file()):
+                    raise ValueError("workspace contains an unsupported file type")
+                if path.is_file():
+                    total_size += path.stat().st_size
+                    if total_size > self._max_archive_bytes:
+                        raise ValueError("workspace archive exceeds size limit")
+                paths.append(path)
             buffer = BytesIO()
             with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-                for path in sorted(workspace.rglob("*")):
-                    if path.is_symlink():
-                        raise ValueError("workspace contains an unsafe symlink")
+                for path in sorted(paths):
                     archive.add(
                         path,
                         arcname=path.relative_to(workspace),
                         recursive=False,
                     )
-            return buffer.getvalue()
+            content = buffer.getvalue()
+            if len(content) > self._max_archive_bytes:
+                raise ValueError("compressed workspace archive exceeds size limit")
+            return content
 
         content = await asyncio.to_thread(pack)
         stored = await self._store.put(tenant_id, snapshot_id, content)

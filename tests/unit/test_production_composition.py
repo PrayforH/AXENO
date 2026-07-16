@@ -26,6 +26,8 @@ def production_settings(**overrides: object) -> Settings:
         "environment": "production",
         "runtime": "claude-sdk",
         "sandbox_provider": "local",
+        "allow_unsafe_local_sandbox": True,
+        "api_bearer_token": SecretStr("a" * 32),
         "new_api_base_url": "https://gateway.example",
         "new_api_model": "deepseek-chat",
         "new_api_key": SecretStr("model-secret"),
@@ -67,12 +69,21 @@ def execution_identity() -> ExecutionIdentity:
 
 @pytest.mark.asyncio
 async def test_production_container_uses_durable_event_and_queue_adapters() -> None:
-    container = build_production_container(production_settings())
+    container = build_production_container(
+        production_settings(
+            new_api_compatibility="degraded",
+            new_api_capabilities="streaming",
+        )
+    )
 
     try:
         assert isinstance(container.events, PostgresEventRepository)
         assert isinstance(container.task_queue, RedisTaskQueue)
         assert container.auto_execute is False
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        gateway = vars(runtime)["_config"]
+        assert gateway.compatibility.value == "degraded"
+        assert gateway.capabilities == frozenset({"streaming"})
     finally:
         assert container.close is not None
         await container.close()
@@ -112,11 +123,48 @@ def test_production_container_fails_fast_without_gateway_credentials() -> None:
         )
 
 
+def test_production_container_rejects_empty_gateway_capabilities() -> None:
+    with pytest.raises(ValueError, match="CAPABILITIES must not be empty"):
+        build_production_container(production_settings(new_api_capabilities=" , "))
+
+
+def test_production_container_rejects_implicit_local_sandbox() -> None:
+    with pytest.raises(ValueError, match="ALLOW_UNSAFE_LOCAL_SANDBOX"):
+        build_production_container(
+            production_settings(allow_unsafe_local_sandbox=False)
+        )
+
+
+@pytest.mark.asyncio
+async def test_production_composition_configures_optional_anthropic_fallback() -> None:
+    container = build_production_container(
+        production_settings(
+            anthropic_api_key=SecretStr("anthropic-secret"),
+            anthropic_model="claude-fallback",
+        )
+    )
+    try:
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        fallback = vars(runtime)["_fallback_config"]
+        assert fallback is not None
+        assert fallback.provider == "anthropic"
+        assert fallback.model == "claude-fallback"
+        assert "anthropic-secret" not in repr(fallback)
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
 def test_configured_app_selects_production_composition() -> None:
     app = create_configured_app(production_settings())
 
     assert isinstance(app.state.container.events, PostgresEventRepository)
     assert app.state.container.auto_execute is False
+
+
+def test_production_app_fails_fast_without_strong_api_credential() -> None:
+    with pytest.raises(ValueError, match="HARNESS_API_BEARER_TOKEN"):
+        create_configured_app(production_settings(api_bearer_token=SecretStr("short")))
 
 
 def test_app_lifespan_closes_composed_resources() -> None:

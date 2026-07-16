@@ -19,6 +19,24 @@ _SENSITIVE_MARKERS = (
     "token",
 )
 
+_SAFE_NUMERIC_METRICS = frozenset(
+    {
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "harness.usage.cache_creation_input_tokens",
+        "harness.usage.cache_read_input_tokens",
+    }
+)
+
+
+def _is_safe_numeric_metric(key: object, value: object) -> bool:
+    return (
+        str(key).lower() in _SAFE_NUMERIC_METRICS
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+
 
 def correlation_hash(value: str) -> str:
     """Return a stable, non-reversible short identity correlation value."""
@@ -31,7 +49,9 @@ def redact(value: Any) -> Any:
         mapping = cast(dict[object, Any], value)
         return {
             str(key): (
-                "[REDACTED]"
+                child
+                if _is_safe_numeric_metric(key, child)
+                else "[REDACTED]"
                 if any(marker in str(key).lower() for marker in _SENSITIVE_MARKERS)
                 else redact(child)
             )

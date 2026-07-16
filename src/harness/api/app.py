@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from hmac import compare_digest
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from harness.agent_package import AgentBundleValidationError, AgentPackageCheckError
 from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, input_artifacts, runs, sessions
@@ -45,6 +47,14 @@ async def _manifest_error(_request: Request, error: Exception) -> JSONResponse:
     )
 
 
+async def _agent_package_error(_request: Request, error: Exception) -> JSONResponse:
+    assert isinstance(error, (AgentPackageCheckError, AgentBundleValidationError))
+    return JSONResponse(
+        status_code=422,
+        content={"error": {"code": "agent_package_invalid", "message": str(error)}},
+    )
+
+
 async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
     container: ApiContainer = request.app.state.container
     with container.observability.span(
@@ -54,11 +64,47 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
         return await call_next(request)
 
 
+async def _authenticate_request(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
+    if not request.url.path.startswith("/v1"):
+        return await call_next(request)
+    container: ApiContainer = request.app.state.container
+    expected = container.api_bearer_token.get_secret_value()
+    if not expected:
+        return await call_next(request)
+    scheme, separator, credential = request.headers.get("Authorization", "").partition(
+        " "
+    )
+    if (
+        not separator
+        or scheme.lower() != "bearer"
+        or not compare_digest(credential, expected)
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": {
+                    "code": "api_auth_required",
+                    "message": "A valid Harness API credential is required",
+                }
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 async def _healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
 def create_app(container: ApiContainer) -> FastAPI:
+    api_token = container.api_bearer_token.get_secret_value()
+    if container.environment == "production" and len(api_token) < 32:
+        raise ValueError(
+            "production API requires HARNESS_API_BEARER_TOKEN with at least 32 characters"
+        )
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
         try:
@@ -81,10 +127,13 @@ def create_app(container: ApiContainer) -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(BaseHTTPMiddleware, dispatch=_trace_request)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_authenticate_request)
 
     app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(HarnessDomainError, _domain_error)
     app.add_exception_handler(ManifestValidationError, _manifest_error)
+    app.add_exception_handler(AgentPackageCheckError, _agent_package_error)
+    app.add_exception_handler(AgentBundleValidationError, _agent_package_error)
 
     for router in (
         agents.router,
@@ -113,7 +162,9 @@ def create_configured_app(settings: Settings) -> FastAPI:
     if settings.environment == "production":
         from harness.composition import build_production_container
 
-        return create_app(build_production_container(settings))
+        return create_app(
+            build_production_container(settings, execution_enabled=False)
+        )
     return create_memory_app(
         auto_execute=settings.local_auto_execute,
         settings=settings,

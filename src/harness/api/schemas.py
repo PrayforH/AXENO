@@ -16,6 +16,7 @@ class CreateSessionRequest(BaseModel):
 
 class CreateRunRequest(BaseModel):
     prompt: str = Field(min_length=1)
+    input_artifact_ids: tuple[str, ...] = Field(default=())
 
 
 class ApprovalDecisionRequest(BaseModel):

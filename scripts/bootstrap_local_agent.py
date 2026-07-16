@@ -47,7 +47,7 @@ async def main() -> None:
     api_url = os.getenv("HARNESS_API_URL", "http://127.0.0.1:8000")
     async with AsyncClient(**local_client_options(api_url)) as client:
         await bootstrap_local_agents(client)
-    print("Local Agents: helper-agent@1.0.0, echo-agent@0.3.0 ready")
+    print("Local Agents: helper-agent@1.0.0, echo-agent@0.4.0 ready")
 
 
 if __name__ == "__main__":

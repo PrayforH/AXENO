@@ -3,10 +3,12 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Header, HTTPException, Request
+from pydantic import SecretStr
 
 from harness.adapters.memory import (
     InMemoryAgentRegistry,
@@ -24,6 +26,7 @@ from harness.adapters.memory import (
     InMemoryWorkspaceSnapshotRepository,
 )
 from harness.agui.service import AguiRunService
+from harness.application.agent_assets import stage_published_agent_assets
 from harness.application.agents import AgentService
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
@@ -35,11 +38,14 @@ from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
 from harness.config import Settings
+from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
+from harness.core.models import Run, Session
 from harness.core.ports import EventRepository, TaskQueue
 from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
-from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.policy.profiles import default_policy_profiles
+from harness.policy.rules import PolicyEngine
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.default_tools import (
@@ -66,6 +72,8 @@ class Identity:
 
 @dataclass(frozen=True)
 class ApiContainer:
+    environment: str
+    api_bearer_token: SecretStr
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -136,6 +144,7 @@ def build_memory_container(
         repository=artifact_repository,
         store=artifact_store,
         id_generator=id_generator,
+        max_file_bytes=resolved_settings.output_artifact_max_bytes,
     )
     file_catalog_service = FileCatalogService(
         thread_file_repository,
@@ -152,7 +161,10 @@ def build_memory_container(
     )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     workspace_service = WorkspaceService(
-        artifact_store, snapshots=workspace_snapshot_repository
+        artifact_store,
+        snapshots=workspace_snapshot_repository,
+        max_archive_bytes=resolved_settings.workspace_archive_max_bytes,
+        max_archive_members=resolved_settings.workspace_archive_max_members,
     )
 
     async def workspace_policy_resolver(
@@ -164,7 +176,31 @@ def build_memory_container(
             restore_session=manifest.spec.workspace.restore_session,
             archive_on_complete=manifest.spec.workspace.archive_on_complete,
         )
-    policy = PolicyEngine(default_policy_rules())
+
+    async def stage_runtime_assets(
+        tenant_id: str,
+        agent_name: str,
+        agent_version: str,
+        workspace: Path,
+    ) -> tuple[str, ...]:
+        return await stage_published_agent_assets(
+            registry,
+            tenant_id=tenant_id,
+            agent_name=agent_name,
+            agent_version=agent_version,
+            workspace=workspace,
+        )
+
+    policy_profiles = default_policy_profiles()
+
+    async def resolve_policy(
+        tenant_id: str, agent_name: str, agent_version: str
+    ) -> PolicyEngine:
+        version = await registry.get(tenant_id, agent_name, agent_version)
+        manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
+        return policy_profiles.resolve(manifest.spec.permissions.policy)
+
+    policy = policy_profiles.resolve("local-standard")
     if resolved_settings.sandbox_provider == "daytona":
         daytona_api_key = resolved_settings.daytona_api_key.get_secret_value()
         if not daytona_api_key:
@@ -180,6 +216,14 @@ def build_memory_container(
             cli_version=resolved_settings.daytona_claude_cli_version,
             cli_path=resolved_settings.daytona_claude_cli_path,
             delete_on_destroy=resolved_settings.daytona_delete_on_destroy,
+            auto_stop_interval_minutes=(
+                resolved_settings.daytona_auto_stop_interval_minutes
+            ),
+            auto_delete_interval_minutes=(
+                resolved_settings.daytona_auto_delete_interval_minutes
+            ),
+            max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
+            max_collect_members=resolved_settings.workspace_archive_max_members,
         )
     else:
         sandbox = LocalSandboxProvider()
@@ -197,7 +241,7 @@ def build_memory_container(
             ),
             tool_resolver=default_tool_resolver(credential_provider),
             tool_gate=SdkToolGate(
-                policy=policy,
+                profiles=policy_profiles,
                 approvals=approval_service,
                 events=event_service,
             ),
@@ -219,6 +263,12 @@ def build_memory_container(
         input_artifacts=input_artifact_service,
         memory=memory_service,
         workspace_policy_resolver=workspace_policy_resolver,
+        runtime_asset_stager=(
+            stage_runtime_assets
+            if resolved_settings.runtime == "claude-sdk"
+            else None
+        ),
+        policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
     )
     agui = AguiRunService(
@@ -227,7 +277,11 @@ def build_memory_container(
         input_artifacts=input_artifact_service,
     )
     return ApiContainer(
-        agents=AgentService(registry, clock=clock),
+        environment=resolved_settings.environment,
+        api_bearer_token=resolved_settings.api_bearer_token,
+        agents=AgentService(
+            registry, clock=clock, environment=resolved_settings.environment
+        ),
         sessions=session_service,
         runs=run_service,
         approvals=approval_service,
@@ -262,3 +316,20 @@ async def require_identity(
             },
         )
     return Identity(tenant_id=tenant_id, user_id=user_id)
+
+
+async def require_owned_session(
+    container: ApiContainer, identity: Identity, session_id: str
+) -> Session:
+    session = await container.sessions.get(identity.tenant_id, session_id)
+    if session.user_id != identity.user_id:
+        raise NotFoundError(f"session not found: {session_id}")
+    return session
+
+
+async def require_owned_run(
+    container: ApiContainer, identity: Identity, run_id: str
+) -> Run:
+    run = await container.runs.get(identity.tenant_id, run_id)
+    await require_owned_session(container, identity, run.session_id)
+    return run

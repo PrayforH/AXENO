@@ -19,6 +19,7 @@ export function decideApproval(
       headers: {
         "Content-Type": "application/json",
         ...config.identityHeaders,
+        ...config.serviceHeaders,
       },
       body: JSON.stringify({ decision }),
     },
@@ -33,6 +34,6 @@ export function downloadArtifact(
   const config = getHarnessServerConfig(environment);
   return fetcher(
     `${config.apiUrl}/v1/artifacts/${encodeURIComponent(artifactId)}/content`,
-    { headers: config.identityHeaders },
+    { headers: { ...config.identityHeaders, ...config.serviceHeaders } },
   );
 }

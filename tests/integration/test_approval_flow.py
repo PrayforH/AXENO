@@ -195,3 +195,116 @@ async def test_inline_rejection_resumes_sdk_without_emitting_a_run_terminal() ->
     ]
     assert "tool.result" not in event_types
     assert "run.rejected" not in event_types
+
+
+@pytest.mark.asyncio
+async def test_inline_decision_crosses_api_and_worker_service_instances() -> None:
+    runs = InMemoryRunRepository()
+    approvals = InMemoryApprovalRepository()
+    events = InMemoryEventRepository()
+    event_service = EventService(
+        events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
+    )
+    await runs.add(
+        Run(
+            run_id="run-cross-process",
+            session_id="session-1",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="cross-process",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    worker_service = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=lambda: NOW,
+        id_generator=ids(),
+        decision_poll_interval_seconds=0.001,
+    )
+    api_service = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=lambda: NOW,
+        id_generator=ids(),
+        decision_poll_interval_seconds=0.001,
+    )
+    approval = await worker_service.request(
+        tenant_id="tenant-a",
+        run_id="run-cross-process",
+        tool_call_id="tool-cross-process",
+        reason="Bash requires review",
+        inline=True,
+    )
+    waiting = asyncio.create_task(
+        worker_service.wait_for_decision(approval.approval_id)
+    )
+
+    assert not api_service.has_inline_waiter(approval.approval_id)
+    await api_service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.REJECTED,
+    )
+
+    assert await asyncio.wait_for(waiting, timeout=0.2) is ApprovalStatus.REJECTED
+    assert (
+        await runs.get("tenant-a", "run-cross-process")
+    ).status is RunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_run_cancellation_releases_inline_approval_waiter() -> None:
+    service, runs, events = await arrange()
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-cancelled",
+        reason="review",
+        inline=True,
+    )
+    waiting = asyncio.create_task(service.wait_for_decision(approval.approval_id))
+    current = await runs.get("tenant-a", "run-1")
+    cancelling = current.model_copy(
+        update={
+            "status": RunStatus.CANCELLING,
+            "fencing_token": current.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.WAITING_APPROVAL, cancelling)
+
+    assert await asyncio.wait_for(waiting, timeout=0.5) is ApprovalStatus.CANCELLED
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-1].type == "approval.cancelled"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_inline_wait_can_be_closed_idempotently() -> None:
+    service, _, events = await arrange()
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-interrupted",
+        reason="review",
+        inline=True,
+    )
+
+    cancelled = await service.cancel_pending(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        reason="runtime timeout",
+    )
+    repeated = await service.cancel_pending(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        reason="ignored duplicate",
+    )
+
+    assert cancelled.status is ApprovalStatus.CANCELLED
+    assert repeated == cancelled
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert [event.type for event in emitted].count("approval.cancelled") == 1
+    assert emitted[-1].payload["reason"] == "runtime timeout"
