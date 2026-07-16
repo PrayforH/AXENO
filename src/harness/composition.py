@@ -60,10 +60,14 @@ from harness.storage.platform_repositories import (
     PostgresUserMemoryRepository,
     PostgresWorkspaceSnapshotRepository,
 )
+from harness.storage.preview_repository import PostgresPreviewRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.preview_controller import PreviewController
+from harness.studio.preview_queue import PreviewTaskQueue
+from harness.studio.preview_service import PreviewService
 from harness.studio.service import AgentStudioService
 from harness.worker.orchestrator import RunOrchestrator
 
@@ -195,6 +199,7 @@ def build_production_container(
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
     event_repository = PostgresEventRepository(sessions)
     agent_drafts = PostgresAgentDraftRepository(sessions)
+    preview_repository = PostgresPreviewRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
@@ -253,6 +258,24 @@ def build_production_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: ids("draft"),
+    )
+    preview_queue = PreviewTaskQueue.redis(
+        redis_client,
+        visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
+        retry_delay_seconds=settings.worker_task_retry_delay_seconds,
+    )
+    preview_service = PreviewService(
+        repository=preview_repository,
+        queue=preview_queue,
+        studio=studio_service,
+        audit=audit,
+        clock=clock,
+        id_generator=lambda: ids("preview"),
+    )
+    preview_controller = PreviewController(
+        repository=preview_repository,
+        queue=preview_queue,
+        clock=clock,
     )
 
     events = EventService(event_repository, bus, clock=clock, id_generator=ids)
@@ -412,6 +435,9 @@ def build_production_container(
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
         studio=studio_service,
+        preview_repository=preview_repository,
+        previews=preview_service,
+        preview_controller=preview_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

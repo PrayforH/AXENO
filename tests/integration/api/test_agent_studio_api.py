@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from harness.adapters.memory import InMemoryAgentRegistry
 from harness.api.app import create_app
 from harness.api.dependencies import ApiContainer, build_memory_container
+from harness.core.errors import NotFoundError
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -24,9 +25,9 @@ def app() -> FastAPI:
     return create_app(container)
 
 
-def app_and_container() -> tuple[FastAPI, ApiContainer]:
+def app_and_container(*, auto_execute: bool = False) -> tuple[FastAPI, ApiContainer]:
     container = replace(
-        build_memory_container(),
+        build_memory_container(auto_execute=auto_execute),
         environment="production",
         api_bearer_token=SecretStr(SERVICE_TOKEN),
     )
@@ -279,6 +280,73 @@ async def test_unpublished_subagent_blocks_validation_and_publish_api() -> None:
     assert {issue["code"] for issue in published.json()["error"]["issues"]} >= {
         "subagent_not_published"
     }
+
+
+@pytest.mark.asyncio
+async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "previewer-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request("preview-agent")
+        )
+        draft_id = created.json()["draftId"]
+        preview_request = {
+            "draftId": draft_id,
+            "expectedRevision": 1,
+            "idempotencyKey": "preview-agent-r1",
+            "ttlSeconds": 600,
+        }
+        first = await client.post(
+            "/v1/studio/previews", headers=headers, json=preview_request
+        )
+        repeated = await client.post(
+            "/v1/studio/previews", headers=headers, json=preview_request
+        )
+        listed = await client.get("/v1/studio/previews", headers=headers)
+        current = await client.get(
+            f"/v1/studio/previews/{first.json()['previewId']}", headers=headers
+        )
+
+        changed_spec = created.json()["spec"]
+        changed_spec["description"] = "Draft changed after Preview creation."
+        changed = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": changed_spec},
+        )
+        stale = await client.get(
+            f"/v1/studio/previews/{first.json()['previewId']}", headers=headers
+        )
+        cancelling = await client.post(
+            f"/v1/studio/previews/{first.json()['previewId']}/cancel",
+            headers=headers,
+        )
+        cancelled = await client.get(
+            f"/v1/studio/previews/{first.json()['previewId']}", headers=headers
+        )
+
+    assert first.status_code == 202
+    assert first.json()["identityKind"] == "test"
+    assert first.json()["environment"] == "preview"
+    assert repeated.status_code == 202
+    assert repeated.json()["previewId"] == first.json()["previewId"]
+    assert len(listed.json()) == 1
+    assert current.json()["status"] == "ready"
+    assert changed.status_code == 200
+    assert stale.json()["stale"] is True
+    assert stale.json()["staleReason"] == "draft_revision_changed"
+    assert cancelling.json()["status"] == "cancelling"
+    assert cancelled.json()["status"] == "cancelled"
+    registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
+    with pytest.raises(NotFoundError):
+        await registry.get("tenant-a", "preview-agent", "0.1.0")
 
 
 @pytest.mark.asyncio
@@ -587,6 +655,9 @@ def test_studio_routes_are_exposed_once_in_openapi() -> None:
         "/v1/studio/drafts/{draft_id}/validate",
         "/v1/studio/drafts/{draft_id}/bundle",
         "/v1/studio/drafts/{draft_id}/publish",
+        "/v1/studio/previews",
+        "/v1/studio/previews/{preview_id}",
+        "/v1/studio/previews/{preview_id}/cancel",
     }
 
     assert expected <= set(schema["paths"])

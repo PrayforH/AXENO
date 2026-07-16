@@ -638,7 +638,8 @@
 
 .conflictBanner,
 .readonlyBanner,
-.emptyBanner {
+.emptyBanner,
+.previewBanner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -666,6 +667,40 @@
 
 .emptyBanner strong {
   color: var(--studio-ink);
+}
+
+.previewBanner {
+  color: var(--studio-green);
+  background: var(--studio-green-soft);
+}
+
+.previewBanner[data-stale="true"],
+.previewBanner[data-status="failed"] {
+  color: #783d38;
+  background: var(--studio-red-soft);
+}
+
+.previewBanner > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.previewBanner > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.previewBanner button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  color: inherit;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .conflictBanner > div {

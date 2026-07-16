@@ -89,4 +89,29 @@ describe("Studio typed API mapping", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it("creates a Preview bound to the exact Draft revision and stable key", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        draftId: "draft-api",
+        expectedRevision: 7,
+        idempotencyKey: "preview:draft-api:r7:hash",
+        ttlSeconds: 3600,
+      });
+      return Response.json({ previewId: "preview-one", status: "queued" });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    await studioClient.createPreview(
+      "draft-api",
+      7,
+      "preview:draft-api:r7:hash",
+    );
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/studio/previews",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
 });

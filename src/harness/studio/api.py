@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 
 from harness.api.dependencies import Identity, ensure_permission, require_identity
@@ -28,6 +28,9 @@ from harness.studio.models import (
     ReplaceCapabilityCatalogRequest,
     UpsertCatalogResourceRequest,
 )
+from harness.studio.preview_controller import PreviewController
+from harness.studio.preview_models import CreatePreviewRequest, PreviewDeployment
+from harness.studio.preview_service import PreviewService
 from harness.studio.service import (
     AgentStudioService,
     StudioPublicationConflictError,
@@ -64,6 +67,12 @@ def require_studio_publisher(
     return _authorize_studio_actor(identity, "studio:publish")
 
 
+def require_studio_previewer(
+    identity: Annotated[Identity, Depends(require_identity)],
+) -> StudioActor:
+    return _authorize_studio_actor(identity, "studio:preview")
+
+
 def require_studio_catalog_admin(
     identity: Annotated[Identity, Depends(require_identity)],
 ) -> StudioActor:
@@ -96,6 +105,34 @@ def get_catalog_service(request: Request) -> CapabilityCatalogService:
             },
         )
     return service
+
+
+def get_preview_service(request: Request) -> PreviewService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "previews", None)
+    if not isinstance(service, PreviewService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "preview_not_configured",
+                "message": "Studio Preview control plane is not configured",
+            },
+        )
+    return service
+
+
+def get_preview_controller(request: Request) -> PreviewController:
+    container = getattr(request.app.state, "container", None)
+    controller = getattr(container, "preview_controller", None)
+    if not isinstance(controller, PreviewController):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "preview_controller_not_configured",
+                "message": "Studio Preview controller is not configured",
+            },
+        )
+    return controller
 
 
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
@@ -203,6 +240,88 @@ async def list_drafts(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> list[AgentDraftSummary]:
     return await service.list(actor.tenant_id)
+
+
+@router.post(
+    "/previews",
+    response_model=PreviewDeployment,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_preview(
+    body: CreatePreviewRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[PreviewService, Depends(get_preview_service)],
+    controller: Annotated[PreviewController, Depends(get_preview_controller)],
+) -> PreviewDeployment:
+    try:
+        preview = await service.create(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            request=body,
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [
+                    issue.model_dump(mode="json", by_alias=True)
+                    for issue in error.issues
+                ],
+            },
+        ) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        background_tasks.add_task(controller.process_once)
+    return preview
+
+
+@router.get("/previews", response_model=list[PreviewDeployment])
+async def list_previews(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[PreviewService, Depends(get_preview_service)],
+) -> list[PreviewDeployment]:
+    return await service.list(actor.tenant_id)
+
+
+@router.get("/previews/{preview_id}", response_model=PreviewDeployment)
+async def get_preview(
+    preview_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[PreviewService, Depends(get_preview_service)],
+) -> PreviewDeployment:
+    try:
+        return await service.get(actor.tenant_id, preview_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post("/previews/{preview_id}/cancel", response_model=PreviewDeployment)
+async def cancel_preview(
+    preview_id: str,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[PreviewService, Depends(get_preview_service)],
+    controller: Annotated[PreviewController, Depends(get_preview_controller)],
+) -> PreviewDeployment:
+    try:
+        preview = await service.cancel(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            preview_id=preview_id,
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        background_tasks.add_task(controller.process_once)
+    return preview
 
 
 @router.post(

@@ -18,6 +18,7 @@ import {
   studioClient,
   type StudioCapabilities,
   type StudioDraftSummary,
+  type StudioPreview,
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
@@ -55,6 +56,8 @@ export function AgentStudioWorkbench() {
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [creatingPreview, setCreatingPreview] = useState(false);
+  const [previews, setPreviews] = useState<StudioPreview[]>([]);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [versionConflict, setVersionConflict] = useState(false);
@@ -112,13 +115,15 @@ export function AgentStudioWorkbench() {
       setLoading(true);
       setLoadError("");
       try {
-        const [serverDrafts, serverCapabilities] = await Promise.all([
+        const [serverDrafts, serverCapabilities, serverPreviews] = await Promise.all([
           studioClient.listDrafts(),
           studioClient.capabilities(),
+          studioClient.listPreviews(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
         setDrafts(serverDrafts);
+        setPreviews(serverPreviews);
         const migration = await migrateLegacyStudioDraft(
           window.localStorage,
           studioClient,
@@ -342,6 +347,65 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function createPreview() {
+    if (!draft.id || dirty || !serverValidation?.ready || !canEdit) return;
+    const reusable = previews.find(
+      (item) => item.draftId === draft.id
+        && item.draftRevision === draft.revision
+        && item.contentHash === serverValidation.contentHash
+        && item.packageHash === serverValidation.packageHash
+        && !["cancelled", "failed", "expired"].includes(item.status),
+    );
+    if (reusable) {
+      await refreshPreview(reusable.previewId);
+      setNotice(`复用当前 Preview · ${reusable.status}`);
+      return;
+    }
+    setCreatingPreview(true);
+    try {
+      const idempotencyKey = [
+        "studio-preview",
+        draft.id,
+        `r${draft.revision}`,
+        crypto.randomUUID(),
+      ].join(":");
+      const preview = await studioClient.createPreview(
+        draft.id,
+        draft.revision,
+        idempotencyKey,
+      );
+      const refreshed = await studioClient.getPreview(preview.previewId);
+      setPreviews(await studioClient.listPreviews());
+      setNotice(`Preview ${refreshed.status} · 测试身份 · 1 小时 TTL`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Preview 创建失败");
+    } finally {
+      setCreatingPreview(false);
+    }
+  }
+
+  async function refreshPreview(previewId: string) {
+    try {
+      const refreshed = await studioClient.getPreview(previewId);
+      setPreviews((current) => [
+        refreshed,
+        ...current.filter((item) => item.previewId !== previewId),
+      ]);
+      setNotice(`Preview 状态：${refreshed.status}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Preview 状态读取失败");
+    }
+  }
+
+  async function cancelPreview(previewId: string) {
+    try {
+      await studioClient.cancelPreview(previewId);
+      await refreshPreview(previewId);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Preview 取消失败");
+    }
+  }
+
   function sectionSummary(section: StudioSection) {
     switch (section) {
       case "identity":
@@ -367,6 +431,10 @@ export function AgentStudioWorkbench() {
     options.routes.find((route) => route.id === draft.modelRoute) ?? options.routes[0];
   const skill = draft.skills[0];
   const validationReady = serverValidation?.ready ?? contract.ready;
+  const activePreview = previews.find(
+    (item) => item.draftId === draft.id
+      && !["cancelled", "failed", "expired"].includes(item.status),
+  ) ?? previews.find((item) => item.draftId === draft.id);
   const publishedCurrent = Boolean(
     draft.publishedVersion === draft.version
     && draft.publishedHash
@@ -376,7 +444,7 @@ export function AgentStudioWorkbench() {
   );
   const activeLifecycleStage = publishedCurrent
     ? "version"
-    : inspected && validationReady
+    : activePreview && !activePreview.stale
       ? "preview"
       : inspected
         ? "check"
@@ -514,10 +582,11 @@ export function AgentStudioWorkbench() {
             <button
               type="button"
               className={styles.previewButton}
-              disabled
-              title="等待临时隔离环境 API 接入"
+              disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
+              title="创建绑定当前 Draft 双 Hash 的短时测试环境；真实 Preflight 在下一阶段执行"
+              onClick={() => void createPreview()}
             >
-              隔离试跑
+              {creatingPreview ? "创建中…" : "创建 Preview"}
             </button>
             <button
               type="button"
@@ -555,6 +624,22 @@ export function AgentStudioWorkbench() {
               <span>已发布版本不能覆盖。请修改版本号、保存并重新检查后再发布。</span>
             </div>
             <button type="button" onClick={() => setActiveSection("identity")}>修改版本号</button>
+          </div>
+        )}
+        {activePreview && (
+          <div className={styles.previewBanner} data-status={activePreview.status} data-stale={activePreview.stale}>
+            <div>
+              <strong>Preview · {activePreview.status}{activePreview.stale ? " · stale" : ""}</strong>
+              <span>
+                测试身份 · Draft r{activePreview.draftRevision} · 到期 {new Date(activePreview.expiresAt).toLocaleString("zh-CN")}
+              </span>
+            </div>
+            <div>
+              <button type="button" onClick={() => void refreshPreview(activePreview.previewId)}>刷新</button>
+              {!(["cancelled", "failed", "expired"] as string[]).includes(activePreview.status) && (
+                <button type="button" onClick={() => void cancelPreview(activePreview.previewId)}>取消</button>
+              )}
+            </div>
           </div>
         )}
         {!canEdit && (

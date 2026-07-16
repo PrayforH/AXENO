@@ -6,6 +6,7 @@ from redis.asyncio import Redis
 
 from harness.core.ports import RunTask
 from harness.storage.redis import AsyncRedisClient, RedisTaskQueue
+from harness.studio.preview_queue import PreviewTask, PreviewTaskQueue
 
 
 @pytest.mark.asyncio
@@ -42,5 +43,38 @@ async def test_redis_queue_deduplicates_delivery() -> None:
         await second_owner.acknowledge(task)
         await queue.enqueue(task)
         assert await queue.dequeue() == task
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_preview_queue_recovers_a_crashed_worker_lease() -> None:
+    client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
+        "redis://localhost:6379/14", decode_responses=True
+    )
+    await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
+    queue = PreviewTaskQueue.redis(
+        cast(AsyncRedisClient, client),
+        visibility_timeout_seconds=0.05,
+        retry_delay_seconds=0,
+    )
+    try:
+        task = PreviewTask(tenant_id="tenant-a", preview_id="preview-1")
+        await queue.enqueue(task)
+        await queue.enqueue(task)
+        assert await queue.dequeue() == task
+        assert await queue.dequeue() is None
+
+        # The first owner disappears without ACK; a new Controller instance can
+        # acquire the same durable job after its visibility lease expires.
+        await asyncio.sleep(0.06)
+        recovered_queue = PreviewTaskQueue.redis(
+            cast(AsyncRedisClient, client),
+            visibility_timeout_seconds=0.05,
+            retry_delay_seconds=0,
+        )
+        assert await recovered_queue.dequeue() == task
+        await recovered_queue.acknowledge(task)
+        assert await recovered_queue.dequeue() is None
     finally:
         await client.aclose()

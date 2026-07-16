@@ -70,6 +70,13 @@ from harness.sandbox.daytona import (
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.preview_controller import PreviewController
+from harness.studio.preview_queue import PreviewTaskQueue
+from harness.studio.preview_repositories import (
+    InMemoryPreviewRepository,
+    PreviewRepository,
+)
+from harness.studio.preview_service import PreviewService
 from harness.studio.repositories import (
     AgentDraftRepository,
     InMemoryAgentDraftRepository,
@@ -97,6 +104,9 @@ class ApiContainer:
     agent_drafts: AgentDraftRepository
     capability_catalogs: CapabilityCatalogService
     studio: AgentStudioService
+    preview_repository: PreviewRepository
+    previews: PreviewService
+    preview_controller: PreviewController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -155,6 +165,8 @@ def build_memory_container(
     )
     audit = AuditService(InMemoryAuditRepository())
     agent_drafts = InMemoryAgentDraftRepository()
+    preview_repository = InMemoryPreviewRepository()
+    preview_queue = PreviewTaskQueue.memory()
     capability_catalog_repository = InMemoryCapabilityCatalogRepository()
 
     def clock() -> datetime:
@@ -179,6 +191,19 @@ def build_memory_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
+    )
+    preview_service = PreviewService(
+        repository=preview_repository,
+        queue=preview_queue,
+        studio=studio_service,
+        audit=audit,
+        clock=clock,
+        id_generator=lambda: id_generator("preview"),
+    )
+    preview_controller = PreviewController(
+        repository=preview_repository,
+        queue=preview_queue,
+        clock=clock,
     )
 
     event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
@@ -347,6 +372,9 @@ def build_memory_container(
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
         studio=studio_service,
+        preview_repository=preview_repository,
+        previews=preview_service,
+        preview_controller=preview_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

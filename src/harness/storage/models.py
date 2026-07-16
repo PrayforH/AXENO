@@ -131,6 +131,32 @@ class CapabilityCatalogRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class PreviewDeploymentRow(Base):
+    __tablename__ = "preview_deployments"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_preview_deployment_idempotency",
+        ),
+        Index(
+            "ix_preview_deployments_tenant_created",
+            "tenant_id",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    preview_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    draft_id: Mapped[str] = mapped_column(String(128), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    fencing_token: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

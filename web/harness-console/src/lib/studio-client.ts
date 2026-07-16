@@ -92,6 +92,27 @@ export type StudioValidation = {
   packageHash: string | null;
 };
 
+export type StudioPreview = {
+  previewId: string;
+  tenantId: string;
+  draftId: string;
+  draftRevision: number;
+  contentHash: string;
+  packageHash: string;
+  requestedBy: string;
+  idempotencyKey: string;
+  status: "queued" | "provisioning" | "ready" | "cancelling" | "cancelled" | "failed" | "expired";
+  identityKind: "test";
+  environment: "preview";
+  fencingToken: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  errorCode: string | null;
+  stale: boolean;
+  staleReason: string | null;
+};
+
 export type StudioCapabilities = {
   modelRoutes: Array<{
     routeId: string;
@@ -272,6 +293,26 @@ export const studioClient = {
     request<ApiAgentVersion>(`drafts/${encodeURIComponent(draftId)}/publish`, {
       method: "POST",
       body: JSON.stringify({ expectedRevision }),
+    }),
+  listPreviews: () => request<StudioPreview[]>("previews"),
+  createPreview: (
+    draftId: string,
+    expectedRevision: number,
+    idempotencyKey: string,
+  ) => request<StudioPreview>("previews", {
+    method: "POST",
+    body: JSON.stringify({
+      draftId,
+      expectedRevision,
+      idempotencyKey,
+      ttlSeconds: 3600,
+    }),
+  }),
+  getPreview: (previewId: string) =>
+    request<StudioPreview>(`previews/${encodeURIComponent(previewId)}`),
+  cancelPreview: (previewId: string) =>
+    request<StudioPreview>(`previews/${encodeURIComponent(previewId)}/cancel`, {
+      method: "POST",
     }),
   async downloadBundle(draftId: string): Promise<void> {
     const response = requireAuthenticatedResponse(

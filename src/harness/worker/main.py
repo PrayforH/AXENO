@@ -118,13 +118,18 @@ async def serve(settings: Settings) -> None:
         except NotImplementedError:  # pragma: no cover - Windows event loop
             pass
     try:
+        async def maintenance() -> None:
+            await container.approvals.reap_expired()
+            await container.preview_controller.process_once()
+            await container.preview_controller.reap_expired()
+
         await worker_loop(
             container.task_queue,
             container.worker,
             stop=stop,
             poll_interval=settings.worker_poll_interval_seconds,
             lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
-            maintenance=container.approvals.reap_expired,
+            maintenance=maintenance,
         )
     finally:
         if container.close is not None:

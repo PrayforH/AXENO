@@ -67,6 +67,16 @@ async def test_production_studio_api_restores_draft_after_container_restart(
             created = await client.post(
                 "/v1/studio/drafts", headers=headers(), json=draft_request()
             )
+            preview = await client.post(
+                "/v1/studio/previews",
+                headers=headers(),
+                json={
+                    "draftId": created.json()["draftId"],
+                    "expectedRevision": 1,
+                    "idempotencyKey": "durable-preview-r1",
+                    "ttlSeconds": 600,
+                },
+            )
             disabled = await client.delete(
                 "/v1/studio/catalog/modelRoute/new-api-default",
                 headers=headers(),
@@ -76,6 +86,8 @@ async def test_production_studio_api_restores_draft_after_container_restart(
         await close(first)
 
     assert created.status_code == 201
+    assert preview.status_code == 202
+    assert preview.json()["status"] == "queued"
     assert first_catalog.json() == second_seed.json()
     assert disabled.status_code == 200
     draft_id = cast(str, created.json()["draftId"])
@@ -89,14 +101,24 @@ async def test_production_studio_api_restores_draft_after_container_restart(
             restored = await client.get(
                 f"/v1/studio/drafts/{draft_id}", headers=headers()
             )
+            restored_preview = await client.get(
+                f"/v1/studio/previews/{preview.json()['previewId']}",
+                headers=headers(),
+            )
             restored_catalog = await client.get(
                 "/v1/studio/catalog", headers=headers()
+            )
+            reconciled_preview = await second.preview_controller.reconcile(
+                "tenant-a", preview.json()["previewId"]
             )
     finally:
         await close(second)
 
     assert restored.status_code == 200
     assert restored.json() == created.json()
+    assert restored_preview.status_code == 200
+    assert restored_preview.json()["status"] == "queued"
+    assert reconciled_preview.status.value == "ready"
     assert restored_catalog.status_code == 200
     assert restored_catalog.json()["revision"] == 2
     route = next(
