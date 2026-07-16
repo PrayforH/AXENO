@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { activityOverview } from "../lib/activity-schema";
+import { activityOverview, type ActivityItem } from "../lib/activity-schema";
 import { useRunActivity } from "../lib/activity-store";
-import { developerRows } from "../lib/developer-details";
 import { isHiddenByCollapsedDetails } from "../lib/focus-target";
-import { StructuredValue } from "./structured-value";
 
 const statusLabels: Record<string, string> = {
   queued: "排队中",
@@ -27,6 +25,26 @@ const kindLabels: Record<string, string> = {
   result: "完成",
   error: "错误",
 };
+
+const noisyEventTypes = new Set([
+  "message.delta",
+  "subagent.delta",
+  "subagent.progress",
+  "runtime.system",
+]);
+
+export function notableActivityItems(items: readonly ActivityItem[]) {
+  return items
+    .filter((item) => {
+      if (noisyEventTypes.has(item.event_type)) return false;
+      if (
+        item.kind === "tool" &&
+        ["succeeded", "completed", "running"].includes(item.status)
+      ) return false;
+      return true;
+    })
+    .slice(-12);
+}
 
 function useNarrowRunPanel() {
   const [isModal, setIsModal] = useState(false);
@@ -52,6 +70,7 @@ export function DeveloperDrawer({
   const activity = useRunActivity();
   const overview = activity ? activityOverview(activity) : undefined;
   const isModal = useNarrowRunPanel();
+  const notableItems = activity ? notableActivityItems(activity.items) : [];
   const panelRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -119,17 +138,20 @@ export function DeveloperDrawer({
     <aside
       ref={panelRef}
       className="developer-drawer"
-      aria-label="本次运行"
+      aria-label="运行详情"
       role={isModal ? "dialog" : undefined}
       aria-modal={isModal || undefined}
     >
       <header className="inspector-header">
-        <div>
-          <p className="eyebrow">Current run</p>
-          <h2>本次运行</h2>
+        <div className="inspector-title">
+          <span className="inspector-title-mark" aria-hidden="true"><i /><i /><i /></span>
+          <div>
+            <h2>本次运行</h2>
+            <p>状态摘要与外部观测</p>
+          </div>
         </div>
         {onClose && (
-          <button ref={closeButtonRef} type="button" className="inspector-close" onClick={onClose} aria-label="关闭本次运行">×</button>
+          <button ref={closeButtonRef} type="button" className="inspector-close" onClick={onClose} aria-label="关闭运行详情"><span aria-hidden="true" /></button>
         )}
       </header>
 
@@ -138,56 +160,77 @@ export function DeveloperDrawer({
           <section className="run-overview">
             <div className="run-overview-status">
               <span className={`activity-pulse status-${activity.status}`} aria-hidden="true" />
-              <div><small>运行状态</small><strong>{statusLabels[activity.status] ?? activity.status}</strong></div>
+              <div><small>当前状态</small><strong>{statusLabels[activity.status] ?? activity.status}</strong></div>
+              <span className="run-overview-duration">{overview.duration}</span>
             </div>
             <dl className="run-metrics">
-              <div><dt>运行模型</dt><dd title={overview.model}>{overview.model}</dd></div>
-              <div><dt>模型服务</dt><dd>{overview.provider}</dd></div>
-              <div><dt>运行用时</dt><dd>{overview.duration}</dd></div>
-              <div><dt>对话轮次</dt><dd>{overview.turns}</dd></div>
-              <div><dt>估算费用</dt><dd>{overview.cost}</dd></div>
-              <div><dt>结束原因</dt><dd>{overview.stopReason}</dd></div>
+              <div><dt>模型</dt><dd title={overview.model}>{overview.model}</dd></div>
+              <div><dt>服务</dt><dd>{overview.provider}</dd></div>
+              <div><dt>轮次</dt><dd>{overview.turns}</dd></div>
+              <div><dt>费用</dt><dd>{overview.cost}</dd></div>
             </dl>
             <div className="run-counts">
               <span><strong>{overview.toolCalls}</strong> 工具调用</span>
               <span><strong>{overview.subagents}</strong> 子 Agent</span>
+              <span>{overview.stopReason === "—" ? "执行中" : overview.stopReason}</span>
             </div>
           </section>
 
-          <section className="inspector-timeline" aria-label="执行记录">
-            <div className="inspector-section-title"><span>执行记录</span><span>{activity.items.length} 条</span></div>
-            {activity.items.map((item) => (
-              <article className={`inspector-event inspector-kind-${item.kind}`} key={item.id}>
-                <div className="inspector-event-summary">
-                  <span className="inspector-node" aria-hidden="true" />
-                  <span className="inspector-event-copy">
-                    <small>{kindLabels[item.kind] ?? "步骤"} · {item.sequence}</small>
-                    <strong>{item.title}</strong>
-                    {item.summary && <span>{item.summary}</span>}
-                  </span>
-                  <time>{new Date(item.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>
-                </div>
-              </article>
-            ))}
+          <section className="observability-panel" aria-label="外部观测">
+            <div className="inspector-section-title"><span>外部观测</span><span>Langfuse</span></div>
+            <a
+              className="observability-link"
+              href={`/api/harness/observability?run_id=${encodeURIComponent(activity.run_id)}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span className="observability-mark" aria-hidden="true"><i /></span>
+              <span>
+                <strong>在 Langfuse 中查看</strong>
+                <small>Trace、Span、模型指标与错误诊断</small>
+              </span>
+              <span className="external-arrow" aria-hidden="true">↗</span>
+            </a>
           </section>
+
+          <details className="inspector-activity">
+            <summary>
+              <span>已记录 {activity.items.length} 条活动</span>
+              <small>{notableItems.length} 条关键记录</small>
+              <span className="inspector-disclosure-chevron" aria-hidden="true" />
+            </summary>
+            <div className="inspector-timeline" aria-label="关键执行记录">
+              {notableItems.map((item) => (
+                <article className={`inspector-event inspector-kind-${item.kind}`} key={item.id}>
+                  <div className="inspector-event-summary">
+                    <span className="inspector-node" aria-hidden="true" />
+                    <span className="inspector-event-copy">
+                      <small>{kindLabels[item.kind] ?? "步骤"} · {item.sequence}</small>
+                      <strong>{item.title}</strong>
+                      {item.summary && <span>{item.summary}</span>}
+                    </span>
+                    <time>{new Date(item.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </details>
+
+          <details className="run-identifiers">
+            <summary>运行标识</summary>
+            <dl>
+              <div><dt>Run</dt><dd><code>{activity.run_id}</code></dd></div>
+              <div><dt>Thread</dt><dd><code>{threadId}</code></dd></div>
+            </dl>
+          </details>
         </>
       ) : (
         <div className="inspector-empty">
           <span className="empty-orbit" aria-hidden="true" />
           <strong>还没有运行记录</strong>
-          <p>提交任务后，可在这里查看执行步骤、工具使用和运行结果。</p>
+          <p>提交任务后，可在这里查看运行摘要并跳转到外部 Trace。</p>
         </div>
       )}
-
-      <details className="raw-inspector">
-        <summary>高级诊断</summary>
-        <div className="developer-grid">
-          {developerRows(threadId).map(([label, value]) => (
-            <div className="developer-row" key={label}><span>{label}</span><code>{value}</code></div>
-          ))}
-        </div>
-        {activity && <StructuredValue value={activity} label="Harness activity" />}
-      </details>
     </aside>
   );
 }

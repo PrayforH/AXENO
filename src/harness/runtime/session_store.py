@@ -22,15 +22,30 @@ def _subpath(key: SessionKey | SessionListSubkeysKey) -> str:
 class PostgresSessionStore:
     """Tenant-bound SDK SessionStore with opaque JSON transcript entries."""
 
-    def __init__(self, sessions: SessionFactory, *, tenant_id: str) -> None:
+    def __init__(
+        self,
+        sessions: SessionFactory,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+    ) -> None:
         self._sessions = sessions
         self._tenant_id = tenant_id
+        # Claude derives project_key from cwd. Harness workspaces have a new
+        # temporary path for every Run, so using that key would make the next
+        # Run unable to find the previous transcript. A Harness Session-bound
+        # project id keeps resume stable across sandboxes, workers and hosts.
+        self._project_id = project_id
+
+    def _project(self, key: SessionKey | SessionListSubkeysKey) -> str:
+        return self._project_id or key["project_key"]
 
     async def append(self, key: SessionKey, entries: list[SessionStoreEntry]) -> None:
         if not entries:
             return
         subpath = _subpath(key)
-        lock_key = f"{self._tenant_id}:{key['project_key']}:{key['session_id']}:{subpath}"
+        project_id = self._project(key)
+        lock_key = f"{self._tenant_id}:{project_id}:{key['session_id']}:{subpath}"
         async with self._sessions() as session:
             await session.execute(
                 text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
@@ -39,7 +54,7 @@ class PostgresSessionStore:
             maximum = await session.scalar(
                 select(func.max(SdkSessionEntryRow.sequence)).where(
                     SdkSessionEntryRow.tenant_id == self._tenant_id,
-                    SdkSessionEntryRow.project_id == key["project_key"],
+                    SdkSessionEntryRow.project_id == project_id,
                     SdkSessionEntryRow.session_id == key["session_id"],
                     SdkSessionEntryRow.subpath == subpath,
                 )
@@ -52,7 +67,7 @@ class PostgresSessionStore:
                     await session.scalars(
                         select(SdkSessionEntryRow.entry_uuid).where(
                             SdkSessionEntryRow.tenant_id == self._tenant_id,
-                            SdkSessionEntryRow.project_id == key["project_key"],
+                            SdkSessionEntryRow.project_id == project_id,
                             SdkSessionEntryRow.session_id == key["session_id"],
                             SdkSessionEntryRow.subpath == subpath,
                             SdkSessionEntryRow.entry_uuid.in_(uuids),
@@ -69,7 +84,7 @@ class PostgresSessionStore:
                 session.add(
                     SdkSessionEntryRow(
                         tenant_id=self._tenant_id,
-                        project_id=key["project_key"],
+                        project_id=project_id,
                         session_id=key["session_id"],
                         subpath=subpath,
                         sequence=next_sequence,
@@ -82,11 +97,12 @@ class PostgresSessionStore:
             await session.commit()
 
     async def load(self, key: SessionKey) -> list[SessionStoreEntry] | None:
+        project_id = self._project(key)
         statement = (
             select(SdkSessionEntryRow.payload)
             .where(
                 SdkSessionEntryRow.tenant_id == self._tenant_id,
-                SdkSessionEntryRow.project_id == key["project_key"],
+                SdkSessionEntryRow.project_id == project_id,
                 SdkSessionEntryRow.session_id == key["session_id"],
                 SdkSessionEntryRow.subpath == _subpath(key),
             )
@@ -99,6 +115,7 @@ class PostgresSessionStore:
             return [cast(SessionStoreEntry, dict(row)) for row in rows]
 
     async def list_sessions(self, project_key: str) -> list[SessionStoreListEntry]:
+        project_id = self._project_id or project_key
         statement = (
             select(
                 SdkSessionEntryRow.session_id,
@@ -106,7 +123,7 @@ class PostgresSessionStore:
             )
             .where(
                 SdkSessionEntryRow.tenant_id == self._tenant_id,
-                SdkSessionEntryRow.project_id == project_key,
+                SdkSessionEntryRow.project_id == project_id,
                 SdkSessionEntryRow.subpath == "",
             )
             .group_by(SdkSessionEntryRow.session_id)
@@ -124,7 +141,7 @@ class PostgresSessionStore:
     async def delete(self, key: SessionKey) -> None:
         conditions = [
             SdkSessionEntryRow.tenant_id == self._tenant_id,
-            SdkSessionEntryRow.project_id == key["project_key"],
+            SdkSessionEntryRow.project_id == self._project(key),
             SdkSessionEntryRow.session_id == key["session_id"],
         ]
         if key.get("subpath") is not None:
@@ -138,7 +155,7 @@ class PostgresSessionStore:
             select(SdkSessionEntryRow.subpath)
             .where(
                 SdkSessionEntryRow.tenant_id == self._tenant_id,
-                SdkSessionEntryRow.project_id == key["project_key"],
+                SdkSessionEntryRow.project_id == self._project(key),
                 SdkSessionEntryRow.session_id == key["session_id"],
                 SdkSessionEntryRow.subpath != "",
             )

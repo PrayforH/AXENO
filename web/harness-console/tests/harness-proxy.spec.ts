@@ -11,13 +11,14 @@ const config: HarnessServerConfig = {
   agentVersion: "0.1.0",
   aguiUrl:
     "http://harness.internal:8000/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
-  identityHeaders: {
-    "X-Tenant-ID": "local",
-    "X-User-ID": "developer",
-  },
   serviceHeaders: {
-    Authorization: "Bearer server-only-token",
+    "X-Harness-Service-Token": "server-only-token",
   },
+  cookieSecure: false,
+  refreshCookieDays: 30,
+  googleClientId: "",
+  githubClientId: "",
+  publicUrl: "",
 };
 
 describe("Harness same-origin proxies", () => {
@@ -41,7 +42,10 @@ describe("Harness same-origin proxies", () => {
     };
     const request = new Request("http://console.test/api/agui", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: "private=browser" },
+      headers: {
+        "Content-Type": "application/json",
+        Cookie: "private=browser; harness_access_token=user-jwt",
+      },
       body: JSON.stringify({ threadId: "thread-1" }),
     });
 
@@ -49,9 +53,10 @@ describe("Harness same-origin proxies", () => {
 
     expect(upstreamUrl).toBe(config.aguiUrl);
     const headers = new Headers(upstreamInit?.headers);
-    expect(headers.get("X-Tenant-ID")).toBe("local");
-    expect(headers.get("X-User-ID")).toBe("developer");
-    expect(headers.get("Authorization")).toBe("Bearer server-only-token");
+    expect(headers.get("X-Tenant-ID")).toBeNull();
+    expect(headers.get("X-User-ID")).toBeNull();
+    expect(headers.get("Authorization")).toBe("Bearer user-jwt");
+    expect(headers.get("X-Harness-Service-Token")).toBe("server-only-token");
     expect(headers.get("Cookie")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
@@ -66,7 +71,7 @@ describe("Harness same-origin proxies", () => {
     };
     const request = new Request(
       "http://console.test/api/agui/threads/thread%2F1/runs/run%2F1/cancel",
-      { method: "POST" },
+      { method: "POST", headers: { Cookie: "harness_access_token=user-jwt" } },
     );
 
     await proxyAguiRequest(
@@ -92,7 +97,10 @@ describe("Harness same-origin proxies", () => {
     };
     const request = new Request("http://console.test/api/input-artifacts", {
       method: "POST",
-      headers: { "Content-Type": "multipart/form-data; boundary=test" },
+      headers: {
+        "Content-Type": "multipart/form-data; boundary=test",
+        Cookie: "harness_access_token=user-jwt",
+      },
       body: "--test--",
     });
 
@@ -100,7 +108,8 @@ describe("Harness same-origin proxies", () => {
 
     const headers = new Headers(upstreamInit?.headers);
     expect(headers.get("Content-Type")).toContain("boundary=test");
-    expect(headers.get("X-Tenant-ID")).toBe("local");
+    expect(headers.get("X-Tenant-ID")).toBeNull();
+    expect(headers.get("Authorization")).toBe("Bearer user-jwt");
     expect(await response.json()).toEqual({
       input_artifact_id: "input_artifact_1",
     });

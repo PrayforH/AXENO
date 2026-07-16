@@ -6,6 +6,7 @@ from fastapi.responses import Response
 from harness.api.dependencies import (
     ApiContainer,
     Identity,
+    ensure_permission,
     get_container,
     require_identity,
     require_owned_run,
@@ -27,6 +28,7 @@ async def upload_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Artifact:
+    ensure_permission(identity, "tasks:write")
     await require_owned_run(container, identity, run_id)
     maximum = container.artifacts.max_file_bytes
     content = await file.read(maximum + 1)
@@ -53,6 +55,7 @@ async def list_artifacts(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[Artifact]:
+    ensure_permission(identity, "tasks:read")
     await require_owned_run(container, identity, run_id)
     return await container.artifacts.list_for_run(identity.tenant_id, run_id)
 
@@ -63,6 +66,7 @@ async def download_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Response:
+    ensure_permission(identity, "tasks:read")
     artifact = await container.artifacts.get(identity.tenant_id, artifact_id)
     await require_owned_run(container, identity, artifact.run_id)
     artifact, content = await container.artifacts.download(identity.tenant_id, artifact_id)

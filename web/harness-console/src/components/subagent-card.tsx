@@ -20,12 +20,13 @@ export function SubagentCard({ status, parameters, result }: SubagentCardProps) 
   return (
     <details className={`agent-card tool-status-${status}`} open={status !== "complete"}>
       <summary>
-        <span className="agent-avatar" aria-hidden="true">A</span>
+        <span className="agent-avatar" aria-hidden="true"><i /><i /></span>
         <span className="agent-card-copy">
-          <strong>子 Agent · {agent}</strong>
+          <strong>委派给 {agent}</strong>
           {description != null && <small>{String(description)}</small>}
         </span>
         <span className="tool-status-label">{statusLabel[status]}</span>
+        <span className="tool-chevron" aria-hidden="true" />
       </summary>
       <div className="tool-card-body">
         <StructuredValue value={parameters} label="委派任务" />

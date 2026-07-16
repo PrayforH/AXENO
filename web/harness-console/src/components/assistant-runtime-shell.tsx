@@ -11,6 +11,7 @@ import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
+import { createThreadHistoryAdapter } from "../lib/task-history";
 
 export function AssistantRuntimeShell({
   threadId,
@@ -27,6 +28,7 @@ export function AssistantRuntimeShell({
   }, [threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
+  const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);
   useEffect(() => {
     activityStore.clear();
     uploadFeedbackStore.clear();
@@ -34,7 +36,7 @@ export function AssistantRuntimeShell({
   const runtime = useAgUiRuntime({
     agent,
     showThinking: true,
-    adapters: { attachments, speech },
+    adapters: { attachments, speech, history },
     onCancel: () => agent.cancelActiveRun(),
     onError: (error) => console.error("[Harness Console]", error),
   });

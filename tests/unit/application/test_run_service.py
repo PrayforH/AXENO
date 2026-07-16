@@ -115,7 +115,7 @@ async def test_create_run_annotates_the_api_trace_with_session_identity() -> Non
 
 
 @pytest.mark.asyncio
-async def test_cancel_moves_run_to_cancelling_and_emits_event() -> None:
+async def test_cancel_reaches_cancelled_and_emits_both_lifecycle_events() -> None:
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     queue = InMemoryTaskQueue()
@@ -144,9 +144,12 @@ async def test_cancel_moves_run_to_cancelling_and_emits_event() -> None:
 
     cancelled = await service.cancel("tenant-a", run.run_id)
 
-    assert cancelled.status is RunStatus.CANCELLING
+    assert cancelled.status is RunStatus.CANCELLED
     stored_events = await events.list_after("tenant-a", run.run_id, 0)
     assert [(item.sequence, item.type) for item in stored_events] == [
         (1, "run.queued"),
         (2, "run.cancelling"),
+        (3, "run.cancelled"),
     ]
+
+    assert await service.cancel("tenant-a", run.run_id) == cancelled

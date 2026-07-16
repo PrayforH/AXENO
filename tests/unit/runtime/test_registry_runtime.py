@@ -244,6 +244,8 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
         )
     )
     captured: list[tuple[str, ClaudeAgentOptions]] = []
+    captured_store_sessions: list[Session] = []
+    session_store = object()
 
     async def fake_query(prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append((prompt, options))
@@ -266,6 +268,9 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
             credential=SecretStr("registry-secret"),
         ),
         query_factory=fake_query,
+        session_store_factory=lambda session: (
+            captured_store_sessions.append(session) or session_store
+        ),
     )
     now = datetime.now(UTC)
     context = RuntimeContext(
@@ -296,6 +301,10 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert captured[0][1].model == "cc-switch-model"
     assert captured[0][1].env["ANTHROPIC_BASE_URL"] == "https://gateway.example"
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
+    assert captured[0][1].env["CLAUDE_CONFIG_DIR"] == str(
+        tmp_path / ".harness-runtime" / "claude-config"
+    )
+    assert not (tmp_path / ".harness-runtime").exists()
     assert captured[0][1].agents is not None
     helper = captured[0][1].agents["helper-agent"]
     assert helper.prompt == helper_snapshot.system_prompt
@@ -310,6 +319,9 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert isinstance(captured[0][1].mcp_servers, dict)
     assert captured[0][1].mcp_servers == {}
     assert captured[0][1].allowed_tools == []
+    assert captured[0][1].session_store is session_store
+    assert captured[0][1].session_store_flush == "eager"
+    assert captured_store_sessions == [context.session]
     assert [event.type for event in events] == [
         "model.route.selected",
         "message.start",

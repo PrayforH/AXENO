@@ -59,7 +59,7 @@ def default_tool_resolver(
                     {"type": "http", "url": "https://mcp.tavily.com/mcp/"},
                 ),
                 allowed_tools=TAVILY_ALLOWED_TOOLS,
-                credential_headers=(("Authorization", "authorization"),),
+                credential_query_parameters=(("tavilyApiKey", "api_key"),),
             )
         },
         credential_provider=credential_provider,

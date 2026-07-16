@@ -80,24 +80,58 @@ class RunService:
     async def get(self, tenant_id: str, run_id: str) -> Run:
         return await self._runs.get(tenant_id, run_id)
 
+    async def list_for_sessions(
+        self, tenant_id: str, session_ids: list[str], *, limit: int = 200
+    ) -> list[Run]:
+        return await self._runs.list_for_sessions(
+            tenant_id, session_ids, limit=limit
+        )
+
     async def cancel(self, tenant_id: str, run_id: str) -> Run:
         current = await self._runs.get(tenant_id, run_id)
-        if current.status is RunStatus.CANCELLING or current.status.is_terminal:
+        if current.status.is_terminal:
             return current
-        target = transition(current.status, RunStatus.CANCELLING)
-        updated = current.model_copy(
+        if current.status is not RunStatus.CANCELLING:
+            cancelling = current.model_copy(
+                update={
+                    "status": transition(current.status, RunStatus.CANCELLING),
+                    "updated_at": self._clock(),
+                    "fencing_token": current.fencing_token + 1,
+                }
+            )
+            if not await self._runs.compare_and_set(current.status, cancelling):
+                current = await self._runs.get(tenant_id, run_id)
+                if current.status.is_terminal:
+                    return current
+                if current.status is not RunStatus.CANCELLING:
+                    raise ConflictError(
+                        f"run changed while cancellation was requested: {run_id}"
+                    )
+            else:
+                current = cancelling
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=current.session_id,
+                    event_type="run.cancelling",
+                )
+
+        cancelled = current.model_copy(
             update={
-                "status": target,
+                "status": transition(current.status, RunStatus.CANCELLED),
                 "updated_at": self._clock(),
                 "fencing_token": current.fencing_token + 1,
             }
         )
-        if not await self._runs.compare_and_set(current.status, updated):
-            raise ConflictError(f"run changed while cancellation was requested: {run_id}")
+        if not await self._runs.compare_and_set(RunStatus.CANCELLING, cancelled):
+            latest = await self._runs.get(tenant_id, run_id)
+            if latest.status.is_terminal:
+                return latest
+            raise ConflictError(f"run changed while cancellation completed: {run_id}")
         await self._events.append(
             tenant_id=tenant_id,
             run_id=run_id,
             session_id=current.session_id,
-            event_type="run.cancelling",
+            event_type="run.cancelled",
         )
-        return updated
+        return cancelled

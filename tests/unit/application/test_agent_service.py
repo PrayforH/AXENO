@@ -155,7 +155,7 @@ async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
         AgentVersion(
             tenant_id="tenant-a",
             name="public-opinion-agent",
-            version="0.1.0",
+            version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
             manifest_hash=parent.content_hash,
             snapshot=parent.model_dump(mode="json"),
@@ -172,7 +172,10 @@ async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
 
     with pytest.raises(NotFoundError, match="helper-agent@1.0.0"):
         await service.create(
-            "tenant-a", "user-1", "public-opinion-agent", "0.1.0"
+            "tenant-a",
+            "user-1",
+            "public-opinion-agent",
+            parent.manifest.metadata.version,
         )
 
 
@@ -186,7 +189,7 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
         AgentVersion(
             tenant_id="tenant-a",
             name="public-opinion-agent",
-            version="0.1.0",
+            version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
             manifest_hash=parent.content_hash,
             snapshot=parent.model_dump(mode="json"),
@@ -213,5 +216,8 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
 
     with pytest.raises(ConflictError, match="subagent must be published"):
         await service.create(
-            "tenant-a", "user-1", "public-opinion-agent", "0.1.0"
+            "tenant-a",
+            "user-1",
+            "public-opinion-agent",
+            parent.manifest.metadata.version,
         )

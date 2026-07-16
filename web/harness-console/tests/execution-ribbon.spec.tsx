@@ -81,7 +81,8 @@ describe("execution ribbon", () => {
 
     expect(html).toContain('<details class="execution-ribbon phase-running"');
     expect(html).not.toContain('<details class="execution-ribbon phase-running" open');
-    expect(html).toContain("正在执行");
+    expect(html).toContain("正在处理");
+    expect(html).toContain('class="execution-state-mark"');
     expect(html).toContain("2 个工具");
     expect(html).toContain("2 个子任务");
     expect(html).toContain("6s");
@@ -128,6 +129,62 @@ describe("execution ribbon", () => {
     expect(html).toContain("运行模型");
     expect(html).not.toContain("子 Agent 任务");
     expect(html).not.toContain("<h4>工具</h4>");
+  });
+
+  it("folds repeated completed discovery tools into one processed disclosure", () => {
+    const completedTools = runActivitySchema.parse({
+      ...activity,
+      items: [
+        ...activity.items,
+        {
+          id: "tool-one-result",
+          event_type: "tool.result",
+          kind: "tool",
+          status: "succeeded",
+          title: "Read 已完成",
+          timestamp: "2026-07-14T00:00:07Z",
+          sequence: 7,
+          metadata: { tool_call_id: "tool-1" },
+        },
+        {
+          id: "tool-two-result",
+          event_type: "tool.result",
+          kind: "tool",
+          status: "succeeded",
+          title: "Grep 已完成",
+          timestamp: "2026-07-14T00:00:08Z",
+          sequence: 8,
+          metadata: { tool_call_id: "tool-2" },
+        },
+        {
+          id: "tool-three",
+          event_type: "tool.request",
+          kind: "tool",
+          status: "running",
+          title: "调用 Glob",
+          timestamp: "2026-07-14T00:00:09Z",
+          sequence: 9,
+          metadata: { tool_call_id: "tool-3", name: "Glob" },
+        },
+        {
+          id: "tool-three-result",
+          event_type: "tool.result",
+          kind: "tool",
+          status: "succeeded",
+          title: "Glob 已完成",
+          timestamp: "2026-07-14T00:00:10Z",
+          sequence: 10,
+          metadata: { tool_call_id: "tool-3" },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(<ActivitySummary activity={completedTools} />);
+
+    expect(html).toContain('<details class="execution-tool-batch"><summary>');
+    expect(html).not.toContain('<details class="execution-tool-batch" open');
+    expect(html).toContain("已处理 3 项");
+    expect(html).toContain("Read · Grep · Glob");
   });
 
   it.each([
@@ -188,6 +245,6 @@ describe("execution ribbon", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={completed} />);
 
     expect(html).toContain("phase-completed");
-    expect(html).toContain("执行完成");
+    expect(html).toContain("已处理");
   });
 });

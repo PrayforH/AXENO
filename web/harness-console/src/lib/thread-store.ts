@@ -23,3 +23,8 @@ export function createNewThread(
   storage.setItem(THREAD_STORAGE_KEY, threadId);
   return threadId;
 }
+
+export function selectThread(storage: ThreadStorage, threadId: string): string {
+  storage.setItem(THREAD_STORAGE_KEY, threadId);
+  return threadId;
+}

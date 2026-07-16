@@ -26,7 +26,7 @@ def _publish_bundle(
             "X-User-ID": user_id,
         }
         if api_token:
-            headers["Authorization"] = f"Bearer {api_token}"
+            headers["X-Harness-Service-Token"] = api_token
         request = urllib.request.Request(
             f"{api_url}/v1/agents/bundles",
             data=archive.read_bytes(),

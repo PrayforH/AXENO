@@ -3,7 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
-from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    ensure_permission,
+    get_container,
+    require_identity,
+)
 from harness.api.downloads import attachment_content_disposition
 from harness.core.errors import NotFoundError
 from harness.core.models import InputArtifact, ThreadFile
@@ -17,6 +23,7 @@ async def list_thread_files(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[ThreadFile]:
+    ensure_permission(identity, "tasks:read")
     session = await container.sessions.get(identity.tenant_id, session_id)
     if session.user_id != identity.user_id:
         raise NotFoundError(f"session not found: {session_id}")
@@ -35,6 +42,7 @@ async def upload_input_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> InputArtifact:
+    ensure_permission(identity, "tasks:write")
     maximum = container.input_artifacts.max_file_bytes
     content = await file.read(maximum + 1)
     if len(content) > maximum:
@@ -60,6 +68,7 @@ async def download_input_artifact(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Response:
+    ensure_permission(identity, "tasks:read")
     artifact, content = await container.input_artifacts.download(
         tenant_id=identity.tenant_id,
         user_id=identity.user_id,

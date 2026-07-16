@@ -32,3 +32,42 @@ async def test_session_and_subagent_transcripts_resume_after_store_recreation() 
     finally:
         await recreated.delete(key)
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_session_store_uses_stable_project_across_run_workspaces() -> None:
+    engine, sessions = create_database(
+        "postgresql+asyncpg://harness:harness@localhost:5432/harness"
+    )
+    await drop_schema(engine)
+    await create_schema(engine)
+    first_key: SessionKey = {
+        "project_key": "temporary-run-workspace-a",
+        "session_id": "resume-session",
+    }
+    next_key: SessionKey = {
+        "project_key": "temporary-run-workspace-b",
+        "session_id": "resume-session",
+    }
+    entries: list[SessionStoreEntry] = [
+        {"type": "user", "uuid": "stable-project-user"},
+        {"type": "assistant", "uuid": "stable-project-assistant"},
+    ]
+    first = PostgresSessionStore(
+        sessions,
+        tenant_id="tenant-a",
+        project_id="harness-session-a",
+    )
+    await first.delete(first_key)
+    await first.append(first_key, entries)
+
+    recreated = PostgresSessionStore(
+        sessions,
+        tenant_id="tenant-a",
+        project_id="harness-session-a",
+    )
+    try:
+        assert await recreated.load(next_key) == entries
+    finally:
+        await recreated.delete(next_key)
+        await engine.dispose()

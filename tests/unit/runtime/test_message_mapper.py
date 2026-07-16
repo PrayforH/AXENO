@@ -203,6 +203,34 @@ def test_generic_system_message_whitelists_status_metadata() -> None:
     assert "never-show" not in repr(events)
 
 
+def test_init_message_keeps_safe_tool_and_mcp_connection_metadata() -> None:
+    message = SystemMessage(
+        subtype="init",
+        data={
+            "session_id": "session-1",
+            "tools": ["Read", "mcp__tavily__tavily_search", {"secret": "drop"}],
+            "mcp_servers": [
+                {"name": "tavily", "status": "connected", "url": "never-show"},
+                {"name": "broken", "status": "failed", "error": "never-show"},
+            ],
+            "apiKey": "never-show",
+        },
+    )
+
+    events = map_sdk_message(message)
+
+    assert events[0].payload == {
+        "subtype": "init",
+        "session_id": "session-1",
+        "tools": ["Read", "mcp__tavily__tavily_search"],
+        "mcp_servers": [
+            {"name": "tavily", "status": "connected"},
+            {"name": "broken", "status": "failed"},
+        ],
+    }
+    assert "never-show" not in repr(events)
+
+
 def test_noisy_or_unknown_system_messages_are_not_persisted() -> None:
     for subtype in ("thinking_tokens", "background_tasks_changed", "future_noise"):
         message = SystemMessage(

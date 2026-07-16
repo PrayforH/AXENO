@@ -5,8 +5,8 @@ import "@assistant-ui/react-ui/styles/markdown.css";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Agent Harness Console",
-  description: "Local validation console for Claude Agent Harness",
+  title: "Agent Harness",
+  description: "面向业务 Agent 的任务工作台",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

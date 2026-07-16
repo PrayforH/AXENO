@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from types import MappingProxyType
 from typing import Any, cast
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from claude_agent_sdk import (
     McpServerConfig,
@@ -36,6 +37,7 @@ class McpServerRegistration:
     allowed_tools: tuple[str, ...] = ()
     credential_headers: tuple[tuple[str, str], ...] = ()
     credential_environment: tuple[tuple[str, str], ...] = ()
+    credential_query_parameters: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         public_config = cast(dict[str, object], self.config)
@@ -45,6 +47,7 @@ class McpServerRegistration:
             )
         targets = [name for name, _ in self.credential_headers]
         targets.extend(name for name, _ in self.credential_environment)
+        targets.extend(name for name, _ in self.credential_query_parameters)
         if len(targets) != len(set(targets)):
             raise ToolResolutionError("duplicate MCP credential target")
 
@@ -103,7 +106,11 @@ class ToolResolver:
                 raise ToolResolutionError(
                     f"duplicate MCP server name: {registration.server_name}"
                 )
-            bindings = registration.credential_headers + registration.credential_environment
+            bindings = (
+                registration.credential_headers
+                + registration.credential_environment
+                + registration.credential_query_parameters
+            )
             required_keys = frozenset(key for _, key in bindings)
             if required_keys and identity is None:
                 raise McpCredentialError(
@@ -141,6 +148,33 @@ class ToolResolver:
                 config["env"] = environment
                 sensitive_names.update(environment)
                 sensitive_values.update(environment.values())
+            if registration.credential_query_parameters:
+                raw_url = config.get("url")
+                if not isinstance(raw_url, str):
+                    raise ToolResolutionError(
+                        f"MCP query credentials require an HTTP URL: {reference}"
+                    )
+                parsed = urlsplit(raw_url)
+                query = parse_qsl(parsed.query, keep_blank_values=True)
+                existing_names = {name for name, _ in query}
+                requested_names = {
+                    name for name, _ in registration.credential_query_parameters
+                }
+                duplicates = existing_names.intersection(requested_names)
+                if duplicates:
+                    names = ", ".join(sorted(duplicates))
+                    raise ToolResolutionError(
+                        f"MCP query credential already present: {reference}.{names}"
+                    )
+                injected = {
+                    target: credentials[key].get_secret_value()
+                    for target, key in registration.credential_query_parameters
+                }
+                config["url"] = urlunsplit(
+                    parsed._replace(query=urlencode([*query, *injected.items()]))
+                )
+                sensitive_names.update(injected)
+                sensitive_values.update(injected.values())
             mcp_servers[registration.server_name] = cast(McpServerConfig, config)
             for allowed_tool in registration.allowed_tools:
                 if allowed_tool not in allowed_tools:

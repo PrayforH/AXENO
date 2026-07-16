@@ -1,11 +1,15 @@
 "use client";
 
 import {
+  ActionBarPrimitive,
   AuiIf,
   MessagePrimitive,
+  useAuiState,
+  useThreadRuntime,
   type ReasoningMessagePartComponent,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
+import { type FormEvent, useState } from "react";
 import {
   AssistantActionBar,
   AssistantMessage,
@@ -13,6 +17,7 @@ import {
   Composer,
   Thread,
   ThreadWelcome,
+  UserMessage,
 } from "@assistant-ui/react-ui";
 import { ActivitySummary } from "./activity-summary";
 import { ApprovalCard, type ApprovalDetails } from "./approval-card";
@@ -22,6 +27,10 @@ import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity, useRunViewModel } from "../lib/activity-store";
 import { selectComposerDisabled } from "../lib/run-view-model";
+import {
+  hasRunActivityToolCall,
+  runActivitySchema,
+} from "../lib/activity-schema";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -74,6 +83,11 @@ function UploadFeedbackNotice() {
 function HarnessComposer() {
   const runView = useRunViewModel();
   const runLocked = selectComposerDisabled(runView);
+  const composerHint = runLocked
+    ? runView?.phase === "waiting_approval"
+      ? "处理审批后，Agent 会从当前步骤继续"
+      : "Agent 正在执行，可随时停止"
+    : "Enter 发送 · Shift + Enter 换行";
   return (
     <div
       className="harness-composer-shell"
@@ -83,9 +97,10 @@ function HarnessComposer() {
     >
       <UploadFeedbackNotice />
       <Composer />
-      <p className="runtime-disclaimer">
-        文件在隔离工作区中处理 · 关键操作会先请求确认
-      </p>
+      <div className="composer-meta" aria-live="polite">
+        <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
+        <span>{composerHint}</span>
+      </div>
     </div>
   );
 }
@@ -115,12 +130,11 @@ export function UserTaskWelcome() {
   return (
     <ThreadWelcome.Root className="user-task-welcome">
       <ThreadWelcome.Center className="user-task-hero">
-        <ThreadWelcome.Avatar />
         <div className="user-task-intro">
-          <p className="user-task-kicker">开始一项任务</p>
-          <h2>今天想让 Agent 完成什么？</h2>
+          <p className="user-task-kicker"><span aria-hidden="true" />开始一项任务</p>
+          <h2>把目标交给 Agent</h2>
           <p>
-            描述目标或附加资料。Agent 可以分析、整理和执行复杂任务，并持续汇报进展。
+            描述期望结果，或附上资料。Agent 会规划步骤、调用工具，并在关键操作前请求确认。
           </p>
         </div>
       </ThreadWelcome.Center>
@@ -144,8 +158,8 @@ export function UserTaskWelcome() {
       </div>
 
       <p className="user-task-trust">
-        <span aria-hidden="true">✓</span>
-        文件在隔离工作区中处理，关键操作会先请求确认
+        <span aria-hidden="true" />
+        工具在隔离工作区运行 · 支持人工审批 · 产物可直接下载
       </p>
     </ThreadWelcome.Root>
   );
@@ -166,6 +180,14 @@ function objectValue(value: unknown): Record<string, unknown> {
 function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
+  if (part.toolName === "harness_run_activity") {
+    const parsed = runActivitySchema.safeParse(args.activity);
+    return parsed.success ? (
+      <div className="turn-activity-summary">
+        <ActivitySummary activity={parsed.data} />
+      </div>
+    ) : null;
+  }
   if (part.toolName === "Task" || part.toolName === "Agent") {
     return <SubagentCard status={status} parameters={args} result={part.result} />;
   }
@@ -194,10 +216,12 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
   }
   return (
     <ToolCard
+      toolCallId={part.toolCallId}
       name={part.toolName}
       status={status}
       args={args}
       result={part.result}
+      isError={part.isError}
     />
   );
 }
@@ -205,8 +229,9 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
 const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
   <details className="reasoning-card" open={status.type === "running"}>
     <summary>
-      <span aria-hidden="true">◇</span> 思考过程
-      <span>{status.type === "running" ? "进行中" : "已完成"}</span>
+      <span className="reasoning-mark" aria-hidden="true" />
+      <span>{status.type === "running" ? "正在思考" : "已思考"}</span>
+      <small>{status.type === "running" ? "进行中" : "展开查看"}</small>
     </summary>
     <div>{text}</div>
   </details>
@@ -214,8 +239,10 @@ const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
 
 function HarnessAssistantMessage() {
   return (
-    <AssistantMessage.Root>
-      <AssistantMessage.Avatar />
+    <AssistantMessage.Root className="harness-assistant-message">
+      <AuiIf condition={(state) => state.message.isLast}>
+        <LatestActivity />
+      </AuiIf>
       <AssistantMessage.Content
         components={{
           Text: MarkdownText,
@@ -223,7 +250,7 @@ function HarnessAssistantMessage() {
         }}
       />
       <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
-        <div className="aui-message-error">本次运行未完整结束，请打开“本次运行”查看详情。</div>
+        <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
       </AuiIf>
       <BranchPicker />
       <AssistantActionBar />
@@ -231,10 +258,122 @@ function HarnessAssistantMessage() {
   );
 }
 
+function EditMessageIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M4 14.8 4.7 12 13 3.7a1.4 1.4 0 0 1 2 0l1.3 1.3a1.4 1.4 0 0 1 0 2L8 15.3l-2.8.7Z" />
+      <path d="m12 4.7 3.3 3.3" />
+    </svg>
+  );
+}
+
+function CopyMessageIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="6.5" y="6.5" width="9" height="9" rx="1.5" />
+      <path d="M13.5 6.5v-2a1.5 1.5 0 0 0-1.5-1.5H4.5A1.5 1.5 0 0 0 3 4.5V12A1.5 1.5 0 0 0 4.5 13h2" />
+    </svg>
+  );
+}
+
+function HarnessUserMessage() {
+  const message = useAuiState((state) => state.message);
+  const threadRunning = useAuiState((state) => state.thread.isRunning);
+  const thread = useThreadRuntime();
+  const originalText = message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(originalText);
+
+  function beginEdit() {
+    setDraft(originalText);
+    setEditing(true);
+  }
+
+  function submitEdit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const text = draft.trim();
+    if (!text || text === originalText.trim()) {
+      setEditing(false);
+      return;
+    }
+    const parentId =
+      message.index > 0 ? thread.getState().messages[message.index - 1]?.id ?? null : null;
+    thread.append({
+      parentId,
+      sourceId: message.id,
+      role: "user",
+      content: [{ type: "text", text }],
+      attachments: message.attachments,
+      startRun: true,
+    });
+    setEditing(false);
+  }
+
+  return (
+    <UserMessage.Root className="harness-user-message">
+      <UserMessage.Attachments />
+      <MessagePrimitive.If hasContent>
+        {editing ? (
+          <form className="user-message-editor" onSubmit={submitEdit}>
+            <label htmlFor={`edit-${message.id}`}>编辑用户输入</label>
+            <textarea
+              id={`edit-${message.id}`}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              autoFocus
+              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+            />
+            <div>
+              <button type="button" onClick={() => setEditing(false)}>取消</button>
+              <button type="submit" disabled={!draft.trim() || draft.trim() === originalText.trim()}>
+                更新并重新运行
+              </button>
+            </div>
+          </form>
+        ) : (
+          <>
+            <UserMessage.Content />
+            <ActionBarPrimitive.Root
+              className="harness-user-action-bar"
+              autohide="never"
+            >
+              <button
+                className="user-message-action"
+                type="button"
+                aria-label="编辑消息"
+                title={threadRunning ? "运行结束后可编辑" : "编辑消息"}
+                disabled={threadRunning}
+                onClick={beginEdit}
+              >
+                <EditMessageIcon />
+              </button>
+              <ActionBarPrimitive.Copy
+                className="user-message-action"
+                aria-label="复制消息"
+                title="复制消息"
+                copiedDuration={1800}
+              >
+                <CopyMessageIcon />
+              </ActionBarPrimitive.Copy>
+            </ActionBarPrimitive.Root>
+          </>
+        )}
+      </MessagePrimitive.If>
+      <BranchPicker />
+    </UserMessage.Root>
+  );
+}
+
 function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
-  if (!activity || !runView) return null;
+  const hasDurableActivity = useAuiState((state) =>
+    hasRunActivityToolCall(state.message.content),
+  );
+  if (!activity || !runView || hasDurableActivity) return null;
   return (
     <div className={`latest-activity ${runView.phase}`}>
       <ActivitySummary activity={activity} />
@@ -245,7 +384,6 @@ function LatestActivity() {
 export function AgentThread() {
   return (
     <Thread
-      assistantAvatar={{ fallback: "H" }}
       assistantMessage={{
         allowCopy: true,
         allowReload: true,
@@ -259,9 +397,9 @@ export function AgentThread() {
       composer={{ allowAttachments: true }}
       components={{
         AssistantMessage: HarnessAssistantMessage,
+        UserMessage: HarnessUserMessage,
         Composer: HarnessComposer,
         ThreadWelcome: UserTaskWelcome,
-        MessagesFooter: LatestActivity,
       }}
       strings={{
         thread: { scrollToBottom: { tooltip: "滚动到底部" } },
@@ -284,7 +422,7 @@ export function AgentThread() {
           cancel: { tooltip: "停止运行" },
           addAttachment: { tooltip: "添加本地文件" },
           removeAttachment: { tooltip: "移除附件" },
-          input: { placeholder: "描述你希望完成的任务，可附加文件或资料…" },
+          input: { placeholder: "描述任务，或附加文件…" },
         },
         editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
       }}

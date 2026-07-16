@@ -91,15 +91,17 @@ export function ApprovalCard({
 
   const settled = complete || decision !== null;
   const contextRows = approvalContextRows(details);
+  const riskLabel = details.risk ? riskLabels[details.risk] ?? details.risk : undefined;
   return (
     <section className="domain-card approval-domain-card" aria-live="polite">
-      <div className="domain-card-kicker">
-        <span className="domain-card-icon" aria-hidden="true">
-          !
-        </span>
-        <span>{settled ? "审批已处理" : approvalLabel("pending")}</span>
+      <div className="approval-heading-row">
+        <div className="domain-card-kicker">
+          <span className="domain-card-icon" aria-hidden="true">!</span>
+          <span>{settled ? "审批已处理" : approvalLabel("pending")}</span>
+        </div>
+        {riskLabel && <span className={`risk-badge risk-${details.risk}`}>{riskLabel}风险</span>}
       </div>
-      <h3>允许 Agent 执行受保护操作？</h3>
+      <h3>允许执行这个操作？</h3>
       <p>{formatApprovalReason(details.reason)}</p>
       <dl className="domain-metadata">
         {contextRows.map((row) => (
@@ -123,7 +125,7 @@ export function ApprovalCard({
           disabled={settled || pending !== null}
           onClick={() => void decide("approved")}
         >
-          {pending === "approved" ? "正在批准…" : "批准并继续"}
+          {pending === "approved" ? "正在允许…" : "允许并继续"}
         </button>
         <button
           className="reject-button"
@@ -135,7 +137,7 @@ export function ApprovalCard({
         </button>
         {decision && (
           <span className="decision-label">
-            {decision === "approved" ? "已批准，Run 正在恢复" : "已拒绝"}
+            {decision === "approved" ? "已允许，运行正在恢复" : "已拒绝"}
           </span>
         )}
       </div>

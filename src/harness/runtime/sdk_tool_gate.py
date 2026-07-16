@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 
 from claude_agent_sdk import HookMatcher
@@ -12,6 +13,8 @@ from claude_agent_sdk.types import (
     HookEvent,
     HookInput,
     HookJSONOutput,
+    PostToolUseFailureHookInput,
+    PostToolUseHookInput,
     PreToolUseHookInput,
     SyncHookJSONOutput,
 )
@@ -19,7 +22,7 @@ from claude_agent_sdk.types import (
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.core.models import ApprovalStatus
-from harness.policy.models import PolicyContext, PolicyDecision
+from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult
 from harness.policy.profiles import PolicyProfileRegistry
 from harness.policy.rules import PolicyEngine
 from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
@@ -91,6 +94,66 @@ def _hook_output(decision: str, reason: str) -> SyncHookJSONOutput:
     )
 
 
+class _RunFileCapabilities:
+    """Track successful, run-created files without trusting model claims."""
+
+    def __init__(self, context: RuntimeContext) -> None:
+        self._workspace = context.workspace.resolve()
+        self._initial_exists: dict[Path, bool] = {}
+        self._generated: set[Path] = set()
+        self._pending_writes: dict[str, Path] = {}
+        self._protected: set[Path] = set()
+        for value in (*context.input_files, *context.processed_input_paths):
+            target = self._normalize(value)
+            if target is not None:
+                self._protected.add(target)
+
+    def _normalize(self, value: str) -> Path | None:
+        if not value.strip():
+            return None
+        pure = PurePosixPath(value)
+        if pure.is_absolute() and len(pure.parts) >= 2 and pure.parts[1] == "workspace":
+            candidate = self._workspace.joinpath(*pure.parts[2:])
+        else:
+            candidate = Path(value)
+            if not candidate.is_absolute():
+                candidate = self._workspace / candidate
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            return None
+        if resolved == self._workspace or not resolved.is_relative_to(self._workspace):
+            return None
+        return resolved
+
+    def target(self, arguments: dict[str, Any]) -> Path | None:
+        value = arguments.get("file_path", arguments.get("path"))
+        return self._normalize(value) if isinstance(value, str) else None
+
+    def is_generated(self, target: Path) -> bool:
+        return target in self._generated
+
+    def observe(self, target: Path) -> None:
+        self._initial_exists.setdefault(target, target.exists())
+
+    def note_authorized_write(self, tool_call_id: str, target: Path) -> None:
+        existed = self._initial_exists[target]
+        relative = target.relative_to(self._workspace)
+        protected = target in self._protected or (
+            bool(relative.parts) and relative.parts[0] == "inputs"
+        )
+        if not existed and not protected:
+            self._pending_writes[tool_call_id] = target
+
+    def note_success(self, hook_input: PostToolUseHookInput) -> None:
+        target = self._pending_writes.pop(hook_input["tool_use_id"], None)
+        if hook_input["tool_name"] == "Write" and target is not None:
+            self._generated.add(target)
+
+    def note_failure(self, hook_input: PostToolUseFailureHookInput) -> None:
+        self._pending_writes.pop(hook_input["tool_use_id"], None)
+
+
 class SdkToolGate:
     """Build a catch-all SDK hook that decides before tool execution."""
 
@@ -136,6 +199,7 @@ class SdkToolGate:
                     for name, child_policy_id in subagent_policy_ids.items()
                 }
         implicit_deny = PolicyEngine([])
+        file_capabilities = _RunFileCapabilities(context)
 
         async def pre_tool_use(
             hook_input: HookInput,
@@ -163,12 +227,35 @@ class SdkToolGate:
                 typed_input,
                 policy=selected_policy,
                 policy_id=selected_policy_id,
+                file_capabilities=file_capabilities,
             )
+
+        async def post_tool_use(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _hook_context: HookContext,
+        ) -> HookJSONOutput:
+            file_capabilities.note_success(cast(PostToolUseHookInput, hook_input))
+            return cast(HookJSONOutput, {})
+
+        async def post_tool_use_failure(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _hook_context: HookContext,
+        ) -> HookJSONOutput:
+            file_capabilities.note_failure(
+                cast(PostToolUseFailureHookInput, hook_input)
+            )
+            return cast(HookJSONOutput, {})
 
         return {
             "PreToolUse": [
                 HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=900.0)
-            ]
+            ],
+            "PostToolUse": [HookMatcher(matcher="Write", hooks=[post_tool_use])],
+            "PostToolUseFailure": [
+                HookMatcher(matcher="Write", hooks=[post_tool_use_failure])
+            ],
         }
 
     async def _authorize(
@@ -178,6 +265,7 @@ class SdkToolGate:
         *,
         policy: PolicyEngine,
         policy_id: str,
+        file_capabilities: _RunFileCapabilities,
     ) -> SyncHookJSONOutput:
         tool_name = hook_input["tool_name"]
         tool_call_id = hook_input["tool_use_id"]
@@ -219,13 +307,30 @@ class SdkToolGate:
             event_type="tool.request",
             payload=request_payload,
         )
-        result = policy.evaluate(
-            PolicyContext(
-                tenant_id=context.run.tenant_id,
-                agent_name=context.session.agent_name,
-                tool_name=tool_name,
-                arguments=arguments,
-                sandbox_isolation=context.sandbox_isolation,
+        write_target: Path | None = None
+        if tool_name in {"Write", "Edit"}:
+            write_target = file_capabilities.target(arguments)
+            if write_target is None:
+                reason = "write path must stay within the run workspace"
+                await self._append_denied(context, tool_call_id, reason)
+                return _hook_output("deny", reason)
+            file_capabilities.observe(write_target)
+        result = (
+            PolicyResult(
+                decision=PolicyDecision.ALLOW,
+                rule_name="run-generated-file",
+                reason="matched run-created file capability",
+            )
+            if write_target is not None
+            and file_capabilities.is_generated(write_target)
+            else policy.evaluate(
+                PolicyContext(
+                    tenant_id=context.run.tenant_id,
+                    agent_name=context.session.agent_name,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    sandbox_isolation=context.sandbox_isolation,
+                )
             )
         )
 
@@ -263,6 +368,9 @@ class SdkToolGate:
                 raise
             if decision is not ApprovalStatus.APPROVED:
                 return _hook_output("deny", "tool use was not approved")
+
+        if tool_name == "Write" and write_target is not None:
+            file_capabilities.note_authorized_write(tool_call_id, write_target)
 
         await self._events.append(
             tenant_id=context.run.tenant_id,

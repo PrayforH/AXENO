@@ -14,6 +14,10 @@ from ag_ui.core import (
 )
 
 from harness.adapters.memory import InMemoryAguiThreadBindingRepository
+from harness.agui.task_title import (
+    TaskTitleGenerator,
+    summarize_task_title_from_prompts,
+)
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
@@ -38,11 +42,15 @@ class AguiRunService:
         runs: RunService,
         input_artifacts: InputArtifactService,
         bindings: AguiThreadBindingRepository | None = None,
+        title_generator: TaskTitleGenerator | None = None,
     ) -> None:
         self._sessions = sessions
         self._run_service = runs
         self._input_artifacts = input_artifacts
         self._bindings = bindings or InMemoryAguiThreadBindingRepository()
+        self._title_generator = title_generator
+        self._title_tasks: set[asyncio.Task[None]] = set()
+        self._title_task_keys: set[tuple[str, str, str, datetime]] = set()
         self._run_bindings: dict[tuple[str, str, str, str], str] = {}
         self._lock = asyncio.Lock()
 
@@ -57,6 +65,13 @@ class AguiRunService:
             agent_version=session.agent_version,
         )
 
+    async def list_bindings(
+        self, *, tenant_id: str, user_id: str, limit: int = 50
+    ) -> list[StoredAguiThreadBinding]:
+        return await self._bindings.list_for_user(
+            tenant_id, user_id, limit=limit
+        )
+
     async def create_run(
         self,
         *,
@@ -67,6 +82,7 @@ class AguiRunService:
         request: RunAgentInput,
     ) -> Run:
         prompt, input_artifact_ids = _latest_user_input(request)
+        conversation_prompts = _user_prompts(request)
         resolved = await self._input_artifacts.resolve_for_run(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -85,6 +101,7 @@ class AguiRunService:
             request.run_id,
             input={
                 "prompt": prompt,
+                "conversation_prompts": conversation_prompts,
                 "input_artifact_ids": [item.input_artifact_id for item in resolved],
             },
         )
@@ -92,7 +109,115 @@ class AguiRunService:
             self._run_bindings[
                 (tenant_id, user_id, request.thread_id, request.run_id)
             ] = run.run_id
+        title_timestamp = datetime.now(UTC)
+        await self._bindings.update_title(
+            tenant_id,
+            user_id,
+            request.thread_id,
+            title=summarize_task_title_from_prompts(conversation_prompts),
+            source="fallback",
+            generated_at=title_timestamp,
+        )
+        self._schedule_model_title(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            thread_id=request.thread_id,
+            prompts=conversation_prompts,
+            generated_at=title_timestamp,
+        )
         return run
+
+    async def resolve_title(
+        self, binding: StoredAguiThreadBinding, prompts: list[str]
+    ) -> str:
+        if binding.title and (
+            binding.title_source == "model"
+            or self._title_generator is None
+            or not prompts
+        ):
+            return binding.title
+        generated_at = binding.title_updated_at or datetime.now(UTC)
+        if binding.title:
+            self._schedule_model_title(
+                tenant_id=binding.tenant_id,
+                user_id=binding.user_id,
+                thread_id=binding.thread_id,
+                prompts=prompts,
+                generated_at=generated_at,
+            )
+            return binding.title
+        updated = await self._bindings.update_title(
+            binding.tenant_id,
+            binding.user_id,
+            binding.thread_id,
+            title=summarize_task_title_from_prompts(prompts),
+            source="fallback",
+            generated_at=generated_at,
+        )
+        self._schedule_model_title(
+            tenant_id=binding.tenant_id,
+            user_id=binding.user_id,
+            thread_id=binding.thread_id,
+            prompts=prompts,
+            generated_at=generated_at,
+        )
+        return updated.title or "新任务"
+
+    def _schedule_model_title(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        prompts: list[str],
+        generated_at: datetime,
+    ) -> None:
+        if self._title_generator is None or not prompts:
+            return
+        key = (tenant_id, user_id, thread_id, generated_at)
+        if key in self._title_task_keys:
+            return
+        self._title_task_keys.add(key)
+        task = asyncio.create_task(
+            self._generate_model_title(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                prompts=prompts,
+                generated_at=generated_at,
+            )
+        )
+        self._title_tasks.add(task)
+
+        def cleanup(completed: asyncio.Task[None]) -> None:
+            self._title_tasks.discard(completed)
+            self._title_task_keys.discard(key)
+
+        task.add_done_callback(cleanup)
+
+    async def _generate_model_title(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        prompts: list[str],
+        generated_at: datetime,
+    ) -> None:
+        assert self._title_generator is not None
+        try:
+            title = await self._title_generator.generate(prompts)
+            await self._bindings.update_title(
+                tenant_id,
+                user_id,
+                thread_id,
+                title=title,
+                source="model",
+                generated_at=generated_at,
+            )
+        except Exception:
+            # A title must never block the Agent run; the deterministic title remains valid.
+            return
 
     async def cancel_run(
         self,
@@ -197,3 +322,18 @@ def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
                 input_artifact_ids.append(input_artifact_id)
         return text, input_artifact_ids
     return "", []
+
+
+def _user_prompts(request: RunAgentInput) -> list[str]:
+    prompts: list[str] = []
+    for message in request.messages:
+        if message.role != "user":
+            continue
+        content = message.content
+        if isinstance(content, str):
+            prompts.append(content)
+            continue
+        prompts.append(
+            "\n".join(item.text for item in content if isinstance(item, TextInputContent))
+        )
+    return prompts

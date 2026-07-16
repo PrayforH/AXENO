@@ -24,6 +24,20 @@ class Settings(BaseSettings):
     local_auto_execute: bool = False
     api_bearer_token: SecretStr = SecretStr("")
 
+    auth_jwt_secret: SecretStr = SecretStr(
+        "local-development-auth-secret-change-before-production"
+    )
+    auth_issuer: str = "claude-agent-harness"
+    auth_audience: str = "claude-agent-harness-api"
+    auth_access_token_minutes: int = Field(default=30, ge=5, le=1440)
+    auth_refresh_token_days: int = Field(default=30, ge=1, le=365)
+    auth_allow_registration: bool = True
+    auth_default_tenant_id: str = "local"
+    auth_google_client_id: str = ""
+    auth_google_client_secret: SecretStr = SecretStr("")
+    auth_github_client_id: str = ""
+    auth_github_client_secret: SecretStr = SecretStr("")
+
     database_url: str = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
     redis_url: str = "redis://localhost:6379/0"
 

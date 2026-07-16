@@ -9,11 +9,13 @@ from harness.adapters.memory import (
     InMemoryEventBus,
     InMemoryEventRepository,
     InMemoryRunRepository,
+    InMemoryTaskQueue,
 )
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus
+from harness.core.ports import RunTask
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
@@ -28,7 +30,11 @@ def ids() -> Callable[[str], str]:
     return generate
 
 
-async def arrange(*, clock: Callable[[], datetime] = lambda: NOW):
+async def arrange(
+    *,
+    clock: Callable[[], datetime] = lambda: NOW,
+    queue: InMemoryTaskQueue | None = None,
+):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
     events = InMemoryEventRepository()
@@ -48,6 +54,7 @@ async def arrange(*, clock: Callable[[], datetime] = lambda: NOW):
         events=EventService(events, InMemoryEventBus(), clock=clock, id_generator=ids()),
         clock=clock,
         id_generator=ids(),
+        queue=queue,
         ttl=timedelta(minutes=5),
     )
     return service, runs, events
@@ -136,6 +143,88 @@ async def test_expired_approval_cannot_execute() -> None:
             approval_id=approval.approval_id,
             decision=ApprovalStatus.APPROVED,
         )
+
+
+@pytest.mark.asyncio
+async def test_orphaned_expired_approval_is_reaped_and_run_is_rejected() -> None:
+    current = NOW
+
+    def clock() -> datetime:
+        return current
+
+    runs = InMemoryRunRepository()
+    approvals = InMemoryApprovalRepository()
+    events = InMemoryEventRepository()
+    event_service = EventService(
+        events, InMemoryEventBus(), clock=clock, id_generator=ids()
+    )
+    await runs.add(
+        Run(
+            run_id="run-orphan",
+            session_id="session-1",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="orphan",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    worker_before_restart = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=clock,
+        id_generator=ids(),
+        ttl=timedelta(minutes=5),
+    )
+    approval = await worker_before_restart.request(
+        tenant_id="tenant-a",
+        run_id="run-orphan",
+        tool_call_id="tool-orphan",
+        reason="review",
+        inline=True,
+    )
+    assert worker_before_restart.has_inline_waiter(approval.approval_id)
+
+    current = NOW + timedelta(minutes=6)
+    worker_after_restart = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=clock,
+        id_generator=ids(),
+        ttl=timedelta(minutes=5),
+    )
+
+    assert await worker_after_restart.reap_expired() == 1
+    assert (await approvals.get("tenant-a", approval.approval_id)).status is ApprovalStatus.EXPIRED
+    assert (await runs.get("tenant-a", "run-orphan")).status is RunStatus.REJECTED
+    emitted = await events.list_after("tenant-a", "run-orphan", 0)
+    assert [event.type for event in emitted][-3:] == [
+        "approval.expired",
+        "tool.result",
+        "run.rejected",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_approved_handoff_enqueues_a_fresh_worker_task() -> None:
+    queue = InMemoryTaskQueue()
+    service, _, _ = await arrange(queue=queue)
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-handoff",
+        reason="review",
+    )
+
+    await service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+
+    assert await queue.dequeue() == RunTask(tenant_id="tenant-a", run_id="run-1")
 
 
 @pytest.mark.asyncio

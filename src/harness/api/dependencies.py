@@ -37,6 +37,13 @@ from harness.application.memory import UserMemoryService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
+from harness.auth.audit import AuditService
+from harness.auth.repositories import InMemoryAuditRepository, InMemoryAuthRepository
+from harness.auth.service import (
+    AuthenticationError,
+    AuthService,
+    OAuthProviderConfig,
+)
 from harness.config import Settings
 from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
@@ -68,12 +75,18 @@ from harness.worker.orchestrator import RunOrchestrator
 class Identity:
     tenant_id: str
     user_id: str
+    roles: frozenset[str] = frozenset({"owner"})
+    email: str = ""
+    display_name: str = ""
+    authentication_method: str = "service"
 
 
 @dataclass(frozen=True)
 class ApiContainer:
     environment: str
     api_bearer_token: SecretStr
+    auth: AuthService
+    audit: AuditService
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -112,6 +125,25 @@ def build_memory_container(
     bus = InMemoryEventBus()
     queue = InMemoryTaskQueue()
     observability = build_observability(resolved_settings)
+    auth = AuthService(
+        InMemoryAuthRepository(),
+        jwt_secret=resolved_settings.auth_jwt_secret,
+        issuer=resolved_settings.auth_issuer,
+        audience=resolved_settings.auth_audience,
+        access_token_minutes=resolved_settings.auth_access_token_minutes,
+        refresh_token_days=resolved_settings.auth_refresh_token_days,
+        allow_registration=resolved_settings.auth_allow_registration,
+        default_tenant_id=resolved_settings.auth_default_tenant_id,
+        google=OAuthProviderConfig(
+            resolved_settings.auth_google_client_id,
+            resolved_settings.auth_google_client_secret,
+        ),
+        github=OAuthProviderConfig(
+            resolved_settings.auth_github_client_id,
+            resolved_settings.auth_github_client_secret,
+        ),
+    )
+    audit = AuditService(InMemoryAuditRepository())
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -138,6 +170,7 @@ def build_memory_container(
         events=event_service,
         clock=clock,
         id_generator=id_generator,
+        queue=queue,
     )
     artifact_service = ArtifactService(
         runs=runs,
@@ -279,6 +312,8 @@ def build_memory_container(
     return ApiContainer(
         environment=resolved_settings.environment,
         api_bearer_token=resolved_settings.api_bearer_token,
+        auth=auth,
+        audit=audit,
         agents=AgentService(
             registry, clock=clock, environment=resolved_settings.environment
         ),
@@ -304,18 +339,71 @@ def get_container(request: Request) -> ApiContainer:
 
 
 async def require_identity(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
     tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
     user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
 ) -> Identity:
-    if not tenant_id or not user_id:
+    container: ApiContainer = request.app.state.container
+    scheme, separator, credential = (authorization or "").partition(" ")
+    service_authenticated = bool(
+        getattr(request.state, "service_authenticated", False)
+    )
+    if separator and scheme.lower() == "bearer" and credential.count(".") == 2:
+        try:
+            claims = container.auth.authenticate_access_token(credential)
+            user, membership = await container.auth.current_user(claims)
+        except AuthenticationError as error:
+            raise HTTPException(
+                status_code=401,
+                detail={"code": "access_token_invalid", "message": str(error)},
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from error
+        identity = Identity(
+            tenant_id=membership.tenant_id,
+            user_id=user.user_id,
+            roles=frozenset({membership.role}),
+            email=user.email,
+            display_name=user.display_name,
+            authentication_method="jwt",
+        )
+        request.state.identity = identity
+        return identity
+    legacy_allowed = service_authenticated or container.environment != "production"
+    if not legacy_allowed or not tenant_id or not user_id:
         raise HTTPException(
             status_code=401,
             detail={
                 "code": "identity_required",
-                "message": "X-Tenant-ID and X-User-ID headers are required",
+                "message": "Sign in with a valid access token",
+            },
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    identity = Identity(tenant_id=tenant_id, user_id=user_id)
+    request.state.identity = identity
+    return identity
+
+
+_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
+    "owner": frozenset({"*"}),
+    "admin": frozenset({"agents:publish", "tasks:read", "tasks:write", "audit:read"}),
+    "member": frozenset({"tasks:read", "tasks:write"}),
+    "viewer": frozenset({"tasks:read"}),
+}
+
+
+def ensure_permission(identity: Identity, permission: str) -> None:
+    granted: set[str] = set()
+    for role in identity.roles:
+        granted.update(_ROLE_PERMISSIONS.get(role, frozenset()))
+    if "*" not in granted and permission not in granted:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "permission_denied",
+                "message": f"Permission required: {permission}",
             },
         )
-    return Identity(tenant_id=tenant_id, user_id=user_id)
 
 
 async def require_owned_session(

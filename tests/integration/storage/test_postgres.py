@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from harness.core.errors import ConflictError
 from harness.core.events import RunEvent
 from harness.core.models import (
     AgentVersion,
@@ -110,6 +111,20 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     session_repository = PostgresSessionRepository(sessions)
     await session_repository.add(thread)
     assert await session_repository.get("tenant-a", "session-a") == thread
+    bound_thread = await session_repository.bind_claude_session_id(
+        "tenant-a", "session-a", "claude-session-a"
+    )
+    assert bound_thread.claude_session_id == "claude-session-a"
+    assert await session_repository.get("tenant-a", "session-a") == bound_thread
+    assert (
+        await session_repository.bind_claude_session_id(
+            "tenant-a", "session-a", "claude-session-a"
+        )
+    ) == bound_thread
+    with pytest.raises(ConflictError, match="already bound"):
+        await session_repository.bind_claude_session_id(
+            "tenant-a", "session-a", "claude-session-b"
+        )
 
     approval = ApprovalRequest(
         approval_id="approval-a",
@@ -123,6 +138,7 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     )
     approval_repository = PostgresApprovalRepository(sessions)
     await approval_repository.add(approval)
+    assert await approval_repository.list_expired_pending(now, limit=10) == [approval]
     approved = approval.model_copy(update={"status": ApprovalStatus.APPROVED})
     assert await approval_repository.compare_and_set(ApprovalStatus.PENDING, approved)
     assert not await approval_repository.compare_and_set(ApprovalStatus.PENDING, approved)
@@ -211,3 +227,17 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     assert await binding_repository.get_by_thread(
         "tenant-a", "user-a", "thread-a"
     ) == binding
+    titled = await binding_repository.update_title(
+        "tenant-a",
+        "user-a",
+        "thread-a",
+        title="生成可下载报告",
+        source="model",
+        generated_at=now,
+    )
+    assert titled.title == "生成可下载报告"
+    assert (
+        await binding_repository.get_by_thread(
+            "tenant-a", "user-a", "thread-a"
+        )
+    ).title == "生成可下载报告"

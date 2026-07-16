@@ -3,7 +3,7 @@ import { getHarnessServerConfig } from "../../../../lib/server-config";
 
 export const dynamic = "force-dynamic";
 
-export async function POST(
+async function proxy(
   request: Request,
   context: { params: Promise<{ path: string[] }> },
 ) {
@@ -14,4 +14,18 @@ export async function POST(
     fetch,
     path.map(encodeURIComponent).join("/"),
   );
+}
+
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxy(request, context);
+}
+
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxy(request, context);
 }

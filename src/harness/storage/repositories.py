@@ -75,6 +75,26 @@ class PostgresRunRepository:
             cursor = cast(CursorResult[Any], result)
             return bool(cursor.rowcount)
 
+    async def list_for_sessions(
+        self, tenant_id: str, session_ids: list[str], *, limit: int
+    ) -> list[Run]:
+        if not session_ids:
+            return []
+        statement = (
+            select(RunRow.payload)
+            .where(
+                RunRow.tenant_id == tenant_id,
+                RunRow.session_id.in_(session_ids),
+            )
+        )
+        async with self._sessions() as session:
+            payloads = (await session.execute(statement)).scalars().all()
+            return sorted(
+                (Run.model_validate(payload) for payload in payloads),
+                key=lambda run: (run.updated_at, run.run_id),
+                reverse=True,
+            )[:limit]
+
 
 class PostgresEventRepository:
     def __init__(self, sessions: SessionFactory) -> None:

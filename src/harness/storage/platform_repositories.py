@@ -1,6 +1,7 @@
 """PostgreSQL repositories for durable platform state beyond runs and events."""
 
-from typing import Any, cast
+from datetime import datetime
+from typing import Any, Literal, cast
 
 from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.exc import IntegrityError
@@ -92,6 +93,33 @@ class PostgresSessionRepository:
                 raise NotFoundError(f"session not found: {session_id}")
             return Session.model_validate(row.payload)
 
+    async def bind_claude_session_id(
+        self, tenant_id: str, session_id: str, claude_session_id: str
+    ) -> Session:
+        if not claude_session_id:
+            raise ValueError("claude_session_id must be non-empty")
+        async with self._sessions() as session:
+            row = await session.get(
+                SessionRow,
+                (tenant_id, session_id),
+                with_for_update=True,
+            )
+            if row is None:
+                raise NotFoundError(f"session not found: {session_id}")
+            current = Session.model_validate(row.payload)
+            if current.claude_session_id is not None:
+                if current.claude_session_id != claude_session_id:
+                    raise ConflictError(
+                        f"session {session_id} is already bound to another Claude session"
+                    )
+                return current
+            updated = current.model_copy(
+                update={"claude_session_id": claude_session_id}
+            )
+            row.payload = updated.model_dump(mode="json")
+            await session.commit()
+            return updated
+
 
 class PostgresApprovalRepository:
     def __init__(self, sessions: SessionFactory) -> None:
@@ -106,6 +134,7 @@ class PostgresApprovalRepository:
                     run_id=approval.run_id,
                     tool_call_id=approval.tool_call_id,
                     status=approval.status.value,
+                    expires_at=approval.expires_at,
                     payload=approval.model_dump(mode="json"),
                 )
             )
@@ -151,6 +180,43 @@ class PostgresApprovalRepository:
             result = await session.execute(statement)
             await session.commit()
             return bool(cast(CursorResult[Any], result).rowcount)
+
+    async def list_expired_pending(
+        self, expires_at_or_before: datetime, *, limit: int
+    ) -> list[ApprovalRequest]:
+        statement = (
+            select(ApprovalRow.payload)
+            .where(
+                ApprovalRow.status == ApprovalStatus.PENDING.value,
+                ApprovalRow.expires_at <= expires_at_or_before,
+            )
+            .order_by(ApprovalRow.expires_at, ApprovalRow.approval_id)
+            .limit(limit)
+        )
+        async with self._sessions() as session:
+            payloads = (await session.execute(statement)).scalars().all()
+            return [ApprovalRequest.model_validate(payload) for payload in payloads]
+
+    async def list_for_runs(
+        self, tenant_id: str, run_ids: list[str]
+    ) -> list[ApprovalRequest]:
+        if not run_ids:
+            return []
+        statement = (
+            select(ApprovalRow.payload)
+            .where(
+                ApprovalRow.tenant_id == tenant_id,
+                ApprovalRow.run_id.in_(run_ids),
+            )
+            .order_by(ApprovalRow.approval_id.desc())
+        )
+        async with self._sessions() as session:
+            payloads = (await session.execute(statement)).scalars().all()
+            return sorted(
+                (ApprovalRequest.model_validate(payload) for payload in payloads),
+                key=lambda approval: (approval.created_at, approval.approval_id),
+                reverse=True,
+            )
 
 
 class PostgresArtifactRepository:
@@ -483,3 +549,52 @@ class PostgresAguiThreadBindingRepository:
                     f"AG-UI session binding not found: {session_id}"
                 )
             return AguiThreadBinding.model_validate(payload)
+
+    async def list_for_user(
+        self, tenant_id: str, user_id: str, *, limit: int
+    ) -> list[AguiThreadBinding]:
+        statement = (
+            select(AguiThreadBindingRow.payload)
+            .where(
+                AguiThreadBindingRow.tenant_id == tenant_id,
+                AguiThreadBindingRow.user_id == user_id,
+            )
+        )
+        async with self._sessions() as session:
+            payloads = (await session.execute(statement)).scalars().all()
+            return sorted(
+                (AguiThreadBinding.model_validate(payload) for payload in payloads),
+                key=lambda binding: (binding.updated_at, binding.thread_id),
+                reverse=True,
+            )[:limit]
+
+    async def update_title(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: Literal["fallback", "model"],
+        generated_at: datetime,
+    ) -> AguiThreadBinding:
+        async with self._sessions() as session:
+            row = await session.get(
+                AguiThreadBindingRow, (tenant_id, user_id, thread_id)
+            )
+            if row is None:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
+            binding = AguiThreadBinding.model_validate(row.payload)
+            if binding.title_updated_at is not None and binding.title_updated_at > generated_at:
+                return binding
+            updated = binding.model_copy(
+                update={
+                    "title": title,
+                    "title_source": source,
+                    "title_updated_at": generated_at,
+                    "updated_at": max(binding.updated_at, generated_at),
+                }
+            )
+            row.payload = updated.model_dump(mode="json")
+            await session.commit()
+            return updated

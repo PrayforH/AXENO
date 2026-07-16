@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 from harness.api.dependencies import (
     ApiContainer,
     Identity,
+    ensure_permission,
     get_container,
     require_identity,
     require_owned_run,
@@ -32,6 +33,7 @@ async def create_run(
     container: Annotated[ApiContainer, Depends(get_container)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Run:
+    ensure_permission(identity, "tasks:write")
     await require_owned_session(container, identity, session_id)
     run_input: dict[str, object] = {"prompt": body.prompt}
     if body.input_artifact_ids:
@@ -53,6 +55,7 @@ async def get_run(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Run:
+    ensure_permission(identity, "tasks:read")
     return await require_owned_run(container, identity, run_id)
 
 
@@ -62,6 +65,7 @@ async def cancel_run(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> Run:
+    ensure_permission(identity, "tasks:write")
     await require_owned_run(container, identity, run_id)
     return await container.runs.cancel(identity.tenant_id, run_id)
 
@@ -73,6 +77,7 @@ async def replay_events(
     container: Annotated[ApiContainer, Depends(get_container)],
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
+    ensure_permission(identity, "tasks:read")
     await require_owned_run(container, identity, run_id)
     after_sequence = int(last_event_id or "0")
     events = await container.events.list_after(identity.tenant_id, run_id, after_sequence)

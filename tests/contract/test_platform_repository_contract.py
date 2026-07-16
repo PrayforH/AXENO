@@ -119,6 +119,18 @@ async def test_agui_binding_round_trips_in_both_directions() -> None:
 
     assert await repository.get_by_thread("tenant-a", "user-a", "thread-a") == binding
     assert await repository.get_by_session("tenant-a", "user-a", "session-a") == binding
+    titled = await repository.update_title(
+        "tenant-a",
+        "user-a",
+        "thread-a",
+        title="生成可下载报告",
+        source="model",
+        generated_at=NOW + timedelta(seconds=1),
+    )
+    assert titled.title == "生成可下载报告"
+    assert titled.title_source == "model"
+    assert await repository.get_by_session(
+        "tenant-a", "user-a", "session-a"
+    ) == titled
     with pytest.raises(NotFoundError):
         await repository.get_by_thread("tenant-a", "user-b", "thread-a")
-

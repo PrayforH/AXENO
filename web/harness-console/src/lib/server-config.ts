@@ -5,8 +5,12 @@ export interface HarnessServerConfig {
   agentName: string;
   agentVersion: string;
   aguiUrl: string;
-  identityHeaders: Record<string, string>;
   serviceHeaders: Record<string, string>;
+  cookieSecure: boolean;
+  refreshCookieDays: number;
+  googleClientId: string;
+  githubClientId: string;
+  publicUrl: string;
 }
 
 export function getHarnessServerConfig(
@@ -28,12 +32,13 @@ export function getHarnessServerConfig(
     agentName,
     agentVersion,
     aguiUrl: `${apiUrl}/v1/agui?${query.toString()}`,
-    identityHeaders: {
-      "X-Tenant-ID": environment.HARNESS_TENANT_ID ?? "local",
-      "X-User-ID": environment.HARNESS_USER_ID ?? "developer",
-    },
     serviceHeaders: environment.HARNESS_API_BEARER_TOKEN
-      ? { Authorization: `Bearer ${environment.HARNESS_API_BEARER_TOKEN}` }
+      ? { "X-Harness-Service-Token": environment.HARNESS_API_BEARER_TOKEN }
       : {},
+    cookieSecure: environment.AUTH_COOKIE_SECURE === "true",
+    refreshCookieDays: Number(environment.AUTH_REFRESH_COOKIE_DAYS ?? "30"),
+    googleClientId: environment.AUTH_GOOGLE_CLIENT_ID ?? "",
+    githubClientId: environment.AUTH_GITHUB_CLIENT_ID ?? "",
+    publicUrl: (environment.AUTH_PUBLIC_URL ?? "").replace(/\/$/, ""),
   };
 }

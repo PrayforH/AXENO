@@ -112,6 +112,9 @@ class ArtifactPublisher:
             )
 
         display_name = name.strip() if isinstance(name, str) else ""
+        source_suffix = PurePosixPath(resolved.name).suffix
+        if display_name and source_suffix and not PurePosixPath(display_name).suffix:
+            display_name = f"{display_name}{source_suffix}"
         artifact = await self._artifacts.upload(
             tenant_id=self._tenant_id,
             run_id=self._run_id,

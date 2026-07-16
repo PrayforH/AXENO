@@ -5,9 +5,13 @@ import { ApprovalCard } from "../src/components/approval-card";
 import { ArtifactCard } from "../src/components/artifact-list";
 import { SubagentCard } from "../src/components/subagent-card";
 import { ToolCard } from "../src/components/tool-card";
+import { completedToolBatch } from "../src/components/tool-card";
+import type { RunViewModel } from "../src/lib/run-view-model";
 import { UploadFeedbackContent } from "../src/components/agent-thread";
 import {
   activityOverview,
+  hasRunActivityToolCall,
+  latestHistoryRunActivity,
   latestRunActivity,
   runActivitySchema,
 } from "../src/lib/activity-schema";
@@ -78,6 +82,49 @@ describe("Codex-style activity UI", () => {
     });
   });
 
+  it("restores the latest activity from durable history tool calls", () => {
+    const completed = runActivitySchema.parse({
+      ...activity,
+      status: "succeeded",
+    });
+    const found = latestHistoryRunActivity([
+      {
+        role: "assistant",
+        content: "done",
+        toolCalls: [
+          {
+            function: {
+              name: "harness_run_activity",
+              arguments: JSON.stringify({ activity: completed }),
+            },
+          },
+        ],
+      },
+      { role: "tool", content: '{"status":"ready"}' },
+    ]);
+
+    expect(found?.run_id).toBe("run-1");
+    expect(found?.status).toBe("succeeded");
+  });
+
+  it("detects a durable activity card so the live summary is not duplicated", () => {
+    expect(
+      hasRunActivityToolCall([
+        { type: "text", text: "answer" },
+        {
+          type: "tool-call",
+          toolName: "harness_run_activity",
+          toolCallId: "activity-1",
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      hasRunActivityToolCall([
+        { type: "tool-call", toolName: "Read", toolCallId: "read-1" },
+      ]),
+    ).toBe(false);
+  });
+
   it("summarizes model, tools, and subagents without raw event JSON", () => {
     const html = renderToStaticMarkup(
       <ActivitySummary activity={runActivitySchema.parse(activity)} />,
@@ -95,10 +142,24 @@ describe("Codex-style activity UI", () => {
     const html = renderToStaticMarkup(
       <ToolCard name="Read" status="complete" args={{ file_path: "README.md" }} result={'{"ok":true}'} />,
     );
+    expect(html).toContain("读取文件");
     expect(html).toContain("Read");
     expect(html).toContain("已完成");
     expect(html).toContain("file_path");
     expect(html).toContain("json-boolean");
+  });
+
+  it("selects multiple completed ordinary tools for one collapsed batch", () => {
+    const tools = completedToolBatch({
+      tools: [
+        { id: "tool-1", name: "tool", status: "completed", sequence: 1 },
+        { id: "tool-2", name: "Bash", status: "completed", sequence: 2 },
+        { id: "tool-3", name: "Edit", status: "failed", sequence: 3 },
+        { id: "tool-4", name: "harness_request_approval", status: "completed", sequence: 4 },
+      ],
+    } as RunViewModel);
+
+    expect(tools.map((tool) => tool.id)).toEqual(["tool-1", "tool-2"]);
   });
 
   it("presents Task calls as delegated subagents", () => {
@@ -108,7 +169,7 @@ describe("Codex-style activity UI", () => {
         parameters={{ description: "分析仓库", subagent_type: "helper" }}
       />,
     );
-    expect(html).toContain("子 Agent");
+    expect(html).toContain("委派给 helper");
     expect(html).toContain("helper");
     expect(html).toContain("分析仓库");
   });
@@ -154,14 +215,16 @@ describe("Codex-style activity UI", () => {
           run_id: "run-1",
           tool_call_id: "tool-1",
           reason: "matched policy rule write-review",
+          risk: "high",
         }}
         complete={false}
         onDecision={async () => undefined}
       />,
     );
 
-    expect(html).toContain("允许 Agent 执行受保护操作？");
-    expect(html).toContain("批准并继续");
+    expect(html).toContain("允许执行这个操作？");
+    expect(html).toContain("允许并继续");
+    expect(html).toContain("高风险");
     expect(html).toContain("拒绝");
     expect(html).toContain("write-review");
   });

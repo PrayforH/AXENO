@@ -1,6 +1,7 @@
 """Framework-independent ports implemented by infrastructure adapters."""
 
-from typing import Protocol
+from datetime import datetime
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -47,6 +48,10 @@ class SessionRepository(Protocol):
 
     async def get(self, tenant_id: str, session_id: str) -> Session: ...
 
+    async def bind_claude_session_id(
+        self, tenant_id: str, session_id: str, claude_session_id: str
+    ) -> Session: ...
+
 
 class RunRepository(Protocol):
     async def add(self, run: Run) -> None: ...
@@ -58,6 +63,10 @@ class RunRepository(Protocol):
     ) -> Run | None: ...
 
     async def compare_and_set(self, expected_status: RunStatus, updated: Run) -> bool: ...
+
+    async def list_for_sessions(
+        self, tenant_id: str, session_ids: list[str], *, limit: int
+    ) -> list[Run]: ...
 
 
 class ApprovalRepository(Protocol):
@@ -72,6 +81,14 @@ class ApprovalRepository(Protocol):
     async def compare_and_set(
         self, expected_status: ApprovalStatus, updated: ApprovalRequest
     ) -> bool: ...
+
+    async def list_expired_pending(
+        self, expires_at_or_before: datetime, *, limit: int
+    ) -> list[ApprovalRequest]: ...
+
+    async def list_for_runs(
+        self, tenant_id: str, run_ids: list[str]
+    ) -> list[ApprovalRequest]: ...
 
 
 class EventRepository(Protocol):
@@ -155,6 +172,21 @@ class AguiThreadBindingRepository(Protocol):
 
     async def get_by_session(
         self, tenant_id: str, user_id: str, session_id: str
+    ) -> AguiThreadBinding: ...
+
+    async def list_for_user(
+        self, tenant_id: str, user_id: str, *, limit: int
+    ) -> list[AguiThreadBinding]: ...
+
+    async def update_title(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: Literal["fallback", "model"],
+        generated_at: datetime,
     ) -> AguiThreadBinding: ...
 
 

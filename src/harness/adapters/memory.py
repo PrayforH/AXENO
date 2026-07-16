@@ -3,6 +3,8 @@
 import asyncio
 import hashlib
 from collections import defaultdict, deque
+from datetime import datetime
+from typing import Literal
 
 from harness.core.errors import ConflictError, EventSequenceConflictError, NotFoundError
 from harness.core.events import RunEvent
@@ -62,6 +64,28 @@ class InMemorySessionRepository:
         except KeyError as error:
             raise NotFoundError(f"session not found: {session_id}") from error
 
+    async def bind_claude_session_id(
+        self, tenant_id: str, session_id: str, claude_session_id: str
+    ) -> Session:
+        if not claude_session_id:
+            raise ValueError("claude_session_id must be non-empty")
+        key = (tenant_id, session_id)
+        async with self._lock:
+            current = self._items.get(key)
+            if current is None:
+                raise NotFoundError(f"session not found: {session_id}")
+            if current.claude_session_id is not None:
+                if current.claude_session_id != claude_session_id:
+                    raise ConflictError(
+                        f"session {session_id} is already bound to another Claude session"
+                    )
+                return current
+            updated = current.model_copy(
+                update={"claude_session_id": claude_session_id}
+            )
+            self._items[key] = updated
+            return updated
+
 
 class InMemoryRunRepository:
     def __init__(self) -> None:
@@ -104,6 +128,17 @@ class InMemoryRunRepository:
             self._items[key] = updated
             return True
 
+    async def list_for_sessions(
+        self, tenant_id: str, session_ids: list[str], *, limit: int
+    ) -> list[Run]:
+        wanted = set(session_ids)
+        matches = [
+            run
+            for (item_tenant, _), run in self._items.items()
+            if item_tenant == tenant_id and run.session_id in wanted
+        ]
+        return sorted(matches, key=lambda run: (run.updated_at, run.run_id), reverse=True)[:limit]
+
 
 class InMemoryApprovalRepository:
     def __init__(self) -> None:
@@ -144,6 +179,31 @@ class InMemoryApprovalRepository:
                 return False
             self._items[key] = updated
             return True
+
+    async def list_expired_pending(
+        self, expires_at_or_before: datetime, *, limit: int
+    ) -> list[ApprovalRequest]:
+        items = [
+            approval
+            for approval in self._items.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at <= expires_at_or_before
+        ]
+        return sorted(items, key=lambda approval: approval.expires_at)[:limit]
+
+    async def list_for_runs(
+        self, tenant_id: str, run_ids: list[str]
+    ) -> list[ApprovalRequest]:
+        wanted = set(run_ids)
+        return sorted(
+            (
+                approval
+                for (item_tenant, _), approval in self._items.items()
+                if item_tenant == tenant_id and approval.run_id in wanted
+            ),
+            key=lambda approval: (approval.created_at, approval.approval_id),
+            reverse=True,
+        )
 
 
 class InMemoryEventRepository:
@@ -407,6 +467,52 @@ class InMemoryAguiThreadBindingRepository:
             return self._by_session[(tenant_id, user_id, session_id)]
         except KeyError as error:
             raise NotFoundError(f"AG-UI session binding not found: {session_id}") from error
+
+    async def list_for_user(
+        self, tenant_id: str, user_id: str, *, limit: int
+    ) -> list[AguiThreadBinding]:
+        matches = [
+            binding
+            for (item_tenant, item_user, _), binding in self._by_thread.items()
+            if item_tenant == tenant_id and item_user == user_id
+        ]
+        return sorted(
+            matches,
+            key=lambda binding: (binding.updated_at, binding.thread_id),
+            reverse=True,
+        )[:limit]
+
+    async def update_title(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        title: str,
+        source: Literal["fallback", "model"],
+        generated_at: datetime,
+    ) -> AguiThreadBinding:
+        thread_key = (tenant_id, user_id, thread_id)
+        async with self._lock:
+            try:
+                binding = self._by_thread[thread_key]
+            except KeyError as error:
+                raise NotFoundError(
+                    f"AG-UI thread binding not found: {thread_id}"
+                ) from error
+            if binding.title_updated_at is not None and binding.title_updated_at > generated_at:
+                return binding
+            updated = binding.model_copy(
+                update={
+                    "title": title,
+                    "title_source": source,
+                    "title_updated_at": generated_at,
+                    "updated_at": max(binding.updated_at, generated_at),
+                }
+            )
+            self._by_thread[thread_key] = updated
+            self._by_session[(tenant_id, user_id, binding.session_id)] = updated
+            return updated
 
 
 class InMemoryTaskQueue:
