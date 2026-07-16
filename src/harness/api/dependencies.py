@@ -48,7 +48,7 @@ from harness.auth.service import (
 from harness.config import Settings
 from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import Run, Session
+from harness.core.models import Run, RunStatus, Session
 from harness.core.ports import EventRepository, TaskQueue
 from harness.deployments.controller import DeploymentController
 from harness.deployments.queue import DeploymentTaskQueue
@@ -84,6 +84,12 @@ from harness.quality.repositories import InMemoryQualityRepository, QualityRepos
 from harness.quality.service import QualityService
 from harness.quota.repositories import InMemoryQuotaRepository
 from harness.quota.service import QuotaService
+from harness.reliability.adapters import ObservedEventRepository
+from harness.reliability.controller import MaintenanceReaper, ReliabilityController
+from harness.reliability.metrics import ReliabilityMetrics
+from harness.reliability.probes import CapacityProbe, QueueStats
+from harness.reliability.repositories import InMemoryReliabilityRepository
+from harness.reliability.service import ReliabilityService
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.default_tools import (
@@ -160,6 +166,9 @@ class ApiContainer:
     quotas: QuotaService
     lifecycle: DataLifecycleService
     lifecycle_controller: DataLifecycleController
+    reliability_metrics: ReliabilityMetrics
+    reliability: ReliabilityService
+    reliability_controller: ReliabilityController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -169,6 +178,7 @@ class ApiContainer:
     file_catalog: FileCatalogService
     memory: UserMemoryService
     events: EventRepository
+    observed_events: EventRepository
     task_queue: TaskQueue
     observability: Observability
     runtime: AgentRuntime
@@ -195,10 +205,12 @@ def build_memory_container(
     thread_file_repository = InMemoryThreadFileRepository()
     workspace_snapshot_repository = InMemoryWorkspaceSnapshotRepository()
     artifact_store = InMemoryArtifactStore()
-    events = InMemoryEventRepository()
+    raw_events = InMemoryEventRepository()
     bus = InMemoryEventBus()
     queue = InMemoryTaskQueue()
     observability = build_observability(resolved_settings)
+    reliability_metrics = ReliabilityMetrics()
+    observed_events = ObservedEventRepository(raw_events, reliability_metrics)
     auth = AuthService(
         InMemoryAuthRepository(),
         jwt_secret=resolved_settings.auth_jwt_secret,
@@ -302,7 +314,12 @@ def build_memory_container(
         id_generator=lambda: id_generator("preview"),
         quotas=quotas,
     )
-    event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
+    event_service = EventService(
+        raw_events,
+        bus,
+        clock=clock,
+        id_generator=id_generator,
+    )
 
     async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
         version = await registry.get(tenant_id, agent_name, agent_version)
@@ -383,8 +400,9 @@ def build_memory_container(
         queue=quality_queue,
         runs=runs,
         sessions=sessions,
-        events=events,
+        events=raw_events,
         artifacts=artifact_repository,
+        metrics=reliability_metrics,
         clock=clock,
     )
     quality_controller = QualitySyncController(
@@ -601,6 +619,54 @@ def build_memory_container(
         runs=run_service,
         input_artifacts=input_artifact_service,
     )
+
+    async def lifecycle_reap() -> int:
+        await lifecycle.enqueue_due_retention_jobs()
+        return int(await lifecycle_controller.process_once() is not None)
+
+    reliability_repository = InMemoryReliabilityRepository()
+    capacity_probe = CapacityProbe(
+        runs=runs,
+        approvals=approvals,
+        previews=preview_repository,
+        queue=cast(QueueStats, queue),
+        lifecycle=lifecycle_repository,
+        credentials=None,
+    )
+    reliability = ReliabilityService(
+        reliability_repository,
+        reliability_metrics,
+        capacity_probe,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    maintenance = [
+        MaintenanceReaper("approval-expiry", "approval", approval_service.reap_expired),
+        MaintenanceReaper("preview-expiry", "preview", preview_controller.reap_expired),
+        MaintenanceReaper("quota-reservation", "quota", quotas.reap_expired_all),
+        MaintenanceReaper("workspace-retention", "workspace", lifecycle_reap),
+    ]
+    if sandbox_maintenance is not None:
+        maintenance.append(
+            MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance)
+        )
+    reliability_controller = ReliabilityController(
+        runs=runs,
+        events=event_service,
+        repository=reliability_repository,
+        metrics=reliability_metrics,
+        thresholds={
+            RunStatus.QUEUED: resolved_settings.stuck_queued_seconds,
+            RunStatus.PROVISIONING: resolved_settings.stuck_provisioning_seconds,
+            RunStatus.RUNNING: resolved_settings.stuck_running_seconds,
+            RunStatus.WAITING_APPROVAL: resolved_settings.stuck_waiting_approval_seconds,
+            RunStatus.CANCELLING: resolved_settings.stuck_cancelling_seconds,
+        },
+        maintenance=maintenance,
+        quotas=quotas,
+        clock=clock,
+        id_generator=id_generator,
+    )
     return ApiContainer(
         environment=resolved_settings.environment,
         api_bearer_token=resolved_settings.api_bearer_token,
@@ -626,6 +692,9 @@ def build_memory_container(
         quotas=quotas,
         lifecycle=lifecycle,
         lifecycle_controller=lifecycle_controller,
+        reliability_metrics=reliability_metrics,
+        reliability=reliability,
+        reliability_controller=reliability_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
@@ -634,7 +703,8 @@ def build_memory_container(
         input_artifacts=input_artifact_service,
         file_catalog=file_catalog_service,
         memory=memory_service,
-        events=events,
+        events=raw_events,
+        observed_events=observed_events,
         task_queue=queue,
         observability=observability,
         runtime=runtime,
@@ -710,6 +780,8 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:quota:write",
             "data:lifecycle:admin",
             "data:lifecycle:self",
+            "operations:read",
+            "operations:admin",
         }
     ),
     "member": frozenset(
@@ -720,9 +792,12 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:write",
             "studio:preview",
             "data:lifecycle:self",
+            "operations:read",
         }
     ),
-    "viewer": frozenset({"tasks:read", "studio:read", "data:lifecycle:self"}),
+    "viewer": frozenset(
+        {"tasks:read", "studio:read", "data:lifecycle:self", "operations:read"}
+    ),
 }
 
 

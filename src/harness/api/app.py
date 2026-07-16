@@ -3,6 +3,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from hmac import compare_digest
+from time import monotonic
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +21,7 @@ from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
 from harness.lifecycle import api as lifecycle_routes
 from harness.quota.repositories import QuotaExceededError
+from harness.reliability import api as reliability_routes
 from harness.studio import api as studio_routes
 
 
@@ -86,15 +88,55 @@ async def _agent_package_error(_request: Request, error: Exception) -> JSONRespo
 
 async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
     container: ApiContainer = request.app.state.container
+    started = monotonic()
+    operation = _metric_operation(request.method, request.url.path)
     with container.observability.span(
         "harness.api.request",
         attributes={"http.method": request.method, "http.route": request.url.path},
     ):
-        return await call_next(request)
+        try:
+            response = await call_next(request)
+        except BaseException:
+            container.reliability_metrics.observe(
+                "harness_api_request_duration_seconds",
+                monotonic() - started,
+                labels={"operation": operation},
+            )
+            if operation == "artifact.download":
+                container.reliability_metrics.increment(
+                    "harness_artifact_download_total",
+                    labels={"outcome": "failure"},
+                )
+            raise
+        container.reliability_metrics.observe(
+            "harness_api_request_duration_seconds",
+            monotonic() - started,
+            labels={"operation": operation},
+        )
+        if operation == "artifact.download":
+            container.reliability_metrics.increment(
+                "harness_artifact_download_total",
+                labels={"outcome": "success" if response.status_code < 400 else "failure"},
+            )
+        return response
+
+
+def _metric_operation(method: str, path: str) -> str:
+    if method == "POST" and path.endswith("/runs"):
+        return "run.create"
+    if method == "POST" and path.endswith("/cancel"):
+        return "run.cancel"
+    if method == "PUT" and "/approvals/" in path:
+        return "approval.decide"
+    if method == "GET" and path.endswith("/content") and "/artifacts/" in path:
+        return "artifact.download"
+    return "other"
 
 
 async def _authenticate_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
-    if not request.url.path.startswith("/v1") or request.url.path.startswith("/v1/auth"):
+    path = request.url.path
+    protected = path.startswith("/v1") or path == "/metrics"
+    if not protected or path.startswith("/v1/auth"):
         return await call_next(request)
     container: ApiContainer = request.app.state.container
     expected = container.api_bearer_token.get_secret_value()
@@ -177,6 +219,15 @@ def create_app(container: ApiContainer) -> FastAPI:
     )
     app.state.container = container
     app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
+    app.add_api_route(
+        "/metrics",
+        lambda: Response(
+            container.reliability_metrics.render_prometheus(),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        ),
+        methods=["GET"],
+        include_in_schema=False,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
@@ -203,6 +254,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         artifacts.router,
         input_artifacts.router,
         lifecycle_routes.router,
+        reliability_routes.router,
         agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")

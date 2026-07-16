@@ -5,7 +5,12 @@ from harness.core.models import RunStatus
 
 _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset(
-        {RunStatus.PROVISIONING, RunStatus.CANCELLING, RunStatus.CANCELLED}
+        {
+            RunStatus.PROVISIONING,
+            RunStatus.CANCELLING,
+            RunStatus.CANCELLED,
+            RunStatus.TIMED_OUT,
+        }
     ),
     RunStatus.PROVISIONING: frozenset(
         {RunStatus.RUNNING, RunStatus.CANCELLING, RunStatus.FAILED, RunStatus.TIMED_OUT}

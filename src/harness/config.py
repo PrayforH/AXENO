@@ -93,6 +93,13 @@ class Settings(BaseSettings):
     kubernetes_egress_gateway_port: int = Field(default=3128, ge=1, le=65_535)
     kubernetes_dns_namespace: str = "kube-system"
     kubernetes_reaper_interval_seconds: float = Field(default=30, ge=5, le=3600)
+    reliability_reaper_interval_seconds: float = Field(default=30, ge=5, le=3600)
+    worker_metrics_port: int = Field(default=8001, ge=1, le=65_535)
+    stuck_queued_seconds: int = Field(default=120, ge=30, le=86_400)
+    stuck_provisioning_seconds: int = Field(default=300, ge=30, le=86_400)
+    stuck_running_seconds: int = Field(default=3600, ge=60, le=604_800)
+    stuck_waiting_approval_seconds: int = Field(default=900, ge=60, le=604_800)
+    stuck_cancelling_seconds: int = Field(default=30, ge=10, le=3600)
     output_artifact_max_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     workspace_archive_max_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
     workspace_archive_max_members: int = Field(default=10_000, gt=0)

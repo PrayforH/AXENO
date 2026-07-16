@@ -18,6 +18,8 @@ class AsyncRedisClient(Protocol):
         self, name: str, minimum: str, maximum: str
     ) -> Awaitable[list[bytes | str]]: ...
 
+    def zcard(self, name: str) -> Awaitable[int]: ...
+
 
 _ENQUEUE = """
 local current = redis.call('TIME')
@@ -168,6 +170,11 @@ class RedisTaskQueue:
             str(self._visibility_timeout_seconds),
             receipt,
         )
+
+    async def stats(self) -> dict[str, int]:
+        ready = await self._client.zcard(self._ready)
+        processing = await self._client.zcard(self._processing)
+        return {"ready": int(ready), "processing": int(processing)}
 
 
 class RedisEventBus:

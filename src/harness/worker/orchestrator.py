@@ -497,9 +497,9 @@ class RunOrchestrator:
                 result = await self._execute(tenant_id, run_id)
                 await self._release_terminal_quota(result)
                 trace_id = self._observability.current_trace_id()
-                if result.status.is_terminal and trace_id and self._quality_hook is not None:
+                if result.status.is_terminal and self._quality_hook is not None:
                     try:
-                        await self._quality_hook(result, session, trace_id)
+                        await self._quality_hook(result, session, trace_id or "")
                     except Exception:
                         # Quality export is fail-open for the Agent Run. Durable
                         # sync state and alerts are reconciled independently.

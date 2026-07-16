@@ -24,6 +24,19 @@ def test_health_check_remains_available_without_api_credential() -> None:
     assert response.status_code == 200
 
 
+def test_metrics_requires_the_service_credential() -> None:
+    token = "service-token-with-at-least-32-characters"
+    with protected_client() as client:
+        missing = client.get("/metrics")
+        authorized = client.get(
+            "/metrics", headers={"Authorization": f"Bearer {token}"}
+        )
+
+    assert missing.status_code == 401
+    assert authorized.status_code == 200
+    assert "# HELP harness_api_request_duration_seconds" in authorized.text
+
+
 def test_v1_boundary_rejects_missing_or_invalid_api_credential() -> None:
     with protected_client() as client:
         missing = client.get(

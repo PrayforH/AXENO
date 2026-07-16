@@ -80,7 +80,9 @@ async def replay_events(
     ensure_permission(identity, "tasks:read")
     await require_owned_run(container, identity, run_id)
     after_sequence = int(last_event_id or "0")
-    events = await container.events.list_after(identity.tenant_id, run_id, after_sequence)
+    events = await container.observed_events.list_after(
+        identity.tenant_id, run_id, after_sequence
+    )
 
     async def stream() -> AsyncIterator[str]:
         for event in events:

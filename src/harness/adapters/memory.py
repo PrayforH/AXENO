@@ -139,6 +139,31 @@ class InMemoryRunRepository:
         ]
         return sorted(matches, key=lambda run: (run.updated_at, run.run_id), reverse=True)[:limit]
 
+    async def list_for_tenant(self, tenant_id: str, *, limit: int) -> list[Run]:
+        return sorted(
+            (
+                run
+                for (stored_tenant, _), run in self._items.items()
+                if stored_tenant == tenant_id
+            ),
+            key=lambda run: (run.updated_at, run.run_id),
+            reverse=True,
+        )[:limit]
+
+    async def list_stale(
+        self,
+        statuses: frozenset[RunStatus],
+        updated_at_or_before: datetime,
+        *,
+        limit: int,
+    ) -> list[Run]:
+        values = [
+            run
+            for run in self._items.values()
+            if run.status in statuses and run.updated_at <= updated_at_or_before
+        ]
+        return sorted(values, key=lambda item: (item.updated_at, item.run_id))[:limit]
+
 
 class InMemoryApprovalRepository:
     def __init__(self) -> None:
@@ -550,3 +575,6 @@ class InMemoryTaskQueue:
 
     async def extend_lease(self, task: RunTask) -> None:
         del task
+
+    async def stats(self) -> dict[str, int]:
+        return {"ready": len(self._items), "processing": len(self._leased)}
