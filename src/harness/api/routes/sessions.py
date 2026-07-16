@@ -11,6 +11,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import CreateSessionRequest
 from harness.core.models import Session
+from harness.deployments.models import EnvironmentName
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -27,4 +28,5 @@ async def create_session(
         identity.user_id,
         body.agent_name,
         body.agent_version,
+        environment=(EnvironmentName(body.environment) if body.environment else None),
     )

@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from pydantic import ValidationError
+
+from harness.api.dependencies import ApiContainer, build_memory_container
+from harness.core.errors import ConflictError
+from harness.deployments.models import (
+    DeploymentSnapshot,
+    DeploymentStatus,
+    EnvironmentName,
+    PromoteRequest,
+    RollbackRequest,
+)
+from harness.studio.models import (
+    AgentDraft,
+    AgentTemplate,
+    CreateAgentDraftRequest,
+    ReplaceAgentDraftRequest,
+)
+
+TENANT = "tenant-a"
+USER = "release-manager"
+IMAGE = "sha256:" + "1" * 64
+
+
+async def published_versions(
+    container: ApiContainer, name: str = "deployment-agent"
+) -> tuple[AgentDraft, str, str]:
+    draft = await container.studio.create(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=CreateAgentDraftRequest(
+            name=name,
+            domain="deployment",
+            displayName="部署 Agent",
+            description="验证部署生命周期与会话版本固定。",
+            template=AgentTemplate.ANALYST,
+        ),
+    )
+    first = await container.studio.publish(tenant_id=TENANT, user_id=USER, draft_id=draft.draft_id)
+    published_draft = await container.studio.get(TENANT, draft.draft_id)
+    updated = await container.studio.replace(
+        tenant_id=TENANT,
+        user_id=USER,
+        draft_id=draft.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=published_draft.revision,
+            spec=published_draft.spec.model_copy(update={"version": "0.2.0"}),
+        ),
+    )
+    second = await container.studio.publish(tenant_id=TENANT, user_id=USER, draft_id=draft.draft_id)
+    return updated, first.version, second.version
+
+
+def promotion(
+    *,
+    agent_name: str,
+    version: str,
+    revision: int,
+    key: str,
+    canary: int = 100,
+) -> PromoteRequest:
+    return PromoteRequest(
+        agentName=agent_name,
+        agentVersion=version,
+        environment=EnvironmentName.PRODUCTION,
+        expectedEnvironmentRevision=revision,
+        canaryPercent=canary,
+        imageDigest=IMAGE,
+        executionProfile="isolated-default",
+        config={"LOG_LEVEL": "info"},
+        idempotencyKey=key,
+    )
+
+
+async def promote_and_drain(container: ApiContainer, request: PromoteRequest) -> DeploymentSnapshot:
+    view = await container.deployments.promote(tenant_id=TENANT, user_id=USER, request=request)
+    result = await container.deployment_controller.drain_locally(
+        TENANT, view.deployment.deployment_id
+    )
+    assert result.status is DeploymentStatus.SUCCEEDED
+    return view.target
+
+
+@pytest.mark.asyncio
+async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() -> None:
+    container = build_memory_container()
+    draft, first_version, second_version = await published_versions(container)
+    first = await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="first-release",
+        ),
+    )
+    old_session = await container.sessions.create(
+        TENANT,
+        "user-a",
+        draft.spec.name,
+        None,
+        environment=EnvironmentName.PRODUCTION,
+    )
+
+    await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=second_version,
+            revision=1,
+            key="canary-release",
+            canary=50,
+        ),
+    )
+    assert old_session.agent_version == first_version
+    assert old_session.deployment_snapshot_id == first.snapshot_id
+
+    selected_key = ""
+    for index in range(1000):
+        candidate = f"new-session-{index}"
+        resolution = await container.deployments.resolve(
+            TENANT, draft.spec.name, EnvironmentName.PRODUCTION, candidate
+        )
+        if resolution.agent_version == second_version:
+            selected_key = candidate
+            break
+    assert selected_key
+    canary_session = await container.sessions.create(
+        TENANT,
+        "user-b",
+        draft.spec.name,
+        None,
+        session_id=selected_key,
+        environment=EnvironmentName.PRODUCTION,
+    )
+    assert canary_session.agent_version == second_version
+
+    rollback = await container.deployments.rollback(
+        tenant_id=TENANT,
+        user_id=USER,
+        agent_name=draft.spec.name,
+        environment_name=EnvironmentName.PRODUCTION,
+        request=RollbackRequest(
+            snapshotId=first.snapshot_id,
+            expectedEnvironmentRevision=2,
+            idempotencyKey="rollback-first",
+        ),
+    )
+    rolled_back = await container.deployment_controller.drain_locally(
+        TENANT, rollback.deployment.deployment_id
+    )
+    environment = await container.deployments.environment(
+        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+    )
+
+    assert rolled_back.status is DeploymentStatus.SUCCEEDED
+    assert environment.healthy_snapshot_id == first.snapshot_id
+    assert [(route.snapshot_id, route.weight) for route in environment.routes] == [
+        (first.snapshot_id, 100)
+    ]
+    assert old_session.agent_version == first_version
+
+
+@pytest.mark.asyncio
+async def test_failed_reconcile_preserves_last_healthy_environment() -> None:
+    container = build_memory_container()
+    draft, first_version, second_version = await published_versions(
+        container, "failed-deployment-agent"
+    )
+    first = await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="healthy-release",
+        ),
+    )
+    pending = await container.deployments.promote(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=promotion(
+            agent_name=draft.spec.name,
+            version=second_version,
+            revision=1,
+            key="broken-release",
+        ),
+    )
+
+    async def fail(_snapshot: DeploymentSnapshot) -> None:
+        raise RuntimeError("registry password must never escape")
+
+    controller = container.deployment_controller
+    controller._deploy = fail  # pyright: ignore[reportPrivateUsage]
+    result = await controller.drain_locally(TENANT, pending.deployment.deployment_id)
+    environment = await container.deployments.environment(
+        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+    )
+
+    assert result.status is DeploymentStatus.FAILED
+    assert result.error_code == "deployment_reconcile_failed"
+    assert "password" not in result.model_dump_json()
+    assert environment.revision == 1
+    assert environment.healthy_snapshot_id == first.snapshot_id
+
+
+@pytest.mark.asyncio
+async def test_concurrent_promotions_use_environment_compare_and_set() -> None:
+    container = build_memory_container()
+    draft, first_version, second_version = await published_versions(
+        container, "concurrent-deployment-agent"
+    )
+    first = await container.deployments.promote(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="concurrent-first",
+        ),
+    )
+    second = await container.deployments.promote(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=promotion(
+            agent_name=draft.spec.name,
+            version=second_version,
+            revision=0,
+            key="concurrent-second",
+        ),
+    )
+    controller = container.deployment_controller
+    await controller.reconcile(TENANT, first.deployment.deployment_id)
+    await controller.reconcile(TENANT, second.deployment.deployment_id)
+    outcomes = await asyncio.gather(
+        controller.reconcile(TENANT, first.deployment.deployment_id),
+        controller.reconcile(TENANT, second.deployment.deployment_id),
+    )
+    environment = await container.deployments.environment(
+        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+    )
+
+    assert sorted(item.status.value for item in outcomes) == ["failed", "succeeded"]
+    assert environment.revision == 1
+    assert len(environment.routes) == 1
+
+
+@pytest.mark.asyncio
+async def test_deployment_idempotency_and_secret_free_config_contract() -> None:
+    container = build_memory_container()
+    draft, first_version, _second_version = await published_versions(
+        container, "idempotent-deployment-agent"
+    )
+    request = promotion(
+        agent_name=draft.spec.name,
+        version=first_version,
+        revision=0,
+        key="same-release",
+    )
+    first = await container.deployments.promote(tenant_id=TENANT, user_id=USER, request=request)
+    repeated = await container.deployments.promote(tenant_id=TENANT, user_id=USER, request=request)
+
+    assert repeated.deployment.deployment_id == first.deployment.deployment_id
+    with pytest.raises(ConflictError):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=request.model_copy(update={"agent_version": "0.2.0"}),
+        )
+    with pytest.raises(ValidationError, match="secret-like"):
+        PromoteRequest(
+            agentName=draft.spec.name,
+            agentVersion=first_version,
+            environment=EnvironmentName.PRODUCTION,
+            expectedEnvironmentRevision=0,
+            imageDigest=IMAGE,
+            executionProfile="isolated-default",
+            config={"api_token": "not-allowed"},
+            idempotencyKey="unsafe-release",
+        )

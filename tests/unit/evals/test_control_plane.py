@@ -8,6 +8,7 @@ from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.application.sessions import SessionService
 from harness.core.errors import ConflictError
 from harness.core.models import Session
+from harness.deployments.models import EnvironmentName
 from harness.evals.controller import EvalController
 from harness.evals.models import (
     CreateEvalDatasetVersionRequest,
@@ -41,9 +42,10 @@ class FailFirstSessionService(SessionService):
         tenant_id: str,
         user_id: str,
         agent_name: str,
-        agent_version: str,
+        agent_version: str | None,
         *,
         session_id: str | None = None,
+        environment: EnvironmentName | None = None,
     ) -> Session:
         self.calls += 1
         if self.calls == 1:
@@ -54,6 +56,7 @@ class FailFirstSessionService(SessionService):
             agent_name,
             agent_version,
             session_id=session_id,
+            environment=environment,
         )
 
 

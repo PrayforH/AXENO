@@ -73,9 +73,7 @@ async def drain_eval(container: ApiContainer, eval_run_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_studio_rejects_unauthenticated_and_self_reported_identity() -> None:
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         anonymous = await client.get("/v1/studio/capabilities")
         spoofed = await client.get(
             "/v1/studio/capabilities",
@@ -95,23 +93,13 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         "X-Tenant-ID": "tenant-a",
         "X-User-ID": "builder-a",
     }
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         capabilities = await client.get("/v1/studio/capabilities", headers=headers)
-        created = await client.post(
-            "/v1/studio/drafts", headers=headers, json=draft_request()
-        )
+        created = await client.post("/v1/studio/drafts", headers=headers, json=draft_request())
         draft_id = created.json()["draftId"]
-        validation = await client.post(
-            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
-        )
-        bundle = await client.get(
-            f"/v1/studio/drafts/{draft_id}/bundle", headers=headers
-        )
-        published = await client.post(
-            f"/v1/studio/drafts/{draft_id}/publish", headers=headers
-        )
+        validation = await client.post(f"/v1/studio/drafts/{draft_id}/validate", headers=headers)
+        bundle = await client.get(f"/v1/studio/drafts/{draft_id}/bundle", headers=headers)
+        published = await client.post(f"/v1/studio/drafts/{draft_id}/publish", headers=headers)
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
     assert capabilities.status_code == 200
@@ -127,8 +115,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     content_hash = validation.json()["contentHash"]
     package_hash = validation.json()["packageHash"]
     assert bundle.headers["content-disposition"] == (
-        "attachment; "
-        f'filename="policy-researcher-0.1.0-{package_hash[:12]}.zip"'
+        f'attachment; filename="policy-researcher-0.1.0-{package_hash[:12]}.zip"'
     )
     archive_hash = hashlib.sha256(bundle.content).hexdigest()
     assert bundle.headers["etag"] == f'"{archive_hash}"'
@@ -138,6 +125,60 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert published.json()["name"] == "policy-researcher"
     assert "snapshot" not in published.json()
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -> None:
+    application, _container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "release-manager",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("deployed-agent"),
+        )
+        draft_id = created.json()["draftId"]
+        published = await client.post(f"/v1/studio/drafts/{draft_id}/publish", headers=headers)
+        promoted = await client.post(
+            "/v1/studio/deployments/promote",
+            headers=headers,
+            json={
+                "agentName": "deployed-agent",
+                "agentVersion": published.json()["version"],
+                "environment": "production",
+                "expectedEnvironmentRevision": 0,
+                "canaryPercent": 100,
+                "imageDigest": "sha256:" + "a" * 64,
+                "executionProfile": "isolated-default",
+                "config": {"LOG_LEVEL": "info"},
+                "idempotencyKey": "api-first-release",
+            },
+        )
+        deployment_id = promoted.json()["deployment"]["deploymentId"]
+        deployment = await client.get(f"/v1/studio/deployments/{deployment_id}", headers=headers)
+        environments = await client.get(
+            "/v1/studio/agents/deployed-agent/environments", headers=headers
+        )
+        session = await client.post(
+            "/v1/sessions",
+            headers=headers,
+            json={"agent_name": "deployed-agent", "environment": "production"},
+        )
+
+    production = next(item for item in environments.json() if item["name"] == "production")
+    assert promoted.status_code == 202
+    assert deployment.json()["deployment"]["status"] == "succeeded"
+    assert production["revision"] == 1
+    assert production["routes"][0]["weight"] == 100
+    assert session.status_code == 201
+    assert session.json()["agent_version"] == published.json()["version"]
+    assert session.json()["deployment_snapshot_id"] == production["healthySnapshotId"]
 
 
 @pytest.mark.asyncio
@@ -185,9 +226,7 @@ async def test_eval_control_plane_runs_cases_persists_reports_and_exposes_gate()
         )
         eval_run_id = started.json()["run"]["evalRunId"]
         await drain_eval(container, eval_run_id)
-        finished = await client.get(
-            f"/v1/studio/eval-runs/{eval_run_id}", headers=headers
-        )
+        finished = await client.get(f"/v1/studio/eval-runs/{eval_run_id}", headers=headers)
         listed = await client.get("/v1/studio/eval-runs", headers=headers)
         gate = await client.get(
             "/v1/studio/evaluation-gates/evaluated-agent/versions/0.1.0",
@@ -195,8 +234,7 @@ async def test_eval_control_plane_runs_cases_persists_reports_and_exposes_gate()
         )
         artifacts = finished.json()["run"]["artifacts"]
         report = await client.get(
-            f"/v1/studio/eval-runs/{eval_run_id}/artifacts/"
-            f"{artifacts[0]['artifactId']}",
+            f"/v1/studio/eval-runs/{eval_run_id}/artifacts/{artifacts[0]['artifactId']}",
             headers=headers,
         )
 
@@ -265,9 +303,7 @@ async def test_memory_auto_execute_drives_eval_and_child_run_queues() -> None:
             },
         )
 
-    stored = await container.eval_run_repository.get(
-        "tenant-a", started.json()["run"]["evalRunId"]
-    )
+    stored = await container.eval_run_repository.get("tenant-a", started.json()["run"]["evalRunId"])
     assert stored.status is EvalRunStatus.PASSED
 
 
@@ -284,14 +320,10 @@ async def test_publish_is_idempotent_and_writes_secret_free_domain_audit() -> No
     async with AsyncClient(
         transport=ASGITransport(app=application), base_url="http://test"
     ) as client:
-        created = await client.post(
-            "/v1/studio/drafts", headers=headers, json=draft_request()
-        )
+        created = await client.post("/v1/studio/drafts", headers=headers, json=draft_request())
         spec = created.json()["spec"]
         spec["systemPrompt"] += f"\n{prompt_sentinel}\n"
-        spec["skills"][0]["files"] = [
-            {"path": "references/private.md", "content": file_sentinel}
-        ]
+        spec["skills"][0]["files"] = [{"path": "references/private.md", "content": file_sentinel}]
         replaced = await client.put(
             f"/v1/studio/drafts/{created.json()['draftId']}",
             headers=headers,
@@ -307,9 +339,7 @@ async def test_publish_is_idempotent_and_writes_secret_free_domain_audit() -> No
             headers=headers,
             json={"expectedRevision": 3},
         )
-        stored = await client.get(
-            f"/v1/studio/drafts/{created.json()['draftId']}", headers=headers
-        )
+        stored = await client.get(f"/v1/studio/drafts/{created.json()['draftId']}", headers=headers)
 
     assert replaced.status_code == 200
     assert first.status_code == 200
@@ -326,9 +356,7 @@ async def test_publish_is_idempotent_and_writes_secret_free_domain_audit() -> No
         False,
         True,
     }
-    audit_json = json.dumps(
-        [entry.model_dump(mode="json") for entry in domain_audits]
-    )
+    audit_json = json.dumps([entry.model_dump(mode="json") for entry in domain_audits])
     assert prompt_sentinel not in audit_json
     assert file_sentinel not in audit_json
     assert "systemPrompt" not in audit_json
@@ -346,18 +374,16 @@ async def test_changed_content_reusing_version_is_rejected_and_audited() -> None
     async with AsyncClient(
         transport=ASGITransport(app=application), base_url="http://test"
     ) as client:
-        created = await client.post(
-            "/v1/studio/drafts", headers=headers, json=draft_request()
-        )
+        created = await client.post("/v1/studio/drafts", headers=headers, json=draft_request())
         draft_id = created.json()["draftId"]
         first = await client.post(
             f"/v1/studio/drafts/{draft_id}/publish",
             headers=headers,
             json={"expectedRevision": 1},
         )
-        changed_spec = (await client.get(
-            f"/v1/studio/drafts/{draft_id}", headers=headers
-        )).json()["spec"]
+        changed_spec = (await client.get(f"/v1/studio/drafts/{draft_id}", headers=headers)).json()[
+            "spec"
+        ]
         changed_spec["description"] = "版本号未变化，但内容已经变化。"
         changed = await client.put(
             f"/v1/studio/drafts/{draft_id}",
@@ -376,9 +402,7 @@ async def test_changed_content_reusing_version_is_rejected_and_audited() -> None
     assert conflicting.json()["error"]["code"] == "version_conflict"
     audits = await container.audit.list_for_tenant("tenant-a", limit=20)
     denied = next(
-        entry
-        for entry in audits
-        if entry.action == "studio.publish" and entry.outcome == "denied"
+        entry for entry in audits if entry.action == "studio.publish" and entry.outcome == "denied"
     )
     assert denied.details["error_code"] == "version_conflict"
     assert set(denied.details) == {
@@ -406,9 +430,7 @@ async def test_unpublished_subagent_blocks_validation_and_publish_api() -> None:
             json={**draft_request("lead-agent"), "template": "orchestrator"},
         )
         draft_id = created.json()["draftId"]
-        validation = await client.post(
-            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
-        )
+        validation = await client.post(f"/v1/studio/drafts/{draft_id}/validate", headers=headers)
         published = await client.post(
             f"/v1/studio/drafts/{draft_id}/publish",
             headers=headers,
@@ -417,9 +439,7 @@ async def test_unpublished_subagent_blocks_validation_and_publish_api() -> None:
 
     assert validation.status_code == 200
     assert validation.json()["ready"] is False
-    assert {issue["code"] for issue in validation.json()["issues"]} >= {
-        "subagent_not_published"
-    }
+    assert {issue["code"] for issue in validation.json()["issues"]} >= {"subagent_not_published"}
     assert published.status_code == 422
     assert published.json()["error"]["code"] == "draft_not_ready"
     assert {issue["code"] for issue in published.json()["error"]["issues"]} >= {
@@ -448,12 +468,8 @@ async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes()
             "idempotencyKey": "preview-agent-r1",
             "ttlSeconds": 600,
         }
-        first = await client.post(
-            "/v1/studio/previews", headers=headers, json=preview_request
-        )
-        repeated = await client.post(
-            "/v1/studio/previews", headers=headers, json=preview_request
-        )
+        first = await client.post("/v1/studio/previews", headers=headers, json=preview_request)
+        repeated = await client.post("/v1/studio/previews", headers=headers, json=preview_request)
         listed = await client.get("/v1/studio/previews", headers=headers)
         current = await client.get(
             f"/v1/studio/previews/{first.json()['previewId']}", headers=headers
@@ -514,9 +530,7 @@ async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes()
 
 @pytest.mark.asyncio
 async def test_jwt_identity_ignores_spoofed_tenant_and_user_headers() -> None:
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         owner = await register(client, "owner@example.com")
         body_spoofed = await client.post(
             "/v1/studio/drafts",
@@ -547,22 +561,14 @@ async def test_jwt_identity_ignores_spoofed_tenant_and_user_headers() -> None:
 
 @pytest.mark.asyncio
 async def test_member_can_write_and_validate_but_cannot_publish() -> None:
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         await register(client, "owner@example.com")
         member = await register(client, "member@example.com")
         headers = {"Authorization": f"Bearer {member['access_token']}"}
-        created = await client.post(
-            "/v1/studio/drafts", headers=headers, json=draft_request()
-        )
+        created = await client.post("/v1/studio/drafts", headers=headers, json=draft_request())
         draft_id = created.json()["draftId"]
-        validation = await client.post(
-            f"/v1/studio/drafts/{draft_id}/validate", headers=headers
-        )
-        published = await client.post(
-            f"/v1/studio/drafts/{draft_id}/publish", headers=headers
-        )
+        validation = await client.post(f"/v1/studio/drafts/{draft_id}/validate", headers=headers)
+        published = await client.post(f"/v1/studio/drafts/{draft_id}/publish", headers=headers)
 
     assert member["membership"]["role"] == "member"
     assert created.status_code == 201
@@ -578,9 +584,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
         "X-Tenant-ID": "tenant-a",
         "X-User-ID": "owner-a",
     }
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         await register(client, "owner@example.com")
         member = await register(client, "member@example.com")
         member_headers = {"Authorization": f"Bearer {member['access_token']}"}
@@ -625,9 +629,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
             f"/v1/studio/drafts/{draft_id}/validate", headers=owner_headers
         )
         current = await client.get("/v1/studio/catalog", headers=owner_headers)
-        member_catalog = await client.get(
-            "/v1/studio/catalog", headers=member_headers
-        )
+        member_catalog = await client.get("/v1/studio/catalog", headers=member_headers)
 
     assert catalog.status_code == 200
     assert catalog.json()["revision"] == 1
@@ -646,9 +648,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
     assert disabled.json()["impact"]["draftIds"] == [draft_id]
     assert validation.status_code == 200
     assert validation.json()["ready"] is False
-    assert {issue["code"] for issue in validation.json()["issues"]} >= {
-        "model_route_disabled"
-    }
+    assert {issue["code"] for issue in validation.json()["issues"]} >= {"model_route_disabled"}
     assert current.status_code == 200
     assert current.json()["revision"] == 2
     assert member_catalog.status_code == 200
@@ -674,17 +674,13 @@ async def test_published_agent_version_is_immutable_after_catalog_change() -> No
             headers=owner_headers,
         )
         registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
-        stored_before = await registry.get(
-            "tenant-a", "policy-researcher", "0.1.0"
-        )
+        stored_before = await registry.get("tenant-a", "policy-researcher", "0.1.0")
         disabled = await client.delete(
             "/v1/studio/catalog/modelRoute/new-api-default",
             headers=owner_headers,
             params={"expected_revision": 1},
         )
-        stored_after = await registry.get(
-            "tenant-a", "policy-researcher", "0.1.0"
-        )
+        stored_after = await registry.get("tenant-a", "policy-researcher", "0.1.0")
 
     assert published.status_code == 200
     assert disabled.status_code == 200
@@ -705,9 +701,7 @@ async def test_admin_can_create_update_and_disable_catalog_registration() -> Non
         "description": "对受监管材料使用更严格的审批边界。",
         "risk": "high",
     }
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         created = await client.put(
             "/v1/studio/catalog/policy/regulated-review",
             headers=owner_headers,
@@ -763,16 +757,10 @@ async def test_studio_contract_hides_tenants_and_reports_conflict_and_invalid_bu
         "X-Tenant-ID": "tenant-b",
         "X-User-ID": "builder-b",
     }
-    async with AsyncClient(
-        transport=ASGITransport(app=app()), base_url="http://test"
-    ) as client:
-        created = await client.post(
-            "/v1/studio/drafts", headers=tenant_a, json=draft_request()
-        )
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        created = await client.post("/v1/studio/drafts", headers=tenant_a, json=draft_request())
         draft_id = created.json()["draftId"]
-        hidden = await client.get(
-            f"/v1/studio/drafts/{draft_id}", headers=tenant_b
-        )
+        hidden = await client.get(f"/v1/studio/drafts/{draft_id}", headers=tenant_b)
 
         first_spec = created.json()["spec"]
         first_spec["description"] = "第一次保存。"
@@ -794,9 +782,7 @@ async def test_studio_contract_hides_tenants_and_reports_conflict_and_invalid_bu
             headers=tenant_a,
             json={"expectedRevision": 2, "spec": invalid_spec},
         )
-        invalid_bundle = await client.get(
-            f"/v1/studio/drafts/{draft_id}/bundle", headers=tenant_a
-        )
+        invalid_bundle = await client.get(f"/v1/studio/drafts/{draft_id}/bundle", headers=tenant_a)
 
     assert created.status_code == 201
     assert hidden.status_code == 404

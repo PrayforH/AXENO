@@ -49,6 +49,15 @@ from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import Run, Session
 from harness.core.ports import EventRepository, TaskQueue
+from harness.deployments.controller import DeploymentController
+from harness.deployments.queue import DeploymentTaskQueue
+from harness.deployments.repositories import (
+    DeploymentRepository,
+    EnvironmentRepository,
+    InMemoryDeploymentRepository,
+    InMemoryEnvironmentRepository,
+)
+from harness.deployments.service import DeploymentService
 from harness.evals.controller import EvalController
 from harness.evals.queue import EvalTaskQueue
 from harness.evals.repositories import (
@@ -127,6 +136,10 @@ class ApiContainer:
     eval_run_repository: EvalRunRepository
     evals: EvalControlPlaneService
     eval_controller: EvalController
+    environment_repository: EnvironmentRepository
+    deployment_repository: DeploymentRepository
+    deployments: DeploymentService
+    deployment_controller: DeploymentController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -190,6 +203,9 @@ def build_memory_container(
     eval_dataset_repository = InMemoryEvalDatasetRepository()
     eval_run_repository = InMemoryEvalRunRepository()
     eval_queue = EvalTaskQueue.memory()
+    environment_repository = InMemoryEnvironmentRepository()
+    deployment_repository = InMemoryDeploymentRepository()
+    deployment_queue = DeploymentTaskQueue.memory()
     capability_catalog_repository = InMemoryCapabilityCatalogRepository()
 
     def clock() -> datetime:
@@ -198,9 +214,7 @@ def build_memory_container(
     def id_generator(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
-    agent_service = AgentService(
-        registry, clock=clock, environment=resolved_settings.environment
-    )
+    agent_service = AgentService(registry, clock=clock, environment=resolved_settings.environment)
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
         agent_drafts,
@@ -233,9 +247,7 @@ def build_memory_container(
         id_generator=id_generator,
         observability=observability,
     )
-    session_service = SessionService(
-        registry, sessions, clock=clock, id_generator=id_generator
-    )
+    session_service = SessionService(registry, sessions, clock=clock, id_generator=id_generator)
     approval_service = ApprovalService(
         runs=runs,
         approvals=approvals,
@@ -287,6 +299,24 @@ def build_memory_container(
         object_store=artifact_store,
         clock=clock,
     )
+    deployment_service = DeploymentService(
+        environments=environment_repository,
+        deployments=deployment_repository,
+        queue=deployment_queue,
+        registry=registry,
+        evals=eval_service,
+        previews=preview_service,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    session_service.configure_deployment_resolver(deployment_service.resolve)
+    deployment_controller = DeploymentController(
+        environments=environment_repository,
+        deployments=deployment_repository,
+        queue=deployment_queue,
+        clock=clock,
+    )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     workspace_service = WorkspaceService(
         artifact_store,
@@ -321,9 +351,7 @@ def build_memory_container(
 
     policy_profiles = default_policy_profiles()
 
-    async def resolve_policy(
-        tenant_id: str, agent_name: str, agent_version: str
-    ) -> PolicyEngine:
+    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> PolicyEngine:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
         return policy_profiles.resolve(manifest.spec.permissions.policy)
@@ -344,12 +372,8 @@ def build_memory_container(
             cli_version=resolved_settings.daytona_claude_cli_version,
             cli_path=resolved_settings.daytona_claude_cli_path,
             delete_on_destroy=resolved_settings.daytona_delete_on_destroy,
-            auto_stop_interval_minutes=(
-                resolved_settings.daytona_auto_stop_interval_minutes
-            ),
-            auto_delete_interval_minutes=(
-                resolved_settings.daytona_auto_delete_interval_minutes
-            ),
+            auto_stop_interval_minutes=(resolved_settings.daytona_auto_stop_interval_minutes),
+            auto_delete_interval_minutes=(resolved_settings.daytona_auto_delete_interval_minutes),
             max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
             max_collect_members=resolved_settings.workspace_archive_max_members,
         )
@@ -364,9 +388,7 @@ def build_memory_container(
             references_json=resolved_settings.mcp_secret_references_json,
             secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
         )
-        gateway = load_cc_switch_claude_config(
-            resolved_settings.cc_switch_settings_path
-        )
+        gateway = load_cc_switch_claude_config(resolved_settings.cc_switch_settings_path)
         tool_resolver = default_tool_resolver(credential_provider)
         runtime = RegistryClaudeRuntime(
             registry=registry,
@@ -419,9 +441,7 @@ def build_memory_container(
         memory=memory_service,
         workspace_policy_resolver=workspace_policy_resolver,
         runtime_asset_stager=(
-            stage_runtime_assets
-            if resolved_settings.runtime == "claude-sdk"
-            else None
+            stage_runtime_assets if resolved_settings.runtime == "claude-sdk" else None
         ),
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
@@ -446,6 +466,10 @@ def build_memory_container(
         eval_run_repository=eval_run_repository,
         evals=eval_service,
         eval_controller=eval_controller,
+        environment_repository=environment_repository,
+        deployment_repository=deployment_repository,
+        deployments=deployment_service,
+        deployment_controller=deployment_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
@@ -476,9 +500,7 @@ async def require_identity(
 ) -> Identity:
     container: ApiContainer = request.app.state.container
     scheme, separator, credential = (authorization or "").partition(" ")
-    service_authenticated = bool(
-        getattr(request.state, "service_authenticated", False)
-    )
+    service_authenticated = bool(getattr(request.state, "service_authenticated", False))
     if separator and scheme.lower() == "bearer" and credential.count(".") == 2:
         try:
             claims = container.auth.authenticate_access_token(credential)
@@ -566,9 +588,7 @@ async def require_owned_session(
     return session
 
 
-async def require_owned_run(
-    container: ApiContainer, identity: Identity, run_id: str
-) -> Run:
+async def require_owned_run(container: ApiContainer, identity: Identity, run_id: str) -> Run:
     run = await container.runs.get(identity.tenant_id, run_id)
     await require_owned_session(container, identity, run.session_id)
     return run

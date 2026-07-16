@@ -113,12 +113,19 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("每个 Case 使用独立 Session");
     expect(workbench).toContain("downloadEvalArtifact");
     expect(workbench).toContain("线上质量监控");
+    expect(workbench).toContain("环境指针、灰度与可验证回滚");
+    expect(workbench).toContain("新 Session 解析当前路由");
+    expect(workbench).toContain("studioClient.promoteDeployment");
+    expect(workbench).toContain("studioClient.rollbackDeployment");
+    expect(workbench).toContain("版本差异");
     expect(workbench).toContain("必须调用");
     expect(workbench).toContain("禁止");
     expect(errorBoundary).toContain("Studio 没有正常加载");
     expect(errorBoundary).toContain("重新加载");
     expect(loadingBoundary).toContain("正在恢复 Agent Studio");
     expect(styles).toContain(".studioStateShell");
+    expect(styles).toContain(".deploymentControlPlane");
+    expect(styles).toContain(".environmentGrid");
   });
 
   it("creates a hash-bound Preview and renders real Preflight facts", () => {

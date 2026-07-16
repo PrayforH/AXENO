@@ -169,4 +169,58 @@ describe("Studio typed API mapping", () => {
       },
     ]);
   });
+
+  it("promotes with environment CAS and rolls back to a verified snapshot", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("crypto", { randomUUID: () => "stable-operation" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      });
+      return Response.json({ deployment: { status: "queued" } });
+    });
+    const environment = {
+      tenantId: "tenant-a",
+      agentName: "policy-researcher",
+      name: "production" as const,
+      revision: 4,
+      routes: [],
+      healthySnapshotId: "snapshot-current",
+      updatedAt: "2026-07-16T00:00:00Z",
+    };
+
+    await studioClient.promoteDeployment(
+      "policy-researcher",
+      "1.2.3",
+      environment,
+      "a".repeat(64),
+      "isolated-default",
+      10,
+    );
+    await studioClient.rollbackDeployment(
+      "policy-researcher",
+      environment,
+      "snapshot-previous",
+    );
+
+    expect(calls[0]).toMatchObject({
+      url: "/api/studio/deployments/promote",
+      body: {
+        agentName: "policy-researcher",
+        agentVersion: "1.2.3",
+        environment: "production",
+        expectedEnvironmentRevision: 4,
+        canaryPercent: 10,
+        imageDigest: `sha256:${"a".repeat(64)}`,
+      },
+    });
+    expect(calls[1]).toMatchObject({
+      url: "/api/studio/agents/policy-researcher/environments/production/rollback",
+      body: {
+        snapshotId: "snapshot-previous",
+        expectedEnvironmentRevision: 4,
+      },
+    });
+  });
 });

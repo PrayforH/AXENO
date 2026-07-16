@@ -29,6 +29,9 @@ from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelCompatibility
 from harness.core.ports import ArtifactStore, TaskQueue
+from harness.deployments.controller import DeploymentController
+from harness.deployments.queue import DeploymentTaskQueue
+from harness.deployments.service import DeploymentService
 from harness.evals.controller import EvalController
 from harness.evals.queue import EvalTaskQueue
 from harness.evals.service import EvalControlPlaneService
@@ -51,6 +54,10 @@ from harness.sandbox.daytona import DaytonaSandboxProvider, SdkDaytonaClient
 from harness.sandbox.local import LocalSandboxProvider
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
+from harness.storage.deployment_repository import (
+    PostgresDeploymentRepository,
+    PostgresEnvironmentRepository,
+)
 from harness.storage.eval_repository import (
     PostgresEvalDatasetRepository,
     PostgresEvalRunRepository,
@@ -95,9 +102,7 @@ def _gateway_capabilities(value: str) -> frozenset[str]:
 
 def _anthropic_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
     anthropic_key = settings.anthropic_api_key.get_secret_value()
-    if not (
-        settings.anthropic_base_url and settings.anthropic_model and anthropic_key
-    ):
+    if not (settings.anthropic_base_url and settings.anthropic_model and anthropic_key):
         return None
     return CcSwitchClaudeConfig(
         base_url=settings.anthropic_base_url,
@@ -174,12 +179,15 @@ def build_production_container(
     secret_key = settings.minio_secret_key.get_secret_value()
     if not access_key or not secret_key:
         raise ValueError("production requires HARNESS_MINIO_ACCESS_KEY and SECRET_KEY")
-    execution_config: tuple[
-        CcSwitchClaudeConfig,
-        CcSwitchClaudeConfig | None,
-        SandboxProvider,
-        DynamicMcpCredentialProvider,
-    ] | None = None
+    execution_config: (
+        tuple[
+            CcSwitchClaudeConfig,
+            CcSwitchClaudeConfig | None,
+            SandboxProvider,
+            DynamicMcpCredentialProvider,
+        ]
+        | None
+    ) = None
     try:
         title_gateway, _ = _gateways(settings)
     except ValueError:
@@ -216,6 +224,8 @@ def build_production_container(
     preview_repository = PostgresPreviewRepository(sessions)
     eval_dataset_repository = PostgresEvalDatasetRepository(sessions)
     eval_run_repository = PostgresEvalRunRepository(sessions)
+    environment_repository = PostgresEnvironmentRepository(sessions)
+    deployment_repository = PostgresDeploymentRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
@@ -234,10 +244,7 @@ def build_production_container(
         ),
     )
     audit = AuditService(PostgresAuditRepository(sessions))
-    if (
-        settings.worker_task_heartbeat_seconds
-        >= settings.worker_task_visibility_timeout_seconds
-    ):
+    if settings.worker_task_heartbeat_seconds >= settings.worker_task_visibility_timeout_seconds:
         raise ValueError("worker task heartbeat must be shorter than visibility timeout")
     queue: TaskQueue = RedisTaskQueue(
         redis_client,
@@ -281,6 +288,11 @@ def build_production_container(
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
     )
     eval_queue = EvalTaskQueue.redis(
+        redis_client,
+        visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
+        retry_delay_seconds=settings.worker_task_retry_delay_seconds,
+    )
+    deployment_queue = DeploymentTaskQueue.redis(
         redis_client,
         visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
@@ -357,6 +369,24 @@ def build_production_container(
         object_store=store,
         clock=clock,
     )
+    deployment_service = DeploymentService(
+        environments=environment_repository,
+        deployments=deployment_repository,
+        queue=deployment_queue,
+        registry=registry,
+        evals=eval_service,
+        previews=preview_service,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
+    session_service.configure_deployment_resolver(deployment_service.resolve)
+    deployment_controller = DeploymentController(
+        environments=environment_repository,
+        deployments=deployment_repository,
+        queue=deployment_queue,
+        clock=clock,
+    )
     memory_service = UserMemoryService(memory_repository, clock=clock)
     workspace_service = WorkspaceService(
         store,
@@ -391,9 +421,7 @@ def build_production_container(
 
     policy_profiles = default_policy_profiles()
 
-    async def resolve_policy(
-        tenant_id: str, agent_name: str, agent_version: str
-    ) -> PolicyEngine:
+    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> PolicyEngine:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
         return policy_profiles.resolve(manifest.spec.permissions.policy)
@@ -401,9 +429,7 @@ def build_production_container(
     policy = policy_profiles.resolve("local-standard")
     if execution_enabled:
         assert execution_config is not None
-        primary_gateway, fallback_gateway, runtime_sandbox, credential_provider = (
-            execution_config
-        )
+        primary_gateway, fallback_gateway, runtime_sandbox, credential_provider = execution_config
         tool_resolver = default_tool_resolver(credential_provider)
         runtime = RegistryClaudeRuntime(
             registry=registry,
@@ -506,6 +532,10 @@ def build_production_container(
         eval_run_repository=eval_run_repository,
         evals=eval_service,
         eval_controller=eval_controller,
+        environment_repository=environment_repository,
+        deployment_repository=deployment_repository,
+        deployments=deployment_service,
+        deployment_controller=deployment_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

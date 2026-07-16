@@ -146,10 +146,10 @@ PostgreSQL 中的 Run/Event/Approval/Artifact 是权威事实；AG-UI 和 assist
 | assistant-ui + AG-UI | [已实现] | 对话、Markdown、代码、附件、审批、执行轨迹、任务列表和 Artifact |
 | OpenTelemetry / Langfuse | [已实现] | 应用发 OTel，Collector 可选输出到外部 Langfuse |
 | Agent Studio 页面 | [已实现] | 本地目录、草稿编辑、Lead/Sub、有效契约、评测和生命周期展示 |
-| Studio 持久化 API | [待接入] | API 契约和内存 Repository 已有，尚未挂载主应用和 PostgreSQL |
-| Studio RBAC | [待接入] | 用户登录已有；Builder/Publisher 与 StudioActor 映射尚未完成 |
-| 临时预览和环境晋级 | [规划] | UI 已表达生命周期，后端 Preview/Deployment 资源尚未实现 |
-| 在线 Eval 与自动告警 | [规划] | OTel Trace 已有，Dataset/Score/Alert/回滚策略待建设 |
+| Studio 持久化 API | [已实现] | 租户 Draft、Catalog、Preview、Eval 和 Deployment 已挂载 API 与 PostgreSQL |
+| Studio RBAC | [已实现] | 登录身份映射 StudioActor，owner/admin/member/viewer 权限矩阵与审计已接入 |
+| 临时预览和环境晋级 | [已实现] | Preview TTL、真实 Preflight、Environment、灰度、Snapshot 和回滚已接入 |
+| 在线 Eval 与自动告警 | [部分实现] | 耐久 Dataset/Eval Gate 已实现；Langfuse Score/Alert 由 G11 完成 |
 | 任意步骤 Checkpoint | [规划] | 当前只承诺会话、Workspace 和审批恢复 |
 
 ## 6. 总体架构
@@ -268,7 +268,7 @@ erDiagram
 | MCPRegistration | 平台管理 | 逻辑 ID、transport、工具列表、网络级别、凭据引用、风险级别 |
 | PermissionProfile | 平台管理 | allow / deny / ask 规则和 Sandbox 条件 |
 | EvalSuite | 随包版本化 | happy、ambiguous、safety 及业务专项用例 |
-| Deployment | [规划] | environment、Agent Version、执行 Profile、配置快照、流量、状态 |
+| Deployment | 不可变操作 + 可变环境指针 | environment、Agent Version、Snapshot、执行 Profile、配置、流量、状态 |
 
 ### 7.2 运行类对象
 
@@ -499,7 +499,7 @@ RBAC 必须从已经验证的用户与租户身份生成 `StudioActor`，不能�
 
 ### 10.3 临时预览
 
-**[规划]** Preview 是短生命周期 Deployment：
+**[已实现]** Preview 是短生命周期 Deployment：
 
 - 固定草稿内容哈希；
 - 独立 Sandbox 和测试身份；

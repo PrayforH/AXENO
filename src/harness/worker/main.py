@@ -135,6 +135,7 @@ async def serve(settings: Settings) -> None:
         except NotImplementedError:  # pragma: no cover - Windows event loop
             pass
     try:
+
         async def preview_maintenance() -> None:
             await container.approvals.reap_expired()
             await container.preview_controller.process_once()
@@ -142,6 +143,9 @@ async def serve(settings: Settings) -> None:
 
         async def eval_maintenance() -> None:
             await container.eval_controller.process_once()
+
+        async def deployment_maintenance() -> None:
+            await container.deployment_controller.process_once()
 
         control_tasks = (
             asyncio.create_task(
@@ -158,6 +162,14 @@ async def serve(settings: Settings) -> None:
                     stop=stop,
                     poll_interval=settings.worker_poll_interval_seconds,
                     label="eval",
+                )
+            ),
+            asyncio.create_task(
+                maintenance_loop(
+                    deployment_maintenance,
+                    stop=stop,
+                    poll_interval=settings.worker_poll_interval_seconds,
+                    label="deployment",
                 )
             ),
         )

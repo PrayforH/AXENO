@@ -16,6 +16,16 @@ from harness.api.dependencies import (
     require_identity,
 )
 from harness.core.errors import ConflictError, NotFoundError
+from harness.deployments.controller import DeploymentController
+from harness.deployments.models import (
+    DeploymentSnapshot,
+    DeploymentView,
+    Environment,
+    EnvironmentName,
+    PromoteRequest,
+    RollbackRequest,
+)
+from harness.deployments.service import DeploymentService
 from harness.evals.controller import EvalController
 from harness.evals.models import (
     CreateEvalDatasetVersionRequest,
@@ -86,6 +96,12 @@ def require_studio_previewer(
     identity: Annotated[Identity, Depends(require_identity)],
 ) -> StudioActor:
     return _authorize_studio_actor(identity, "studio:preview")
+
+
+def require_studio_deployer(
+    identity: Annotated[Identity, Depends(require_identity)],
+) -> StudioActor:
+    return _authorize_studio_actor(identity, "studio:deploy")
 
 
 def require_studio_catalog_admin(
@@ -178,7 +194,147 @@ def get_eval_controller(request: Request) -> EvalController:
     return controller
 
 
+def get_deployment_service(request: Request) -> DeploymentService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "deployments", None)
+    if not isinstance(service, DeploymentService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "deployment_control_plane_not_configured",
+                "message": "Studio Deployment control plane is not configured",
+            },
+        )
+    return service
+
+
+def get_deployment_controller(request: Request) -> DeploymentController:
+    container = getattr(request.app.state, "container", None)
+    controller = getattr(container, "deployment_controller", None)
+    if not isinstance(controller, DeploymentController):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "deployment_controller_not_configured",
+                "message": "Studio Deployment controller is not configured",
+            },
+        )
+    return controller
+
+
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
+
+
+@router.get(
+    "/agents/{agent_name}/environments",
+    response_model=list[Environment],
+)
+async def list_deployment_environments(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+) -> list[Environment]:
+    return await service.list_environments(actor.tenant_id, agent_name)
+
+
+@router.get(
+    "/agents/{agent_name}/deployments",
+    response_model=list[DeploymentView],
+)
+async def list_deployments(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+) -> list[DeploymentView]:
+    return await service.list(actor.tenant_id, agent_name)
+
+
+@router.get(
+    "/agents/{agent_name}/deployment-snapshots",
+    response_model=list[DeploymentSnapshot],
+)
+async def list_deployment_snapshots(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+) -> list[DeploymentSnapshot]:
+    return await service.snapshots(actor.tenant_id, agent_name)
+
+
+@router.get("/deployments/{deployment_id}", response_model=DeploymentView)
+async def get_deployment(
+    deployment_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+) -> DeploymentView:
+    try:
+        return await service.view(actor.tenant_id, deployment_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
+    "/deployments/promote",
+    response_model=DeploymentView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def promote_deployment(
+    body: PromoteRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+    controller: Annotated[DeploymentController, Depends(get_deployment_controller)],
+) -> DeploymentView:
+    try:
+        result = await service.promote(
+            tenant_id=actor.tenant_id, user_id=actor.user_id, request=body
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        background_tasks.add_task(
+            controller.drain_locally,
+            actor.tenant_id,
+            result.deployment.deployment_id,
+        )
+    return result
+
+
+@router.post(
+    "/agents/{agent_name}/environments/{environment}/rollback",
+    response_model=DeploymentView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rollback_deployment(
+    agent_name: str,
+    environment: EnvironmentName,
+    body: RollbackRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+    controller: Annotated[DeploymentController, Depends(get_deployment_controller)],
+) -> DeploymentView:
+    try:
+        result = await service.rollback(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            agent_name=agent_name,
+            environment_name=environment,
+            request=body,
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    container = getattr(request.app.state, "container", None)
+    if getattr(container, "auto_execute", False):
+        background_tasks.add_task(
+            controller.drain_locally,
+            actor.tenant_id,
+            result.deployment.deployment_id,
+        )
+    return result
 
 
 @router.post(
@@ -228,9 +384,7 @@ async def get_eval_dataset(
         raise _translate_domain_error(error) from error
 
 
-@router.post(
-    "/eval-runs", response_model=EvalRunView, status_code=status.HTTP_202_ACCEPTED
-)
+@router.post("/eval-runs", response_model=EvalRunView, status_code=status.HTTP_202_ACCEPTED)
 async def create_eval_run(
     body: CreateEvalRunRequest,
     background_tasks: BackgroundTasks,
@@ -472,10 +626,7 @@ async def create_preview(
             detail={
                 "code": "draft_not_ready",
                 "message": str(error),
-                "issues": [
-                    issue.model_dump(mode="json", by_alias=True)
-                    for issue in error.issues
-                ],
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
             },
         ) from error
     container = getattr(request.app.state, "container", None)
@@ -543,9 +694,7 @@ async def cancel_preview(
     return preview
 
 
-@router.post(
-    "/drafts", response_model=AgentDraft, status_code=status.HTTP_201_CREATED
-)
+@router.post("/drafts", response_model=AgentDraft, status_code=status.HTTP_201_CREATED)
 async def create_draft(
     body: CreateAgentDraftRequest,
     actor: Annotated[StudioActor, Depends(require_studio_writer)],
@@ -619,10 +768,7 @@ async def download_bundle(
             detail={
                 "code": "draft_not_ready",
                 "message": str(error),
-                "issues": [
-                    issue.model_dump(mode="json", by_alias=True)
-                    for issue in error.issues
-                ],
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
             },
         ) from error
     return Response(
@@ -651,9 +797,7 @@ async def publish_draft(
             draft_id=draft_id,
             expected_revision=(body.expected_revision if body is not None else None),
         )
-        return PublishedAgentVersion.model_validate(
-            version.model_dump(exclude={"snapshot"})
-        )
+        return PublishedAgentVersion.model_validate(version.model_dump(exclude={"snapshot"}))
     except StudioPublicationConflictError as error:
         raise HTTPException(
             status_code=409,
@@ -667,10 +811,7 @@ async def publish_draft(
             detail={
                 "code": "draft_not_ready",
                 "message": str(error),
-                "issues": [
-                    issue.model_dump(mode="json", by_alias=True)
-                    for issue in error.issues
-                ],
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
             },
         ) from error
     except StudioPublisherNotConfiguredError as error:

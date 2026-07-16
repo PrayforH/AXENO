@@ -36,9 +36,7 @@ class UserRow(Base):
 
 class OAuthIdentityRow(Base):
     __tablename__ = "oauth_identities"
-    __table_args__ = (
-        UniqueConstraint("provider", "subject", name="uq_oauth_identity_subject"),
-    )
+    __table_args__ = (UniqueConstraint("provider", "subject", name="uq_oauth_identity_subject"),)
 
     identity_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     provider: Mapped[str] = mapped_column(String(32), index=True)
@@ -119,9 +117,7 @@ class AgentDraftRow(Base):
 class CapabilityCatalogRow(Base):
     __tablename__ = "capability_catalogs"
     __table_args__ = (
-        CheckConstraint(
-            "revision >= 1", name="ck_capability_catalogs_revision_positive"
-        ),
+        CheckConstraint("revision >= 1", name="ck_capability_catalogs_revision_positive"),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -160,9 +156,7 @@ class PreviewDeploymentRow(Base):
 class EvalDatasetVersionRow(Base):
     __tablename__ = "eval_dataset_versions"
     __table_args__ = (
-        CheckConstraint(
-            "version >= 1", name="ck_eval_dataset_version_positive"
-        ),
+        CheckConstraint("version >= 1", name="ck_eval_dataset_version_positive"),
         Index("ix_eval_datasets_tenant_created", "tenant_id", "created_at"),
         Index("ix_eval_datasets_tenant_agent", "tenant_id", "agent_name"),
     )
@@ -179,12 +173,8 @@ class EvalDatasetVersionRow(Base):
 class EvalRunRow(Base):
     __tablename__ = "eval_runs"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "idempotency_key", name="uq_eval_run_idempotency"
-        ),
-        CheckConstraint(
-            "dataset_version >= 1", name="ck_eval_run_dataset_version_positive"
-        ),
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_eval_run_idempotency"),
+        CheckConstraint("dataset_version >= 1", name="ck_eval_run_dataset_version_positive"),
         Index("ix_eval_runs_tenant_created", "tenant_id", "created_at"),
         Index(
             "ix_eval_runs_agent_version",
@@ -209,9 +199,7 @@ class EvalRunRow(Base):
 
 class EvalCaseResultRow(Base):
     __tablename__ = "eval_case_results"
-    __table_args__ = (
-        Index("ix_eval_case_results_run", "tenant_id", "eval_run_id"),
-    )
+    __table_args__ = (Index("ix_eval_case_results_run", "tenant_id", "eval_run_id"),)
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     eval_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -219,6 +207,61 @@ class EvalCaseResultRow(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     passed: Mapped[bool] = mapped_column(Boolean)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class EnvironmentRow(Base):
+    __tablename__ = "deployment_environments"
+    __table_args__ = (CheckConstraint("revision >= 0", name="ck_environment_revision"),)
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class DeploymentSnapshotRow(Base):
+    __tablename__ = "deployment_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_deployment_snapshots_agent_created",
+            "tenant_id",
+            "agent_name",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128))
+    agent_version: Mapped[str] = mapped_column(String(64))
+    environment: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class DeploymentRow(Base):
+    __tablename__ = "deployments"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "idempotency_key", name="uq_deployment_idempotency"),
+        Index(
+            "ix_deployments_agent_created",
+            "tenant_id",
+            "agent_name",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    deployment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128))
+    environment: Mapped[str] = mapped_column(String(32))
+    idempotency_key: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    fencing_token: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -298,9 +341,7 @@ class SdkSessionEntryRow(Base):
 class ApprovalRow(Base):
     __tablename__ = "approvals"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "run_id", "tool_call_id", name="uq_approval_tool_call"
-        ),
+        UniqueConstraint("tenant_id", "run_id", "tool_call_id", name="uq_approval_tool_call"),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -365,9 +406,7 @@ class WorkspaceSnapshotRow(Base):
 class AguiThreadBindingRow(Base):
     __tablename__ = "agui_thread_bindings"
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "user_id", "session_id", name="uq_agui_binding_session"
-        ),
+        UniqueConstraint("tenant_id", "user_id", "session_id", name="uq_agui_binding_session"),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)

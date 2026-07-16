@@ -1,10 +1,15 @@
 """Session lifecycle use cases."""
 
+from collections.abc import Awaitable, Callable
+
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
 from harness.core.models import AgentVersionStatus, Session
 from harness.core.ports import AgentRegistry, SessionRepository
+from harness.deployments.models import DeploymentResolution, EnvironmentName
+
+DeploymentResolver = Callable[[str, str, EnvironmentName, str], Awaitable[DeploymentResolution]]
 
 
 class SessionService:
@@ -16,22 +21,43 @@ class SessionService:
         clock: Clock,
         id_generator: IdGenerator,
         require_published_dependencies: bool = False,
+        deployment_resolver: DeploymentResolver | None = None,
     ) -> None:
         self._registry = registry
         self._sessions = sessions
         self._clock = clock
         self._id_generator = id_generator
         self._require_published_dependencies = require_published_dependencies
+        self._deployment_resolver = deployment_resolver
+
+    def configure_deployment_resolver(self, resolver: DeploymentResolver) -> None:
+        if self._deployment_resolver is not None:
+            raise RuntimeError("deployment resolver is already configured")
+        self._deployment_resolver = resolver
 
     async def create(
         self,
         tenant_id: str,
         user_id: str,
         agent_name: str,
-        agent_version: str,
+        agent_version: str | None,
         *,
         session_id: str | None = None,
+        environment: EnvironmentName | None = None,
     ) -> Session:
+        if (agent_version is None) == (environment is None):
+            raise ConflictError("provide exactly one of agent_version or environment")
+        resolved_session_id = session_id or self._id_generator("session")
+        deployment_snapshot_id: str | None = None
+        if environment is not None:
+            if self._deployment_resolver is None:
+                raise ConflictError("environment deployment resolution is unavailable")
+            resolution = await self._deployment_resolver(
+                tenant_id, agent_name, environment, resolved_session_id
+            )
+            agent_version = resolution.agent_version
+            deployment_snapshot_id = resolution.snapshot_id
+        assert agent_version is not None
         version = await self._registry.get(tenant_id, agent_name, agent_version)
         if version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("sessions can only use a published Agent version")
@@ -43,12 +69,14 @@ class SessionService:
                 agent_version=agent_version,
             )
         session = Session(
-            session_id=session_id or self._id_generator("session"),
+            session_id=resolved_session_id,
             tenant_id=tenant_id,
             user_id=user_id,
             agent_name=agent_name,
             agent_version=agent_version,
             created_at=self._clock(),
+            environment=environment.value if environment is not None else None,
+            deployment_snapshot_id=deployment_snapshot_id,
         )
         try:
             await self._sessions.add(session)
@@ -60,6 +88,8 @@ class SessionService:
                 existing.user_id != user_id
                 or existing.agent_name != agent_name
                 or existing.agent_version != agent_version
+                or existing.environment != (environment.value if environment is not None else None)
+                or existing.deployment_snapshot_id != deployment_snapshot_id
             ):
                 raise ConflictError(
                     "deterministic Session ID was reused for another Eval Case"

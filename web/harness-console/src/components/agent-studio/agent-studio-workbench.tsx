@@ -17,7 +17,10 @@ import {
   StudioApiError,
   studioClient,
   type StudioCapabilities,
+  type StudioDeployment,
+  type StudioDeploymentSnapshot,
   type StudioDraftSummary,
+  type StudioEnvironment,
   type StudioEvalDataset,
   type StudioEvalGate,
   type StudioEvalRun,
@@ -85,6 +88,10 @@ export function AgentStudioWorkbench() {
   const [evalRuns, setEvalRuns] = useState<StudioEvalRun[]>([]);
   const [evalGate, setEvalGate] = useState<StudioEvalGate | null>(null);
   const [evalAction, setEvalAction] = useState<"dataset" | "run" | "cancel" | "">("");
+  const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
+  const [deployments, setDeployments] = useState<StudioDeployment[]>([]);
+  const [deploymentSnapshots, setDeploymentSnapshots] = useState<StudioDeploymentSnapshot[]>([]);
+  const [deploymentAction, setDeploymentAction] = useState("");
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [versionConflict, setVersionConflict] = useState(false);
@@ -500,6 +507,66 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function refreshDeployments(agentName = draft.name) {
+    if (!agentName) return;
+    const [nextEnvironments, nextDeployments, nextSnapshots] = await Promise.all([
+      studioClient.listEnvironments(agentName),
+      studioClient.listDeployments(agentName),
+      studioClient.listDeploymentSnapshots(agentName),
+    ]);
+    setEnvironments(nextEnvironments);
+    setDeployments(nextDeployments);
+    setDeploymentSnapshots(nextSnapshots);
+  }
+
+  async function promoteTo(environment: StudioEnvironment) {
+    if (!draft.publishedVersion || !draft.publishedPackageHash || !canPublish) return;
+    setDeploymentAction(`promote:${environment.name}`);
+    try {
+      const canaryPercent = environment.name === "canary" && environment.healthySnapshotId
+        ? 10
+        : 100;
+      const deployment = await studioClient.promoteDeployment(
+        draft.name,
+        draft.publishedVersion,
+        environment,
+        draft.publishedPackageHash,
+        draft.executionProfile,
+        canaryPercent,
+      );
+      await refreshDeployments();
+      setNotice(
+        `${environment.name} 发布已进入 ${deployment.deployment.status}`
+        + (canaryPercent < 100 ? ` · 新会话 ${canaryPercent}% 灰度` : ""),
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "环境发布失败");
+    } finally {
+      setDeploymentAction("");
+    }
+  }
+
+  async function rollbackTo(
+    environment: StudioEnvironment,
+    snapshot: StudioDeploymentSnapshot,
+  ) {
+    if (!canPublish) return;
+    setDeploymentAction(`rollback:${snapshot.snapshotId}`);
+    try {
+      const deployment = await studioClient.rollbackDeployment(
+        draft.name,
+        environment,
+        snapshot.snapshotId,
+      );
+      await refreshDeployments();
+      setNotice(`${environment.name} 回滚已进入 ${deployment.deployment.status}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "环境回滚失败");
+    } finally {
+      setDeploymentAction("");
+    }
+  }
+
   function sectionSummary(section: StudioSection) {
     switch (section) {
       case "identity":
@@ -544,8 +611,19 @@ export function AgentStudioWorkbench() {
     && draft.publishedPackageHash
     && serverValidation?.packageHash === draft.publishedPackageHash
   );
+  const snapshotById = new Map(
+    deploymentSnapshots.map((snapshot) => [snapshot.snapshotId, snapshot]),
+  );
+  const activeDeployment = deployments.find((item) =>
+    ["queued", "reconciling"].includes(item.deployment.status),
+  );
+  const deployedCurrent = environments.some((environment) =>
+    environment.routes.some((route) =>
+      snapshotById.get(route.snapshotId)?.agentVersion === draft.publishedVersion,
+    ),
+  );
   const activeLifecycleStage = publishedCurrent
-    ? "version"
+    ? deployedCurrent ? "deploy" : "version"
     : activePreview && !activePreview.stale
       ? "preview"
       : inspected
@@ -608,6 +686,42 @@ export function AgentStudioWorkbench() {
       .catch(() => { if (active) setEvalGate(null); });
     return () => { active = false; };
   }, [draft.name, draft.publishedVersion, activeEvalRun?.run.status]);
+
+  useEffect(() => {
+    if (!draft.id || !draft.name) {
+      setEnvironments([]);
+      setDeployments([]);
+      setDeploymentSnapshots([]);
+      return;
+    }
+    let active = true;
+    void Promise.all([
+      studioClient.listEnvironments(draft.name),
+      studioClient.listDeployments(draft.name),
+      studioClient.listDeploymentSnapshots(draft.name),
+    ]).then(([nextEnvironments, nextDeployments, nextSnapshots]) => {
+      if (!active) return;
+      setEnvironments(nextEnvironments);
+      setDeployments(nextDeployments);
+      setDeploymentSnapshots(nextSnapshots);
+    }).catch(() => {
+      if (!active) return;
+      setEnvironments([]);
+      setDeployments([]);
+      setDeploymentSnapshots([]);
+    });
+    return () => { active = false; };
+  }, [draft.id, draft.name]);
+
+  useEffect(() => {
+    if (!activeDeployment) return;
+    const timer = window.setTimeout(() => {
+      void refreshDeployments().catch((error) => {
+        setNotice(error instanceof Error ? error.message : "部署状态读取失败");
+      });
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [activeDeployment?.deployment.deploymentId, activeDeployment?.deployment.status]);
 
   if (loading) {
     return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
@@ -1554,6 +1668,111 @@ export function AgentStudioWorkbench() {
                     <code>test → canary → production</code>
                   </article>
                 </div>
+                <section className={styles.deploymentControlPlane} aria-label="环境部署控制面">
+                  <header>
+                    <div>
+                      <span>DEPLOYMENT CONTROL PLANE</span>
+                      <strong>环境指针、灰度与可验证回滚</strong>
+                      <small>发布不修改 Agent Version；新 Session 解析当前路由，已存在 Session 始终固定原快照。</small>
+                    </div>
+                    {activeDeployment && (
+                      <em>{activeDeployment.deployment.environment} · {activeDeployment.deployment.status}</em>
+                    )}
+                  </header>
+                  <div className={styles.environmentGrid}>
+                    {environments.map((environment) => {
+                      const currentRoutes = environment.routes.map((route) => ({
+                        ...route,
+                        snapshot: snapshotById.get(route.snapshotId),
+                      }));
+                      const alreadyCurrent = currentRoutes.some(
+                        (route) => route.snapshot?.agentVersion === draft.publishedVersion,
+                      );
+                      return (
+                        <article key={environment.name} data-environment={environment.name}>
+                          <div className={styles.environmentHeading}>
+                            <span>{environment.name.toUpperCase()}</span>
+                            <code>revision {environment.revision}</code>
+                          </div>
+                          <strong>
+                            {currentRoutes.length
+                              ? currentRoutes.map((route) => `${route.snapshot?.agentVersion ?? "未知版本"} · ${route.weight}%`).join(" / ")
+                              : "尚未部署"}
+                          </strong>
+                          <small>
+                            {environment.healthySnapshotId
+                              ? `健康快照 ${environment.healthySnapshotId.slice(-10)}`
+                              : "等待首次健康发布"}
+                          </small>
+                          <button
+                            type="button"
+                            disabled={
+                              !canPublish
+                              || !draft.publishedVersion
+                              || !draft.publishedPackageHash
+                              || !evalGate?.passed
+                              || alreadyCurrent
+                              || Boolean(deploymentAction)
+                            }
+                            onClick={() => void promoteTo(environment)}
+                          >
+                            {deploymentAction === `promote:${environment.name}`
+                              ? "提交中…"
+                              : alreadyCurrent
+                                ? "当前版本"
+                                : environment.name === "canary" && environment.healthySnapshotId
+                                  ? "灰度 10% 新会话"
+                                  : `发布 ${draft.publishedVersion ?? "版本"}`}
+                          </button>
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <details className={styles.deploymentHistory} open={deployments.some((item) => item.deployment.status === "failed")}>
+                    <summary>部署记录与版本差异 · {deployments.length} 次</summary>
+                    <div>
+                      {deployments.slice(0, 8).map((item) => {
+                        const previous = item.deployment.previousSnapshotId
+                          ? snapshotById.get(item.deployment.previousSnapshotId)
+                          : undefined;
+                        const environment = environments.find(
+                          (candidate) => candidate.name === item.deployment.environment,
+                        );
+                        const canRollback = Boolean(
+                          environment
+                          && item.deployment.status === "succeeded"
+                          && environment.healthySnapshotId !== item.target.snapshotId,
+                        );
+                        return (
+                          <article key={item.deployment.deploymentId} data-status={item.deployment.status}>
+                            <span>{item.deployment.action === "rollback" ? "回滚" : "发布"}</span>
+                            <div>
+                              <strong>
+                                {item.deployment.environment} · {previous?.agentVersion ?? "空环境"} → {item.target.agentVersion}
+                              </strong>
+                              <small>
+                                {item.deployment.status}
+                                {item.deployment.canaryPercent < 100 ? ` · 新会话 ${item.deployment.canaryPercent}%` : " · 全量"}
+                                {item.deployment.errorCode ? ` · ${item.deployment.errorCode}` : ""}
+                              </small>
+                              <code>{previous?.packageHash.slice(0, 10) ?? "—"} → {item.target.packageHash.slice(0, 10)}</code>
+                            </div>
+                            {canRollback && environment && (
+                              <button
+                                type="button"
+                                disabled={Boolean(deploymentAction)}
+                                onClick={() => void rollbackTo(environment, item.target)}
+                              >
+                                {deploymentAction === `rollback:${item.target.snapshotId}` ? "回滚中…" : "回滚到此快照"}
+                              </button>
+                            )}
+                          </article>
+                        );
+                      })}
+                      {deployments.length === 0 && <p>发布后会在此保留快照、操作者、状态和差异。</p>}
+                    </div>
+                  </details>
+                </section>
               </section>
             )}
           </fieldset>

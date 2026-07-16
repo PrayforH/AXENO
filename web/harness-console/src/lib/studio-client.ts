@@ -233,6 +233,60 @@ export type StudioEvalGate = {
   missingDatasetIds: string[];
 };
 
+export type StudioEnvironmentName = "test" | "canary" | "production";
+
+export type StudioEnvironment = {
+  tenantId: string;
+  agentName: string;
+  name: StudioEnvironmentName;
+  revision: number;
+  routes: Array<{ snapshotId: string; weight: number }>;
+  healthySnapshotId: string | null;
+  updatedAt: string;
+};
+
+export type StudioDeploymentSnapshot = {
+  tenantId: string;
+  snapshotId: string;
+  agentName: string;
+  agentVersion: string;
+  environment: StudioEnvironmentName;
+  manifestHash: string;
+  packageHash: string;
+  imageDigest: string;
+  executionProfile: string;
+  config: Record<string, string | number | boolean>;
+  evalGatePassed: boolean;
+  evalRequiredDatasets: number;
+  previewId: string | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type StudioDeployment = {
+  deployment: {
+    tenantId: string;
+    deploymentId: string;
+    agentName: string;
+    environment: StudioEnvironmentName;
+    action: "promote" | "rollback";
+    targetSnapshotId: string;
+    previousSnapshotId: string | null;
+    canaryPercent: number;
+    expectedEnvironmentRevision: number;
+    idempotencyKey: string;
+    requestedBy: string;
+    status: "queued" | "reconciling" | "succeeded" | "failed";
+    fencingToken: number;
+    createdAt: string;
+    updatedAt: string;
+    completedAt: string | null;
+    errorCode: string | null;
+  };
+  target: StudioDeploymentSnapshot;
+  environment: StudioEnvironment;
+};
+
 export type StudioCapabilities = {
   modelRoutes: Array<{
     routeId: string;
@@ -477,6 +531,54 @@ export const studioClient = {
     request<StudioEvalGate>(
       `evaluation-gates/${encodeURIComponent(agentName)}/versions/${encodeURIComponent(agentVersion)}`,
     ),
+  listEnvironments: (agentName: string) =>
+    request<StudioEnvironment[]>(
+      `agents/${encodeURIComponent(agentName)}/environments`,
+    ),
+  listDeployments: (agentName: string) =>
+    request<StudioDeployment[]>(
+      `agents/${encodeURIComponent(agentName)}/deployments`,
+    ),
+  listDeploymentSnapshots: (agentName: string) =>
+    request<StudioDeploymentSnapshot[]>(
+      `agents/${encodeURIComponent(agentName)}/deployment-snapshots`,
+    ),
+  promoteDeployment: (
+    agentName: string,
+    agentVersion: string,
+    environment: StudioEnvironment,
+    packageHash: string,
+    executionProfile: string,
+    canaryPercent: number,
+  ) => request<StudioDeployment>("deployments/promote", {
+    method: "POST",
+    body: JSON.stringify({
+      agentName,
+      agentVersion,
+      environment: environment.name,
+      expectedEnvironmentRevision: environment.revision,
+      canaryPercent,
+      imageDigest: `sha256:${packageHash}`,
+      executionProfile,
+      config: {},
+      idempotencyKey: `studio-deploy:${agentName}:${agentVersion}:${environment.name}:r${environment.revision}:${crypto.randomUUID()}`,
+    }),
+  }),
+  rollbackDeployment: (
+    agentName: string,
+    environment: StudioEnvironment,
+    snapshotId: string,
+  ) => request<StudioDeployment>(
+    `agents/${encodeURIComponent(agentName)}/environments/${environment.name}/rollback`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        snapshotId,
+        expectedEnvironmentRevision: environment.revision,
+        idempotencyKey: `studio-rollback:${agentName}:${environment.name}:${snapshotId}:r${environment.revision}:${crypto.randomUUID()}`,
+      }),
+    },
+  ),
   async downloadEvalArtifact(evalRunId: string, artifactId: string): Promise<void> {
     const response = requireAuthenticatedResponse(
       await fetch(

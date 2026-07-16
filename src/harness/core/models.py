@@ -113,6 +113,8 @@ class Session(FrozenModel):
     created_at: datetime
     claude_session_id: str | None = None
     workspace_snapshot_id: str | None = None
+    environment: str | None = None
+    deployment_snapshot_id: str | None = None
 
 
 class Run(FrozenModel):
