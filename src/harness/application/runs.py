@@ -1,5 +1,9 @@
 """Run creation, lookup and cancellation use cases."""
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Protocol
+
 from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
@@ -7,6 +11,32 @@ from harness.core.models import Run, RunStatus
 from harness.core.ports import RunRepository, RunTask, SessionRepository, TaskQueue
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
+
+
+@dataclass(frozen=True)
+class RunQuotaPlan:
+    max_budget_usd: float | None
+    max_model_tokens: int | None
+    ttl_seconds: int
+
+
+class RunAdmission(Protocol):
+    async def admit_run(
+        self,
+        *,
+        tenant_id: str,
+        run_id: str,
+        agent_name: str,
+        environment: str | None,
+        max_budget_usd: float | None,
+        max_model_tokens: int | None,
+        ttl_seconds: int,
+    ) -> tuple[object, ...]: ...
+
+    async def release_subject(self, tenant_id: str, subject_id: str) -> int: ...
+
+
+RunQuotaPlanResolver = Callable[[str, str, str], Awaitable[RunQuotaPlan]]
 
 
 class RunService:
@@ -20,6 +50,8 @@ class RunService:
         clock: Clock,
         id_generator: IdGenerator,
         observability: Observability | None = None,
+        admission: RunAdmission | None = None,
+        quota_plan_resolver: RunQuotaPlanResolver | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -28,6 +60,8 @@ class RunService:
         self._clock = clock
         self._id_generator = id_generator
         self._observability = observability
+        self._admission = admission
+        self._quota_plan_resolver = quota_plan_resolver
 
     async def create(
         self,
@@ -37,7 +71,7 @@ class RunService:
         *,
         input: dict[str, object] | None = None,
     ) -> Run:
-        await self._sessions.get(tenant_id, session_id)
+        session = await self._sessions.get(tenant_id, session_id)
         existing = await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
         if existing is not None:
             self._annotate_trace(session_id, existing.run_id)
@@ -56,7 +90,31 @@ class RunService:
             input=input or {},
             trace_context=(self._observability.inject() if self._observability is not None else {}),
         )
-        await self._runs.add(run)
+        admitted = False
+        if self._admission is not None:
+            plan = (
+                await self._quota_plan_resolver(
+                    tenant_id, session.agent_name, session.agent_version
+                )
+                if self._quota_plan_resolver is not None
+                else RunQuotaPlan(None, None, 3600)
+            )
+            await self._admission.admit_run(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                agent_name=session.agent_name,
+                environment=session.environment,
+                max_budget_usd=plan.max_budget_usd,
+                max_model_tokens=plan.max_model_tokens,
+                ttl_seconds=plan.ttl_seconds,
+            )
+            admitted = True
+        try:
+            await self._runs.add(run)
+        except Exception:
+            if admitted and self._admission is not None:
+                await self._admission.release_subject(tenant_id, run_id)
+            raise
         await self._events.append(
             tenant_id=tenant_id,
             run_id=run.run_id,
@@ -83,13 +141,13 @@ class RunService:
     async def list_for_sessions(
         self, tenant_id: str, session_ids: list[str], *, limit: int = 200
     ) -> list[Run]:
-        return await self._runs.list_for_sessions(
-            tenant_id, session_ids, limit=limit
-        )
+        return await self._runs.list_for_sessions(tenant_id, session_ids, limit=limit)
 
     async def cancel(self, tenant_id: str, run_id: str) -> Run:
         current = await self._runs.get(tenant_id, run_id)
         if current.status.is_terminal:
+            if self._admission is not None:
+                await self._admission.release_subject(tenant_id, run_id)
             return current
         if current.status is not RunStatus.CANCELLING:
             cancelling = current.model_copy(
@@ -104,9 +162,7 @@ class RunService:
                 if current.status.is_terminal:
                     return current
                 if current.status is not RunStatus.CANCELLING:
-                    raise ConflictError(
-                        f"run changed while cancellation was requested: {run_id}"
-                    )
+                    raise ConflictError(f"run changed while cancellation was requested: {run_id}")
             else:
                 current = cancelling
                 await self._events.append(
@@ -134,4 +190,6 @@ class RunService:
             session_id=current.session_id,
             event_type="run.cancelled",
         )
+        if self._admission is not None:
+            await self._admission.release_subject(tenant_id, run_id)
         return cancelled

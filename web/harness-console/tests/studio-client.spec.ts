@@ -41,10 +41,29 @@ describe("Studio typed API mapping", () => {
     expect(draft.id).toBe("draft-api");
     expect(draft.revision).toBe(3);
     expect(draft.executionProfile).toBe("isolated-default");
+    expect(draft.maxModelTokens).toBe(200000);
     expect(saved.skills[0].files).toEqual([
       { path: "references/rules.md", content: "rules" },
     ]);
     expect(saved.model.requiredCapabilities).toEqual(["streaming", "tool_use"]);
+    expect(saved.limits.maxModelTokens).toBe(200000);
+  });
+
+  it("reads usage and replaces quota policy with revision CAS", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (!init?.method) return Response.json({ policies: [], counters: [], activeReservations: [], unknownCostEntries: 0 });
+      return Response.json({ policyId: "tenant-default", revision: 2 });
+    });
+
+    await studioClient.quotaUsage();
+    await studioClient.replaceQuotaPolicy("tenant-default", 1, { concurrent_runs: 12 });
+
+    expect(calls).toEqual([
+      { url: "/api/studio/quotas", body: null },
+      { url: "/api/studio/quotas/tenant-default", body: { expectedRevision: 1, scope: { agentName: null, environment: null }, limits: { concurrent_runs: 12 } } },
+    ]);
   });
 
   it("maps server eval tags into the editor and restores them on save", () => {

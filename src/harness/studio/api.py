@@ -47,6 +47,13 @@ from harness.quality.models import (
     QualityScore,
 )
 from harness.quality.service import QualityService
+from harness.quota.models import (
+    QuotaPolicy,
+    QuotaUsageView,
+    ReplaceQuotaPolicyRequest,
+)
+from harness.quota.repositories import QuotaExceededError
+from harness.quota.service import QuotaService
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.models import (
@@ -120,6 +127,12 @@ def require_studio_catalog_admin(
     identity: Annotated[Identity, Depends(require_identity)],
 ) -> StudioActor:
     return _authorize_studio_actor(identity, "studio:catalog:write")
+
+
+def require_studio_quota_admin(
+    identity: Annotated[Identity, Depends(require_identity)],
+) -> StudioActor:
+    return _authorize_studio_actor(identity, "studio:quota:write")
 
 
 def get_studio_service(request: Request) -> AgentStudioService:
@@ -248,7 +261,44 @@ def get_quality_service(request: Request) -> QualityService:
     return service
 
 
+def get_quota_service(request: Request) -> QuotaService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "quotas", None)
+    if not isinstance(service, QuotaService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "quota_not_configured",
+                "message": "Quota control plane is not configured",
+            },
+        )
+    return service
+
+
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
+
+
+@router.get("/quotas", response_model=QuotaUsageView)
+async def get_quota_usage(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[QuotaService, Depends(get_quota_service)],
+) -> QuotaUsageView:
+    return await service.usage(actor.tenant_id)
+
+
+@router.put("/quotas/{policy_id}", response_model=QuotaPolicy)
+async def replace_quota_policy(
+    policy_id: str,
+    body: ReplaceQuotaPolicyRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_quota_admin)],
+    service: Annotated[QuotaService, Depends(get_quota_service)],
+) -> QuotaPolicy:
+    return await service.replace_policy(
+        tenant_id=actor.tenant_id,
+        user_id=actor.user_id,
+        policy_id=policy_id,
+        request=body,
+    )
 
 
 @router.get("/agents/{agent_name}/quality/scores", response_model=list[QualityScore])
@@ -691,6 +741,11 @@ def _translate_domain_error(error: Exception) -> HTTPException:
         return HTTPException(
             status_code=404,
             detail={"code": "not_found", "message": str(error)},
+        )
+    if isinstance(error, QuotaExceededError):
+        return HTTPException(
+            status_code=409,
+            detail={"code": "quota_exceeded", "message": str(error)},
         )
     if isinstance(error, ConflictError):
         return HTTPException(

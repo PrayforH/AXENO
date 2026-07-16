@@ -20,6 +20,9 @@ from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus, Session
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.quota.repositories import InMemoryQuotaRepository
+from harness.quota.service import QuotaService
 from harness.runtime.base import RuntimeContext
 from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.sandbox.base import SandboxIsolation
@@ -43,6 +46,7 @@ async def _arrange(
     *,
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE,
     use_profiles: bool = False,
+    quotas: QuotaService | None = None,
 ):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -76,12 +80,14 @@ async def _arrange(
             profiles=default_policy_profiles(),
             approvals=approval_service,
             events=events,
+            quotas=quotas,
         )
         if use_profiles
         else SdkToolGate(
             policy=PolicyEngine(default_policy_rules()),
             approvals=approval_service,
             events=events,
+            quotas=quotas,
         )
     )
     context = RuntimeContext(
@@ -97,9 +103,7 @@ async def _arrange(
         workspace=tmp_path,
         assistant_message_id="assistant-sdk-message",
         sandbox_provider=(
-            "daytona"
-            if sandbox_isolation is SandboxIsolation.CONTAINER
-            else "local"
+            "daytona" if sandbox_isolation is SandboxIsolation.CONTAINER else "local"
         ),
         sandbox_isolation=sandbox_isolation,
     )
@@ -229,6 +233,81 @@ async def test_allows_read_before_tool_execution_and_emits_ordered_events(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resource", "tool_name"),
+    [
+        (QuotaResource.MCP_REQUESTS, "mcp__tavily__tavily_search"),
+        (QuotaResource.CONCURRENT_SUBAGENTS, "Task"),
+    ],
+)
+async def test_tool_gate_enforces_mcp_and_subagent_quota(
+    tmp_path: Path,
+    resource: QuotaResource,
+    tool_name: str,
+) -> None:
+    quotas = QuotaService(InMemoryQuotaRepository())
+    await quotas.replace_policy(
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={resource: 1},
+        ),
+    )
+    gate, _, _, events, context = await _arrange(tmp_path, quotas=quotas)
+
+    first = await _invoke(gate, context, _input(tool_name, {}, "quota-tool-1"))
+    second = await _invoke(gate, context, _input(tool_name, {}, "quota-tool-2"))
+
+    assert _decision(first) == "allow"
+    assert _decision(second) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[-1].payload["error"]["message"] == (
+        f"quota exceeded for {resource.value}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_completed_subagent_releases_concurrency_for_next_delegation(
+    tmp_path: Path,
+) -> None:
+    quotas = QuotaService(InMemoryQuotaRepository())
+    await quotas.replace_policy(
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={QuotaResource.CONCURRENT_SUBAGENTS: 1},
+        ),
+    )
+    gate, _, _, _, context = await _arrange(tmp_path, quotas=quotas)
+    assert _decision(
+        await _invoke(gate, context, _input("Task", {}, "delegation-one"))
+    ) == "allow"
+    post_input = cast(
+        PostToolUseHookInput,
+        {
+            "session_id": "sdk-session",
+            "transcript_path": "/tmp/transcript",
+            "cwd": str(tmp_path),
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Task",
+            "tool_input": {},
+            "tool_response": {"status": "completed"},
+            "tool_use_id": "delegation-one",
+        },
+    )
+    release_hook = gate.hooks(context)["PostToolUse"][1].hooks[0]
+    await release_hook(post_input, "delegation-one", {"signal": None})
+
+    assert _decision(
+        await _invoke(gate, context, _input("Task", {}, "delegation-two"))
+    ) == "allow"
+
+
+@pytest.mark.asyncio
 async def test_staged_input_read_persists_only_safe_path_and_marker(tmp_path: Path) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
     relative_path = "inputs/facts.txt"
@@ -266,9 +345,7 @@ async def test_denies_destructive_bash_before_tool_execution(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_ask_waits_inline_and_continues_only_after_approval(tmp_path: Path) -> None:
     gate, approvals, runs, events, context = await _arrange(tmp_path)
-    task = asyncio.create_task(
-        _invoke(gate, context, _input("Bash", {"command": "ls"}, "tool-3"))
-    )
+    task = asyncio.create_task(_invoke(gate, context, _input("Bash", {"command": "ls"}, "tool-3")))
     requested = []
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     for _ in range(20):
@@ -355,9 +432,7 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
     assert requested
     assert requested[0].payload["message_id"] == "assistant-sdk-message"
     assert requested[0].payload["tool_name"] == "Write"
-    assert requested[0].payload["argument_summary"] == {
-        "file_path": "result.txt"
-    }
+    assert requested[0].payload["argument_summary"] == {"file_path": "result.txt"}
     assert requested[0].payload["sandbox_provider"] == "local"
     assert requested[0].payload["sandbox_isolation"] == "workspace"
     assert requested[0].payload["policy_rule"] == "write-review"
@@ -418,9 +493,7 @@ async def test_successful_approved_write_grants_same_run_edit_capability(
             "tool_use_id": "tool-create-report",
         },
     )
-    await hooks["PostToolUse"][0].hooks[0](
-        post_input, "tool-create-report", {"signal": None}
-    )
+    await hooks["PostToolUse"][0].hooks[0](post_input, "tool-create-report", {"signal": None})
 
     edit_input = _input(
         "Edit",

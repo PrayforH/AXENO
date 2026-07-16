@@ -21,7 +21,7 @@ from harness.application.events import EventService
 from harness.application.file_catalog import FileCatalogService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
-from harness.application.runs import RunService
+from harness.application.runs import RunQuotaPlan, RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
 from harness.auth.audit import AuditService
@@ -51,6 +51,7 @@ from harness.quality.controller import QualitySyncController
 from harness.quality.langfuse import DisabledQualityExporter, LangfuseQualityExporter
 from harness.quality.queue import QualityTaskQueue
 from harness.quality.service import QualityService
+from harness.quota.service import QuotaService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     default_tool_resolver,
@@ -91,6 +92,7 @@ from harness.storage.platform_repositories import (
 )
 from harness.storage.preview_repository import PostgresPreviewRepository
 from harness.storage.quality_repository import PostgresQualityRepository
+from harness.storage.quota_repository import PostgresQuotaRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
@@ -168,9 +170,7 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         if not settings.kubernetes_image:
             raise ValueError("HARNESS_KUBERNETES_IMAGE is required for Kubernetes")
         try:
-            selector_raw = json.loads(
-                settings.kubernetes_egress_gateway_selector_json
-            )
+            selector_raw = json.loads(settings.kubernetes_egress_gateway_selector_json)
         except json.JSONDecodeError:
             raise ValueError(
                 "HARNESS_KUBERNETES_EGRESS_GATEWAY_SELECTOR_JSON must be JSON"
@@ -179,14 +179,11 @@ def _sandbox(settings: Settings) -> SandboxProvider:
             raise ValueError("Kubernetes egress gateway selector must map strings")
         selector_items = cast(dict[object, object], selector_raw)
         if not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in selector_items.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in selector_items.items()
         ):
             raise ValueError("Kubernetes egress gateway selector must map strings")
         if not settings.kubernetes_egress_proxy_url:
-            raise ValueError(
-                "HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes"
-            )
+            raise ValueError("HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes")
         client = KubectlKubernetesClient(
             namespace=settings.kubernetes_namespace,
             kubectl_path=settings.kubernetes_kubectl_path,
@@ -273,9 +270,7 @@ def build_production_container(
         if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
             raise ValueError("MCP credential settings must be JSON objects")
         typed_secrets = cast(dict[object, object], secrets_raw)
-        sources: dict[
-            CredentialSourceKey, tuple[str, dict[str, SecretStr]]
-        ] = {
+        sources: dict[CredentialSourceKey, tuple[str, dict[str, SecretStr]]] = {
             ("*", CredentialResourceKind.MODEL, "new-api-default"): (
                 f"settings://{primary_gateway.provider}/primary",
                 {"api_key": primary_gateway.credential},
@@ -290,9 +285,7 @@ def build_production_container(
                 continue
             values = {
                 str(key): SecretStr(str(typed_secrets[secret_reference]))
-                for key, secret_reference in cast(
-                    dict[object, object], raw_references
-                ).items()
+                for key, secret_reference in cast(dict[object, object], raw_references).items()
                 if secret_reference in typed_secrets
             }
             sources[("*", CredentialResourceKind.MCP, str(server))] = (
@@ -374,6 +367,13 @@ def build_production_container(
     def ids(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    quotas = QuotaService(
+        PostgresQuotaRepository(sessions),
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
+
     agent_service = AgentService(registry, clock=clock, environment="production")
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
@@ -416,6 +416,7 @@ def build_production_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: ids("preview"),
+        quotas=quotas,
     )
     events = EventService(event_repository, bus, clock=clock, id_generator=ids)
     session_service = SessionService(
@@ -425,6 +426,16 @@ def build_production_container(
         id_generator=ids,
         require_published_dependencies=True,
     )
+
+    async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
+        version = await registry.get(tenant_id, agent_name, agent_version)
+        limits = AgentManifestSnapshot.model_validate(version.snapshot).manifest.spec.limits
+        return RunQuotaPlan(
+            max_budget_usd=limits.max_budget_usd,
+            max_model_tokens=limits.max_model_tokens,
+            ttl_seconds=limits.timeout_seconds + 300,
+        )
+
     run_service = RunService(
         session_repository,
         runs,
@@ -433,6 +444,8 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         observability=observability,
+        admission=quotas,
+        quota_plan_resolver=run_quota_plan,
     )
     approval_service = ApprovalService(
         runs=runs,
@@ -448,6 +461,8 @@ def build_production_container(
         store=store,
         id_generator=ids,
         max_file_bytes=settings.output_artifact_max_bytes,
+        sessions=session_repository,
+        quotas=quotas,
     )
     file_service = FileCatalogService(file_repository, clock=clock, id_generator=ids)
     input_service = InputArtifactService(
@@ -517,6 +532,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         quality_gate=quality_service.require_promotion_allowed,
+        quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
@@ -531,6 +547,8 @@ def build_production_container(
         snapshots=snapshot_repository,
         max_archive_bytes=settings.workspace_archive_max_bytes,
         max_archive_members=settings.workspace_archive_max_members,
+        sessions=session_repository,
+        quotas=quotas,
     )
 
     async def workspace_policy(
@@ -585,6 +603,7 @@ def build_production_container(
                 profiles=policy_profiles,
                 approvals=approval_service,
                 events=events,
+                quotas=quotas,
             ),
             memory_service=memory_service,
             session_store_factory=lambda session: PostgresSessionStore(
@@ -598,9 +617,7 @@ def build_production_container(
         model_probe = AnthropicSandboxModelProbe(primary_gateway)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
 
-        async def resolve_runtime_sandbox(
-            tenant_id: str, session: Session
-        ) -> SandboxProvider:
+        async def resolve_runtime_sandbox(tenant_id: str, session: Session) -> SandboxProvider:
             if session.deployment_snapshot_id is None:
                 return runtime_sandbox
             snapshot = await deployment_repository.get_snapshot(
@@ -655,6 +672,7 @@ def build_production_container(
         ),
         heartbeat_seconds=settings.worker_task_heartbeat_seconds,
         clock=clock,
+        quotas=quotas,
     )
     worker = RunOrchestrator(
         sessions=session_repository,
@@ -679,6 +697,8 @@ def build_production_container(
             credential_broker.revoke_run if credential_broker is not None else None
         ),
         sandbox_resolver=sandbox_resolver,
+        quotas=quotas,
+        quota_plan_resolver=run_quota_plan,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -723,6 +743,7 @@ def build_production_container(
         quality_repository=quality_repository,
         quality=quality_service,
         quality_controller=quality_controller,
+        quotas=quotas,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

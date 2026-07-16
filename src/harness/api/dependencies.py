@@ -35,7 +35,7 @@ from harness.application.events import EventService
 from harness.application.file_catalog import FileCatalogService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
-from harness.application.runs import RunService
+from harness.application.runs import RunQuotaPlan, RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
 from harness.auth.audit import AuditService
@@ -77,6 +77,8 @@ from harness.quality.langfuse import DisabledQualityExporter
 from harness.quality.queue import QualityTaskQueue
 from harness.quality.repositories import InMemoryQualityRepository, QualityRepository
 from harness.quality.service import QualityService
+from harness.quota.repositories import InMemoryQuotaRepository
+from harness.quota.service import QuotaService
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.default_tools import (
@@ -150,6 +152,7 @@ class ApiContainer:
     quality_repository: QualityRepository
     quality: QualityService
     quality_controller: QualitySyncController
+    quotas: QuotaService
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -227,6 +230,13 @@ def build_memory_container(
     def id_generator(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    quotas = QuotaService(
+        InMemoryQuotaRepository(),
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
+
     agent_service = AgentService(registry, clock=clock, environment=resolved_settings.environment)
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
@@ -249,8 +259,19 @@ def build_memory_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: id_generator("preview"),
+        quotas=quotas,
     )
     event_service = EventService(events, bus, clock=clock, id_generator=id_generator)
+
+    async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
+        version = await registry.get(tenant_id, agent_name, agent_version)
+        limits = AgentManifestSnapshot.model_validate(version.snapshot).manifest.spec.limits
+        return RunQuotaPlan(
+            max_budget_usd=limits.max_budget_usd,
+            max_model_tokens=limits.max_model_tokens,
+            ttl_seconds=limits.timeout_seconds + 300,
+        )
+
     run_service = RunService(
         sessions,
         runs,
@@ -259,6 +280,8 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
         observability=observability,
+        admission=quotas,
+        quota_plan_resolver=run_quota_plan,
     )
     session_service = SessionService(registry, sessions, clock=clock, id_generator=id_generator)
     approval_service = ApprovalService(
@@ -275,6 +298,8 @@ def build_memory_container(
         store=artifact_store,
         id_generator=id_generator,
         max_file_bytes=resolved_settings.output_artifact_max_bytes,
+        sessions=sessions,
+        quotas=quotas,
     )
     file_catalog_service = FileCatalogService(
         thread_file_repository,
@@ -337,6 +362,7 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
         quality_gate=quality_service.require_promotion_allowed,
+        quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
@@ -351,6 +377,8 @@ def build_memory_container(
         snapshots=workspace_snapshot_repository,
         max_archive_bytes=resolved_settings.workspace_archive_max_bytes,
         max_archive_members=resolved_settings.workspace_archive_max_members,
+        sessions=sessions,
+        quotas=quotas,
     )
 
     async def workspace_policy_resolver(
@@ -408,9 +436,7 @@ def build_memory_container(
         )
     elif resolved_settings.sandbox_provider == "kubernetes":
         try:
-            selector_raw = json.loads(
-                resolved_settings.kubernetes_egress_gateway_selector_json
-            )
+            selector_raw = json.loads(resolved_settings.kubernetes_egress_gateway_selector_json)
         except json.JSONDecodeError:
             raise ValueError(
                 "HARNESS_KUBERNETES_EGRESS_GATEWAY_SELECTOR_JSON must be JSON"
@@ -419,16 +445,13 @@ def build_memory_container(
             raise ValueError("Kubernetes egress gateway selector must map strings")
         selector_items = cast(dict[object, object], selector_raw)
         if not all(
-            isinstance(key, str) and isinstance(value, str)
-            for key, value in selector_items.items()
+            isinstance(key, str) and isinstance(value, str) for key, value in selector_items.items()
         ):
             raise ValueError("Kubernetes egress gateway selector must map strings")
         if not resolved_settings.kubernetes_image:
             raise ValueError("HARNESS_KUBERNETES_IMAGE is required for Kubernetes")
         if not resolved_settings.kubernetes_egress_proxy_url:
-            raise ValueError(
-                "HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes"
-            )
+            raise ValueError("HARNESS_KUBERNETES_EGRESS_PROXY_URL is required for Kubernetes")
         kubernetes = KubernetesSandboxProvider(
             client=KubectlKubernetesClient(
                 namespace=resolved_settings.kubernetes_namespace,
@@ -448,9 +471,7 @@ def build_memory_container(
             cpu_millis=resolved_settings.kubernetes_cpu_millis,
             memory_mib=resolved_settings.kubernetes_memory_mib,
             disk_mib=resolved_settings.kubernetes_disk_mib,
-            egress_gateway_namespace=(
-                resolved_settings.kubernetes_egress_gateway_namespace
-            ),
+            egress_gateway_namespace=(resolved_settings.kubernetes_egress_gateway_namespace),
             egress_gateway_selector=cast(dict[str, str], selector_items),
             egress_gateway_port=resolved_settings.kubernetes_egress_gateway_port,
             egress_proxy_url=resolved_settings.kubernetes_egress_proxy_url,
@@ -481,6 +502,7 @@ def build_memory_container(
                 profiles=policy_profiles,
                 approvals=approval_service,
                 events=event_service,
+                quotas=quotas,
             ),
             memory_service=memory_service,
             observability=observability,
@@ -507,6 +529,7 @@ def build_memory_container(
         ),
         heartbeat_seconds=resolved_settings.worker_task_heartbeat_seconds,
         clock=clock,
+        quotas=quotas,
     )
     worker = RunOrchestrator(
         sessions=sessions,
@@ -529,6 +552,8 @@ def build_memory_container(
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
         quality_hook=quality_service.record_terminal_run,
+        quotas=quotas,
+        quota_plan_resolver=run_quota_plan,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -557,6 +582,7 @@ def build_memory_container(
         quality_repository=quality_repository,
         quality=quality_service,
         quality_controller=quality_controller,
+        quotas=quotas,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
@@ -638,6 +664,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:publish",
             "studio:deploy",
             "studio:catalog:write",
+            "studio:quota:write",
         }
     ),
     "member": frozenset(

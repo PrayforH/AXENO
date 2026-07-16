@@ -11,8 +11,11 @@ from pydantic import SecretStr
 from harness.adapters.memory import InMemoryAgentRegistry
 from harness.api.app import create_app
 from harness.api.dependencies import ApiContainer, build_memory_container
+from harness.auth.models import Membership
+from harness.auth.repositories import InMemoryAuthRepository
 from harness.core.errors import NotFoundError
 from harness.evals.models import EvalRunStatus
+from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -575,6 +578,122 @@ async def test_member_can_write_and_validate_but_cannot_publish() -> None:
     assert validation.status_code == 200
     assert published.status_code == 403
     assert published.json()["error"]["code"] == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_quota_usage_is_readable_but_only_admin_roles_can_change_policy() -> None:
+    application, container = app_and_container()
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        owner = await register(client, "quota-owner@example.com")
+        member = await register(client, "quota-member@example.com")
+        viewer = await register(client, "quota-viewer@example.com")
+        repository = cast(InMemoryAuthRepository, vars(container.auth)["_repository"])
+        viewer_membership = Membership(
+            tenant_id=viewer["membership"]["tenant_id"],
+            user_id=viewer["user"]["user_id"],
+            role="viewer",
+            created_at=repository.memberships[
+                (viewer["membership"]["tenant_id"], viewer["user"]["user_id"])
+            ].created_at,
+        )
+        repository.memberships[(viewer_membership.tenant_id, viewer_membership.user_id)] = (
+            viewer_membership
+        )
+        viewer_login = await client.post(
+            "/v1/auth/login",
+            json={"email": "quota-viewer@example.com", "password": "SecurePass123"},
+        )
+        owner_headers = {"Authorization": f"Bearer {owner['access_token']}"}
+        member_headers = {"Authorization": f"Bearer {member['access_token']}"}
+        viewer_headers = {"Authorization": f"Bearer {viewer_login.json()['access_token']}"}
+
+        initial = await client.get("/v1/studio/quotas", headers=viewer_headers)
+        member_write = await client.put(
+            "/v1/studio/quotas/tenant-default",
+            headers=member_headers,
+            json={"expectedRevision": 0, "scope": {}, "limits": {"concurrent_runs": 3}},
+        )
+        viewer_write = await client.put(
+            "/v1/studio/quotas/tenant-default",
+            headers=viewer_headers,
+            json={"expectedRevision": 0, "scope": {}, "limits": {"concurrent_runs": 3}},
+        )
+        changed = await client.put(
+            "/v1/studio/quotas/tenant-default",
+            headers=owner_headers,
+            json={"expectedRevision": 0, "scope": {}, "limits": {"concurrent_runs": 3}},
+        )
+        current = await client.get("/v1/studio/quotas", headers=member_headers)
+
+    assert initial.status_code == 200
+    assert initial.json()["policies"][0]["revision"] == 0
+    assert member_write.status_code == 403
+    assert viewer_write.status_code == 403
+    assert changed.status_code == 200
+    assert changed.json()["revision"] == 1
+    assert current.status_code == 200
+    assert current.json()["policies"][0]["limits"]["concurrent_runs"] == 3
+    audits = await container.audit.list_for_tenant(owner["membership"]["tenant_id"], limit=20)
+    assert any(
+        entry.action == "quota.policy.replace"
+        and entry.resource_id == "tenant-default"
+        and entry.user_id == owner["user"]["user_id"]
+        for entry in audits
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_quota_rejection_does_not_create_a_half_preview() -> None:
+    application, container = app_and_container()
+    await container.quotas.replace_policy(
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        policy_id="tenant-default",
+        request=ReplaceQuotaPolicyRequest(
+            expectedRevision=0,
+            limits={QuotaResource.ACTIVE_PREVIEWS: 1},
+        ),
+    )
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        draft = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request("preview-quota")
+        )
+        first = await client.post(
+            "/v1/studio/previews",
+            headers=headers,
+            json={
+                "draftId": draft.json()["draftId"],
+                "expectedRevision": 1,
+                "idempotencyKey": "preview-quota-one",
+                "ttlSeconds": 600,
+            },
+        )
+        rejected = await client.post(
+            "/v1/studio/previews",
+            headers=headers,
+            json={
+                "draftId": draft.json()["draftId"],
+                "expectedRevision": 1,
+                "idempotencyKey": "preview-quota-two",
+                "ttlSeconds": 600,
+            },
+        )
+        listed = await client.get("/v1/studio/previews", headers=headers)
+
+    assert first.status_code == 202
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "quota_exceeded"
+    assert "active_previews" in rejected.json()["error"]["message"]
+    assert [item["previewId"] for item in listed.json()] == [first.json()["previewId"]]
 
 
 @pytest.mark.asyncio

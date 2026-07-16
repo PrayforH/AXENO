@@ -90,13 +90,10 @@ class DraftLimits(StudioModel):
     max_turns: int = Field(default=15, alias="maxTurns", ge=1, le=200)
     timeout_seconds: int = Field(default=900, alias="timeoutSeconds", ge=1, le=86_400)
     max_budget_usd: float = Field(default=1, alias="maxBudgetUsd", gt=0)
+    max_model_tokens: int = Field(default=200_000, alias="maxModelTokens", ge=1, le=10_000_000)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
-    max_subagent_tasks: int = Field(
-        default=16, alias="maxSubagentTasks", ge=1, le=128
-    )
-    max_concurrent_subagents: int = Field(
-        default=4, alias="maxConcurrentSubagents", ge=1, le=16
-    )
+    max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
+    max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
     max_subagent_usage_units: int | None = Field(
         default=200_000, alias="maxSubagentUsageUnits", gt=0
     )
@@ -128,9 +125,7 @@ class AgentDraftSpec(StudioModel):
     )
     workspace: DraftWorkspace = DraftWorkspace()
     limits: DraftLimits = DraftLimits()
-    evaluation_cases: tuple[EvalCase, ...] = Field(
-        min_length=1, alias="evaluationCases"
-    )
+    evaluation_cases: tuple[EvalCase, ...] = Field(min_length=1, alias="evaluationCases")
 
     @model_validator(mode="after")
     def unique_capabilities(self) -> AgentDraftSpec:
@@ -142,17 +137,11 @@ class AgentDraftSpec(StudioModel):
             if duplicates:
                 raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
         aliases = [subagent.alias for subagent in self.subagents]
-        duplicate_aliases = sorted(
-            {alias for alias in aliases if aliases.count(alias) > 1}
-        )
+        duplicate_aliases = sorted({alias for alias in aliases if aliases.count(alias) > 1})
         if duplicate_aliases:
-            raise ValueError(
-                f"duplicate subagent alias: {', '.join(duplicate_aliases)}"
-            )
+            raise ValueError(f"duplicate subagent alias: {', '.join(duplicate_aliases)}")
         skill_names = [skill.name for skill in self.skills]
-        duplicate_skills = sorted(
-            {name for name in skill_names if skill_names.count(name) > 1}
-        )
+        duplicate_skills = sorted({name for name in skill_names if skill_names.count(name) > 1})
         if duplicate_skills:
             raise ValueError(f"duplicate Skill: {', '.join(duplicate_skills)}")
         return self
@@ -287,9 +276,7 @@ class ExecutionProfileMetadata(StudioModel):
     profile_id: str = Field(alias="profileId", pattern=r"^[a-z][a-z0-9-]*$")
     label: str = Field(min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=500)
-    sandbox_provider: Literal["local", "daytona", "gvisor"] = Field(
-        alias="sandboxProvider"
-    )
+    sandbox_provider: Literal["local", "daytona", "gvisor"] = Field(alias="sandboxProvider")
     network_access: tuple[NetworkAccess, ...] = Field(alias="networkAccess")
     risk: CapabilityRisk
     cpu_millis: int = Field(default=1000, alias="cpuMillis", ge=100, le=16_000)
@@ -301,9 +288,7 @@ class ExecutionProfileMetadata(StudioModel):
         alias="networkPolicyId",
         pattern=r"^[a-z][a-z0-9-]*$",
     )
-    allowed_mcp_references: tuple[str, ...] = Field(
-        default=(), alias="allowedMcpReferences"
-    )
+    allowed_mcp_references: tuple[str, ...] = Field(default=(), alias="allowedMcpReferences")
     provider_config_reference: str = Field(
         default="platform-default",
         alias="providerConfigReference",
@@ -377,10 +362,7 @@ class CatalogMutationResult(StudioModel):
 
 
 CatalogManagedResource = (
-    ModelRouteCapability
-    | McpCapability
-    | PolicyCapability
-    | ExecutionProfileMetadata
+    ModelRouteCapability | McpCapability | PolicyCapability | ExecutionProfileMetadata
 )
 
 

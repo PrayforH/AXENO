@@ -138,6 +138,7 @@ async def serve(settings: Settings) -> None:
 
         async def preview_maintenance() -> None:
             await container.approvals.reap_expired()
+            await container.quotas.reap_expired_all()
             await container.preview_controller.process_once()
             await container.preview_controller.reap_expired()
 

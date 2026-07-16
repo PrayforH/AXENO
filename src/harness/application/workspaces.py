@@ -12,7 +12,9 @@ from typing import Protocol
 from uuid import uuid4
 
 from harness.core.models import WorkspaceSnapshot
-from harness.core.ports import ArtifactStore, WorkspaceSnapshotRepository
+from harness.core.ports import ArtifactStore, SessionRepository, WorkspaceSnapshotRepository
+from harness.quota.models import QuotaResource, ResourceReservation
+from harness.quota.service import QuotaService
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class WorkspaceService:
         snapshots: WorkspaceSnapshotRepository | None = None,
         max_archive_bytes: int = 512 * 1024 * 1024,
         max_archive_members: int = 10_000,
+        sessions: SessionRepository | None = None,
+        quotas: QuotaService | None = None,
     ) -> None:
         if max_archive_bytes <= 0 or max_archive_members <= 0:
             raise ValueError("workspace archive limits must be positive")
@@ -42,6 +46,8 @@ class WorkspaceService:
         self._snapshots = snapshots
         self._max_archive_bytes = max_archive_bytes
         self._max_archive_members = max_archive_members
+        self._sessions = sessions
+        self._quotas = quotas
 
     async def archive(
         self, *, tenant_id: str, session_id: str, workspace: Path
@@ -77,7 +83,28 @@ class WorkspaceService:
             return content
 
         content = await asyncio.to_thread(pack)
-        stored = await self._store.put(tenant_id, snapshot_id, content)
+        reservation: ResourceReservation | None = None
+        if self._quotas is not None:
+            session = (
+                await self._sessions.get(tenant_id, session_id)
+                if self._sessions is not None
+                else None
+            )
+            reservation = await self._quotas.reserve(
+                tenant_id=tenant_id,
+                resource=QuotaResource.SNAPSHOT_BYTES,
+                amount=max(1, len(content)),
+                subject_id=snapshot_id,
+                idempotency_key=f"snapshot:{snapshot_id}:bytes",
+                agent_name=session.agent_name if session is not None else None,
+                environment=session.environment if session is not None else None,
+            )
+        try:
+            stored = await self._store.put(tenant_id, snapshot_id, content)
+        except Exception:
+            if reservation is not None and self._quotas is not None:
+                await self._quotas.release(reservation)
+            raise
         snapshot = WorkspaceSnapshot(
             snapshot_id=snapshot_id,
             session_id=session_id,
@@ -86,8 +113,15 @@ class WorkspaceService:
             sha256=stored.sha256,
             created_at=datetime.now(UTC),
         )
-        if self._snapshots is not None:
-            await self._snapshots.add(snapshot)
+        try:
+            if self._snapshots is not None:
+                await self._snapshots.add(snapshot)
+        except Exception:
+            if reservation is not None and self._quotas is not None:
+                await self._quotas.release(reservation)
+            raise
+        if reservation is not None and self._quotas is not None:
+            await self._quotas.commit(reservation, amount=len(content))
         return snapshot
 
     async def restore_latest(

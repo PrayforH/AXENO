@@ -48,9 +48,7 @@ class AgentDraftCompiler:
 
     def render_manifest(self, draft: AgentDraft) -> str:
         spec = draft.spec
-        tools: list[dict[str, str]] = [
-            {"builtin": name} for name in spec.builtin_tools
-        ]
+        tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
         manifest = AgentManifest.model_validate(
             {
@@ -72,9 +70,7 @@ class AgentDraftCompiler:
                         "model": spec.model.model,
                         "fallbackRoute": spec.model.fallback_route_id,
                         "fallbackModel": spec.model.fallback_model,
-                        "requiredCapabilities": list(
-                            spec.model.required_capabilities
-                        ),
+                        "requiredCapabilities": list(spec.model.required_capabilities),
                     },
                     "prompt": {"system": "prompts/system.md"},
                     "skills": [f"skills/{skill.name}" for skill in spec.skills],
@@ -99,15 +95,12 @@ class AgentDraftCompiler:
                         "maxTurns": spec.limits.max_turns,
                         "timeoutSeconds": spec.limits.timeout_seconds,
                         "maxBudgetUsd": spec.limits.max_budget_usd,
+                        "maxModelTokens": spec.limits.max_model_tokens,
                         "maxSubagents": spec.limits.max_subagents,
                         "maxSubagentTasks": spec.limits.max_subagent_tasks,
-                        "maxConcurrentSubagents": (
-                            spec.limits.max_concurrent_subagents
-                        ),
+                        "maxConcurrentSubagents": (spec.limits.max_concurrent_subagents),
                         "maxSubagentDepth": 1,
-                        "maxSubagentUsageUnits": (
-                            spec.limits.max_subagent_usage_units
-                        ),
+                        "maxSubagentUsageUnits": (spec.limits.max_subagent_usage_units),
                     },
                 },
             }
@@ -138,9 +131,7 @@ class AgentDraftCompiler:
                     )
         issues.extend(self._deployment_warnings(draft))
         return DraftValidationResult(
-            ready=not any(
-                issue.severity is ValidationSeverity.ERROR for issue in issues
-            ),
+            ready=not any(issue.severity is ValidationSeverity.ERROR for issue in issues),
             issues=tuple(issues),
             contract=self.effective_contract(draft),
             manifestYaml=manifest_yaml,
@@ -161,9 +152,7 @@ class AgentDraftCompiler:
         with TemporaryDirectory(prefix="harness-agent-studio-pack-") as directory:
             root = Path(directory)
             manifest = self._materialize(draft, root, validation.manifest_yaml)
-            archive, report = pack_agent_package(
-                manifest, output_directory=root / "dist"
-            )
+            archive, report = pack_agent_package(manifest, output_directory=root / "dist")
             return CompiledAgentDraft(
                 bundle=archive.read_bytes(),
                 filename=archive.name,
@@ -244,9 +233,7 @@ class AgentDraftCompiler:
                 issues.append(
                     ValidationIssue(
                         code="model_not_available",
-                        message=(
-                            f"模型 {spec.model.model} 不属于路由 {spec.model.route_id}"
-                        ),
+                        message=(f"模型 {spec.model.model} 不属于路由 {spec.model.route_id}"),
                         severity=ValidationSeverity.ERROR,
                         path="model.model",
                     )
@@ -273,9 +260,7 @@ class AgentDraftCompiler:
                         path="builtinTools",
                     )
                 )
-        mcp_servers = {
-            server.reference: server for server in self._catalog.mcp_servers
-        }
+        mcp_servers = {server.reference: server for server in self._catalog.mcp_servers}
         for reference in spec.mcp_servers:
             server = mcp_servers.get(reference)
             if server is None:
@@ -316,10 +301,7 @@ class AgentDraftCompiler:
                     path="permissionPolicy",
                 )
             )
-        profiles = {
-            profile.profile_id: profile
-            for profile in self._catalog.execution_profiles
-        }
+        profiles = {profile.profile_id: profile for profile in self._catalog.execution_profiles}
         profile = profiles.get(spec.execution_profile)
         if profile is None:
             issues.append(
@@ -352,9 +334,9 @@ class AgentDraftCompiler:
                     path="executionProfile",
                 )
             )
-        elif {
-            reference for reference in spec.mcp_servers if reference in mcp_servers
-        }.difference(profile.allowed_mcp_references):
+        elif {reference for reference in spec.mcp_servers if reference in mcp_servers}.difference(
+            profile.allowed_mcp_references
+        ):
             issues.append(
                 ValidationIssue(
                     code="execution_profile_egress_incompatible",
@@ -382,9 +364,7 @@ class AgentDraftCompiler:
             and capability.preflight_required
         )
 
-    def _materialize(
-        self, draft: AgentDraft, root: Path, manifest_yaml: str
-    ) -> Path:
+    def _materialize(self, draft: AgentDraft, root: Path, manifest_yaml: str) -> Path:
         spec = draft.spec
         prompt = root / "prompts" / "system.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)

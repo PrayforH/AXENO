@@ -800,6 +800,9 @@ export function AgentStudioWorkbench() {
           >
             智能体
           </Link>
+          <Link className={styles.workspaceTab} href="/studio/usage">
+            用量
+          </Link>
         </nav>
 
         <div className={styles.railHeading}>
@@ -1552,6 +1555,15 @@ export function AgentStudioWorkbench() {
                       step={0.1}
                       value={draft.maxBudgetUsd}
                       onChange={(event) => updateDraft({ maxBudgetUsd: Number(event.target.value) })}
+                    />
+                  </Field>
+                  <Field label="单次模型 Token 上限">
+                    <input
+                      type="number"
+                      min={1}
+                      step={1000}
+                      value={draft.maxModelTokens}
+                      onChange={(event) => updateDraft({ maxModelTokens: Number(event.target.value) })}
                     />
                   </Field>
                   <Field label="可绑定 Sub 上限">

@@ -14,6 +14,7 @@ from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
+from harness.application.runs import RunQuotaPlan, RunQuotaPlanResolver
 from harness.application.types import Clock
 from harness.application.workspaces import (
     WorkspacePolicy,
@@ -28,6 +29,8 @@ from harness.observability.provider import Observability
 from harness.observability.redaction import correlation_hash
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
+from harness.quota.repositories import QuotaExceededError
+from harness.quota.service import QuotaService
 from harness.runtime.artifact_tools import ArtifactPublisher
 from harness.runtime.audit_redaction import redact_tool_arguments
 from harness.runtime.base import (
@@ -104,6 +107,8 @@ class RunOrchestrator:
         quality_hook: RunQualityHook | None = None,
         credential_revoker: RunCredentialRevoker | None = None,
         sandbox_resolver: SandboxResolver | None = None,
+        quotas: QuotaService | None = None,
+        quota_plan_resolver: RunQuotaPlanResolver | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -126,6 +131,8 @@ class RunOrchestrator:
         self._quality_hook = quality_hook
         self._credential_revoker = credential_revoker
         self._sandbox_resolver = sandbox_resolver
+        self._quotas = quotas
+        self._quota_plan_resolver = quota_plan_resolver
 
     def _stage(
         self,
@@ -377,7 +384,7 @@ class RunOrchestrator:
             return await self._move(latest, RunStatus.CANCELLED)
         if latest.status is RunStatus.CANCELLED:
             return latest
-        if isinstance(error, ConflictError):
+        if isinstance(error, ConflictError) and not isinstance(error, QuotaExceededError):
             return latest
         if latest.status.is_terminal:
             return latest
@@ -389,7 +396,11 @@ class RunOrchestrator:
         return await self._move(
             latest,
             RunStatus.FAILED,
-            error_code="runtime_error",
+            error_code=(
+                f"quota_exceeded_{error.resource.value}"
+                if isinstance(error, QuotaExceededError)
+                else "runtime_error"
+            ),
             payload={"error_type": type(error).__name__},
         )
 
@@ -411,9 +422,54 @@ class RunOrchestrator:
         )
         return reclaimed
 
+    async def _ensure_quota_admission(self, tenant_id: str, run_id: str, session: Session) -> None:
+        if self._quotas is None:
+            return
+        plan = (
+            await self._quota_plan_resolver(
+                tenant_id, session.agent_name, session.agent_version
+            )
+            if self._quota_plan_resolver is not None
+            else RunQuotaPlan(None, None, 3600)
+        )
+        await self._quotas.ensure_run_admitted(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            agent_name=session.agent_name,
+            environment=session.environment,
+            max_budget_usd=plan.max_budget_usd,
+            max_model_tokens=plan.max_model_tokens,
+            ttl_seconds=plan.ttl_seconds,
+        )
+
+    async def _record_quota_result(
+        self,
+        tenant_id: str,
+        run_id: str,
+        session: Session,
+        payload: Mapping[str, Any],
+    ) -> None:
+        if self._quotas is None:
+            return
+        raw_usage = payload.get("usage")
+        await self._quotas.record_run_result(
+            tenant_id=tenant_id,
+            run_id=run_id,
+            agent_name=session.agent_name,
+            environment=session.environment,
+            usage=(cast(dict[str, object], raw_usage) if isinstance(raw_usage, dict) else None),
+            total_cost_usd=payload.get("total_cost_usd"),
+        )
+
+    async def _release_terminal_quota(self, result: Run) -> None:
+        if result.status.is_terminal and self._quotas is not None:
+            await self._quotas.release_subject(result.tenant_id, result.run_id)
+
     async def execute(self, tenant_id: str, run_id: str) -> Run:
         if self._observability is None:
-            return await self._execute(tenant_id, run_id)
+            result = await self._execute(tenant_id, run_id)
+            await self._release_terminal_quota(result)
+            return result
         run = await self._runs.get(tenant_id, run_id)
         session = await self._sessions.get(tenant_id, run.session_id)
         correlation_attributes: dict[str, str] = {
@@ -423,17 +479,13 @@ class RunOrchestrator:
             "agent.version": session.agent_version,
         }
         if session.deployment_snapshot_id:
-            correlation_attributes["deployment.snapshot.id"] = (
-                session.deployment_snapshot_id
-            )
+            correlation_attributes["deployment.snapshot.id"] = session.deployment_snapshot_id
         if session.environment:
             correlation_attributes["deployment.environment"] = session.environment
         eval_run_id = run.input.get("eval_run_id")
         if isinstance(eval_run_id, str) and eval_run_id:
             correlation_attributes["eval.run.id"] = eval_run_id
-        with self._observability.bind_attributes(
-            correlation_attributes
-        ):
+        with self._observability.bind_attributes(correlation_attributes):
             with self._observability.span(
                 "harness.worker.run",
                 carrier=run.trace_context,
@@ -443,6 +495,7 @@ class RunOrchestrator:
                 },
             ):
                 result = await self._execute(tenant_id, run_id)
+                await self._release_terminal_quota(result)
                 trace_id = self._observability.current_trace_id()
                 if result.status.is_terminal and trace_id and self._quality_hook is not None:
                     try:
@@ -482,6 +535,7 @@ class RunOrchestrator:
             session = await self._sessions.get(tenant_id, run.session_id)
             if self._sandbox_resolver is not None:
                 active_sandbox = await self._sandbox_resolver(tenant_id, session)
+            await self._ensure_quota_admission(tenant_id, run_id, session)
             with self._stage("harness.sandbox.provision", {"run.id": run_id}):
                 handle = await self._await_cancellable(
                     tenant_id,
@@ -663,6 +717,8 @@ class RunOrchestrator:
                     return latest
                 run = latest
                 payload = dict(runtime_event.payload)
+                if runtime_event.type == "runtime.result":
+                    await self._record_quota_result(tenant_id, run_id, session, payload)
                 if runtime_event.type in {"runtime.system", "runtime.result"}:
                     sdk_session_id = payload.get("session_id")
                     if isinstance(sdk_session_id, str) and sdk_session_id:

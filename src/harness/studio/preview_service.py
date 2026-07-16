@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError
+from harness.quota.models import QuotaResource
+from harness.quota.service import QuotaService
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.preview_models import (
@@ -31,6 +33,7 @@ class PreviewService:
         audit: AuditService | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
+        quotas: QuotaService | None = None,
     ) -> None:
         self._repository = repository
         self._queue = queue
@@ -38,6 +41,7 @@ class PreviewService:
         self._audit = audit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"preview_{uuid4().hex}")
+        self._quotas = quotas
 
     async def create(
         self,
@@ -46,9 +50,7 @@ class PreviewService:
         user_id: str,
         request: CreatePreviewRequest,
     ) -> PreviewDeployment:
-        existing = await self._repository.find_by_idempotency(
-            tenant_id, request.idempotency_key
-        )
+        existing = await self._repository.find_by_idempotency(tenant_id, request.idempotency_key)
         if existing is not None:
             self._ensure_same_request(existing, request)
             return await self._view(existing)
@@ -76,9 +78,7 @@ class PreviewService:
             None,
         )
         if profile is None:
-            raise ConflictError(
-                f"Execution Profile is unavailable: {draft.spec.execution_profile}"
-            )
+            raise ConflictError(f"Execution Profile is unavailable: {draft.spec.execution_profile}")
         preview = PreviewDeployment(
             previewId=self._id_generator(),
             tenantId=tenant_id,
@@ -95,6 +95,21 @@ class PreviewService:
             updatedAt=now,
             expiresAt=now + timedelta(seconds=request.ttl_seconds),
         )
+        quota_subject = f"preview:{request.idempotency_key}"
+        reservation = (
+            await self._quotas.reserve(
+                tenant_id=tenant_id,
+                resource=QuotaResource.ACTIVE_PREVIEWS,
+                amount=1,
+                subject_id=quota_subject,
+                idempotency_key=f"preview:{request.idempotency_key}:active",
+                agent_name=draft.spec.name,
+                environment="preview",
+                ttl_seconds=request.ttl_seconds + 300,
+            )
+            if self._quotas is not None
+            else None
+        )
         try:
             await self._repository.add(preview)
         except ConflictError:
@@ -102,12 +117,16 @@ class PreviewService:
                 tenant_id, request.idempotency_key
             )
             if concurrent is None:
+                if reservation is not None:
+                    await self._quotas.release(reservation)  # type: ignore[union-attr]
                 raise
             self._ensure_same_request(concurrent, request)
             return await self._view(concurrent)
-        await self._queue.enqueue(
-            PreviewTask(tenant_id=tenant_id, preview_id=preview.preview_id)
-        )
+        except Exception:
+            if reservation is not None:
+                await self._quotas.release(reservation)  # type: ignore[union-attr]
+            raise
+        await self._queue.enqueue(PreviewTask(tenant_id=tenant_id, preview_id=preview.preview_id))
         await self._record(
             preview,
             user_id=user_id,
@@ -125,18 +144,14 @@ class PreviewService:
             for preview in await self._repository.list_for_tenant(tenant_id)
         ]
 
-    async def cancel(
-        self, *, tenant_id: str, user_id: str, preview_id: str
-    ) -> PreviewDeployment:
+    async def cancel(self, *, tenant_id: str, user_id: str, preview_id: str) -> PreviewDeployment:
         current = await self._repository.get(tenant_id, preview_id)
         if current.status.is_terminal:
             return await self._view(current)
         if current.status is not PreviewStatus.CANCELLING:
             updated = current.model_copy(
                 update={
-                    "status": transition_preview(
-                        current.status, PreviewStatus.CANCELLING
-                    ),
+                    "status": transition_preview(current.status, PreviewStatus.CANCELLING),
                     "updated_at": self._clock(),
                     "fencing_token": current.fencing_token + 1,
                 }
@@ -144,9 +159,7 @@ class PreviewService:
             if not await self._repository.compare_and_set(current.status, updated):
                 raise ConflictError("Preview changed during cancellation")
             current = updated
-        await self._queue.enqueue(
-            PreviewTask(tenant_id=tenant_id, preview_id=preview_id)
-        )
+        await self._queue.enqueue(PreviewTask(tenant_id=tenant_id, preview_id=preview_id))
         await self._record(
             current,
             user_id=user_id,
@@ -156,9 +169,7 @@ class PreviewService:
         return await self._view(current)
 
     @staticmethod
-    def _ensure_same_request(
-        existing: PreviewDeployment, request: CreatePreviewRequest
-    ) -> None:
+    def _ensure_same_request(existing: PreviewDeployment, request: CreatePreviewRequest) -> None:
         if (
             existing.draft_id != request.draft_id
             or existing.draft_revision != request.expected_revision

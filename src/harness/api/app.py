@@ -18,6 +18,7 @@ from harness.api.routes import agents, approvals, artifacts, auth, input_artifac
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
+from harness.quota.repositories import QuotaExceededError
 from harness.studio import api as studio_routes
 
 
@@ -31,9 +32,7 @@ async def _http_error(_request: Request, error: Exception) -> JSONResponse:
     return JSONResponse(status_code=error.status_code, content={"error": payload})
 
 
-async def _request_validation_error(
-    _request: Request, error: Exception
-) -> JSONResponse:
+async def _request_validation_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, RequestValidationError)
     details = [
         {
@@ -58,7 +57,10 @@ async def _request_validation_error(
 async def _domain_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, HarnessDomainError)
     status_code = 404 if isinstance(error, NotFoundError) else 409
-    code = "not_found" if status_code == 404 else "conflict"
+    if isinstance(error, QuotaExceededError):
+        code = "quota_exceeded"
+    else:
+        code = "not_found" if status_code == 404 else "conflict"
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": str(error)}},
@@ -90,9 +92,7 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
         return await call_next(request)
 
 
-async def _authenticate_request(
-    request: Request, call_next: RequestResponseEndpoint
-) -> Response:
+async def _authenticate_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
     if not request.url.path.startswith("/v1") or request.url.path.startswith("/v1/auth"):
         return await call_next(request)
     container: ApiContainer = request.app.state.container
@@ -123,9 +123,7 @@ async def _authenticate_request(
     return await call_next(request)
 
 
-async def _audit_request(
-    request: Request, call_next: RequestResponseEndpoint
-) -> Response:
+async def _audit_request(request: Request, call_next: RequestResponseEndpoint) -> Response:
     response = await call_next(request)
     identity = getattr(request.state, "identity", None)
     should_record = request.method not in {"GET", "HEAD", "OPTIONS"} or request.url.path.endswith(
@@ -215,18 +213,14 @@ def create_memory_app(
     auto_execute: bool = False,
     settings: Settings | None = None,
 ) -> FastAPI:
-    return create_app(
-        build_memory_container(auto_execute=auto_execute, settings=settings)
-    )
+    return create_app(build_memory_container(auto_execute=auto_execute, settings=settings))
 
 
 def create_configured_app(settings: Settings) -> FastAPI:
     if settings.environment == "production":
         from harness.composition import build_production_container
 
-        return create_app(
-            build_production_container(settings, execution_enabled=False)
-        )
+        return create_app(build_production_container(settings, execution_enabled=False))
     return create_memory_app(
         auto_execute=settings.local_auto_execute,
         settings=settings,
