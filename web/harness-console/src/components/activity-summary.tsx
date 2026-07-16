@@ -12,13 +12,13 @@ import {
 } from "../lib/run-view-model";
 
 const phaseLabels: Record<RunPhase, string> = {
-  queued: "等待执行",
-  running: "正在执行",
+  queued: "等待处理",
+  running: "正在处理",
   waiting_approval: "等待审批",
-  completed: "执行完成",
-  failed: "执行失败",
-  rejected: "执行被拒绝",
-  cancelled: "执行已停止",
+  completed: "已处理",
+  failed: "处理失败",
+  rejected: "已拒绝",
+  cancelled: "已停止",
 };
 
 const workLabels: Record<WorkStatus, string> = {
@@ -66,6 +66,58 @@ function ToolRow({ tool }: { tool: RunToolNode }) {
   );
 }
 
+const standaloneToolNames = new Set([
+  "Task",
+  "Agent",
+  "harness_request_approval",
+  "harness_present_artifact",
+  "harness_run_activity",
+]);
+
+function isFoldableTool(tool: RunToolNode) {
+  return tool.status === "completed" && !standaloneToolNames.has(tool.name);
+}
+
+type ToolDisplayNode =
+  | { kind: "tool"; tool: RunToolNode }
+  | { kind: "processed"; tools: RunToolNode[] };
+
+export function groupProcessedTools(tools: readonly RunToolNode[]): ToolDisplayNode[] {
+  const processed = tools.filter(isFoldableTool);
+  if (processed.length < 2) {
+    return tools.map((tool) => ({ kind: "tool", tool }));
+  }
+  const processedIds = new Set(processed.map((tool) => tool.id));
+  const firstId = processed[0].id;
+  return tools.flatMap((tool): ToolDisplayNode[] => {
+    if (!processedIds.has(tool.id)) return [{ kind: "tool", tool }];
+    return tool.id === firstId ? [{ kind: "processed", tools: processed }] : [];
+  });
+}
+
+function processedDigest(tools: readonly RunToolNode[]) {
+  const counts = new Map<string, number>();
+  for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
+  return [...counts]
+    .map(([name, count]) => count > 1 ? `${name} ×${count}` : name)
+    .join(" · ");
+}
+
+function ProcessedTools({ tools }: { tools: RunToolNode[] }) {
+  return (
+    <details className="execution-tool-batch">
+      <summary>
+        <span className="execution-batch-chevron" aria-hidden="true" />
+        <span>已处理 {tools.length} 项</span>
+        <small>{processedDigest(tools)}</small>
+      </summary>
+      <div className="execution-tool-batch-items">
+        {tools.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
+      </div>
+    </details>
+  );
+}
+
 function ribbonFacts(view: RunViewModel) {
   const facts: string[] = [];
   if (view.toolCount > 0) facts.push(`${view.toolCount} 个工具`);
@@ -84,6 +136,7 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
   const model = [...view.items]
     .reverse()
     .find((item) => item.event_type === "model.route.selected")?.summary;
+  const displayedTools = groupProcessedTools(view.tools);
 
   return (
     <details
@@ -91,7 +144,7 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
       aria-label="执行进度"
     >
       <summary>
-        <span className="execution-chevron" aria-hidden="true" />
+        <span className="execution-state-mark" aria-hidden="true"><i /></span>
         <span className="execution-phase">{phaseLabels[view.phase]}</span>
         <span className="execution-summary">{view.summary}</span>
         <span className="execution-facts">
@@ -99,6 +152,7 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
             <span key={fact}>{fact}</span>
           ))}
         </span>
+        <span className="execution-chevron" aria-hidden="true" />
       </summary>
       <div className="execution-tree">
         {view.tasks.length > 0 && (
@@ -112,8 +166,10 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
         {view.tools.length > 0 && (
           <section aria-label="使用的工具">
             <h4>使用的工具</h4>
-            {view.tools.map((tool) => (
-              <ToolRow key={tool.id} tool={tool} />
+            {displayedTools.map((node) => node.kind === "processed" ? (
+              <ProcessedTools key={`processed-${node.tools[0].id}`} tools={node.tools} />
+            ) : (
+              <ToolRow key={node.tool.id} tool={node.tool} />
             ))}
           </section>
         )}

@@ -257,6 +257,26 @@ def map_sdk_message(message: object) -> list[RuntimeEvent]:
         for key in ("session_id", "status"):
             if key in message.data and isinstance(message.data[key], (str, int, float, bool)):
                 safe[key] = message.data[key]
+        if message.subtype == "init":
+            tools = message.data.get("tools")
+            if isinstance(tools, list):
+                safe["tools"] = [
+                    tool for tool in cast(list[object], tools) if isinstance(tool, str)
+                ]
+            servers = message.data.get("mcp_servers")
+            if isinstance(servers, list):
+                safe_servers: list[dict[str, str]] = []
+                for raw_server in cast(list[object], servers):
+                    if not isinstance(raw_server, dict):
+                        continue
+                    server = cast(dict[object, object], raw_server)
+                    safe_server = {
+                        key: value
+                        for key in ("name", "status")
+                        if isinstance((value := server.get(key)), str)
+                    }
+                    safe_servers.append(safe_server)
+                safe["mcp_servers"] = safe_servers
         return [RuntimeEvent(type="runtime.system", payload=safe)]
     if isinstance(message, UserMessage) and isinstance(message.content, list):
         events: list[RuntimeEvent] = []

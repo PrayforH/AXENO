@@ -1,6 +1,7 @@
 """Claude Agent SDK runtime adapter with explicit gateway routing."""
 
 import asyncio
+import shutil
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
 from pathlib import Path
@@ -199,6 +200,17 @@ class ClaudeSdkRuntime:
         mcp_servers = dict(resolved_tools.mcp_servers)
         allowed_tools = list(resolved_tools.allowed_tools)
         remote_transport = context.runtime_transport_factory is not None
+        if not remote_transport:
+            # The production container runs as an unprivileged user whose HOME
+            # is the read-only application directory. Claude CLI needs a
+            # writable config directory to create the transcript files that
+            # back SessionStore mirror frames. Keep it inside the disposable
+            # Run workspace and remove it before workspace archival.
+            runtime_config_dir = (
+                context.workspace / ".harness-runtime" / "claude-config"
+            )
+            runtime_config_dir.mkdir(parents=True, exist_ok=True)
+            environment["CLAUDE_CONFIG_DIR"] = str(runtime_config_dir)
         in_process_servers = tuple(
             name
             for name, config in mcp_servers.items()
@@ -275,6 +287,7 @@ class ClaudeSdkRuntime:
             skills=list(skill_names),
             env=environment,
             session_store=store,
+            session_store_flush="eager",
             resume=context.session.claude_session_id,
             stderr=discard_sdk_stderr,
         )
@@ -359,6 +372,11 @@ class ClaudeSdkRuntime:
         pending_text = ""
         pending_task_terminals: dict[str, RuntimeEvent] = {}
         with ExitStack() as execution_context:
+            execution_context.callback(
+                shutil.rmtree,
+                context.workspace / ".harness-runtime",
+                ignore_errors=True,
+            )
             if self._memory_service is not None and context.identity is not None:
                 execution_context.enter_context(
                     memory_execution_context(self._memory_service, context.identity)

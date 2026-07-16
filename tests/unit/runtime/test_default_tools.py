@@ -54,10 +54,10 @@ def _factory() -> Callable[[DynamicMcpCredentialProvider | None], ToolResolver]:
 
 
 @pytest.mark.asyncio
-async def test_default_resolver_injects_tavily_authorization_and_exact_allowlist() -> None:
+async def test_default_resolver_injects_tavily_query_key_and_exact_allowlist() -> None:
     provider = ServerSecretReferenceProvider(
-        references={"tavily-readonly": {"authorization": "TAVILY_AUTHORIZATION"}},
-        secrets={"TAVILY_AUTHORIZATION": SecretStr("Bearer test-key")},
+        references={"tavily-readonly": {"api_key": "TAVILY_API_KEY"}},
+        secrets={"TAVILY_API_KEY": SecretStr("test-key")},
     )
 
     resolved = await _factory()(provider).resolve(_manifest(), _identity())
@@ -68,17 +68,16 @@ async def test_default_resolver_injects_tavily_authorization_and_exact_allowlist
     )
     assert resolved.mcp_servers["tavily"] == {
         "type": "http",
-        "url": "https://mcp.tavily.com/mcp/",
-        "headers": {"Authorization": "Bearer test-key"},
+        "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=test-key",
     }
-    assert resolved.sensitive_names == frozenset({"Authorization"})
-    assert resolved.sensitive_values == frozenset({"Bearer test-key"})
+    assert resolved.sensitive_names == frozenset({"tavilyApiKey"})
+    assert resolved.sensitive_values == frozenset({"test-key"})
 
 
 @pytest.mark.asyncio
 async def test_default_resolver_fails_before_execution_without_tavily_credentials() -> None:
     with pytest.raises(
         McpCredentialError,
-        match=r"missing MCP credentials: tavily-readonly\.authorization",
+        match=r"missing MCP credentials: tavily-readonly\.api_key",
     ):
         await _factory()(None).resolve(_manifest(), _identity())

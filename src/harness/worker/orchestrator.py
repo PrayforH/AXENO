@@ -228,7 +228,7 @@ class RunOrchestrator:
                 if task in done:
                     return await task
                 latest = await self._runs.get(tenant_id, run_id)
-                if latest.status is RunStatus.CANCELLING:
+                if latest.status in {RunStatus.CANCELLING, RunStatus.CANCELLED}:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
@@ -274,10 +274,12 @@ class RunOrchestrator:
         error: Exception,
     ) -> Run:
         latest = await self._runs.get(tenant_id, run_id)
-        if isinstance(error, ConflictError):
-            return latest
         if latest.status is RunStatus.CANCELLING:
             return await self._move(latest, RunStatus.CANCELLED)
+        if latest.status is RunStatus.CANCELLED:
+            return latest
+        if isinstance(error, ConflictError):
+            return latest
         if latest.status.is_terminal:
             return latest
         return await self._move(
@@ -331,6 +333,11 @@ class RunOrchestrator:
             return run
         if run.status is RunStatus.CANCELLING:
             return await self._move(run, RunStatus.CANCELLED)
+        if run.status is RunStatus.WAITING_APPROVAL:
+            # The worker may receive a lease recovered from a process that was
+            # waiting inline. A later approval decision enqueues a fresh task;
+            # acknowledge this delivery instead of retrying it forever.
+            return run
         is_resume = run.status is RunStatus.RUNNING
         is_provision_recovery = run.status is RunStatus.PROVISIONING
         if run.status is not RunStatus.QUEUED and not is_resume and not is_provision_recovery:
@@ -514,7 +521,18 @@ class RunOrchestrator:
                 latest = await self._runs.get(tenant_id, run_id)
                 if latest.status is RunStatus.CANCELLING:
                     return await self._move(latest, RunStatus.CANCELLED)
+                if latest.status.is_terminal:
+                    return latest
+                run = latest
                 payload = dict(runtime_event.payload)
+                if runtime_event.type in {"runtime.system", "runtime.result"}:
+                    sdk_session_id = payload.get("session_id")
+                    if isinstance(sdk_session_id, str) and sdk_session_id:
+                        session = await self._sessions.bind_claude_session_id(
+                            tenant_id,
+                            session.session_id,
+                            sdk_session_id,
+                        )
                 original_tool_arguments: dict[str, Any] | None = None
                 if runtime_event.type == "tool.request":
                     raw_arguments = payload.get("arguments")
@@ -727,7 +745,12 @@ class RunOrchestrator:
                     event_type="workspace.archived",
                     payload=snapshot.model_dump(mode="json"),
                 )
-            return await self._move(run, RunStatus.SUCCEEDED)
+            latest = await self._runs.get(tenant_id, run_id)
+            if latest.status is RunStatus.CANCELLING:
+                return await self._move(latest, RunStatus.CANCELLED)
+            if latest.status.is_terminal:
+                return latest
+            return await self._move(latest, RunStatus.SUCCEEDED)
         except RuntimeExecutionTimeoutError:
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:

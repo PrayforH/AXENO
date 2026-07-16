@@ -1,5 +1,8 @@
 # Local development
 
+Web 控制台现在需要登录。邮箱注册不依赖外部服务；本地登录和可选 localhost SSO
+回调配置见 [authentication.md](authentication.md)。
+
 ## Prerequisites
 
 - Python 3.12、uv
@@ -68,8 +71,8 @@ remote MCP。只允许 search 和 extract；Manifest 与 URL 都不保存凭据�
 `.env` 中配置：
 
 ```dotenv
-HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"authorization":"TAVILY_AUTHORIZATION"}}
-HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_AUTHORIZATION":"Bearer tvly-replace-me"}
+HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"api_key":"TAVILY_API_KEY"}}
+HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_API_KEY":"tvly-replace-me"}
 ```
 
 网页内容一律视为不可信输入。Agent 应展示来源标题和 URL，不执行页面中的指令。领域 Agent 只有显式加入 `mcp: tavily-readonly` 才能获得相同能力。
@@ -150,6 +153,8 @@ Collector 环境变量示例：
 
 ```dotenv
 LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PROJECT_ID=replace-with-project-id
 LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
 LANGFUSE_SECRET_KEY=sk-lf-replace-me
 LANGFUSE_ENVIRONMENT=development

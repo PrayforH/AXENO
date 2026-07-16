@@ -1,5 +1,8 @@
 # Docker deployment
 
+认证、可选 Google/GitHub SSO、RBAC 与生产安全配置见
+[authentication.md](authentication.md)。
+
 仓库提供可直接验证的生产形态 Compose：FastAPI、独立 Worker、Next.js standalone Web、PostgreSQL、Redis、MinIO、Alembic migration、种子 Agent，以及可选的 OTel Collector → Langfuse 链路。
 
 ## 1. 准备配置
@@ -71,9 +74,9 @@ docker compose \
 
 ```dotenv
 HARNESS_AGENT_NAME=public-opinion-agent
-HARNESS_AGENT_VERSION=0.1.0
-HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"authorization":"TAVILY_AUTHORIZATION"}}
-HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_AUTHORIZATION":"Bearer replace-with-tavily-token"}
+HARNESS_AGENT_VERSION=0.1.1
+HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"api_key":"TAVILY_API_KEY"}}
+HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_API_KEY":"replace-with-tavily-api-key"}
 ```
 
 然后幂等发布三个依赖包，并只重建读取这些环境变量的服务：
@@ -103,6 +106,8 @@ make docker-e2e
 
 ```dotenv
 HARNESS_OTEL_ENABLED=true
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_PROJECT_ID=replace-with-project-id
 LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
 LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
 LANGFUSE_SECRET_KEY=sk-lf-replace-me
@@ -115,7 +120,7 @@ LANGFUSE_ENVIRONMENT=production
 make docker-up-observability
 ```
 
-应用只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 的 Basic Auth extension 将公钥和私钥转成认证头，并携带 `x-langfuse-ingestion-version: 4` 转发到 Langfuse。应用容器不会收到 Langfuse 密钥。Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse 实例的 `/api/public/otel` 基础入口，Exporter 会追加 `/v1/traces`。自托管实例需要支持该 OTel 入口。Trace Resource 使用 `LANGFUSE_ENVIRONMENT` 写入 `deployment.environment.name`，内容仍经过 Harness 脱敏，不记录模型密钥和原始上传内容。
+应用只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 的 Basic Auth extension 将公钥和私钥转成认证头，并携带 `x-langfuse-ingestion-version: 4` 转发到 Langfuse。应用容器不会收到 Langfuse 密钥。Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse 实例的 `/api/public/otel` 基础入口，Exporter 会追加 `/v1/traces`。`LANGFUSE_BASE_URL` 和 `LANGFUSE_PROJECT_ID` 仅提供给 Web 容器，用于右侧运行面板跳转到对应项目的 Trace 搜索页，不包含摄取密钥。自托管实例需要支持该 OTel 入口。Trace Resource 使用 `LANGFUSE_ENVIRONMENT` 写入 `deployment.environment.name`，内容仍经过 Harness 脱敏，不记录模型密钥和原始上传内容。
 
 一次 Run 对应一个分布式 Trace；同一网页对话的多个 Run 使用 `langfuse.session.id` 聚合。`harness.model.run` 提供 Agent 版本、运行时内容哈希、package hash、Provider、模型、route、Policy Profile、Skill 数量、轮次、耗时、成本和白名单化 Token 计数等低敏检索维度，不输出原始 prompt、模型响应或 Provider 原始 usage 数据。
 

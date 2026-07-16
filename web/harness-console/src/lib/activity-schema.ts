@@ -33,6 +33,48 @@ export function latestRunActivity(messages: readonly unknown[]): RunActivity | u
   return undefined;
 }
 
+export function latestHistoryRunActivity(
+  messages: readonly unknown[],
+): RunActivity | undefined {
+  const directActivity = latestRunActivity(messages);
+  if (directActivity) return directActivity;
+
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex] as Record<string, unknown> | undefined;
+    const toolCalls = Array.isArray(message?.toolCalls)
+      ? message.toolCalls
+      : Array.isArray(message?.tool_calls)
+        ? message.tool_calls
+        : [];
+
+    for (let callIndex = toolCalls.length - 1; callIndex >= 0; callIndex -= 1) {
+      const call = toolCalls[callIndex] as Record<string, unknown> | undefined;
+      const fn = call?.function as Record<string, unknown> | undefined;
+      if (fn?.name !== "harness_run_activity" || typeof fn.arguments !== "string") {
+        continue;
+      }
+      try {
+        const payload = JSON.parse(fn.arguments) as Record<string, unknown>;
+        const parsed = runActivitySchema.safeParse(payload.activity);
+        if (parsed.success) return parsed.data;
+      } catch {
+        // Ignore malformed historical tool payloads and keep looking for an older run.
+      }
+    }
+  }
+  return undefined;
+}
+
+export function hasRunActivityToolCall(parts: readonly unknown[]): boolean {
+  return parts.some((part) => {
+    const candidate = part as Record<string, unknown> | undefined;
+    return (
+      candidate?.type === "tool-call" &&
+      candidate.toolName === "harness_run_activity"
+    );
+  });
+}
+
 export interface ActivityOverview {
   model: string;
   provider: string;

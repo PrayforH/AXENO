@@ -98,10 +98,10 @@ async def test_local_claude_composition_uses_server_owned_mcp_registry(
             runtime="claude-sdk",
             cc_switch_settings_path=str(path),
             mcp_secret_references_json=json.dumps(
-                {"tavily-readonly": {"authorization": "TAVILY_AUTHORIZATION"}}
+                {"tavily-readonly": {"api_key": "TAVILY_API_KEY"}}
             ),
             mcp_server_secrets_json=SecretStr(
-                json.dumps({"TAVILY_AUTHORIZATION": "Bearer local-key"})
+                json.dumps({"TAVILY_API_KEY": "local-key"})
             ),
         )
     )
@@ -111,9 +111,9 @@ async def test_local_claude_composition_uses_server_owned_mcp_registry(
     resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
     tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])
-    assert tavily.get("headers") == {
-        "Authorization": "Bearer local-key"
-    }
+    assert tavily.get("url") == (
+        "https://mcp.tavily.com/mcp/?tavilyApiKey=local-key"
+    )
 
 
 def test_claude_sdk_composition_fails_instead_of_falling_back(tmp_path: Path) -> None:

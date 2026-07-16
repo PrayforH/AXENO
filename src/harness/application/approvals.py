@@ -8,7 +8,12 @@ from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalRequest, ApprovalStatus, Run, RunStatus
-from harness.core.ports import ApprovalRepository, RunRepository
+from harness.core.ports import (
+    ApprovalRepository,
+    RunRepository,
+    RunTask,
+    TaskQueue,
+)
 from harness.core.state_machine import transition
 
 
@@ -21,6 +26,7 @@ class ApprovalService:
         events: EventService,
         clock: Clock,
         id_generator: IdGenerator,
+        queue: TaskQueue | None = None,
         ttl: timedelta = timedelta(minutes=15),
         decision_poll_interval_seconds: float = 0.25,
     ) -> None:
@@ -31,6 +37,7 @@ class ApprovalService:
         self._events = events
         self._clock = clock
         self._id_generator = id_generator
+        self._queue = queue
         self._ttl = ttl
         self._decision_poll_interval = decision_poll_interval_seconds
         self._inline_waiters: dict[str, asyncio.Future[ApprovalStatus]] = {}
@@ -41,6 +48,11 @@ class ApprovalService:
 
     async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
         return await self._approvals.get(tenant_id, approval_id)
+
+    async def list_for_runs(
+        self, tenant_id: str, run_ids: list[str]
+    ) -> list[ApprovalRequest]:
+        return await self._approvals.list_for_runs(tenant_id, run_ids)
 
     def _register_inline_waiter(self, tenant_id: str, approval_id: str) -> None:
         if approval_id not in self._inline_waiters:
@@ -62,7 +74,7 @@ class ApprovalService:
                         await self._ensure_inline_run_resumed(current)
                     return current.status
                 run = await self._runs.get(tenant_id, current.run_id)
-                if run.status is RunStatus.CANCELLING:
+                if run.status in {RunStatus.CANCELLING, RunStatus.CANCELLED}:
                     cancelled = await self._cancel_pending(current, run)
                     return cancelled.status
                 if self._clock() >= current.expires_at:
@@ -133,6 +145,13 @@ class ApprovalService:
             if refreshed.status is RunStatus.WAITING_APPROVAL:
                 raise
 
+    async def _enqueue_resumed_run(self, approval: ApprovalRequest) -> None:
+        if self._queue is None:
+            return
+        await self._queue.enqueue(
+            RunTask(tenant_id=approval.tenant_id, run_id=approval.run_id)
+        )
+
     async def _expire(self, current: ApprovalRequest) -> ApprovalRequest:
         expired = current.model_copy(update={"status": ApprovalStatus.EXPIRED})
         changed = await self._approvals.compare_and_set(
@@ -150,28 +169,53 @@ class ApprovalService:
             event_type="approval.expired",
             payload={"approval_id": current.approval_id},
         )
-        if current.inline:
+        has_local_waiter = current.approval_id in self._inline_waiters
+        if current.inline and has_local_waiter:
             await self._ensure_inline_run_resumed(expired)
         else:
-            await self._events.append(
-                tenant_id=current.tenant_id,
-                run_id=run.run_id,
-                session_id=run.session_id,
-                event_type="tool.result",
-                payload={
-                    "tool_call_id": current.tool_call_id,
-                    "is_error": True,
-                    "error": {
-                        "code": "approval_expired",
-                        "message": "tool approval expired",
+            if not run.status.is_terminal and run.status is not RunStatus.CANCELLING:
+                await self._events.append(
+                    tenant_id=current.tenant_id,
+                    run_id=run.run_id,
+                    session_id=run.session_id,
+                    event_type="tool.result",
+                    payload={
+                        "tool_call_id": current.tool_call_id,
+                        "is_error": True,
+                        "error": {
+                            "code": "approval_expired",
+                            "message": "tool approval expired",
+                        },
                     },
-                },
-            )
-            await self._move(run, RunStatus.REJECTED)
+                )
+                if run.status is RunStatus.WAITING_APPROVAL:
+                    await self._move(run, RunStatus.REJECTED)
         waiter = self._inline_waiters.get(current.approval_id)
         if waiter is not None and not waiter.done():
             waiter.set_result(ApprovalStatus.EXPIRED)
         return expired
+
+    async def reap_expired(self, *, limit: int = 100) -> int:
+        """Expire orphaned approvals even when no SDK waiter is alive."""
+        if limit < 1:
+            raise ValueError("approval reaper limit must be positive")
+        due = await self._approvals.list_expired_pending(
+            self._clock(), limit=limit
+        )
+        expired_count = 0
+        for approval in due:
+            current = await self._approvals.get(
+                approval.tenant_id, approval.approval_id
+            )
+            if (
+                current.status is not ApprovalStatus.PENDING
+                or self._clock() < current.expires_at
+            ):
+                continue
+            result = await self._expire(current)
+            if result.status is ApprovalStatus.EXPIRED:
+                expired_count += 1
+        return expired_count
 
     async def _move(self, run: Run, status: RunStatus) -> Run:
         updated = run.model_copy(
@@ -262,6 +306,8 @@ class ApprovalService:
         if current.status is decision:
             if current.inline:
                 await self._ensure_inline_run_resumed(current)
+            if decision is ApprovalStatus.APPROVED:
+                await self._enqueue_resumed_run(current)
             return current
         if current.status is not ApprovalStatus.PENDING:
             raise ConflictError(f"approval is already {current.status.value}")
@@ -282,6 +328,8 @@ class ApprovalService:
         inline = current.inline
         if decision is ApprovalStatus.APPROVED or inline:
             await self._move(run, RunStatus.RUNNING)
+            if decision is ApprovalStatus.APPROVED:
+                await self._enqueue_resumed_run(updated)
         else:
             await self._events.append(
                 tenant_id=tenant_id,

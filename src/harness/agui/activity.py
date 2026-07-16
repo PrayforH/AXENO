@@ -1,5 +1,6 @@
 """Project durable Harness facts into one replayable AG-UI ActivityMessage."""
 
+from collections.abc import Sequence
 from typing import Any
 
 from ag_ui.core import ActivityDeltaEvent, ActivitySnapshotEvent, BaseEvent
@@ -206,6 +207,36 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             ),
         )
     return None
+
+
+def build_run_activity(events: Sequence[RunEvent]) -> dict[str, Any] | None:
+    """Fold durable run events into the same final activity used by live AG-UI."""
+    if not events:
+        return None
+    items: list[dict[str, Any]] = []
+    metrics: dict[str, object] = {}
+    status = "queued"
+    for event in events:
+        item = _activity_item(event)
+        if item is None:
+            continue
+        items.append(item)
+        if event.type.startswith("run.") or event.type == "runtime.result":
+            status = str(item["status"])
+        if event.type == "runtime.result":
+            metrics.update(item["metadata"])
+    if not items:
+        return None
+    first = next(
+        (event for event in events if event.type == "run.queued"), events[0]
+    )
+    return {
+        "run_id": first.run_id,
+        "status": status,
+        "started_at": _timestamp(first),
+        "items": items,
+        "metrics": metrics,
+    }
 
 
 def activity_projection(event: RunEvent) -> list[BaseEvent]:

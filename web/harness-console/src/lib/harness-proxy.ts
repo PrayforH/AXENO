@@ -1,4 +1,11 @@
 import type { HarnessServerConfig } from "./server-config";
+import {
+  ACCESS_COOKIE,
+  appendClearedSessionCookies,
+  appendSessionCookies,
+  readCookie,
+  refreshSession,
+} from "./auth-session";
 
 const RESPONSE_HEADERS = [
   "cache-control",
@@ -7,11 +14,15 @@ const RESPONSE_HEADERS = [
   "x-accel-buffering",
 ];
 
-function upstreamHeaders(request: Request, config: HarnessServerConfig) {
+function upstreamHeaders(
+  request: Request,
+  config: HarnessServerConfig,
+  accessToken = readCookie(request, ACCESS_COOKIE),
+) {
   const headers = new Headers({
-    ...config.identityHeaders,
     ...config.serviceHeaders,
   });
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   for (const name of ["accept", "content-type", "last-event-id"]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
@@ -53,17 +64,34 @@ async function forward(
   fetcher: typeof fetch,
 ) {
   try {
-    const upstream = await fetcher(url, {
+    const body = await requestBody(request);
+    let upstream = await fetcher(url, {
       method: request.method,
       headers: upstreamHeaders(request, config),
-      body: await requestBody(request),
+      body,
       cache: "no-store",
       signal: request.signal,
     });
+    let refreshed;
+    if (upstream.status === 401) {
+      refreshed = await refreshSession(request, config, fetcher);
+      if (refreshed) {
+        upstream = await fetcher(url, {
+          method: request.method,
+          headers: upstreamHeaders(request, config, refreshed.access_token),
+          body,
+          cache: "no-store",
+          signal: request.signal,
+        });
+      }
+    }
+    const headers = responseHeaders(upstream);
+    if (refreshed) appendSessionCookies(headers, refreshed, config);
+    else if (upstream.status === 401) appendClearedSessionCookies(headers, config);
     return new Response(upstream.body, {
       status: upstream.status,
       statusText: upstream.statusText,
-      headers: responseHeaders(upstream),
+      headers,
     });
   } catch {
     return unavailableResponse();

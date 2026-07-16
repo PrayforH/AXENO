@@ -51,7 +51,7 @@ async def test_publish_create_run_query_and_cancel_are_tenant_scoped() -> None:
 
         cancelled = await client.post(f"/v1/runs/{run_id}/cancel", headers=IDENTITY_HEADERS)
         assert cancelled.status_code == 200
-        assert cancelled.json()["status"] == "cancelling"
+        assert cancelled.json()["status"] == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -64,7 +64,7 @@ async def test_identity_headers_are_required_and_errors_are_structured() -> None
     assert response.json() == {
         "error": {
             "code": "identity_required",
-            "message": "X-Tenant-ID and X-User-ID headers are required",
+            "message": "Sign in with a valid access token",
         }
     }
 

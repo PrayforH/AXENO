@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import signal
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from harness.config import Settings
@@ -60,6 +61,7 @@ async def worker_loop(
     stop: asyncio.Event,
     poll_interval: float,
     lease_heartbeat_interval: float = 20,
+    maintenance: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     """Consume durable run tasks until shutdown is requested.
 
@@ -68,6 +70,11 @@ async def worker_loop(
     """
 
     while not stop.is_set():
+        if maintenance is not None:
+            try:
+                await maintenance()
+            except Exception:
+                logger.exception("worker maintenance failed")
         task: RunTask | None = await queue.dequeue()
         if task is None:
             await _wait_for_work(stop, poll_interval)
@@ -117,6 +124,7 @@ async def serve(settings: Settings) -> None:
             stop=stop,
             poll_interval=settings.worker_poll_interval_seconds,
             lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
+            maintenance=container.approvals.reap_expired,
         )
     finally:
         if container.close is not None:

@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from redis.asyncio import Redis
 
 from harness.agui.service import AguiRunService
+from harness.agui.task_title import AnthropicCompatibleTaskTitleGenerator
 from harness.api.dependencies import ApiContainer
 from harness.application.agent_assets import stage_published_agent_assets
 from harness.application.agents import AgentService
@@ -21,6 +22,9 @@ from harness.application.memory import UserMemoryService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
+from harness.auth.audit import AuditService
+from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepository
+from harness.auth.service import AuthService, OAuthProviderConfig
 from harness.config import Settings
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelCompatibility
@@ -154,6 +158,10 @@ def build_production_container(
         SandboxProvider,
         DynamicMcpCredentialProvider,
     ] | None = None
+    try:
+        title_gateway, _ = _gateways(settings)
+    except ValueError:
+        title_gateway = None
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
         sandbox = _sandbox(settings)
@@ -182,6 +190,23 @@ def build_production_container(
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
     event_repository = PostgresEventRepository(sessions)
+    auth = AuthService(
+        PostgresAuthRepository(sessions),
+        jwt_secret=settings.auth_jwt_secret,
+        issuer=settings.auth_issuer,
+        audience=settings.auth_audience,
+        access_token_minutes=settings.auth_access_token_minutes,
+        refresh_token_days=settings.auth_refresh_token_days,
+        allow_registration=settings.auth_allow_registration,
+        default_tenant_id=settings.auth_default_tenant_id,
+        google=OAuthProviderConfig(
+            settings.auth_google_client_id, settings.auth_google_client_secret
+        ),
+        github=OAuthProviderConfig(
+            settings.auth_github_client_id, settings.auth_github_client_secret
+        ),
+    )
+    audit = AuditService(PostgresAuditRepository(sessions))
     if (
         settings.worker_task_heartbeat_seconds
         >= settings.worker_task_visibility_timeout_seconds
@@ -231,6 +256,7 @@ def build_production_container(
         events=events,
         clock=clock,
         id_generator=ids,
+        queue=queue,
     )
     artifact_service = ArtifactService(
         runs=runs,
@@ -306,8 +332,10 @@ def build_production_container(
                 events=events,
             ),
             memory_service=memory_service,
-            session_store_factory=lambda tenant_id: PostgresSessionStore(
-                sessions, tenant_id=tenant_id
+            session_store_factory=lambda session: PostgresSessionStore(
+                sessions,
+                tenant_id=session.tenant_id,
+                project_id=session.session_id,
             ),
             observability=observability,
         )
@@ -338,6 +366,16 @@ def build_production_container(
         runs=run_service,
         input_artifacts=input_service,
         bindings=binding_repository,
+        title_generator=(
+            AnthropicCompatibleTaskTitleGenerator(
+                base_url=title_gateway.base_url,
+                model=title_gateway.model,
+                credential=title_gateway.credential,
+                provider=title_gateway.provider,
+            )
+            if title_gateway is not None
+            else None
+        ),
     )
 
     async def close() -> None:
@@ -347,6 +385,8 @@ def build_production_container(
     return ApiContainer(
         environment="production",
         api_bearer_token=settings.api_bearer_token,
+        auth=auth,
+        audit=audit,
         agents=AgentService(registry, clock=clock, environment="production"),
         sessions=session_service,
         runs=run_service,

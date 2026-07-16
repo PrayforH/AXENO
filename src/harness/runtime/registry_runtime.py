@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator, Callable
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
-from harness.core.models import ModelRoute
+from harness.core.models import ModelRoute, Session
 from harness.core.ports import AgentRegistry
 from harness.observability.provider import Observability
 from harness.runtime.base import RuntimeContext, RuntimeEvent
@@ -28,7 +28,7 @@ class RegistryClaudeRuntime:
         mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
         tool_gate: ToolGate | None = None,
         memory_service: UserMemoryService | None = None,
-        session_store_factory: Callable[[str], object] | None = None,
+        session_store_factory: Callable[[Session], object] | None = None,
         observability: Observability | None = None,
     ) -> None:
         self._registry = registry
@@ -88,7 +88,7 @@ class RegistryClaudeRuntime:
                 memory_service=self._memory_service,
                 observability=self._observability,
                 session_store=(
-                    self._session_store_factory(session.tenant_id)
+                    self._session_store_factory(session)
                     if self._session_store_factory is not None
                     else None
                 ),
@@ -105,7 +105,7 @@ class RegistryClaudeRuntime:
                 memory_service=self._memory_service,
                 observability=self._observability,
                 session_store=(
-                    self._session_store_factory(session.tenant_id)
+                    self._session_store_factory(session)
                     if self._session_store_factory is not None
                     else None
                 ),

@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 from claude_agent_sdk import PreToolUseHookInput
-from claude_agent_sdk.types import SyncHookJSONOutput
+from claude_agent_sdk.types import PostToolUseHookInput, SyncHookJSONOutput
 
 from harness.adapters.memory import (
     InMemoryApprovalRepository,
@@ -372,6 +372,98 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
     )
 
     assert _decision(await task) == "allow"
+
+
+@pytest.mark.asyncio
+async def test_successful_approved_write_grants_same_run_edit_capability(
+    tmp_path: Path,
+) -> None:
+    gate, approvals, _, events, context = await _arrange(tmp_path)
+    hooks = gate.hooks(context)
+    pre_tool_use = hooks["PreToolUse"][0].hooks[0]
+    report = tmp_path / "outputs" / "report.md"
+    write_input = _input(
+        "Write",
+        {"file_path": str(report), "content": "draft"},
+        "tool-create-report",
+    )
+    write_task = asyncio.ensure_future(
+        pre_tool_use(write_input, write_input["tool_use_id"], {"signal": None})
+    )
+    requested = []
+    for _ in range(20):
+        emitted = await events.list_after("tenant-a", "run-sdk", 0)
+        requested = [event for event in emitted if event.type == "approval.requested"]
+        if requested:
+            break
+        await asyncio.sleep(0)
+    assert requested
+    await approvals.decide(
+        tenant_id="tenant-a",
+        approval_id=str(requested[0].payload["approval_id"]),
+        decision=ApprovalStatus.APPROVED,
+    )
+    assert _decision(cast(SyncHookJSONOutput, await write_task)) == "allow"
+
+    post_input = cast(
+        PostToolUseHookInput,
+        {
+            "session_id": "sdk-session",
+            "transcript_path": "/tmp/transcript",
+            "cwd": str(tmp_path),
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": write_input["tool_input"],
+            "tool_response": {"ok": True},
+            "tool_use_id": "tool-create-report",
+        },
+    )
+    await hooks["PostToolUse"][0].hooks[0](
+        post_input, "tool-create-report", {"signal": None}
+    )
+
+    edit_input = _input(
+        "Edit",
+        {
+            "file_path": "/workspace/outputs/report.md",
+            "old_string": "draft",
+            "new_string": "final",
+        },
+        "tool-edit-report",
+    )
+    edit_output = await asyncio.wait_for(
+        pre_tool_use(edit_input, edit_input["tool_use_id"], {"signal": None}),
+        timeout=0.1,
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, edit_output)) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted].count("approval.requested") == 1
+    assert emitted[-1].type == "tool.allowed"
+
+
+@pytest.mark.asyncio
+async def test_write_tools_deny_paths_outside_the_run_workspace(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Edit",
+            {
+                "file_path": str(tmp_path.parent / "outside.md"),
+                "old_string": "a",
+                "new_string": "b",
+            },
+            "tool-edit-outside",
+        ),
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.result"]
+    assert emitted[-1].payload["error"]["code"] == "policy_denied"
 
 
 @pytest.mark.asyncio

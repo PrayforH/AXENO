@@ -3,12 +3,77 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class UserRow(Base):
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    password_hash: Mapped[str | None] = mapped_column(Text)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class OAuthIdentityRow(Base):
+    __tablename__ = "oauth_identities"
+    __table_args__ = (
+        UniqueConstraint("provider", "subject", name="uq_oauth_identity_subject"),
+    )
+
+    identity_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    subject: Mapped[str] = mapped_column(String(256))
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    provider_email: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class TenantMembershipRow(Base):
+    __tablename__ = "tenant_memberships"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    role: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RefreshTokenRow(Base):
+    __tablename__ = "refresh_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    family_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    replaced_by_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class AuditLogRow(Base):
+    __tablename__ = "audit_logs"
+
+    audit_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    action: Mapped[str] = mapped_column(String(160), index=True)
+    resource_type: Mapped[str] = mapped_column(String(80), index=True)
+    resource_id: Mapped[str | None] = mapped_column(String(256))
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+    details: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 class AgentVersionRow(Base):
@@ -106,6 +171,7 @@ class ApprovalRow(Base):
     run_id: Mapped[str] = mapped_column(String(128), index=True)
     tool_call_id: Mapped[str] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(32), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

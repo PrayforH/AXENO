@@ -49,11 +49,11 @@ export function ArtifactCard({ details }: { details: ArtifactDetails }) {
             target="_blank"
             rel="noreferrer"
           >
-            预览
+            <span>预览</span><i aria-hidden="true">↗</i>
           </a>
         )}
         <a className="download-button" href={contentUrl}>
-          下载
+          <span>下载</span><i aria-hidden="true">↓</i>
         </a>
       </div>
     </section>

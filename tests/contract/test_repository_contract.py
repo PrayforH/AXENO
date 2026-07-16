@@ -64,6 +64,35 @@ async def test_session_repository_is_tenant_scoped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_repository_binds_claude_session_once() -> None:
+    repository = InMemorySessionRepository()
+    session = Session(
+        session_id="session-1",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=now(),
+    )
+    await repository.add(session)
+
+    bound = await repository.bind_claude_session_id(
+        "tenant-a", "session-1", "claude-session-1"
+    )
+
+    assert bound.claude_session_id == "claude-session-1"
+    assert (
+        await repository.bind_claude_session_id(
+            "tenant-a", "session-1", "claude-session-1"
+        )
+    ) == bound
+    with pytest.raises(ConflictError, match="already bound"):
+        await repository.bind_claude_session_id(
+            "tenant-a", "session-1", "claude-session-2"
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_repository_compare_and_set_prevents_stale_writes() -> None:
     repository = InMemoryRunRepository()
     timestamp = now()

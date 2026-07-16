@@ -2,7 +2,7 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: public-opinion-agent
-  version: 0.1.0
+  version: 0.1.1
   labels:
     domain: public-opinion
     template: orchestrator
@@ -23,6 +23,7 @@ spec:
     - builtin: Glob
     - builtin: Grep
     - builtin: Write
+    - builtin: Edit
     - builtin: Task
     - mcp: tavily-readonly
   subagents:

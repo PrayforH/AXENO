@@ -91,6 +91,7 @@ async def test_publish_artifact_stores_file_then_emits_authoritative_event(
     assert synced == ["yes"]
     assert artifacts.uploads[0]["content"] == b"verified"
     assert result.artifact_id == "artifact-1"
+    assert result.name == "Summary.txt"
     assert events.appended[0]["event_type"] == "artifact.ready"
     assert events.appended[0]["payload"]["sha256"] == hashlib.sha256(b"verified").hexdigest()
 

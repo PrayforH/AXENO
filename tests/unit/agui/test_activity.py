@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from harness.agui.activity import activity_projection
+from harness.agui.activity import activity_projection, build_run_activity
 from harness.core.events import RunEvent
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
@@ -134,3 +134,35 @@ def test_subagent_activity_keeps_parent_and_summary() -> None:
         "parent_tool_use_id": "tool-1",
     }
     assert "never-show" not in repr(projected)
+
+
+def test_build_run_activity_folds_each_turn_for_history_replay() -> None:
+    activity = build_run_activity(
+        [
+            event("run.queued", sequence=1),
+            event("run.running", sequence=2),
+            event(
+                "tool.request",
+                {"tool_call_id": "tool-1", "name": "Read"},
+                sequence=3,
+            ),
+            event(
+                "runtime.result",
+                {"num_turns": 2, "total_cost_usd": 0.01},
+                sequence=4,
+            ),
+            event("run.succeeded", sequence=5),
+        ]
+    )
+
+    assert activity is not None
+    assert activity["run_id"] == "run-1"
+    assert activity["status"] == "succeeded"
+    assert activity["metrics"] == {"turns": 2, "cost_usd": 0.01}
+    assert [item["event_type"] for item in activity["items"]] == [
+        "run.queued",
+        "run.running",
+        "tool.request",
+        "runtime.result",
+        "run.succeeded",
+    ]

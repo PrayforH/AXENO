@@ -11,21 +11,23 @@ describe("Harness BFF requests", () => {
       return new Response(JSON.stringify({ status: "approved" }), { status: 200 });
     };
 
-    await decideApproval("approval/1", "approved", fetcher, {
+    const request = new Request("https://console.test/api/approval", {
+      headers: { Cookie: "harness_access_token=user-jwt" },
+    });
+    await decideApproval("approval/1", "approved", request, fetcher, {
       HARNESS_API_URL: "https://harness.internal/",
-      HARNESS_TENANT_ID: "tenant-a",
-      HARNESS_USER_ID: "user-1",
+      HARNESS_API_BEARER_TOKEN: "service-token",
     });
 
     expect(capturedUrl).toBe(
       "https://harness.internal/v1/approvals/approval%2F1",
     );
     expect(capturedInit?.method).toBe("PUT");
-    expect(capturedInit?.headers).toEqual({
-      "Content-Type": "application/json",
-      "X-Tenant-ID": "tenant-a",
-      "X-User-ID": "user-1",
-    });
+    const headers = new Headers(capturedInit?.headers);
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Authorization")).toBe("Bearer user-jwt");
+    expect(headers.get("X-Harness-Service-Token")).toBe("service-token");
+    expect(headers.get("X-Tenant-ID")).toBeNull();
     expect(capturedInit?.body).toBe(JSON.stringify({ decision: "approved" }));
   });
 
@@ -38,19 +40,21 @@ describe("Harness BFF requests", () => {
       return new Response("artifact", { status: 200 });
     };
 
-    await downloadArtifact("artifact-1", fetcher, {
+    const request = new Request("https://console.test/api/artifact", {
+      headers: { Cookie: "harness_access_token=user-jwt" },
+    });
+    await downloadArtifact("artifact-1", request, fetcher, {
       HARNESS_API_URL: "https://harness.internal",
-      HARNESS_TENANT_ID: "tenant-a",
-      HARNESS_USER_ID: "user-1",
+      HARNESS_API_BEARER_TOKEN: "service-token",
     });
 
     expect(capturedUrl).toBe(
       "https://harness.internal/v1/artifacts/artifact-1/content",
     );
-    expect(capturedInit?.headers).toEqual({
-      "X-Tenant-ID": "tenant-a",
-      "X-User-ID": "user-1",
-    });
+    const headers = new Headers(capturedInit?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer user-jwt");
+    expect(headers.get("X-Harness-Service-Token")).toBe("service-token");
+    expect(headers.get("X-User-ID")).toBeNull();
     expect(capturedUrl).not.toContain("minio");
   });
 });

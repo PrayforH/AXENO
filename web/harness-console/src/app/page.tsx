@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AgentThread } from "../components/agent-thread";
+import { AuthProvider } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
 import { DeveloperDrawer } from "../components/developer-drawer";
-import { createNewThread, loadOrCreateThread } from "../lib/thread-store";
+import { TaskSidebar } from "../components/task-sidebar";
+import {
+  createNewThread,
+  loadOrCreateThread,
+  selectThread,
+} from "../lib/thread-store";
 
 export default function Home() {
   const [threadId, setThreadId] = useState("");
   const [runDetailsOpen, setRunDetailsOpen] = useState(false);
+  const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     setThreadId(loadOrCreateThread(window.localStorage));
@@ -19,7 +27,17 @@ export default function Home() {
     setRunDetailsOpen(false);
   }
 
+  function switchTask(nextThreadId: string) {
+    setThreadId(selectThread(window.localStorage, nextThreadId));
+    setRunDetailsOpen(false);
+  }
+
+  const refreshCurrentTask = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
   return (
+    <AuthProvider>
     <main className="console-shell">
       <header className="console-header">
         <div className="brand-lockup" aria-label="智能任务助手">
@@ -27,15 +45,12 @@ export default function Home() {
             H
           </span>
           <div>
-            <p className="eyebrow">Agent Workspace</p>
             <h1>智能任务助手</h1>
+            <p className="workspace-caption">Agent Harness</p>
           </div>
         </div>
 
         <div className="header-actions">
-          <button className="quiet-button" type="button" onClick={startNewTask}>
-            新任务
-          </button>
           <button
             className="icon-button"
             type="button"
@@ -43,16 +58,33 @@ export default function Home() {
             aria-label="切换本次运行详情"
             onClick={() => setRunDetailsOpen((current) => !current)}
           >
-            {runDetailsOpen ? "关闭详情" : "本次运行"}
+            <span className="details-glyph" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span>{runDetailsOpen ? "收起详情" : "运行详情"}</span>
           </button>
         </div>
       </header>
 
-      <div className={`workspace-stage ${runDetailsOpen ? "inspector-open" : ""}`}>
+      <div
+        className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""} ${runDetailsOpen ? "inspector-open" : ""}`}
+      >
+        <TaskSidebar
+          currentThreadId={threadId}
+          collapsed={!taskSidebarOpen}
+          onToggle={() => setTaskSidebarOpen((current) => !current)}
+          onSelect={switchTask}
+          onNewTask={startNewTask}
+          refreshToken={refreshToken}
+          onApprovalHandled={refreshCurrentTask}
+          onCurrentTaskStatusChange={refreshCurrentTask}
+        />
         <section className="chat-stage" aria-label="Agent 任务对话">
           <div className="chat-surface">
             {threadId ? (
-              <AssistantRuntimeShell key={threadId} threadId={threadId}>
+              <AssistantRuntimeShell key={`${threadId}:${refreshToken}`} threadId={threadId}>
                 <AgentThread />
               </AssistantRuntimeShell>
             ) : (
@@ -73,5 +105,6 @@ export default function Home() {
         )}
       </div>
     </main>
+    </AuthProvider>
   );
 }

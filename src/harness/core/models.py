@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -230,6 +230,9 @@ class AguiThreadBinding(FrozenModel):
     user_id: str
     thread_id: str
     session_id: str
+    title: str | None = None
+    title_source: Literal["fallback", "model"] | None = None
+    title_updated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

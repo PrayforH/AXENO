@@ -122,6 +122,44 @@ class CapturingRuntime(FakeRuntime):
             yield event
 
 
+class SessionAwareRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[RuntimeContext] = []
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        self.contexts.append(context)
+        sdk_session_id = context.session.claude_session_id or "sdk-session-1"
+        yield RuntimeEvent(
+            type="runtime.system",
+            payload={"subtype": "init", "session_id": sdk_session_id},
+        )
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(type="message.delta", payload={"text": "ok"})
+        yield RuntimeEvent(type="message.completed")
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"subtype": "success", "session_id": sdk_session_id},
+        )
+
+
+class FencingRefreshRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs: InMemoryRunRepository | None = None
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        assert self.runs is not None
+        current = await self.runs.get(context.run.tenant_id, context.run.run_id)
+        refreshed = current.model_copy(
+            update={"fencing_token": current.fencing_token + 1}
+        )
+        assert await self.runs.compare_and_set(current.status, refreshed)
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(type="message.delta", payload={"text": "approved"})
+        yield RuntimeEvent(type="message.completed")
+
+
 class WorkspaceOutputRuntime(FakeRuntime):
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         output = context.workspace / "outputs" / "report.md"
@@ -333,6 +371,54 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
         "run.succeeded",
     ]
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_terminal_transition_refreshes_fencing_after_inline_approval(
+    tmp_path: Path,
+) -> None:
+    runtime = FencingRefreshRuntime()
+    orchestrator, _, runs, events = await arrange(
+        tmp_path, runtime_override=runtime
+    )
+    runtime.runs = runs
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-1].type == "run.succeeded"
+
+
+@pytest.mark.asyncio
+async def test_next_run_receives_bound_claude_session_for_resume(
+    tmp_path: Path,
+) -> None:
+    runtime = SessionAwareRuntime()
+    orchestrator, _, runs, _ = await arrange(
+        tmp_path,
+        runtime_override=runtime,
+    )
+
+    first = await orchestrator.execute("tenant-a", "run-1")
+    second_run = Run(
+        run_id="run-2",
+        session_id="session-1",
+        tenant_id="tenant-a",
+        status=RunStatus.QUEUED,
+        idempotency_key="idem-2",
+        created_at=NOW,
+        updated_at=NOW,
+        input={"prompt": "what did I say?"},
+    )
+    await runs.add(second_run)
+    second = await orchestrator.execute("tenant-a", "run-2")
+
+    assert first.status is RunStatus.SUCCEEDED
+    assert second.status is RunStatus.SUCCEEDED
+    assert runtime.contexts[0].session.claude_session_id is None
+    assert runtime.contexts[1].session.claude_session_id == "sdk-session-1"
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from starlette.responses import Response
 from harness.agent_package import AgentBundleValidationError, AgentPackageCheckError
 from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
-from harness.api.routes import agents, approvals, artifacts, input_artifacts, runs, sessions
+from harness.api.routes import agents, approvals, artifacts, auth, input_artifacts, runs, sessions
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
@@ -67,20 +67,23 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
 async def _authenticate_request(
     request: Request, call_next: RequestResponseEndpoint
 ) -> Response:
-    if not request.url.path.startswith("/v1"):
+    if not request.url.path.startswith("/v1") or request.url.path.startswith("/v1/auth"):
         return await call_next(request)
     container: ApiContainer = request.app.state.container
     expected = container.api_bearer_token.get_secret_value()
     if not expected:
         return await call_next(request)
-    scheme, separator, credential = request.headers.get("Authorization", "").partition(
-        " "
-    )
-    if (
-        not separator
-        or scheme.lower() != "bearer"
-        or not compare_digest(credential, expected)
-    ):
+    service_credential = request.headers.get("X-Harness-Service-Token", "")
+    scheme, separator, credential = request.headers.get("Authorization", "").partition(" ")
+    if service_credential and compare_digest(service_credential, expected):
+        request.state.service_authenticated = True
+        return await call_next(request)
+    if separator and scheme.lower() == "bearer" and compare_digest(credential, expected):
+        request.state.service_authenticated = True
+        return await call_next(request)
+    if separator and scheme.lower() == "bearer" and credential.count(".") == 2:
+        return await call_next(request)
+    if expected:
         return JSONResponse(
             status_code=401,
             content={
@@ -94,6 +97,33 @@ async def _authenticate_request(
     return await call_next(request)
 
 
+async def _audit_request(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
+    response = await call_next(request)
+    identity = getattr(request.state, "identity", None)
+    should_record = request.method not in {"GET", "HEAD", "OPTIONS"} or request.url.path.endswith(
+        "/content"
+    )
+    if identity is not None and should_record:
+        container: ApiContainer = request.app.state.container
+        try:
+            await container.audit.record(
+                tenant_id=identity.tenant_id,
+                user_id=identity.user_id,
+                action=f"http.{request.method.lower()}",
+                resource_type="api_route",
+                resource_id=request.url.path,
+                outcome="success" if response.status_code < 400 else "denied",
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                details={"status_code": response.status_code},
+            )
+        except Exception:
+            pass
+    return response
+
+
 async def _healthz() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -104,6 +134,8 @@ def create_app(container: ApiContainer) -> FastAPI:
         raise ValueError(
             "production API requires HARNESS_API_BEARER_TOKEN with at least 32 characters"
         )
+    if container.environment == "production" and container.auth.jwt_secret_length < 32:
+        raise ValueError("production requires HARNESS_AUTH_JWT_SECRET with at least 32 characters")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -127,6 +159,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         allow_headers=["*"],
     )
     app.add_middleware(BaseHTTPMiddleware, dispatch=_trace_request)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=_audit_request)
     app.add_middleware(BaseHTTPMiddleware, dispatch=_authenticate_request)
 
     app.add_exception_handler(HTTPException, _http_error)
@@ -137,6 +170,7 @@ def create_app(container: ApiContainer) -> FastAPI:
 
     for router in (
         agents.router,
+        auth.router,
         sessions.router,
         runs.router,
         approvals.router,

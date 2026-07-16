@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from harness.api.dependencies import (
     ApiContainer,
     Identity,
+    ensure_permission,
     get_container,
     require_identity,
     require_owned_run,
@@ -23,6 +24,7 @@ async def decide_approval(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> ApprovalRequest:
+    ensure_permission(identity, "tasks:write")
     current = await container.approvals.get(identity.tenant_id, approval_id)
     await require_owned_run(container, identity, current.run_id)
     inline_waiting = container.approvals.has_inline_waiter(approval_id)

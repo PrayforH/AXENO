@@ -17,11 +17,15 @@ export async function PUT(
   const upstream = await decideApproval(
     approvalId,
     body.decision as ApprovalDecision,
+    request,
   );
+  const headers = new Headers({
+    "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
+  });
+  const setCookie = upstream.headers.get("set-cookie");
+  if (setCookie) headers.set("Set-Cookie", setCookie);
   return new Response(await upstream.text(), {
     status: upstream.status,
-    headers: {
-      "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
-    },
+    headers,
   });
 }

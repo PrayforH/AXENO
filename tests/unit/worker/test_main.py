@@ -107,6 +107,31 @@ async def test_worker_loop_can_stop_while_queue_is_empty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_runs_expiry_maintenance_while_queue_is_idle() -> None:
+    stop = asyncio.Event()
+    queue = Queue([])
+    executor = Executor(stop)
+    calls = 0
+
+    async def maintenance() -> object:
+        nonlocal calls
+        calls += 1
+        stop.set()
+        return 0
+
+    await worker_loop(
+        queue,
+        executor,
+        stop=stop,
+        poll_interval=60,
+        maintenance=maintenance,
+    )
+
+    assert calls == 1
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
 async def test_worker_loop_renews_lease_during_long_execution() -> None:
     stop = asyncio.Event()
     task = RunTask(tenant_id="tenant-a", run_id="run-1")

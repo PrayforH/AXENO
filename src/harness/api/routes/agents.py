@@ -3,7 +3,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from harness.agent_package import MAX_AGENT_BUNDLE_UPLOAD_BYTES
-from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
+from harness.api.dependencies import (
+    ApiContainer,
+    Identity,
+    ensure_permission,
+    get_container,
+    require_identity,
+)
 from harness.api.schemas import PublishAgentRequest
 from harness.core.models import AgentVersion
 
@@ -16,6 +22,7 @@ async def publish_agent(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> AgentVersion:
+    ensure_permission(identity, "agents:publish")
     if not container.agents.path_publication_enabled:
         raise HTTPException(
             status_code=403,
@@ -37,6 +44,7 @@ async def publish_agent_bundle(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> AgentVersion:
+    ensure_permission(identity, "agents:publish")
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type != "application/zip":
         raise HTTPException(

@@ -10,6 +10,9 @@ def test_public_opinion_reference_agent_passes_production_package_gates() -> Non
 
     assert report.snapshot.manifest.metadata.name == "public-opinion-agent"
     assert report.snapshot.manifest.spec.permissions.policy == "production-orchestrator"
+    assert "Edit" in {
+        tool.builtin for tool in report.snapshot.manifest.spec.tools
+    }
     assert [skill.name for skill in report.snapshot.skill_snapshots] == [
         "public-opinion-analysis"
     ]

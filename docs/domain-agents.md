@@ -130,7 +130,7 @@ subagents:
 
 子 Agent 必须固定版本；生产禁止 `latest`。适合委派可独立验收的检索、归纳或专业审查，不适合为了“看起来像多智能体”拆分简单流程。
 
-仓库中的 `public-opinion-agent@0.1.0` 展示了 `mcp: tavily-readonly`、`helper-agent@1.0.0`、证据引用、风险分级和中文报告契约。它复用共享审批与运行界面，没有另建事件协议或 Web UI。
+仓库中的 `public-opinion-agent@0.1.1` 展示了 `mcp: tavily-readonly`、`helper-agent@1.0.0`、证据引用、风险分级和中文报告契约。它复用共享审批与运行界面，没有另建事件协议或 Web UI。
 
 ## 3. 选择最小权限 Profile
 

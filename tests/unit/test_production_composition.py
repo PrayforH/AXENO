@@ -94,10 +94,10 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
     container = build_production_container(
         production_settings(
             mcp_secret_references_json=json.dumps(
-                {"tavily-readonly": {"authorization": "TAVILY_AUTHORIZATION"}}
+                {"tavily-readonly": {"api_key": "TAVILY_API_KEY"}}
             ),
             mcp_server_secrets_json=SecretStr(
-                json.dumps({"TAVILY_AUTHORIZATION": "Bearer production-key"})
+                json.dumps({"TAVILY_API_KEY": "production-key"})
             ),
         )
     )
@@ -108,9 +108,9 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
         tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])
-        assert tavily.get("headers") == {
-            "Authorization": "Bearer production-key"
-        }
+        assert tavily.get("url") == (
+            "https://mcp.tavily.com/mcp/?tavilyApiKey=production-key"
+        )
     finally:
         assert container.close is not None
         await container.close()
