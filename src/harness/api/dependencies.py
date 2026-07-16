@@ -386,9 +386,29 @@ async def require_identity(
 
 _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     "owner": frozenset({"*"}),
-    "admin": frozenset({"agents:publish", "tasks:read", "tasks:write", "audit:read"}),
-    "member": frozenset({"tasks:read", "tasks:write"}),
-    "viewer": frozenset({"tasks:read"}),
+    "admin": frozenset(
+        {
+            "agents:publish",
+            "tasks:read",
+            "tasks:write",
+            "audit:read",
+            "studio:read",
+            "studio:write",
+            "studio:preview",
+            "studio:publish",
+            "studio:deploy",
+        }
+    ),
+    "member": frozenset(
+        {
+            "tasks:read",
+            "tasks:write",
+            "studio:read",
+            "studio:write",
+            "studio:preview",
+        }
+    ),
+    "viewer": frozenset({"tasks:read", "studio:read"}),
 }
 
 
