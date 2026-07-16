@@ -5,6 +5,7 @@ import { AccountMenu } from "./account-menu";
 import { ApprovalCard } from "./approval-card";
 import type { ApprovalDecision } from "../lib/harness-server";
 import { loadTasks, type TaskSummary } from "../lib/task-history";
+import { requireAuthenticatedResponse } from "../lib/client-auth";
 
 const statusLabels: Record<string, string> = {
   idle: "新任务",
@@ -114,13 +115,12 @@ export function TaskSidebar({
   }, [onCurrentTaskStatusChange, selected]);
 
   async function decide(approvalId: string, decision: ApprovalDecision) {
-    const response = await fetch(
-      `/api/harness/approvals/${encodeURIComponent(approvalId)}`,
-      {
+    const response = requireAuthenticatedResponse(
+      await fetch(`/api/harness/approvals/${encodeURIComponent(approvalId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision }),
-      },
+      }),
     );
     if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
     const next = await loadTasks();

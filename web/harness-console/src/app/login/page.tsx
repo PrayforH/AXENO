@@ -8,6 +8,7 @@ type AuthConfig = {
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
+  session_expired: "登录状态已失效，请重新登录。",
   sso_unavailable: "该登录方式尚未配置。",
   sso_state_invalid: "登录请求已经过期，请重新尝试。",
   sso_exchange_failed: "第三方登录没有完成，请重试。",

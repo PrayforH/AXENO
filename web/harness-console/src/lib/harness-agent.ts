@@ -11,6 +11,7 @@ import {
   type ActivityPatchOperation,
   activityStore,
 } from "./activity-store";
+import { redirectOnUnauthorized } from "./client-auth";
 
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
   cancelFetch?: typeof fetch;
@@ -25,8 +26,19 @@ export class HarnessHttpAgent extends HttpAgent {
   private cancelFetch: typeof fetch;
 
   constructor(config: HarnessHttpAgentConfig) {
-    super(config);
-    this.cancelFetch = config.cancelFetch ?? globalThis.fetch.bind(globalThis);
+    const transportFetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    const sessionAwareFetch: typeof transportFetch = async (url, init) => {
+      const response = await transportFetch(url, init);
+      redirectOnUnauthorized(response);
+      return response;
+    };
+    super({ ...config, fetch: sessionAwareFetch });
+    const cancelTransport = config.cancelFetch ?? globalThis.fetch.bind(globalThis);
+    this.cancelFetch = async (input, init) => {
+      const response = await cancelTransport(input, init);
+      redirectOnUnauthorized(response);
+      return response;
+    };
   }
 
   override run(input: RunAgentInput) {

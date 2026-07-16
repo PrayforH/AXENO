@@ -31,6 +31,7 @@ import {
   hasRunActivityToolCall,
   runActivitySchema,
 } from "../lib/activity-schema";
+import { requireAuthenticatedResponse } from "../lib/client-auth";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -198,13 +199,15 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
         details={details}
         complete={part.result !== undefined}
         onDecision={async (decision) => {
-          const response = await fetch(
-            `/api/harness/approvals/${encodeURIComponent(details.approval_id)}`,
-            {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ decision }),
-            },
+          const response = requireAuthenticatedResponse(
+            await fetch(
+              `/api/harness/approvals/${encodeURIComponent(details.approval_id)}`,
+              {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ decision }),
+              },
+            ),
           );
           if (!response.ok) throw new Error(await response.text());
         }}

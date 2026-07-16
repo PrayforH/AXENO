@@ -4,6 +4,7 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/react";
 import { uploadFeedbackStore, uploadKey } from "./upload-feedback-store";
+import { requireAuthenticatedResponse } from "./client-auth";
 
 interface InputArtifactUpload {
   input_artifact_id: string;
@@ -57,10 +58,12 @@ export function createInputAttachmentAdapter(
       try {
         const form = new FormData();
         form.append("file", file);
-        const response = await fetcher("/api/input-artifacts", {
-          method: "POST",
-          body: form,
-        });
+        const response = requireAuthenticatedResponse(
+          await fetcher("/api/input-artifacts", {
+            method: "POST",
+            body: form,
+          }),
+        );
         const payload: unknown = await response.json().catch(() => null);
         if (!response.ok || !isUpload(payload)) {
           throw new Error(

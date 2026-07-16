@@ -6,6 +6,7 @@ import { fromAgUiMessages } from "@assistant-ui/react-ag-ui";
 import type { ApprovalDetails } from "../components/approval-card";
 import { latestHistoryRunActivity } from "./activity-schema";
 import { activityStore } from "./activity-store";
+import { requireAuthenticatedResponse } from "./client-auth";
 
 export interface TaskSummary {
   thread_id: string;
@@ -34,7 +35,9 @@ interface ThreadHistoryResponse {
 }
 
 async function json<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
+  const response = requireAuthenticatedResponse(
+    await fetch(url, { cache: "no-store" }),
+  );
   if (!response.ok) {
     throw new Error((await response.text()) || `HTTP ${response.status}`);
   }
@@ -48,9 +51,11 @@ export function loadTasks(): Promise<TaskSummary[]> {
 export function createThreadHistoryAdapter(threadId: string): ThreadHistoryAdapter {
   return {
     async load() {
-      const response = await fetch(
-        `/api/agui/threads/${encodeURIComponent(threadId)}/history`,
-        { cache: "no-store" },
+      const response = requireAuthenticatedResponse(
+        await fetch(
+          `/api/agui/threads/${encodeURIComponent(threadId)}/history`,
+          { cache: "no-store" },
+        ),
       );
       if (response.status === 404) {
         return ExportedMessageRepository.fromArray([]);
