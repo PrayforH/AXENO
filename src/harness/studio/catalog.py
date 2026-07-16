@@ -1,0 +1,146 @@
+"""Reviewed capabilities that Agent drafts may reference by logical ID."""
+
+from harness.studio.models import (
+    AgentTemplate,
+    BuiltinToolCapability,
+    CapabilityCatalog,
+    CapabilityRisk,
+    McpCapability,
+    ModelRouteCapability,
+    NetworkAccess,
+    PolicyCapability,
+    TemplateCapability,
+)
+
+
+def default_capability_catalog() -> CapabilityCatalog:
+    """Return the safe built-in catalog used until persistent catalogs are wired."""
+
+    return CapabilityCatalog(
+        modelRoutes=(
+            ModelRouteCapability(
+                routeId="new-api-default",
+                label="Anthropic-compatible gateway",
+                provider="new-api",
+                models=("claude-sonnet-4-6",),
+                capabilities=frozenset({"streaming", "tool_use"}),
+            ),
+            ModelRouteCapability(
+                routeId="anthropic-official",
+                label="Anthropic official",
+                provider="anthropic",
+                models=("claude-sonnet-4-6",),
+                capabilities=frozenset({"streaming", "tool_use"}),
+            ),
+        ),
+        builtinTools=(
+            BuiltinToolCapability(
+                name="Read",
+                label="读取文件",
+                description="读取隔离工作区中的文件。",
+                risk=CapabilityRisk.LOW,
+                executionLocation="sandbox",
+                approvalBehavior="自动允许",
+            ),
+            BuiltinToolCapability(
+                name="Glob",
+                label="查找文件",
+                description="按文件名模式查找隔离工作区内容。",
+                risk=CapabilityRisk.LOW,
+                executionLocation="sandbox",
+                approvalBehavior="自动允许",
+            ),
+            BuiltinToolCapability(
+                name="Grep",
+                label="搜索文件内容",
+                description="在隔离工作区内检索文本。",
+                risk=CapabilityRisk.LOW,
+                executionLocation="sandbox",
+                approvalBehavior="自动允许",
+            ),
+            BuiltinToolCapability(
+                name="Write",
+                label="创建文件",
+                description="在隔离工作区中生成文件和交付物。",
+                risk=CapabilityRisk.MEDIUM,
+                executionLocation="sandbox",
+                approvalBehavior="按 Sandbox 策略允许或审批",
+            ),
+            BuiltinToolCapability(
+                name="Edit",
+                label="编辑文件",
+                description="修改隔离工作区中已有文件。",
+                risk=CapabilityRisk.MEDIUM,
+                executionLocation="sandbox",
+                approvalBehavior="按 Sandbox 策略允许或审批",
+            ),
+            BuiltinToolCapability(
+                name="Bash",
+                label="运行命令",
+                description="在隔离工作区中运行受策略约束的命令。",
+                risk=CapabilityRisk.HIGH,
+                executionLocation="sandbox",
+                approvalBehavior="默认需要人工审批",
+            ),
+            BuiltinToolCapability(
+                name="Task",
+                label="委派子 Agent",
+                description="把边界清晰的子任务委派给固定版本 Agent。",
+                risk=CapabilityRisk.MEDIUM,
+                executionLocation="runtime",
+                approvalBehavior="受主/子 Agent 双重权限上限约束",
+            ),
+        ),
+        mcpServers=(
+            McpCapability(
+                reference="tavily-readonly",
+                label="公网搜索（Tavily）",
+                description="检索和抽取公开网页，不提供网页写入能力。",
+                tools=(
+                    "mcp__tavily__tavily_search",
+                    "mcp__tavily__tavily_extract",
+                ),
+                risk=CapabilityRisk.MEDIUM,
+                networkAccess=NetworkAccess.EXTERNAL,
+                sendsUserData=True,
+                executionLocation="external-mcp",
+            ),
+        ),
+        policies=(
+            PolicyCapability(
+                policyId="production-read-only",
+                label="生产只读",
+                description="文件读取和审核过的只读 MCP；其他能力隐式拒绝。",
+                risk=CapabilityRisk.LOW,
+            ),
+            PolicyCapability(
+                policyId="production-standard",
+                label="生产标准",
+                description="允许受控文件写入，命令和高风险动作进入审批。",
+                risk=CapabilityRisk.MEDIUM,
+            ),
+            PolicyCapability(
+                policyId="production-orchestrator",
+                label="生产编排",
+                description="允许固定版本子 Agent 委派，并继承各自权限上限。",
+                risk=CapabilityRisk.MEDIUM,
+            ),
+        ),
+        templates=(
+            TemplateCapability(
+                template=AgentTemplate.ANALYST,
+                label="分析型",
+                description="读取、检索、归纳和报告，默认最小只读权限。",
+            ),
+            TemplateCapability(
+                template=AgentTemplate.OPERATOR,
+                label="执行型",
+                description="在隔离工作区中生成或修改文件，高风险操作需审批。",
+            ),
+            TemplateCapability(
+                template=AgentTemplate.ORCHESTRATOR,
+                label="编排型",
+                description="将可独立验收的任务委派给固定版本子 Agent。",
+            ),
+        ),
+    )
