@@ -149,7 +149,7 @@ PostgreSQL 中的 Run/Event/Approval/Artifact 是权威事实；AG-UI 和 assist
 | Studio 持久化 API | [已实现] | 租户 Draft、Catalog、Preview、Eval 和 Deployment 已挂载 API 与 PostgreSQL |
 | Studio RBAC | [已实现] | 登录身份映射 StudioActor，owner/admin/member/viewer 权限矩阵与审计已接入 |
 | 临时预览和环境晋级 | [已实现] | Preview TTL、真实 Preflight、Environment、灰度、Snapshot 和回滚已接入 |
-| 在线 Eval 与自动告警 | [部分实现] | 耐久 Dataset/Eval Gate 已实现；Langfuse Score/Alert 由 G11 完成 |
+| 在线 Eval 与自动告警 | [已实现] | 耐久 Dataset、规则/人工 Score、Langfuse 投影、Alert 和 Promotion Gate 已接入 |
 | 任意步骤 Checkpoint | [规划] | 当前只承诺会话、Workspace 和审批恢复 |
 
 ## 6. 总体架构

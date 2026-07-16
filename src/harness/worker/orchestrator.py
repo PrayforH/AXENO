@@ -21,7 +21,7 @@ from harness.application.workspaces import (
     WorkspaceService,
 )
 from harness.core.errors import ConflictError
-from harness.core.models import ExecutionIdentity, Run, RunStatus
+from harness.core.models import ExecutionIdentity, Run, RunStatus, Session
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
@@ -47,6 +47,7 @@ from harness.sandbox.base import SandboxHandle, SandboxProvider
 
 RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[[str, str, str], Awaitable[PolicyEngine]]
+RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
 T = TypeVar("T")
 
 
@@ -98,6 +99,7 @@ class RunOrchestrator:
         policy_resolver: PolicyResolver | None = None,
         output_artifact_max_bytes: int = 50 * 1024 * 1024,
         cancellation_poll_interval_seconds: float = 0.25,
+        quality_hook: RunQualityHook | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -117,6 +119,7 @@ class RunOrchestrator:
         self._policy_resolver = policy_resolver
         self._output_artifact_max_bytes = output_artifact_max_bytes
         self._cancellation_poll_interval_seconds = cancellation_poll_interval_seconds
+        self._quality_hook = quality_hook
 
     def _stage(
         self,
@@ -127,9 +130,7 @@ class RunOrchestrator:
             return nullcontext()
         return self._observability.span(name, attributes=attributes)
 
-    async def _runtime_events(
-        self, context: RuntimeContext
-    ) -> AsyncIterator[Any]:
+    async def _runtime_events(self, context: RuntimeContext) -> AsyncIterator[Any]:
         with self._stage(
             "harness.runtime.execute",
             {
@@ -196,10 +197,7 @@ class RunOrchestrator:
                 tenant_id=tenant_id,
                 run_id=run.run_id,
                 name=relative.removeprefix("outputs/"),
-                media_type=(
-                    mimetypes.guess_type(resolved.name)[0]
-                    or "application/octet-stream"
-                ),
+                media_type=(mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"),
                 content=content,
             )
             payload = artifact.model_dump(mode="json")
@@ -311,11 +309,24 @@ class RunOrchestrator:
         if self._observability is None:
             return await self._execute(tenant_id, run_id)
         run = await self._runs.get(tenant_id, run_id)
+        session = await self._sessions.get(tenant_id, run.session_id)
+        correlation_attributes: dict[str, str] = {
+            "langfuse.session.id": run.session_id,
+            "session.id": run.session_id,
+            "agent.name": session.agent_name,
+            "agent.version": session.agent_version,
+        }
+        if session.deployment_snapshot_id:
+            correlation_attributes["deployment.snapshot.id"] = (
+                session.deployment_snapshot_id
+            )
+        if session.environment:
+            correlation_attributes["deployment.environment"] = session.environment
+        eval_run_id = run.input.get("eval_run_id")
+        if isinstance(eval_run_id, str) and eval_run_id:
+            correlation_attributes["eval.run.id"] = eval_run_id
         with self._observability.bind_attributes(
-            {
-                "langfuse.session.id": run.session_id,
-                "session.id": run.session_id,
-            }
+            correlation_attributes
         ):
             with self._observability.span(
                 "harness.worker.run",
@@ -325,7 +336,16 @@ class RunOrchestrator:
                     "tenant.hash": correlation_hash(tenant_id),
                 },
             ):
-                return await self._execute(tenant_id, run_id)
+                result = await self._execute(tenant_id, run_id)
+                trace_id = self._observability.current_trace_id()
+                if result.status.is_terminal and trace_id and self._quality_hook is not None:
+                    try:
+                        await self._quality_hook(result, session, trace_id)
+                    except Exception:
+                        # Quality export is fail-open for the Agent Run. Durable
+                        # sync state and alerts are reconciled independently.
+                        pass
+                return result
 
     async def _execute(self, tenant_id: str, run_id: str) -> Run:
         run = await self._runs.get(tenant_id, run_id)
@@ -360,9 +380,7 @@ class RunOrchestrator:
                 )
             session = await self._sessions.get(tenant_id, run.session_id)
             active_policy = (
-                await self._policy_resolver(
-                    tenant_id, session.agent_name, session.agent_version
-                )
+                await self._policy_resolver(tenant_id, session.agent_name, session.agent_version)
                 if self._policy_resolver is not None
                 else self._policy
             )
@@ -399,9 +417,7 @@ class RunOrchestrator:
             )
             with self._stage("harness.memory.load", {"run.id": run_id}):
                 memory_projection = (
-                    await self._memory.projection(identity)
-                    if self._memory is not None
-                    else ""
+                    await self._memory.projection(identity) if self._memory is not None else ""
                 )
             raw_input_artifact_ids: object = run.input.get("input_artifact_ids", [])
             if not isinstance(raw_input_artifact_ids, list):
@@ -409,9 +425,7 @@ class RunOrchestrator:
             input_artifact_ids: list[str] = []
             for item in cast(list[object], raw_input_artifact_ids):
                 if not isinstance(item, str):
-                    raise ValueError(
-                        "run input_artifact_ids must be a list of strings"
-                    )
+                    raise ValueError("run input_artifact_ids must be a list of strings")
                 input_artifact_ids.append(item)
             if input_artifact_ids and self._input_artifacts is None:
                 raise RuntimeError("input artifact service is not configured")
@@ -473,6 +487,7 @@ class RunOrchestrator:
                     session_id=run.session_id,
                     event_type="run.resumed",
                 )
+
             async def sync_workspace() -> None:
                 await self._sandbox.collect(handle)
 
@@ -499,9 +514,7 @@ class RunOrchestrator:
                 sandbox_isolation=handle.isolation_level,
                 assistant_message_id=f"assistant-{run_id}-{uuid4().hex}",
                 input_files=tuple(
-                    path
-                    for item in staged_inputs
-                    for path in (item.path, *item.processed_paths)
+                    path for item in staged_inputs for path in (item.path, *item.processed_paths)
                 ),
                 identity=identity,
                 memory_projection=memory_projection,
@@ -537,9 +550,7 @@ class RunOrchestrator:
                 if runtime_event.type == "tool.request":
                     raw_arguments = payload.get("arguments")
                     if isinstance(raw_arguments, dict):
-                        original_tool_arguments = dict(
-                            cast(dict[str, Any], raw_arguments)
-                        )
+                        original_tool_arguments = dict(cast(dict[str, Any], raw_arguments))
                     relative_input_path = staged_read_path(
                         payload,
                         workspace=handle.path,
@@ -567,16 +578,13 @@ class RunOrchestrator:
                                 event
                                 for event in reversed(prior_events)
                                 if event.type == "tool.request"
-                                and str(event.payload.get("tool_call_id", ""))
-                                == tool_call_id
+                                and str(event.payload.get("tool_call_id", "")) == tool_call_id
                             ),
                             None,
                         )
                         redact_result = bool(
                             matching_request
-                            and matching_request.payload.get(
-                                STAGED_INPUT_READ_MARKER
-                            )
+                            and matching_request.payload.get(STAGED_INPUT_READ_MARKER)
                         )
                     if redact_result:
                         payload["content"] = INPUT_CONTENT_REDACTION
@@ -617,16 +625,12 @@ class RunOrchestrator:
                         relative_path,
                         max_bytes=self._output_artifact_max_bytes,
                     )
-                    with self._stage(
-                        "harness.artifact.publish", {"run.id": run_id}
-                    ):
+                    with self._stage("harness.artifact.publish", {"run.id": run_id}):
                         artifact = await self._artifacts.upload(
                             tenant_id=tenant_id,
                             run_id=run_id,
                             name=str(payload.get("name", artifact_path.name)),
-                            media_type=str(
-                                payload.get("media_type", "application/octet-stream")
-                            ),
+                            media_type=str(payload.get("media_type", "application/octet-stream")),
                             content=artifact_content,
                         )
                     artifact_payload = artifact.model_dump(mode="json")
@@ -722,9 +726,7 @@ class RunOrchestrator:
             with self._stage("harness.sandbox.collect", {"run.id": run_id}):
                 await self._sandbox.collect(handle)
             if handle.provider == "daytona":
-                with self._stage(
-                    "harness.artifact.publish_outputs", {"run.id": run_id}
-                ):
+                with self._stage("harness.artifact.publish_outputs", {"run.id": run_id}):
                     await self._publish_daytona_outputs(
                         tenant_id=tenant_id,
                         run=run,

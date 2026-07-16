@@ -58,8 +58,7 @@ def test_bound_attributes_propagate_to_nested_spans() -> None:
     spans = exporter.get_finished_spans()
     assert {span.name for span in spans} == {"run.root", "run.child"}
     assert all(
-        span.attributes is not None
-        and span.attributes["langfuse.session.id"] == "session-a"
+        span.attributes is not None and span.attributes["langfuse.session.id"] == "session-a"
         for span in spans
     )
 
@@ -140,7 +139,30 @@ def test_span_records_failure_without_exporting_sensitive_attributes() -> None:
     assert "top-secret" not in repr(attributes)
     assert "private memory" not in repr(attributes)
     assert "private file" not in repr(attributes)
-    assert all(
-        "private failure body" not in repr(event.attributes)
-        for event in span.events
+    assert all("private failure body" not in repr(event.attributes) for event in span.events)
+
+
+def test_trace_attribute_allowlist_drops_raw_io_and_unknown_fields() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
     )
+    with observability.span(
+        "allowlist",
+        attributes={
+            "run.id": "run-a",
+            "tool.arguments": "private argument",
+            "answer": "private answer",
+            "harness.prompt": "private prompt",
+        },
+    ):
+        pass
+    attributes = exporter.get_finished_spans()[0].attributes
+    assert attributes is not None
+    assert attributes["run.id"] == "run-a"
+    assert attributes["harness.prompt"] == "[REDACTED]"
+    assert "tool.arguments" not in attributes
+    assert "answer" not in attributes
+    assert "private" not in repr(attributes)

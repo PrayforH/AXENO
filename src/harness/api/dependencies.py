@@ -71,6 +71,11 @@ from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
+from harness.quality.controller import QualitySyncController
+from harness.quality.langfuse import DisabledQualityExporter
+from harness.quality.queue import QualityTaskQueue
+from harness.quality.repositories import InMemoryQualityRepository, QualityRepository
+from harness.quality.service import QualityService
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
 from harness.runtime.default_tools import (
@@ -140,6 +145,9 @@ class ApiContainer:
     deployment_repository: DeploymentRepository
     deployments: DeploymentService
     deployment_controller: DeploymentController
+    quality_repository: QualityRepository
+    quality: QualityService
+    quality_controller: QualitySyncController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -206,6 +214,8 @@ def build_memory_container(
     environment_repository = InMemoryEnvironmentRepository()
     deployment_repository = InMemoryDeploymentRepository()
     deployment_queue = DeploymentTaskQueue.memory()
+    quality_repository = InMemoryQualityRepository()
+    quality_queue = QualityTaskQueue.memory()
     capability_catalog_repository = InMemoryCapabilityCatalogRepository()
 
     def clock() -> datetime:
@@ -299,6 +309,20 @@ def build_memory_container(
         object_store=artifact_store,
         clock=clock,
     )
+    quality_service = QualityService(
+        repository=quality_repository,
+        queue=quality_queue,
+        runs=runs,
+        sessions=sessions,
+        events=events,
+        artifacts=artifact_repository,
+        clock=clock,
+    )
+    quality_controller = QualitySyncController(
+        repository=quality_repository,
+        queue=quality_queue,
+        exporter=DisabledQualityExporter(),
+    )
     deployment_service = DeploymentService(
         environments=environment_repository,
         deployments=deployment_repository,
@@ -309,6 +333,7 @@ def build_memory_container(
         audit=audit,
         clock=clock,
         id_generator=id_generator,
+        quality_gate=quality_service.require_promotion_allowed,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
@@ -445,6 +470,7 @@ def build_memory_container(
         ),
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
+        quality_hook=quality_service.record_terminal_run,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -470,6 +496,9 @@ def build_memory_container(
         deployment_repository=deployment_repository,
         deployments=deployment_service,
         deployment_controller=deployment_controller,
+        quality_repository=quality_repository,
+        quality=quality_service,
+        quality_controller=quality_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

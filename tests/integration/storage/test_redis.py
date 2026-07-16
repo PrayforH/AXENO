@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from harness.core.ports import RunTask
 from harness.deployments.queue import DeploymentTask, DeploymentTaskQueue
 from harness.evals.queue import EvalTask, EvalTaskQueue
+from harness.quality.queue import QualityTask, QualityTaskQueue
 from harness.storage.redis import AsyncRedisClient, RedisTaskQueue
 from harness.studio.preview_queue import PreviewTask, PreviewTaskQueue
 
@@ -156,5 +157,38 @@ async def test_deployment_queue_recovers_a_crashed_controller_lease() -> None:
         assert item == task
         await recovered.acknowledge(task)
         assert await recovered.dequeue() is None
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_quality_queue_recovers_a_crashed_sync_worker_lease() -> None:
+    client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
+        "redis://localhost:6379/11", decode_responses=True
+    )
+    await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
+    queue = QualityTaskQueue.redis(
+        cast(AsyncRedisClient, client),
+        visibility_timeout_seconds=0.05,
+        retry_delay_seconds=0,
+    )
+    try:
+        task = QualityTask(tenant_id="tenant-a", sync_id="quality-sync-one")
+        await queue.enqueue(task)
+        assert await queue.dequeue() == task
+        await asyncio.sleep(0.06)
+        recovered = QualityTaskQueue.redis(
+            cast(AsyncRedisClient, client),
+            visibility_timeout_seconds=0.05,
+            retry_delay_seconds=0,
+        )
+        item = None
+        for _attempt in range(20):
+            item = await recovered.dequeue()
+            if item is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert item == task
+        await recovered.acknowledge(task)
     finally:
         await client.aclose()

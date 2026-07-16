@@ -287,6 +287,56 @@ export type StudioDeployment = {
   environment: StudioEnvironment;
 };
 
+export type StudioQualityScore = {
+  tenantId: string;
+  scoreId: string;
+  runId: string;
+  traceId: string;
+  sessionId: string;
+  agentName: string;
+  agentVersion: string;
+  deploymentSnapshotId: string | null;
+  evalRunId: string | null;
+  name: string;
+  value: number;
+  source: "rule" | "human" | "llm_judge";
+  createdBy: string;
+  createdAt: string;
+};
+
+export type StudioQualityIncident = {
+  tenantId: string;
+  incidentId: string;
+  ruleId: string;
+  agentName: string;
+  agentVersion: string;
+  state: "open" | "resolved";
+  observedValue: number;
+  sampleCount: number;
+  openedAt: string;
+  resolvedAt: string | null;
+};
+
+export type StudioQualityRule = {
+  tenantId: string;
+  ruleId: string;
+  agentName: string;
+  scoreName: string;
+  minimumValue: number;
+  minimumSamples: number;
+  blocksPromotion: boolean;
+  enabled: boolean;
+  dashboardUrl: string | null;
+  createdAt: string;
+};
+
+export type StudioQualityGate = {
+  agentName: string;
+  agentVersion: string;
+  passed: boolean;
+  blockingIncidentIds: string[];
+};
+
 export type StudioCapabilities = {
   modelRoutes: Array<{
     routeId: string;
@@ -579,6 +629,22 @@ export const studioClient = {
       }),
     },
   ),
+  listQualityScores: (agentName: string) =>
+    request<StudioQualityScore[]>(
+      `agents/${encodeURIComponent(agentName)}/quality/scores`,
+    ),
+  listQualityIncidents: (agentName: string) =>
+    request<StudioQualityIncident[]>(
+      `agents/${encodeURIComponent(agentName)}/quality/incidents`,
+    ),
+  listQualityRules: (agentName: string) =>
+    request<StudioQualityRule[]>(
+      `agents/${encodeURIComponent(agentName)}/quality/rules`,
+    ),
+  getQualityGate: (agentName: string, agentVersion: string) =>
+    request<StudioQualityGate>(
+      `agents/${encodeURIComponent(agentName)}/versions/${encodeURIComponent(agentVersion)}/quality-gate`,
+    ),
   async downloadEvalArtifact(evalRunId: string, artifactId: string): Promise<void> {
     const response = requireAuthenticatedResponse(
       await fetch(

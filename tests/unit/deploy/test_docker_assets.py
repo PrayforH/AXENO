@@ -50,9 +50,10 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert services["api"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
     assert services["web"]["depends_on"]["seed"]["condition"] == "service_completed_successfully"
-    assert "public-opinion-agent/agent.yaml" in services["seed"]["environment"][
-        "HARNESS_SEED_AGENT_MANIFESTS"
-    ]
+    assert (
+        "public-opinion-agent/agent.yaml"
+        in services["seed"]["environment"]["HARNESS_SEED_AGENT_MANIFESTS"]
+    )
     assert services["otel-collector"]["profiles"] == ["observability"]
     assert "postgres-data" in compose()["volumes"]
     assert "redis-data" in compose()["volumes"]
@@ -70,9 +71,7 @@ def test_images_run_as_non_root_and_expose_health_checks() -> None:
     assert "--no-dev" in api
     assert "pypi.tuna.tsinghua.edu.cn" in api
     assert "registry.npmmirror.com" in web
-    assert "output: \"standalone\"" in (
-        ROOT / "web/harness-console/next.config.ts"
-    ).read_text()
+    assert 'output: "standalone"' in (ROOT / "web/harness-console/next.config.ts").read_text()
 
 
 def test_runtime_entrypoints_and_environment_template_exist() -> None:
@@ -140,6 +139,15 @@ def test_observability_profile_scopes_external_langfuse_secrets() -> None:
         )
         assert "LANGFUSE_PUBLIC_KEY" not in service_environment
         assert "LANGFUSE_SECRET_KEY" not in service_environment
+        assert "HARNESS_LANGFUSE_SECRET_KEY" not in service_environment
+    quality_environment = cast(dict[str, Any], services["quality-sync"])["environment"]
+    assert quality_environment["HARNESS_LANGFUSE_PUBLIC_KEY"] == (
+        "${LANGFUSE_PUBLIC_KEY:?set LANGFUSE_PUBLIC_KEY}"
+    )
+    assert quality_environment["HARNESS_LANGFUSE_SECRET_KEY"] == (
+        "${LANGFUSE_SECRET_KEY:?set LANGFUSE_SECRET_KEY}"
+    )
+    assert "HARNESS_NEW_API_KEY" not in quality_environment
 
 
 def test_dockerignore_excludes_secrets_and_build_outputs() -> None:

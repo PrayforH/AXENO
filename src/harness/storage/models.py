@@ -265,6 +265,50 @@ class DeploymentRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class QualityScoreRow(Base):
+    __tablename__ = "quality_scores"
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    score_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), index=True)
+    agent_name: Mapped[str] = mapped_column(String(128), index=True)
+    agent_version: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QualityRuleRow(Base):
+    __tablename__ = "quality_alert_rules"
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QualityIncidentRow(Base):
+    __tablename__ = "quality_alert_incidents"
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), index=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QualitySyncRow(Base):
+    __tablename__ = "quality_sync_jobs"
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sync_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class QualityDatasetRow(Base):
+    __tablename__ = "quality_dataset_projections"
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    projection_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

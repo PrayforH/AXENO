@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
@@ -35,6 +37,16 @@ from harness.evals.models import (
     EvalRunView,
 )
 from harness.evals.service import EvalControlPlaneService
+from harness.quality.models import (
+    AlertIncident,
+    AlertRule,
+    CreateAlertRuleRequest,
+    DatasetProjection,
+    HumanFeedbackRequest,
+    QualityGateResult,
+    QualityScore,
+)
+from harness.quality.service import QualityService
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.models import (
@@ -222,7 +234,112 @@ def get_deployment_controller(request: Request) -> DeploymentController:
     return controller
 
 
+def get_quality_service(request: Request) -> QualityService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "quality", None)
+    if not isinstance(service, QualityService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "quality_not_configured",
+                "message": "Quality control plane is not configured",
+            },
+        )
+    return service
+
+
 router = APIRouter(prefix="/v1/studio", tags=["agent-studio"])
+
+
+@router.get("/agents/{agent_name}/quality/scores", response_model=list[QualityScore])
+async def list_quality_scores(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> list[QualityScore]:
+    return await service.list_scores(actor.tenant_id, agent_name)
+
+
+@router.get("/agents/{agent_name}/quality/incidents", response_model=list[AlertIncident])
+async def list_quality_incidents(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> list[AlertIncident]:
+    return await service.list_incidents(actor.tenant_id, agent_name)
+
+
+@router.get("/agents/{agent_name}/quality/rules", response_model=list[AlertRule])
+async def list_quality_rules(
+    agent_name: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> list[AlertRule]:
+    return await service.list_rules(actor.tenant_id, agent_name)
+
+
+@router.get(
+    "/agents/{agent_name}/versions/{agent_version}/quality-gate", response_model=QualityGateResult
+)
+async def get_quality_gate(
+    agent_name: str,
+    agent_version: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QualityGateResult:
+    return await service.gate(actor.tenant_id, agent_name, agent_version)
+
+
+@router.post("/quality/rules", response_model=AlertRule, status_code=status.HTTP_201_CREATED)
+async def create_quality_rule(
+    body: CreateAlertRuleRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> AlertRule:
+    return await service.add_rule(
+        AlertRule(
+            tenantId=actor.tenant_id,
+            ruleId=f"quality_rule_{uuid4().hex}",
+            agentName=body.agent_name,
+            scoreName=body.score_name,
+            minimumValue=body.minimum_value,
+            minimumSamples=body.minimum_samples,
+            blocksPromotion=body.blocks_promotion,
+            dashboardUrl=body.dashboard_url,
+            createdAt=datetime.now(UTC),
+        )
+    )
+
+
+@router.post(
+    "/runs/{run_id}/feedback", response_model=QualityScore, status_code=status.HTTP_201_CREATED
+)
+async def create_human_feedback(
+    run_id: str,
+    body: HumanFeedbackRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[QualityService, Depends(get_quality_service)],
+) -> QualityScore:
+    return await service.human_feedback(
+        tenant_id=actor.tenant_id, user_id=actor.user_id, run_id=run_id, request=body
+    )
+
+
+@router.post(
+    "/eval-datasets/{dataset_id}/versions/{version}/quality-sync",
+    response_model=DatasetProjection,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def sync_quality_dataset(
+    dataset_id: str,
+    version: int,
+    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    evals: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+    quality: Annotated[QualityService, Depends(get_quality_service)],
+) -> DatasetProjection:
+    return await quality.project_dataset(
+        await evals.get_dataset(actor.tenant_id, dataset_id, version)
+    )
 
 
 @router.get(

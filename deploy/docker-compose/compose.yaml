@@ -206,6 +206,33 @@ services:
       retries: 6
     restart: unless-stopped
 
+  quality-sync:
+    <<: *python-image
+    profiles: ["observability"]
+    entrypoint: []
+    command: ["harness-quality-worker"]
+    environment:
+      HARNESS_ENVIRONMENT: production
+      HARNESS_RUNTIME: claude-sdk
+      HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
+      HARNESS_REDIS_URL: redis://redis:6379/0
+      HARNESS_MINIO_ENDPOINT: minio:9000
+      HARNESS_MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      HARNESS_MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      HARNESS_MINIO_BUCKET: harness-artifacts
+      HARNESS_LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:?set LANGFUSE_BASE_URL}
+      HARNESS_LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?set LANGFUSE_PUBLIC_KEY}
+      HARNESS_LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?set LANGFUSE_SECRET_KEY}
+      HARNESS_LANGFUSE_DASHBOARD_URL: ${LANGFUSE_BASE_URL:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   seed:
     <<: *python-image
     entrypoint: []

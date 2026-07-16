@@ -23,15 +23,32 @@ from harness.observability.redaction import redact
 
 ProcessorFactory = Callable[[SpanExporter], SpanProcessor]
 AttributeValue = str | bool | int | float
+_ATTRIBUTE_PREFIX_ALLOWLIST = (
+    "agent.",
+    "deployment.",
+    "eval.",
+    "gen_ai.",
+    "harness.",
+    "http.",
+    "langfuse.",
+    "run.",
+    "session.",
+    "tenant.",
+)
+_ATTRIBUTE_KEY_ALLOWLIST = frozenset({"input.count", "item.count"})
 
 
 def _safe_attributes(
     attributes: Mapping[str, AttributeValue] | None,
 ) -> dict[str, AttributeValue]:
-    return cast(
-        dict[str, AttributeValue],
-        redact(dict(attributes or {})),
-    )
+    sanitized = cast(dict[str, AttributeValue], redact(dict(attributes or {})))
+    return {
+        key: value
+        for key, value in sanitized.items()
+        if key in _ATTRIBUTE_KEY_ALLOWLIST
+        or key.startswith(_ATTRIBUTE_PREFIX_ALLOWLIST)
+        or value == "[REDACTED]"
+    }
 
 
 class Observability:
@@ -55,15 +72,17 @@ class Observability:
         propagate.inject(carrier)
         return carrier
 
+    def current_trace_id(self) -> str | None:
+        context = get_current_span().get_span_context()
+        return f"{context.trace_id:032x}" if context.is_valid else None
+
     @contextmanager
     def bind_attributes(
         self,
         attributes: Mapping[str, AttributeValue],
     ) -> Generator[None]:
         inherited = self._bound_attributes.get() or {}
-        token = self._bound_attributes.set(
-            {**inherited, **_safe_attributes(attributes)}
-        )
+        token = self._bound_attributes.set({**inherited, **_safe_attributes(attributes)})
         try:
             yield
         finally:

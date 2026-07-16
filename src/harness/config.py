@@ -24,9 +24,7 @@ class Settings(BaseSettings):
     local_auto_execute: bool = False
     api_bearer_token: SecretStr = SecretStr("")
 
-    auth_jwt_secret: SecretStr = SecretStr(
-        "local-development-auth-secret-change-before-production"
-    )
+    auth_jwt_secret: SecretStr = SecretStr("local-development-auth-secret-change-before-production")
     auth_issuer: str = "claude-agent-harness"
     auth_audience: str = "claude-agent-harness-api"
     auth_access_token_minutes: int = Field(default=30, ge=5, le=1440)
@@ -83,3 +81,7 @@ class Settings(BaseSettings):
     otlp_headers: SecretStr = SecretStr("")
     otel_service_name: str = "claude-agent-harness"
     otel_environment: str = ""
+    langfuse_base_url: str = ""
+    langfuse_public_key: str = ""
+    langfuse_secret_key: SecretStr = SecretStr("")
+    langfuse_dashboard_url: str = ""

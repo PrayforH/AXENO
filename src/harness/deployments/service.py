@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -27,6 +27,8 @@ from harness.deployments.repositories import DeploymentRepository, EnvironmentRe
 from harness.evals.service import EvalControlPlaneService
 from harness.studio.preview_service import PreviewService
 
+QualityGate = Callable[[str, str, str], Awaitable[object]]
+
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
@@ -45,6 +47,7 @@ class DeploymentService:
         audit: AuditService | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[str], str] | None = None,
+        quality_gate: QualityGate | None = None,
     ) -> None:
         self._environments = environments
         self._deployments = deployments
@@ -55,6 +58,7 @@ class DeploymentService:
         self._audit = audit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ids = id_generator or _id
+        self._quality_gate = quality_gate
 
     async def environment(
         self, tenant_id: str, agent_name: str, name: EnvironmentName
@@ -100,6 +104,8 @@ class DeploymentService:
         gate = await self._evals.require_promotion_allowed(
             tenant_id, request.agent_name, request.agent_version
         )
+        if self._quality_gate is not None:
+            await self._quality_gate(tenant_id, request.agent_name, request.agent_version)
         if request.preview_id:
             if self._previews is None:
                 raise ConflictError("Preview verification is unavailable")

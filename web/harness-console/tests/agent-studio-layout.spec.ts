@@ -113,6 +113,10 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("每个 Case 使用独立 Session");
     expect(workbench).toContain("downloadEvalArtifact");
     expect(workbench).toContain("线上质量监控");
+    expect(workbench).toContain("规则 Score、人工反馈与 Alert");
+    expect(workbench).toContain("外部同步失败独立重试");
+    expect(workbench).toContain("studioClient.getQualityGate");
+    expect(workbench).toContain("查看 Dashboard");
     expect(workbench).toContain("环境指针、灰度与可验证回滚");
     expect(workbench).toContain("新 Session 解析当前路由");
     expect(workbench).toContain("studioClient.promoteDeployment");
@@ -126,6 +130,7 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".studioStateShell");
     expect(styles).toContain(".deploymentControlPlane");
     expect(styles).toContain(".environmentGrid");
+    expect(styles).toContain(".qualityControlPlane");
   });
 
   it("creates a hash-bound Preview and renders real Preflight facts", () => {

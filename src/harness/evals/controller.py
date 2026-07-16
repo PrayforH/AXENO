@@ -240,6 +240,8 @@ class EvalController:
             input={
                 "prompt": prompt,
                 "input_artifact_ids": list(current.active_input_artifact_ids),
+                "eval_run_id": current.eval_run_id,
+                "eval_case_id": case_id,
             },
         )
         return await self._replace(current, active_run_id=child.run_id)

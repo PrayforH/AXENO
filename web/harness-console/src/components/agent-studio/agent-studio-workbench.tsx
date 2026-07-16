@@ -26,6 +26,10 @@ import {
   type StudioEvalRun,
   type StudioPreflightCheck,
   type StudioPreview,
+  type StudioQualityGate,
+  type StudioQualityIncident,
+  type StudioQualityRule,
+  type StudioQualityScore,
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
@@ -75,7 +79,11 @@ function preflightProgress(checks: StudioPreflightCheck[]) {
 
 export function AgentStudioWorkbench() {
   const { membership } = useAuth();
-  const [draft, setDraft] = useState<StudioDraft>(DEFAULT_STUDIO_DRAFT);
+  const [draft, setDraft] = useState<StudioDraft>({
+    ...DEFAULT_STUDIO_DRAFT,
+    id: "",
+    revision: 0,
+  });
   const [drafts, setDrafts] = useState<StudioDraftSummary[]>([]);
   const [capabilities, setCapabilities] = useState<StudioCapabilities | null>(null);
   const [loading, setLoading] = useState(true);
@@ -92,6 +100,10 @@ export function AgentStudioWorkbench() {
   const [deployments, setDeployments] = useState<StudioDeployment[]>([]);
   const [deploymentSnapshots, setDeploymentSnapshots] = useState<StudioDeploymentSnapshot[]>([]);
   const [deploymentAction, setDeploymentAction] = useState("");
+  const [qualityScores, setQualityScores] = useState<StudioQualityScore[]>([]);
+  const [qualityIncidents, setQualityIncidents] = useState<StudioQualityIncident[]>([]);
+  const [qualityRules, setQualityRules] = useState<StudioQualityRule[]>([]);
+  const [qualityGate, setQualityGate] = useState<StudioQualityGate | null>(null);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [versionConflict, setVersionConflict] = useState(false);
@@ -617,6 +629,12 @@ export function AgentStudioWorkbench() {
   const activeDeployment = deployments.find((item) =>
     ["queued", "reconciling"].includes(item.deployment.status),
   );
+  const latestQualityScores = Array.from(
+    new Map(qualityScores.map((score) => [score.name, score])).values(),
+  );
+  const openQualityIncidents = qualityIncidents.filter(
+    (incident) => incident.state === "open",
+  );
   const deployedCurrent = environments.some((environment) =>
     environment.routes.some((route) =>
       snapshotById.get(route.snapshotId)?.agentVersion === draft.publishedVersion,
@@ -722,6 +740,32 @@ export function AgentStudioWorkbench() {
     }, 1500);
     return () => window.clearTimeout(timer);
   }, [activeDeployment?.deployment.deploymentId, activeDeployment?.deployment.status]);
+
+  useEffect(() => {
+    if (!draft.id || !draft.name || !draft.publishedVersion) {
+      setQualityScores([]);
+      setQualityIncidents([]);
+      setQualityRules([]);
+      setQualityGate(null);
+      return;
+    }
+    let active = true;
+    void Promise.all([
+      studioClient.listQualityScores(draft.name),
+      studioClient.listQualityIncidents(draft.name),
+      studioClient.listQualityRules(draft.name),
+      studioClient.getQualityGate(draft.name, draft.publishedVersion),
+    ]).then(([scores, incidents, rules, gate]) => {
+      if (!active) return;
+      setQualityScores(scores);
+      setQualityIncidents(incidents);
+      setQualityRules(rules);
+      setQualityGate(gate);
+    }).catch(() => {
+      if (active) setQualityGate(null);
+    });
+    return () => { active = false; };
+  }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
     return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
@@ -1626,6 +1670,52 @@ export function AgentStudioWorkbench() {
                     </details>
                   )}
                 </section>
+                <section className={styles.qualityControlPlane} aria-label="线上质量与告警">
+                  <header>
+                    <div>
+                      <span>ONLINE QUALITY</span>
+                      <strong>规则 Score、人工反馈与 Alert</strong>
+                      <small>Run 终态不依赖 Langfuse；外部同步失败独立重试，Promotion 只读取本地耐久门禁。</small>
+                    </div>
+                    <em data-state={qualityGate?.passed === false ? "blocked" : "ready"}>
+                      {qualityGate?.passed === false
+                        ? `${qualityGate.blockingIncidentIds.length} 个阻断告警`
+                        : "质量门禁通过"}
+                    </em>
+                  </header>
+                  <div className={styles.qualityScoreGrid}>
+                    {latestQualityScores.slice(0, 6).map((score) => (
+                      <article key={score.scoreId} data-value={score.value < 0.8 ? "low" : "ok"}>
+                        <span>{score.source}</span>
+                        <strong>{score.name.replaceAll("_", " ")}</strong>
+                        <code>{score.value.toFixed(2)}</code>
+                        <small>{score.agentVersion} · Run {score.runId.slice(-8)}</small>
+                      </article>
+                    ))}
+                    {latestQualityScores.length === 0 && (
+                      <p>版本部署并产生 Run 后，将在此显示终态、工具、审批、时长、成本和 Artifact Score。</p>
+                    )}
+                  </div>
+                  {openQualityIncidents.length > 0 && (
+                    <div className={styles.qualityAlerts}>
+                      {openQualityIncidents.map((incident) => {
+                        const rule = qualityRules.find((item) => item.ruleId === incident.ruleId);
+                        return (
+                          <article key={incident.incidentId}>
+                            <span>ALERT</span>
+                            <div>
+                              <strong>{rule?.scoreName ?? incident.ruleId} · {incident.observedValue.toFixed(2)}</strong>
+                              <small>{incident.sampleCount} 个样本 · {rule?.blocksPromotion ? "阻断晋级" : "仅告警"}</small>
+                            </div>
+                            {rule?.dashboardUrl && (
+                              <a href={rule.dashboardUrl} target="_blank" rel="noreferrer">查看 Dashboard</a>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
                 <div className={styles.releaseGate}>
                   <div>
                     <span>本地结构门禁</span>
@@ -1645,7 +1735,13 @@ export function AgentStudioWorkbench() {
                   </div>
                   <div>
                     <span>线上质量监控</span>
-                    <strong>G11 接入 Langfuse Score / Alert</strong>
+                    <strong>
+                      {qualityGate
+                        ? qualityGate.passed
+                          ? "规则 / 人工 Score 无阻断告警"
+                          : `${qualityGate.blockingIncidentIds.length} 个 Alert 阻断晋级`
+                        : "等待版本运行样本"}
+                    </strong>
                   </div>
                 </div>
                 <div className={styles.releaseArchitecture} aria-label="发布架构">

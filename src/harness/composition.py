@@ -39,6 +39,10 @@ from harness.inputs.processors import DefaultInputProcessor
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
+from harness.quality.controller import QualitySyncController
+from harness.quality.langfuse import DisabledQualityExporter, LangfuseQualityExporter
+from harness.quality.queue import QualityTaskQueue
+from harness.quality.service import QualityService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     default_tool_resolver,
@@ -75,6 +79,7 @@ from harness.storage.platform_repositories import (
     PostgresWorkspaceSnapshotRepository,
 )
 from harness.storage.preview_repository import PostgresPreviewRepository
+from harness.storage.quality_repository import PostgresQualityRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
@@ -226,6 +231,7 @@ def build_production_container(
     eval_run_repository = PostgresEvalRunRepository(sessions)
     environment_repository = PostgresEnvironmentRepository(sessions)
     deployment_repository = PostgresDeploymentRepository(sessions)
+    quality_repository = PostgresQualityRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
@@ -293,6 +299,11 @@ def build_production_container(
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
     )
     deployment_queue = DeploymentTaskQueue.redis(
+        redis_client,
+        visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
+        retry_delay_seconds=settings.worker_task_retry_delay_seconds,
+    )
+    quality_queue = QualityTaskQueue.redis(
         redis_client,
         visibility_timeout_seconds=settings.worker_task_visibility_timeout_seconds,
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
@@ -369,6 +380,31 @@ def build_production_container(
         object_store=store,
         clock=clock,
     )
+    quality_service = QualityService(
+        repository=quality_repository,
+        queue=quality_queue,
+        runs=runs,
+        sessions=session_repository,
+        events=event_repository,
+        artifacts=artifact_repository,
+        clock=clock,
+    )
+    quality_exporter = (
+        LangfuseQualityExporter(
+            base_url=settings.langfuse_base_url,
+            public_key=settings.langfuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+        )
+        if settings.langfuse_base_url
+        and settings.langfuse_public_key
+        and settings.langfuse_secret_key.get_secret_value()
+        else DisabledQualityExporter()
+    )
+    quality_controller = QualitySyncController(
+        repository=quality_repository,
+        queue=quality_queue,
+        exporter=quality_exporter,
+    )
     deployment_service = DeploymentService(
         environments=environment_repository,
         deployments=deployment_repository,
@@ -379,6 +415,7 @@ def build_production_container(
         audit=audit,
         clock=clock,
         id_generator=ids,
+        quality_gate=quality_service.require_promotion_allowed,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
@@ -495,6 +532,7 @@ def build_production_container(
         runtime_asset_stager=stage_runtime_assets if execution_enabled else None,
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=settings.output_artifact_max_bytes,
+        quality_hook=quality_service.record_terminal_run,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -536,6 +574,9 @@ def build_production_container(
         deployment_repository=deployment_repository,
         deployments=deployment_service,
         deployment_controller=deployment_controller,
+        quality_repository=quality_repository,
+        quality=quality_service,
+        quality_controller=quality_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

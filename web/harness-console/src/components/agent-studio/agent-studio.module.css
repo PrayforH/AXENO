@@ -2200,6 +2200,156 @@
   background: var(--studio-line);
 }
 
+.qualityControlPlane {
+  margin-top: 18px;
+  overflow: hidden;
+  border: 1px solid var(--studio-line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.qualityControlPlane > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--studio-line);
+  background: #fafbfa;
+}
+
+.qualityControlPlane > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.qualityControlPlane > header span {
+  color: var(--studio-violet);
+  font: 700 8px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+}
+
+.qualityControlPlane > header strong {
+  font-size: 11px;
+}
+
+.qualityControlPlane > header small,
+.qualityControlPlane > header em {
+  color: var(--studio-muted);
+  font-size: 9px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.qualityControlPlane > header em {
+  flex: none;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #edf5f1;
+  color: #356d59;
+}
+
+.qualityControlPlane > header em[data-state="blocked"] {
+  background: #f7e9e7;
+  color: #9a4b44;
+}
+
+.qualityScoreGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--studio-line);
+}
+
+.qualityScoreGrid article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.qualityScoreGrid article > span,
+.qualityScoreGrid article > small {
+  color: var(--studio-muted);
+  font-size: 8px;
+}
+
+.qualityScoreGrid article > strong {
+  overflow: hidden;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qualityScoreGrid article > code {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  color: #2e7058;
+  font: 700 16px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.qualityScoreGrid article[data-value="low"] > code {
+  color: #a24d45;
+}
+
+.qualityScoreGrid article > small {
+  grid-column: 1 / -1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.qualityScoreGrid > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 18px;
+  background: #fff;
+  color: var(--studio-muted);
+  font-size: 9px;
+}
+
+.qualityAlerts {
+  display: grid;
+  gap: 1px;
+  border-top: 1px solid var(--studio-line);
+  background: var(--studio-line);
+}
+
+.qualityAlerts article {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.qualityAlerts article > span {
+  color: #a24d45;
+  font: 700 8px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.qualityAlerts article > div {
+  display: grid;
+  gap: 3px;
+}
+
+.qualityAlerts strong {
+  font-size: 9px;
+}
+
+.qualityAlerts small,
+.qualityAlerts a {
+  color: var(--studio-muted);
+  font-size: 8px;
+}
+
+.qualityAlerts a {
+  color: #356d59;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .releaseGate div {
   min-height: 82px;
   display: grid;
@@ -2900,6 +3050,7 @@
   .releaseGate,
   .releaseArchitecture,
   .environmentGrid,
+  .qualityScoreGrid,
   .orchestrationSummary,
   .runtimeAssurances,
   .capabilitySpine {
@@ -3010,6 +3161,11 @@
   }
 
   .deploymentControlPlane > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .qualityControlPlane > header {
     align-items: flex-start;
     flex-direction: column;
   }
