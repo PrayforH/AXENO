@@ -108,6 +108,7 @@ function SettingsContent() {
           <p>设置</p>
           <a href="#profile">个人资料</a>
           <a href="#security">账户安全</a>
+          <a href="#data">我的数据</a>
           <a href="#session">登录会话</a>
         </aside>
 
@@ -165,6 +166,17 @@ function SettingsContent() {
                 <p>请在 Google 或 GitHub 中管理密码。本系统不会直接保存第三方账户密码。</p>
               </div>
             )}
+          </section>
+
+          <section className="settings-section" id="data">
+            <div className="settings-section-copy">
+              <h2>我的数据</h2>
+              <p>导出或删除当前用户在 Harness 中产生的会话、文件、记忆与观测数据。</p>
+            </div>
+            <div className="settings-form settings-session">
+              <div><span className="settings-session-dot" aria-hidden="true" /><span><strong>数据生命周期</strong><small>删除操作会先检查 Legal Hold，再按外部系统逐项执行。</small></span></div>
+              <a href="/studio/data">管理我的数据</a>
+            </div>
           </section>
 
           <section className="settings-section" id="session">

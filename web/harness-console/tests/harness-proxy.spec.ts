@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   proxyAguiRequest,
+  proxyDataLifecycleRequest,
   proxyInputArtifactRequest,
   proxyStudioRequest,
 } from "../src/lib/harness-proxy";
@@ -172,5 +173,29 @@ describe("Harness same-origin proxies", () => {
     expect(response.headers.get("Content-Disposition")).toContain("agent-0.1.0.zip");
     expect(response.headers.get("ETag")).toBe('"archive-hash"');
     expect(response.headers.get("X-Agent-Package-SHA256")).toBe("package-hash");
+  });
+
+  it("preserves lifecycle export filenames through the authenticated BFF", async () => {
+    let upstreamUrl = "";
+    const response = await proxyDataLifecycleRequest(
+      new Request("http://console.test/api/data-lifecycle/jobs/job-1/artifact", {
+        headers: { Cookie: "harness_access_token=user-jwt" },
+      }),
+      config,
+      async (input) => {
+        upstreamUrl = String(input);
+        return new Response("zip", {
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": "attachment; filename*=UTF-8''data-export.zip",
+          },
+        });
+      },
+      "jobs/job-1/artifact",
+    );
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/v1/data-lifecycle/jobs/job-1/artifact",
+    );
+    expect(response.headers.get("Content-Disposition")).toContain("data-export.zip");
   });
 });

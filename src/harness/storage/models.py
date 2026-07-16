@@ -373,6 +373,49 @@ class UsageLedgerRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class RetentionPolicyRow(Base):
+    __tablename__ = "retention_policies"
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class LegalHoldRow(Base):
+    __tablename__ = "legal_holds"
+    __table_args__ = (Index("ix_legal_holds_tenant_active", "tenant_id", "active"),)
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    hold_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    active: Mapped[bool] = mapped_column(Boolean)
+    scope_kind: Mapped[str] = mapped_column(String(32))
+    subject_id: Mapped[str] = mapped_column(String(256))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class DataLifecycleJobRow(Base):
+    __tablename__ = "data_lifecycle_jobs"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "idempotency_key",
+            name="uq_data_lifecycle_job_idempotency",
+        ),
+        Index("ix_data_lifecycle_jobs_status", "status", "created_at"),
+        Index("ix_data_lifecycle_jobs_tenant_created", "tenant_id", "created_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32))
+    fencing_token: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

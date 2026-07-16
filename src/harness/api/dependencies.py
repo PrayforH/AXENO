@@ -69,6 +69,11 @@ from harness.evals.repositories import (
 )
 from harness.evals.service import EvalControlPlaneService
 from harness.inputs.processors import DefaultInputProcessor
+from harness.lifecycle.adapters import EmptyLifecycleAdapter
+from harness.lifecycle.controller import DataLifecycleController
+from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
+from harness.lifecycle.repositories import InMemoryDataLifecycleRepository
+from harness.lifecycle.service import DataLifecycleService
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
@@ -153,6 +158,8 @@ class ApiContainer:
     quality: QualityService
     quality_controller: QualitySyncController
     quotas: QuotaService
+    lifecycle: DataLifecycleService
+    lifecycle_controller: DataLifecycleController
     agents: AgentService
     sessions: SessionService
     runs: RunService
@@ -235,6 +242,40 @@ def build_memory_container(
         audit=audit,
         clock=clock,
         id_generator=id_generator,
+    )
+    lifecycle_repository = InMemoryDataLifecycleRepository()
+    lifecycle_adapters = tuple(
+        EmptyLifecycleAdapter(name)
+        for name in ("object-store", "sdk-session", "memory", "langfuse", "postgresql")
+    )
+
+    async def lifecycle_scopes(
+        tenant_id: str, scope: LifecycleScope
+    ) -> tuple[LifecycleScope, ...]:
+        if scope.kind is not LifecycleScopeKind.SESSION:
+            return (scope,)
+        session = await sessions.get(tenant_id, scope.subject_id)
+        return (
+            scope,
+            LifecycleScope(kind=LifecycleScopeKind.USER, subjectId=session.user_id),
+            LifecycleScope(kind=LifecycleScopeKind.AGENT, subjectId=session.agent_name),
+        )
+
+    lifecycle = DataLifecycleService(
+        lifecycle_repository,
+        lifecycle_adapters,
+        export_store=artifact_store,
+        scope_resolver=lifecycle_scopes,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    lifecycle_controller = DataLifecycleController(
+        lifecycle_repository,
+        lifecycle_adapters,
+        artifact_store,
+        scope_resolver=lifecycle_scopes,
+        clock=clock,
     )
 
     agent_service = AgentService(registry, clock=clock, environment=resolved_settings.environment)
@@ -583,6 +624,8 @@ def build_memory_container(
         quality=quality_service,
         quality_controller=quality_controller,
         quotas=quotas,
+        lifecycle=lifecycle,
+        lifecycle_controller=lifecycle_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
@@ -665,6 +708,8 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:deploy",
             "studio:catalog:write",
             "studio:quota:write",
+            "data:lifecycle:admin",
+            "data:lifecycle:self",
         }
     ),
     "member": frozenset(
@@ -674,9 +719,10 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:read",
             "studio:write",
             "studio:preview",
+            "data:lifecycle:self",
         }
     ),
-    "viewer": frozenset({"tasks:read", "studio:read"}),
+    "viewer": frozenset({"tasks:read", "studio:read", "data:lifecycle:self"}),
 }
 
 

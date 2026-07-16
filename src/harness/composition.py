@@ -44,6 +44,10 @@ from harness.execution.credentials import (
     InMemoryCredentialBroker,
 )
 from harness.inputs.processors import DefaultInputProcessor
+from harness.lifecycle.adapters import EmptyLifecycleAdapter, LifecycleAdapter
+from harness.lifecycle.controller import DataLifecycleController
+from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
+from harness.lifecycle.service import DataLifecycleService
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine
@@ -78,6 +82,14 @@ from harness.storage.eval_repository import (
     PostgresEvalDatasetRepository,
     PostgresEvalRunRepository,
 )
+from harness.storage.lifecycle_adapters import (
+    LangfuseLifecycleAdapter,
+    MemoryLifecycleAdapter,
+    ObjectStoreLifecycleAdapter,
+    PostgresLifecycleAdapter,
+    SdkSessionLifecycleAdapter,
+)
+from harness.storage.lifecycle_repository import PostgresDataLifecycleRepository
 from harness.storage.minio import MinioArtifactStore
 from harness.storage.platform_repositories import (
     PostgresAgentRegistry,
@@ -372,6 +384,56 @@ def build_production_container(
         audit=audit,
         clock=clock,
         id_generator=ids,
+    )
+    lifecycle_repository = PostgresDataLifecycleRepository(sessions)
+    lifecycle_adapters: tuple[LifecycleAdapter, ...] = (
+        ObjectStoreLifecycleAdapter(sessions, store),
+        SdkSessionLifecycleAdapter(sessions),
+        MemoryLifecycleAdapter(sessions),
+        (
+            LangfuseLifecycleAdapter(
+                sessions,
+                base_url=settings.langfuse_base_url,
+                public_key=settings.langfuse_public_key,
+                secret_key=settings.langfuse_secret_key,
+            )
+            if settings.langfuse_base_url
+            and settings.langfuse_public_key
+            and settings.langfuse_secret_key.get_secret_value()
+            else EmptyLifecycleAdapter("langfuse")
+        ),
+        # PostgreSQL must remain last: it contains the indexes required to
+        # identify external data during an eventually-consistent retry.
+        PostgresLifecycleAdapter(sessions),
+    )
+
+    async def lifecycle_scopes(
+        tenant_id: str, scope: LifecycleScope
+    ) -> tuple[LifecycleScope, ...]:
+        if scope.kind is not LifecycleScopeKind.SESSION:
+            return (scope,)
+        session = await session_repository.get(tenant_id, scope.subject_id)
+        return (
+            scope,
+            LifecycleScope(kind=LifecycleScopeKind.USER, subjectId=session.user_id),
+            LifecycleScope(kind=LifecycleScopeKind.AGENT, subjectId=session.agent_name),
+        )
+
+    lifecycle = DataLifecycleService(
+        lifecycle_repository,
+        lifecycle_adapters,
+        export_store=store,
+        scope_resolver=lifecycle_scopes,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
+    lifecycle_controller = DataLifecycleController(
+        lifecycle_repository,
+        lifecycle_adapters,
+        store,
+        scope_resolver=lifecycle_scopes,
+        clock=clock,
     )
 
     agent_service = AgentService(registry, clock=clock, environment="production")
@@ -744,6 +806,8 @@ def build_production_container(
         quality=quality_service,
         quality_controller=quality_controller,
         quotas=quotas,
+        lifecycle=lifecycle,
+        lifecycle_controller=lifecycle_controller,
         agents=agent_service,
         sessions=session_service,
         runs=run_service,

@@ -18,6 +18,7 @@ from harness.api.routes import agents, approvals, artifacts, auth, input_artifac
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
+from harness.lifecycle import api as lifecycle_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.studio import api as studio_routes
 
@@ -201,6 +202,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         approvals.router,
         artifacts.router,
         input_artifacts.router,
+        lifecycle_routes.router,
         agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")

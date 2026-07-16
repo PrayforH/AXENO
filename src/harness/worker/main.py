@@ -148,6 +148,10 @@ async def serve(settings: Settings) -> None:
         async def deployment_maintenance() -> None:
             await container.deployment_controller.process_once()
 
+        async def lifecycle_maintenance() -> None:
+            await container.lifecycle.enqueue_due_retention_jobs()
+            await container.lifecycle_controller.process_once()
+
         control_tasks = [
             asyncio.create_task(
                 maintenance_loop(
@@ -171,6 +175,14 @@ async def serve(settings: Settings) -> None:
                     stop=stop,
                     poll_interval=settings.worker_poll_interval_seconds,
                     label="deployment",
+                )
+            ),
+            asyncio.create_task(
+                maintenance_loop(
+                    lifecycle_maintenance,
+                    stop=stop,
+                    poll_interval=settings.worker_poll_interval_seconds,
+                    label="data-lifecycle",
                 )
             ),
         ]

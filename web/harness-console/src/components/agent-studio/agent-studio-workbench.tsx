@@ -803,6 +803,9 @@ export function AgentStudioWorkbench() {
           <Link className={styles.workspaceTab} href="/studio/usage">
             用量
           </Link>
+          <Link className={styles.workspaceTab} href="/studio/data">
+            数据
+          </Link>
         </nav>
 
         <div className={styles.railHeading}>
