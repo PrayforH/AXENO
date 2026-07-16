@@ -26,7 +26,7 @@ cd web/harness-console && npm ci --registry=https://registry.npmmirror.com && cd
 make dev-up
 ```
 
-平台完整架构、Agent Studio、Lead + Sub、多层记忆、安全、评测、发布和分阶段路线见 [docs/agent-production-platform-design.md](docs/agent-production-platform-design.md)，可直接交给 Codex/Claude 执行的目标树和循环见 [docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md](docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md)。领域 Agent 的 prompt、Skill、Python Tool、外部 MCP、权限、bundle 发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)，上线检查和回滚见 [docs/production-agent-runbook.md](docs/production-agent-runbook.md)。仓库中的 `public-opinion-agent` 是可运行的编排型参考实现。
+平台完整架构、Agent Studio、Lead + Sub、多层记忆、安全、评测、发布和分阶段路线见 [docs/agent-production-platform-design.md](docs/agent-production-platform-design.md)，可直接交给 Codex/Claude 执行的目标树和循环见 [docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md](docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md)。领域 Agent 的 prompt、Skill、Python Tool、外部 MCP、权限、bundle 发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)，单 Agent 上线检查见 [docs/production-agent-runbook.md](docs/production-agent-runbook.md)，平台构建一次、签名、环境晋级和回滚见 [docs/runbooks/release-promotion.md](docs/runbooks/release-promotion.md)。仓库中的 `public-opinion-agent` 是可运行的编排型参考实现。
 
 生产形态 Docker Compose（API、Worker、Web、PostgreSQL、Redis、MinIO、migration、可选 Langfuse Collector）见 [docs/deployment.md](docs/deployment.md)。构建默认使用清华 PyPI 与 npmmirror，可通过 `.env.docker` 覆盖：
 

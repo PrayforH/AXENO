@@ -1,9 +1,17 @@
 name: verify
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
@@ -32,12 +40,12 @@ jobs:
           --health-timeout 3s
           --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           version: "0.11.28"
           enable-cache: true
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - run: uv sync --frozen --group dev
@@ -64,7 +72,22 @@ jobs:
           docker run --rm --network host --entrypoint /bin/sh \
             minio/mc:RELEASE.2025-04-16T18-13-26Z \
             -c 'mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc mb --ignore-existing local/harness-artifacts'
-      - run: make verify
+      - name: Verify single migration head and reversible latest revision
+        run: |
+          set -euo pipefail
+          test "$(uv run alembic heads | grep -c '(head)')" = "1"
+          uv run alembic upgrade head
+          uv run alembic downgrade -1
+          uv run alembic upgrade head
+      - name: Lint, type, package determinism, and full Python suite
+        run: make verify
+      - name: Deterministic runtime smoke and Eval/deployment gates
+        run: |
+          uv run python scripts/e2e_fake_runtime.py
+          uv run pytest -q \
+            tests/unit/evals \
+            tests/unit/deployments/test_lifecycle.py \
+            tests/integration/api/test_agent_studio_api.py
 
   web:
     runs-on: ubuntu-latest
@@ -72,8 +95,8 @@ jobs:
       run:
         working-directory: web/harness-console
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           cache: npm
@@ -82,3 +105,35 @@ jobs:
       - run: npm ci --registry=https://registry.npmmirror.com
       - run: npm test
       - run: npm run build
+
+  container-security:
+    needs: [backend, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Build the three production images without pushing
+        run: |
+          set -euo pipefail
+          docker build -f deploy/docker/api.Dockerfile -t harness-api:ci .
+          docker build -f deploy/docker/web.Dockerfile -t harness-web:ci .
+          docker build -f deploy/docker/sandbox.Dockerfile -t harness-sandbox:ci .
+      - name: Verify the scanner and block HIGH/CRITICAL vulnerabilities
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.69.2
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp '^https://github.com/aquasecurity/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "$TRIVY_IMAGE" >/dev/null
+          for image in harness-api:ci harness-web:ci harness-sandbox:ci; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              "$TRIVY_IMAGE" image --scanners vuln --ignore-unfixed \
+              --severity HIGH,CRITICAL --exit-code 1 "$image"
+          done
+          docker run --rm -v "$PWD:/workspace" -w /workspace \
+            "$TRIVY_IMAGE" fs --scanners secret,misconfig \
+            --severity HIGH,CRITICAL --exit-code 1 .

@@ -1,4 +1,4 @@
-.PHONY: install test lint typecheck agent-check agent-pack verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e smoke-daytona
+.PHONY: install test lint typecheck agent-check agent-pack agent-determinism readiness verify dev-up dev-up-cc-switch dev-down migrate e2e web-test web-build docker-config docker-build docker-up docker-up-observability docker-down docker-e2e smoke-daytona
 
 DOCKER_COMPOSE = docker compose --env-file deploy/docker-compose/.env.docker -f deploy/docker-compose/compose.yaml
 
@@ -20,7 +20,13 @@ agent-check:
 agent-pack:
 	uv run python scripts/check_agent_packages.py --output dist/agents
 
-verify: lint typecheck agent-check test
+agent-determinism:
+	uv run python scripts/verify_agent_determinism.py
+
+readiness:
+	uv run python scripts/final_readiness.py
+
+verify: lint typecheck agent-check agent-determinism readiness test
 
 dev-up:
 	bash scripts/dev_up.sh
