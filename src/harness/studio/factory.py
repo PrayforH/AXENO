@@ -9,6 +9,7 @@ from harness.studio.models import (
     DraftLimits,
     DraftModelSelection,
     DraftSkill,
+    DraftSubagent,
 )
 
 
@@ -122,7 +123,7 @@ def create_draft_spec(
     tools: tuple[str, ...]
     policy: str
     limits: DraftLimits
-    subagents: tuple[str, ...] = ()
+    subagents: tuple[DraftSubagent, ...] = ()
     if template is AgentTemplate.OPERATOR:
         tools = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
         policy = "production-standard"
@@ -131,7 +132,25 @@ def create_draft_spec(
         tools = ("Read", "Glob", "Grep", "Task")
         policy = "production-orchestrator"
         limits = DraftLimits(maxTurns=24, timeoutSeconds=1800, maxBudgetUsd=2)
-        subagents = ("helper-agent@1.0.0",)
+        subagents = (
+            DraftSubagent(
+                alias="evidence-researcher",
+                ref="helper-agent@1.0.0",
+                responsibility="并行收集证据、标记来源并返回可核验事实。",
+                background=True,
+            ),
+            DraftSubagent(
+                alias="risk-reviewer",
+                ref="helper-agent@1.0.0",
+                responsibility="独立挑战关键判断，识别反例、风险和未解决的不确定性。",
+                background=True,
+            ),
+            DraftSubagent(
+                alias="quality-reviewer",
+                ref="helper-agent@1.0.0",
+                responsibility="在交付前核验输出契约、证据覆盖和禁止事项。",
+            ),
+        )
     else:
         tools = ("Read", "Glob", "Grep")
         policy = "production-read-only"

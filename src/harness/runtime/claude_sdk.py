@@ -237,9 +237,14 @@ class ClaudeSdkRuntime:
             mcp_servers["harness-artifacts"] = create_artifact_mcp_server()
             allowed_tools.append("mcp__harness-artifacts__publish_artifact")
         agents: dict[str, AgentDefinition] = {}
+        subagent_bindings = {
+            subagent.runtime_name: subagent
+            for subagent in manifest.spec.subagents
+        }
         for name in self._subagent_versions:
             snapshot = subagent_snapshots[name]
             subagent_manifest = snapshot.manifest
+            binding = subagent_bindings.get(name)
             if any(tool.builtin is None for tool in subagent_manifest.spec.tools):
                 raise ToolResolutionError(
                     f"subagent custom tools are not supported: {name}"
@@ -250,12 +255,17 @@ class ClaudeSdkRuntime:
                 if tool.builtin is not None
             ]
             agents[name] = AgentDefinition(
-                description=f"Delegated {name} agent",
+                description=(
+                    binding.description
+                    if binding is not None and binding.description is not None
+                    else f"Delegated {name} agent"
+                ),
                 prompt=snapshot.system_prompt,
                 tools=subagent_tools,
                 model="inherit",
                 maxTurns=subagent_manifest.spec.limits.max_turns,
                 skills=[skill.name for skill in snapshot.skill_snapshots] or None,
+                background=binding.background if binding is not None else False,
             )
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
         options = ClaudeAgentOptions(

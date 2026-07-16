@@ -58,6 +58,17 @@ class ToolSpec(ManifestModel):
 
 class SubagentSpec(ManifestModel):
     ref: str = Field(min_length=1)
+    alias: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9-]*$",
+    )
+    description: str | None = Field(default=None, min_length=1, max_length=500)
+    background: bool = False
+
+    @property
+    def runtime_name(self) -> str:
+        package_name, separator, _version = self.ref.rpartition("@")
+        return self.alias or (package_name if separator else self.ref)
 
 
 class HookSpec(ManifestModel):
@@ -91,6 +102,18 @@ class AgentSpec(ManifestModel):
     permissions: PermissionSpec
     workspace: WorkspaceSpec = WorkspaceSpec()
     limits: LimitSpec = LimitSpec()
+
+    @model_validator(mode="after")
+    def unique_subagent_runtime_names(self) -> AgentSpec:
+        runtime_names = [subagent.runtime_name for subagent in self.subagents]
+        duplicates = sorted(
+            {name for name in runtime_names if runtime_names.count(name) > 1}
+        )
+        if duplicates:
+            raise ValueError(
+                "duplicate subagent runtime name: " + ", ".join(duplicates)
+            )
+        return self
 
 
 class AgentManifest(ManifestModel):

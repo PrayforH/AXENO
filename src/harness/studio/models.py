@@ -92,6 +92,13 @@ class DraftLimits(StudioModel):
     max_budget_usd: float = Field(default=1, alias="maxBudgetUsd", gt=0)
 
 
+class DraftSubagent(StudioModel):
+    alias: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
+    ref: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*@[^@]+$")
+    responsibility: str = Field(min_length=1, max_length=500)
+    background: bool = False
+
+
 class AgentDraftSpec(StudioModel):
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     version: str = Field(default="0.1.0", min_length=1)
@@ -104,7 +111,7 @@ class AgentDraftSpec(StudioModel):
     skills: tuple[DraftSkill, ...] = Field(min_length=1)
     builtin_tools: tuple[str, ...] = Field(default=(), alias="builtinTools")
     mcp_servers: tuple[str, ...] = Field(default=(), alias="mcpServers")
-    subagents: tuple[str, ...] = ()
+    subagents: tuple[DraftSubagent, ...] = ()
     permission_policy: str = Field(alias="permissionPolicy", min_length=1)
     workspace: DraftWorkspace = DraftWorkspace()
     limits: DraftLimits = DraftLimits()
@@ -117,11 +124,18 @@ class AgentDraftSpec(StudioModel):
         for label, values in (
             ("builtin tool", self.builtin_tools),
             ("MCP server", self.mcp_servers),
-            ("subagent", self.subagents),
         ):
             duplicates = sorted({value for value in values if values.count(value) > 1})
             if duplicates:
                 raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
+        aliases = [subagent.alias for subagent in self.subagents]
+        duplicate_aliases = sorted(
+            {alias for alias in aliases if aliases.count(alias) > 1}
+        )
+        if duplicate_aliases:
+            raise ValueError(
+                f"duplicate subagent alias: {', '.join(duplicate_aliases)}"
+            )
         skill_names = [skill.name for skill in self.skills]
         duplicate_skills = sorted(
             {name for name in skill_names if skill_names.count(name) > 1}

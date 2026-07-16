@@ -126,9 +126,20 @@ tools:
   - builtin: Task
 subagents:
   - ref: helper-agent@1.0.0
+    alias: evidence-researcher
+    description: 收集证据并返回带来源的事实，不负责最终结论。
+    background: true
+  - ref: helper-agent@1.0.0
+    alias: risk-reviewer
+    description: 独立挑战关键判断并标记反例与不确定性。
+    background: true
 ```
 
-子 Agent 必须固定版本；生产禁止 `latest`。适合委派可独立验收的检索、归纳或专业审查，不适合为了“看起来像多智能体”拆分简单流程。
+子 Agent 必须固定版本；生产禁止 `latest`。一个通用版本可以通过不同 `alias`
+绑定为多个职责，`description` 用于让 Lead 选择正确角色，`background` 允许独立任务
+并行运行。Lead 必须负责拆解、验收和最终汇总。适合委派可独立验收的检索、归纳
+或专业审查，不适合为了“看起来像多智能体”拆分简单流程。当前仅支持一层委派，
+Sub Agent 只使用自己的 builtin tools、Prompt、Skills、Policy 和轮次上限。
 
 仓库中的 `public-opinion-agent@0.1.1` 展示了 `mcp: tavily-readonly`、`helper-agent@1.0.0`、证据引用、风险分级和中文报告契约。它复用共享审批与运行界面，没有另建事件协议或 Web UI。
 

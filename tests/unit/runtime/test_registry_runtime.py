@@ -17,7 +17,7 @@ from harness.adapters.memory import InMemoryAgentRegistry
 from harness.cli import main
 from harness.config import Settings
 from harness.core.errors import ConflictError
-from harness.core.manifest import load_manifest
+from harness.core.manifest import SubagentSpec, load_manifest
 from harness.core.models import AgentVersion, AgentVersionStatus, Run, RunStatus, Session
 from harness.observability.provider import build_observability
 from harness.runtime.base import RuntimeContext
@@ -330,6 +330,110 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
         "runtime.result",
     ]
     assert "registry-secret" not in repr(events)
+
+
+@pytest.mark.asyncio
+async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    helper_snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    bindings = (
+        SubagentSpec(
+            ref="helper@1.0.0",
+            alias="fact-checker",
+            description="Verify claims and return source-backed facts.",
+            background=True,
+        ),
+        SubagentSpec(
+            ref="helper@1.0.0",
+            alias="risk-reviewer",
+            description="Challenge conclusions and identify uncertainty.",
+        ),
+    )
+    manifest = snapshot.manifest.model_copy(
+        update={"spec": snapshot.manifest.spec.model_copy(update={"subagents": bindings})}
+    )
+    snapshot = snapshot.model_copy(update={"manifest": manifest})
+    registry = InMemoryAgentRegistry()
+    now = datetime.now(UTC)
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="echo-agent",
+            version="0.1.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=snapshot.content_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=now,
+        )
+    )
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="helper",
+            version="1.0.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=helper_snapshot.content_hash,
+            snapshot=helper_snapshot.model_dump(mode="json"),
+            created_at=now,
+        )
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str, options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            base_url="https://gateway.example",
+            model="gateway-model",
+            provider="new-api",
+            credential=SecretStr("secret"),
+        ),
+        query_factory=fake_query,
+    )
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-collaboration",
+            session_id="session-collaboration",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="collaboration",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "delegate independent checks"},
+        ),
+        session=Session(
+            session_id="session-collaboration",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    _events = [event async for event in runtime.execute(context)]
+
+    assert captured[0].agents is not None
+    assert set(captured[0].agents) == {"fact-checker", "risk-reviewer"}
+    assert captured[0].agents["fact-checker"].description.startswith("Verify claims")
+    assert captured[0].agents["fact-checker"].background is True
+    assert captured[0].agents["risk-reviewer"].background is False
+    assert captured[0].agents["fact-checker"].prompt == helper_snapshot.system_prompt
 
 
 @pytest.mark.asyncio

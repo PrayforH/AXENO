@@ -123,3 +123,15 @@ def test_sandbox_is_mandatory_and_provider_is_not_authored_by_domain_agent() -> 
     assert contract.risk is CapabilityRisk.HIGH
     assert "Bash 默认进入人工审批" in contract.approval_summary
     assert "sandbox_provider" not in AgentDraftSpec.model_fields
+
+
+def test_orchestrator_compiles_role_descriptions_and_background_mode() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+
+    validation = compiler.validate(draft(AgentTemplate.ORCHESTRATOR))
+
+    assert validation.ready is True
+    assert "alias: evidence-researcher" in validation.manifest_yaml
+    assert "description: 并行收集证据" in validation.manifest_yaml
+    assert "background: true" in validation.manifest_yaml
+    assert "alias: quality-reviewer" in validation.manifest_yaml

@@ -5,6 +5,9 @@ introduce a second runtime format. A Studio draft is compiled into the same
 `agent.yaml + prompt + Skills + evals` package accepted by the existing production
 bundle gate and immutable `AgentVersion` registry.
 
+The cross-platform production-line comparison and the reasons behind these boundaries
+are recorded in [`agent-production-line-benchmark.md`](agent-production-line-benchmark.md).
+
 ## Current parallel-work boundary
 
 This branch intentionally avoids the authentication and Langfuse workstream:
@@ -29,7 +32,7 @@ A draft contains:
 - structured System Prompt;
 - immutable Skill source and text assets;
 - reviewed builtin tool names and logical MCP references;
-- pinned sub-Agent versions;
+- pinned sub-Agent versions with role aliases, delegation descriptions and background mode;
 - server-owned permission Profile;
 - workspace lifecycle and finite limits;
 - happy, ambiguous and safety evaluation cases.
@@ -43,6 +46,38 @@ The draft compiler performs two gates:
 
 Successful compilation produces the existing deterministic ZIP bundle. Publishing uses
 `AgentService.publish_bundle`; Studio does not write `AgentVersion` rows directly.
+
+## Lead and Sub Agent collaboration
+
+The supported production shape is a fixed one-level delegation graph: one Lead Agent is
+the only user-facing coordinator and delegates bounded work through the SDK `Task` tool.
+Each Sub Agent binding has a stable role alias, a pinned reusable Agent version, a concise
+responsibility contract and an optional background flag:
+
+```yaml
+subagents:
+  - ref: helper-agent@1.0.0
+    alias: fact-checker
+    description: Verify claims and return source-backed findings.
+    background: true
+  - ref: helper-agent@1.0.0
+    alias: risk-reviewer
+    description: Challenge conclusions and identify uncertainty.
+    background: true
+```
+
+Multiple role aliases may reuse the same immutable Agent version. The alias and
+description are passed to Claude Agent SDK so the Lead can choose the right specialist;
+background-enabled roles may run concurrently when the Lead emits independent tasks.
+The Lead remains responsible for checking returned evidence and synthesizing the final
+answer.
+
+Sub Agents keep their own Prompt, Skills, builtin tools, permission Profile and turn
+limit. The parent Run budget and wall-clock timeout remain the outer hard limits. The
+current runtime intentionally supports only one delegation level and builtin tools on
+Sub Agents; MCP and Python tools stay on the Lead until per-Sub credential, network and
+artifact isolation are implemented. Lead and Sub Agents share the Run workspace, so the
+Lead can collect external evidence first and delegate analysis over those files.
 
 ## Sandbox and network policy
 

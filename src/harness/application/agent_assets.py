@@ -31,14 +31,17 @@ async def resolve_published_agent_versions(
             raise ManifestValidationError(
                 f"subagent reference requires name@version: {subagent.ref}"
             )
-        if name in children:
-            raise ManifestValidationError(f"duplicate subagent name: {name}")
+        runtime_name = subagent.runtime_name
+        if runtime_name in children:
+            raise ManifestValidationError(
+                f"duplicate subagent runtime name: {runtime_name}"
+            )
         child = await registry.get(tenant_id, name, version_id)
         if child.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError(
                 f"subagent must be published before use: {name}@{version_id}"
             )
-        children[name] = child
+        children[runtime_name] = child
     return root, children
 
 

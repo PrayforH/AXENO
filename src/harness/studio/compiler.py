@@ -79,7 +79,15 @@ class AgentDraftCompiler:
                     "prompt": {"system": "prompts/system.md"},
                     "skills": [f"skills/{skill.name}" for skill in spec.skills],
                     "tools": tools,
-                    "subagents": [{"ref": ref} for ref in spec.subagents],
+                    "subagents": [
+                        {
+                            "ref": subagent.ref,
+                            "alias": subagent.alias,
+                            "description": subagent.responsibility,
+                            "background": subagent.background,
+                        }
+                        for subagent in spec.subagents
+                    ],
                     "hooks": [],
                     "permissions": {"policy": spec.permission_policy},
                     "workspace": {

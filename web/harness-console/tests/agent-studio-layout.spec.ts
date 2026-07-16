@@ -21,6 +21,14 @@ const studioConfig = readFileSync(
   join(process.cwd(), "src/lib/agent-studio.ts"),
   "utf8",
 );
+const errorBoundary = readFileSync(
+  join(process.cwd(), "src/app/studio/agents/error.tsx"),
+  "utf8",
+);
+const loadingBoundary = readFileSync(
+  join(process.cwd(), "src/app/studio/agents/loading.tsx"),
+  "utf8",
+);
 
 describe("Agent Studio management page", () => {
   it("is an independent control-plane route", () => {
@@ -37,6 +45,7 @@ describe("Agent Studio management page", () => {
     for (const label of [
       "基本信息",
       "System Prompt",
+      "协同编排",
       "Skills",
       "Tools 与联网",
       "运行与权限",
@@ -44,10 +53,26 @@ describe("Agent Studio management page", () => {
     ]) {
       expect(workbench).toContain(label);
     }
-    for (const node of ["Model", "Prompt", "Skills", "Tools", "Isolation", "Release"]) {
+    for (const node of ["Model", "Prompt", "Skills", "Tools", "Agents", "Isolation", "Release"]) {
       expect(workbench).toContain(`label="${node}"`);
     }
     expect(styles).toContain(".capabilitySpine");
+  });
+
+  it("shows a Lead topology with editable, version-pinned Sub Agent roles", () => {
+    expect(workbench).toContain('aria-label="多智能体协同拓扑"');
+    expect(workbench).toContain("Lead 是唯一面向用户的主线");
+    expect(workbench).toContain("value={contract.collaborationLabel}");
+    expect(workbench).toContain("固定版本引用");
+    expect(workbench).toContain("允许后台并行");
+    expect(workbench).toContain("同一通用 Agent 版本可绑定多个职责");
+    expect(workbench).toContain("从已发布目录选择");
+    expect(workbench).toContain("协同运行摘要");
+    expect(studioConfig).toContain("PUBLISHED_SUBAGENTS");
+    expect(studioConfig).toContain("helper-agent@1.0.0");
+    expect(styles).toContain(".orchestrationGraph");
+    expect(styles).toContain(".subagentTopology");
+    expect(styles).toContain(".leadAgentCard");
   });
 
   it("keeps sandbox mandatory and presents Tavily as bounded external egress", () => {
@@ -57,11 +82,37 @@ describe("Agent Studio management page", () => {
     expect(workbench).not.toContain('type="checkbox" checked={sandbox');
     expect(studioConfig).toContain("公网搜索（Tavily）");
     expect(workbench).toContain("这不会开放任意 Bash 网络访问");
+    expect(workbench).toContain("独立工作负载身份");
+    expect(workbench).toContain("恢复同一会话的 SDK 上下文");
+    expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 
   it("does not pretend publishing works before authentication integration", () => {
     expect(workbench).toContain("等待登录与 RBAC 分支接入");
     expect(workbench).toMatch(/className=\{styles\.publishButton\}[\s\S]*?disabled/);
+  });
+
+  it("makes the draft-to-deployment lifecycle explicit without hiding failures", () => {
+    expect(workbench).toContain('aria-label="从草稿到部署的生命周期"');
+    for (const label of ["隔离试跑", "不可变 Bundle", "按环境晋级"]) {
+      expect(workbench).toContain(label);
+    }
+    expect(workbench).toContain("离线轨迹评测");
+    expect(workbench).toContain("线上质量监控");
+    expect(workbench).toContain("必须调用");
+    expect(workbench).toContain("禁止");
+    expect(errorBoundary).toContain("Studio 没有正常加载");
+    expect(errorBoundary).toContain("重新加载");
+    expect(loadingBoundary).toContain("正在恢复 Agent Studio");
+    expect(styles).toContain(".studioStateShell");
+  });
+
+  it("labels repository-backed data instead of presenting invented agents as live data", () => {
+    expect(workbench).toContain("本地目录");
+    expect(workbench).toContain("仅展示仓库内真实 Bundle");
+    expect(workbench).toContain("helper-agent-1.0.0");
+    expect(workbench).not.toContain("合同审查助手");
+    expect(workbench).not.toContain("工单分诊助手");
   });
 
   it("uses a quiet registry palette with no decorative gradient", () => {

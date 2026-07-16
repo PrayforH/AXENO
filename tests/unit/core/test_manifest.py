@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from harness.core.manifest import ManifestValidationError, load_manifest
 
@@ -78,6 +79,50 @@ def test_rejects_latest_subagent_in_production(tmp_path: Path) -> None:
     (tmp_path / "prompts/system.md").write_text("prompt")
 
     with pytest.raises(ManifestValidationError, match="latest"):
+        load_manifest(path, environment="production")
+
+
+def test_supports_multiple_role_aliases_for_one_pinned_subagent(tmp_path: Path) -> None:
+    manifest = yaml.safe_load(FIXTURE.read_text())
+    manifest["spec"]["subagents"] = [
+        {
+            "ref": "helper@1.0.0",
+            "alias": "fact-checker",
+            "description": "Verify facts and return source-backed findings.",
+            "background": True,
+        },
+        {
+            "ref": "helper@1.0.0",
+            "alias": "risk-reviewer",
+            "description": "Challenge conclusions and identify uncertainty.",
+        },
+    ]
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts/system.md").write_text("prompt")
+
+    snapshot = load_manifest(path, environment="production")
+
+    fact_checker, risk_reviewer = snapshot.manifest.spec.subagents
+    assert fact_checker.runtime_name == "fact-checker"
+    assert fact_checker.background is True
+    assert risk_reviewer.runtime_name == "risk-reviewer"
+    assert risk_reviewer.background is False
+
+
+def test_rejects_duplicate_subagent_role_aliases(tmp_path: Path) -> None:
+    manifest = yaml.safe_load(FIXTURE.read_text())
+    manifest["spec"]["subagents"] = [
+        {"ref": "helper@1.0.0", "alias": "reviewer"},
+        {"ref": "helper@1.0.0", "alias": "reviewer"},
+    ]
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts/system.md").write_text("prompt")
+
+    with pytest.raises(ManifestValidationError, match="duplicate subagent runtime name"):
         load_manifest(path, environment="production")
 
 
