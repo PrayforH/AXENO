@@ -74,6 +74,20 @@ def test_images_run_as_non_root_and_expose_health_checks() -> None:
     assert 'output: "standalone"' in (ROOT / "web/harness-console/next.config.ts").read_text()
 
 
+def test_background_services_override_the_api_http_healthcheck() -> None:
+    services = cast(dict[str, Any], compose()["services"])
+
+    for name, process in (
+        ("worker", "harness-worker"),
+        ("quality-sync", "harness-quality-worker"),
+    ):
+        healthcheck = cast(dict[str, Any], services[name]["healthcheck"])
+        command = cast(list[str], healthcheck["test"])
+        assert command[:3] == ["CMD", "python", "-c"]
+        assert process in command[3]
+        assert "/healthz" not in command[3]
+
+
 def test_runtime_entrypoints_and_environment_template_exist() -> None:
     api_entrypoint = ROOT / "deploy/docker/entrypoint-api.sh"
     worker_entrypoint = ROOT / "deploy/docker/entrypoint-worker.sh"

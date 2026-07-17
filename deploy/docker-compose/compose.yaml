@@ -257,6 +257,16 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from pathlib import Path; raise SystemExit('harness-quality-worker' not in Path('/proc/1/cmdline').read_text())"
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 6
     restart: unless-stopped
 
   seed:
