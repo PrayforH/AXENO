@@ -69,6 +69,11 @@ const preflightStageLabels = {
   cleanup: "Sandbox 清理",
 } as const;
 
+const preflightErrorLabels: Record<string, string> = {
+  execution_profile_sandbox_provider_mismatch:
+    "当前 Preview Sandbox 与所选执行档位不一致。Local 模式请选择“本地开发 Preview”，保存并重新检查后再试。",
+};
+
 function preflightProgress(checks: StudioPreflightCheck[]) {
   const passed = checks.filter((check) => check.status === "passed").length;
   const skipped = checks.filter((check) => check.status === "skipped").length;
@@ -985,6 +990,12 @@ export function AgentStudioWorkbench() {
                     </li>
                   ))}
                 </ol>
+                {activePreview.preflightResult.errorCode && (
+                  <p role="alert">
+                    {preflightErrorLabels[activePreview.preflightResult.errorCode]
+                      ?? "Preflight 未通过。请根据失败阶段检查执行档位、凭据与目标环境。"}
+                  </p>
+                )}
                 {activePreview.preflightResult.artifact && (
                   <p>
                     Artifact · {activePreview.preflightResult.artifact.name} · {activePreview.preflightResult.artifact.sizeBytes} B · {activePreview.preflightResult.artifact.sha256.slice(0, 12)}
@@ -1502,6 +1513,7 @@ export function AgentStudioWorkbench() {
                       {options.profiles.map((profile) => (
                         <option key={`${profile.profileId}@${profile.version}`} value={profile.profileId}>
                           {profile.label} · v{profile.version} · {profile.sandboxProvider}
+                          {profile.productionAllowed ? "" : " · 仅 Preview"}
                         </option>
                       ))}
                     </select>
@@ -1519,6 +1531,7 @@ export function AgentStudioWorkbench() {
                           <span>{profile.diskMiB} MiB 磁盘</span>
                           <span>TTL {profile.ttlSeconds}s</span>
                           <span>{profile.networkPolicyId}</span>
+                          {!profile.productionAllowed && <span>禁止生产发布</span>}
                         </>;
                       })()}
                     </div>

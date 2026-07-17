@@ -159,6 +159,27 @@ async def test_preflight_rejects_sandbox_that_does_not_match_pinned_profile(
 
 
 @pytest.mark.asyncio
+async def test_local_development_profile_matches_explicit_local_preview(
+    tmp_path: Path,
+) -> None:
+    runner, preview, sandbox = await context(tmp_path, enforce_profile=True)
+    local_preview = preview.model_copy(
+        update={"execution_profile": "local-development"}
+    )
+
+    result = await runner.run(local_preview, cancelled=never_cancelled)
+
+    assert result.status is PreflightResultStatus.PASSED
+    provision = next(
+        check
+        for check in result.checks
+        if check.stage is PreflightStage.SANDBOX_PROVISION
+    )
+    assert provision.details["provider"] == "local"
+    assert sandbox.destroyed
+
+
+@pytest.mark.asyncio
 async def test_live_preflight_passes_every_boundary_and_collects_artifact(
     tmp_path: Path,
 ) -> None:

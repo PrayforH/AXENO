@@ -142,6 +142,9 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("真实 Preflight · {activePreview.preflightResult.status}");
     expect(workbench).toContain("preflightStageLabels[check.stage]");
     expect(workbench).toContain("preflightProgress(activePreview.preflightResult.checks)");
+    expect(workbench).toContain("execution_profile_sandbox_provider_mismatch");
+    expect(workbench).toContain("本地开发 Preview");
+    expect(workbench).toContain("禁止生产发布");
     expect(workbench).toContain("workspace_artifact");
     expect(workbench).toContain("Preview · {activePreview.status}");
     expect(styles).toContain(".previewBanner");

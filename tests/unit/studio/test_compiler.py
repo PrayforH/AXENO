@@ -125,6 +125,35 @@ def test_sandbox_is_mandatory_and_provider_is_not_authored_by_domain_agent() -> 
     assert "sandbox_provider" not in AgentDraftSpec.model_fields
 
 
+def test_local_development_profile_is_explicitly_preview_only() -> None:
+    catalog = default_capability_catalog()
+    profile = next(
+        item
+        for item in catalog.execution_profiles
+        if item.profile_id == "local-development"
+    )
+    current = draft()
+    local_draft = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={
+                    "execution_profile": profile.profile_id,
+                    "mcp_servers": ("tavily-readonly",),
+                }
+            )
+        }
+    )
+
+    validation = AgentDraftCompiler(catalog).validate(local_draft)
+
+    assert validation.ready is True
+    assert profile.sandbox_provider == "local"
+    assert profile.production_allowed is False
+    assert profile.risk is CapabilityRisk.HIGH
+    assert NetworkAccess.EXTERNAL in profile.network_access
+    assert profile.allowed_mcp_references == ("tavily-readonly",)
+
+
 def test_orchestrator_compiles_role_descriptions_and_background_mode() -> None:
     compiler = AgentDraftCompiler(default_capability_catalog())
 

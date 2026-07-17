@@ -133,6 +133,31 @@ def default_capability_catalog() -> CapabilityCatalog:
         executionProfiles=(
             ExecutionProfileMetadata.model_validate(
                 {
+                    "profileId": "local-development",
+                    "label": "本地开发 Preview",
+                    "description": (
+                        "仅用于显式启用 unsafe local sandbox 的单机开发与 Preview；"
+                        "不提供进程、文件系统或网络强隔离，禁止用于生产发布。"
+                    ),
+                    "sandboxProvider": "local",
+                    "networkAccess": (
+                        NetworkAccess.NONE,
+                        NetworkAccess.INTERNAL,
+                        NetworkAccess.EXTERNAL,
+                    ),
+                    "risk": CapabilityRisk.HIGH,
+                    "cpuMillis": 1000,
+                    "memoryMiB": 2048,
+                    "diskMiB": 10240,
+                    "ttlSeconds": 3600,
+                    "networkPolicyId": "unsafe-local-preview",
+                    "allowedMcpReferences": ("tavily-readonly",),
+                    "providerConfigReference": "local-unsafe-opt-in",
+                    "productionAllowed": False,
+                }
+            ),
+            ExecutionProfileMetadata.model_validate(
+                {
                     "profileId": "isolated-default",
                     "label": "生产隔离执行",
                     "description": "在平台托管的隔离 Sandbox 中执行文件、命令和工具。",
