@@ -44,7 +44,23 @@ class CapabilityCatalogService:
             updatedBy="system",
             updatedAt=self._clock(),
         )
-        return await self._repository.seed(seed)
+        current = await self._repository.seed(seed)
+        if current.updated_by != "system" or current.catalog == seed.catalog:
+            return current
+        upgraded = CapabilityCatalogRecord(
+            tenantId=tenant_id,
+            revision=current.revision + 1,
+            catalog=seed.catalog,
+            updatedBy="system",
+            updatedAt=self._clock(),
+        )
+        try:
+            await self._repository.replace(current.revision, upgraded)
+            return upgraded
+        except ConflictError:
+            # A tenant admin may have replaced the catalog after our read. Never
+            # overwrite that concurrent decision with built-in defaults.
+            return await self._repository.get(tenant_id)
 
     async def replace(
         self,
