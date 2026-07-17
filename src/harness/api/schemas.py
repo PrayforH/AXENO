@@ -1,12 +1,42 @@
 """Request schemas for the public Harness API."""
 
+from typing import Any, cast
+
 from pydantic import BaseModel, Field, model_validator
 
-from harness.core.models import ApprovalStatus
+from harness.core.models import AgentVersion, ApprovalStatus
 
 
 class PublishAgentRequest(BaseModel):
     path: str = Field(min_length=1)
+
+
+class AgentCatalogItem(BaseModel):
+    name: str
+    version: str
+    display_name: str
+    domain: str
+
+    @classmethod
+    def from_version(cls, version: AgentVersion) -> "AgentCatalogItem":
+        manifest = version.snapshot.get("manifest")
+        metadata = (
+            cast(dict[str, Any], manifest).get("metadata")
+            if isinstance(manifest, dict)
+            else None
+        )
+        labels = (
+            cast(dict[str, Any], metadata).get("labels")
+            if isinstance(metadata, dict)
+            else None
+        )
+        label_values = cast(dict[str, Any], labels) if isinstance(labels, dict) else {}
+        return cls(
+            name=version.name,
+            version=version.version,
+            display_name=str(label_values.get("display-name") or version.name),
+            domain=str(label_values.get("domain") or "default"),
+        )
 
 
 class CreateSessionRequest(BaseModel):

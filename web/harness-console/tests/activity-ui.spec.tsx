@@ -7,7 +7,10 @@ import { SubagentCard } from "../src/components/subagent-card";
 import { ToolCard } from "../src/components/tool-card";
 import { completedToolBatch } from "../src/components/tool-card";
 import type { RunViewModel } from "../src/lib/run-view-model";
-import { UploadFeedbackContent } from "../src/components/agent-thread";
+import {
+  hasProjectedTool,
+  UploadFeedbackContent,
+} from "../src/components/agent-thread";
 import {
   activityOverview,
   hasRunActivityToolCall,
@@ -41,7 +44,10 @@ const activity = {
       title: "调用 Read",
       timestamp: "2026-07-13T01:00:02Z",
       sequence: 2,
-      metadata: { name: "Read" },
+      metadata: {
+        name: "Read",
+        arguments: { file_path: "docs/agent-production-platform-design.md" },
+      },
     },
     {
       id: "event-3",
@@ -130,9 +136,8 @@ describe("Codex-style activity UI", () => {
       <ActivitySummary activity={runActivitySchema.parse(activity)} />,
     );
     expect(html).toContain("执行进度");
-    expect(html).toContain("Read");
-    expect(html).toContain("子任务");
-    expect(html).toContain("使用的工具");
+    expect(html).toContain("正在读取 docs/agent-production-platform-design.md");
+    expect(html).toContain('aria-label="思考与行动"');
     expect(html).toContain("运行模型");
     expect(html).toContain("claude-sonnet");
     expect(html).not.toContain("model.route.selected");
@@ -147,6 +152,32 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("已完成");
     expect(html).toContain("file_path");
     expect(html).toContain("json-boolean");
+  });
+
+  it("keeps ordinary tool cards as a fallback when no activity projection exists", () => {
+    const html = renderToStaticMarkup(
+      <ToolCard
+        toolCallId="read-without-activity"
+        name="Read"
+        status="complete"
+        args={{ file_path: "README.md" }}
+        result="fallback"
+      />,
+    );
+
+    expect(html).toContain("读取文件");
+    expect(html).toContain("README.md");
+  });
+
+  it("deduplicates ordinary tool cards already represented by the turn activity", () => {
+    const view = {
+      tools: [
+        { id: "read-projected", name: "Read", status: "completed", sequence: 1 },
+      ],
+    } as RunViewModel;
+
+    expect(hasProjectedTool(view, "read-projected")).toBe(true);
+    expect(hasProjectedTool(view, "read-fallback")).toBe(false);
   });
 
   it("selects multiple completed ordinary tools for one collapsed batch", () => {

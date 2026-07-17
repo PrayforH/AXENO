@@ -116,22 +116,40 @@ describe("full-page agent workbench", () => {
 
   it("aligns user message actions beneath the right-aligned bubble", () => {
     expect(styles).toMatch(
-      /\.harness-user-action-bar\s*\{[^}]*align-self:\s*flex-end;[^}]*gap:\s*2px;/s,
+      /\.harness-user-message\s*\{[^}]*position:\s*relative;[^}]*padding:\s*12px 0 0;/s,
     );
     expect(styles).toMatch(
-      /\.harness-user-action-bar\s*\{[^}]*opacity:\s*0\.58;[^}]*pointer-events:\s*auto;/s,
+      /\.harness-user-action-bar\s*\{[^}]*position:\s*absolute;[^}]*top:\s*calc\(100% \+ 1px\);[^}]*right:\s*2px;[^}]*gap:\s*2px;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-user-action-bar\s*\{[^}]*opacity:\s*0;[^}]*pointer-events:\s*none;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-user-message:hover \.harness-user-action-bar,[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;/s,
     );
     expect(styles).toMatch(
       /\.user-message-action\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-user-message \+ \.harness-assistant-message\s*\{[^}]*padding-top:\s*35px;/s,
+    );
+  });
+
+  it("keeps the attachment control close to the composer text", () => {
+    expect(styles).toMatch(
+      /\.harness-composer-shell \.aui-composer-root\s*\{[^}]*column-gap:\s*0;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-composer-shell \.aui-composer-input\s*\{[^}]*padding:\s*8px 8px 8px 2px;/s,
     );
   });
 
   it("shows an explicit inline editor for message reruns", () => {
     expect(styles).toMatch(
-      /\.user-message-editor\s*\{[^}]*width:\s*min\(100%,\s*560px\);[^}]*align-self:\s*flex-end;/s,
+      /\.user-message-editor\s*\{[^}]*width:\s*min\(100%,\s*48rem\);[^}]*align-self:\s*flex-end;[^}]*border-radius:\s*20px;[^}]*background:\s*#f1f2f1;/s,
     );
     expect(styles).toMatch(
-      /\.user-message-editor button\[type="submit"\]\s*\{[^}]*background:\s*var\(--rail\);/s,
+      /\.user-message-editor-actions button:last-child\s*\{[^}]*background:\s*#202522;/s,
     );
   });
 
@@ -146,7 +164,7 @@ describe("full-page agent workbench", () => {
       /\.harness-composer-shell \.aui-composer-root\s*\{[^}]*min-height:\s*58px;[^}]*align-items:\s*center;/s,
     );
     expect(styles).toMatch(
-      /\.harness-composer-shell \.aui-composer-input\s*\{[^}]*min-height:\s*40px;[^}]*padding:\s*8px;[^}]*line-height:\s*24px;/s,
+      /\.harness-composer-shell \.aui-composer-input\s*\{[^}]*min-height:\s*40px;[^}]*padding:\s*8px 8px 8px 2px;[^}]*line-height:\s*24px;/s,
     );
     expect(styles).toMatch(
       /\.harness-composer-shell \.aui-composer-attach,[\s\S]*?width:\s*40px;[^}]*height:\s*40px;[^}]*margin:\s*0;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;/s,
@@ -165,6 +183,21 @@ describe("full-page agent workbench", () => {
     );
   });
 
+  it("keeps assistant actions below the answer instead of floating over activity", () => {
+    expect(styles).toMatch(
+      /\.harness-assistant-message\s*>\s*\.aui-assistant-message-content\s*\{[^}]*order:\s*1;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-assistant-message\s*>\s*\.assistant-message-controls\s*\{[^}]*order:\s*3;/s,
+    );
+    expect(styles).toMatch(
+      /\.assistant-message-controls\s*\{[^}]*min-height:\s*28px;[^}]*display:\s*flex;/s,
+    );
+    expect(styles).toMatch(
+      /\.assistant-message-controls\s*>\s*\.aui-assistant-action-bar-root\[data-floating\]\s*\{[^}]*position:\s*static;[^}]*border:\s*0;[^}]*box-shadow:\s*none;/s,
+    );
+  });
+
   it("keeps wide Markdown tables inside a keyboard-scrollable region", () => {
     const markdown = readFileSync(
       join(process.cwd(), "src/components/markdown-text.tsx"),
@@ -173,6 +206,7 @@ describe("full-page agent workbench", () => {
     expect(markdown).toContain('className="aui-table-scroll"');
     expect(markdown).toContain('aria-label="表格，可横向滚动"');
     expect(markdown).toContain("table: ScrollableTable");
+    expect(markdown).not.toContain("defer");
     expect(styles).toMatch(
       /\.aui-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s,
     );

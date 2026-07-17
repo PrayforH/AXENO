@@ -3,23 +3,37 @@ FROM ${KUBECTL_IMAGE} AS kubectl
 
 FROM python:3.12.11-slim-bookworm AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.28 /uv /uvx /bin/
 WORKDIR /app
 
 ARG UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN python -m pip install --no-cache-dir \
+    --index-url "${UV_DEFAULT_INDEX}" \
+    "uv==0.11.28"
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
 
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv export \
+    --frozen \
+    --no-dev \
+    --no-hashes \
+    --no-emit-project \
+    --output-file /tmp/requirements.txt \
+    && python -m venv .venv \
+    && .venv/bin/pip install --no-cache-dir \
+        --index-url "${UV_DEFAULT_INDEX}" \
+        --requirement /tmp/requirements.txt
 
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY agents ./agents
 COPY scripts/seed_docker.py ./scripts/seed_docker.py
-RUN uv sync --frozen --no-dev
+RUN .venv/bin/pip install --no-cache-dir \
+    --index-url "${UV_DEFAULT_INDEX}" \
+    --no-deps \
+    .
 
 FROM python:3.12.11-slim-bookworm AS runtime
 

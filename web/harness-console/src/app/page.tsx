@@ -5,30 +5,133 @@ import { AgentThread } from "../components/agent-thread";
 import { AuthProvider } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
 import { DeveloperDrawer } from "../components/developer-drawer";
+import { TaskAgentSwitcher } from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
 import {
+  bindThreadAgent,
   createNewThread,
   loadOrCreateThread,
+  loadThreadAgent,
   selectThread,
 } from "../lib/thread-store";
+import {
+  loadTaskAgentCatalog,
+  type TaskAgent,
+} from "../lib/task-agent-catalog";
+import { loadTasks, type TaskSummary } from "../lib/task-history";
 
 export default function Home() {
   const [threadId, setThreadId] = useState("");
+  const [taskAgents, setTaskAgents] = useState<TaskAgent[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<TaskAgent | null>(null);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState("");
   const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
-    setThreadId(loadOrCreateThread(window.localStorage));
+    let active = true;
+    const currentThreadId = loadOrCreateThread(window.localStorage);
+    setThreadId(currentThreadId);
+    async function loadAgentBinding() {
+      setAgentsLoading(true);
+      try {
+        const [catalog, tasks] = await Promise.all([
+          loadTaskAgentCatalog(),
+          loadTasks().catch(() => []),
+        ]);
+        if (!active) return;
+        const currentTask = tasks.find(
+          (task) => task.thread_id === currentThreadId,
+        );
+        const stored = loadThreadAgent(window.localStorage, currentThreadId);
+        const coordinates = currentTask
+          ? {
+              name: currentTask.agent_name,
+              version: currentTask.agent_version,
+            }
+          : stored ?? catalog.defaultAgent;
+        const selected =
+          catalog.agents.find(
+            (agent) =>
+              agent.name === coordinates.name &&
+              agent.version === coordinates.version,
+          ) ?? {
+            name: coordinates.name,
+            version: coordinates.version,
+            displayName: stored?.displayName ?? coordinates.name,
+            domain: stored?.domain ?? "historical",
+          };
+        const agents = catalog.agents.some(
+          (agent) =>
+            agent.name === selected.name && agent.version === selected.version,
+        )
+          ? catalog.agents
+          : [selected, ...catalog.agents];
+        setTaskAgents(agents);
+        setSelectedAgent(selected);
+        bindThreadAgent(window.localStorage, currentThreadId, selected);
+        setAgentsError("");
+      } catch (error) {
+        if (!active) return;
+        setAgentsError(
+          error instanceof Error ? error.message : "智能体目录暂不可用",
+        );
+      } finally {
+        if (active) setAgentsLoading(false);
+      }
+    }
+    void loadAgentBinding();
+    return () => {
+      active = false;
+    };
   }, []);
 
   function startNewTask() {
-    setThreadId(createNewThread(window.localStorage));
+    if (!selectedAgent) return;
+    const nextThreadId = createNewThread(window.localStorage);
+    bindThreadAgent(window.localStorage, nextThreadId, selectedAgent);
+    setThreadId(nextThreadId);
     setRunDetailsOpen(false);
   }
 
-  function switchTask(nextThreadId: string) {
-    setThreadId(selectThread(window.localStorage, nextThreadId));
+  function switchTask(task: TaskSummary) {
+    const nextAgent =
+      taskAgents.find(
+        (agent) =>
+          agent.name === task.agent_name && agent.version === task.agent_version,
+      ) ?? {
+        name: task.agent_name,
+        version: task.agent_version,
+        displayName: task.agent_name,
+        domain: "historical",
+      };
+    if (
+      !taskAgents.some(
+        (agent) =>
+          agent.name === nextAgent.name && agent.version === nextAgent.version,
+      )
+    ) {
+      setTaskAgents((current) => [nextAgent, ...current]);
+    }
+    bindThreadAgent(window.localStorage, task.thread_id, nextAgent);
+    setSelectedAgent(nextAgent);
+    setThreadId(selectThread(window.localStorage, task.thread_id));
+    setRunDetailsOpen(false);
+  }
+
+  function switchAgent(nextAgent: TaskAgent) {
+    if (
+      selectedAgent?.name === nextAgent.name &&
+      selectedAgent.version === nextAgent.version
+    ) {
+      return;
+    }
+    const nextThreadId = createNewThread(window.localStorage);
+    bindThreadAgent(window.localStorage, nextThreadId, nextAgent);
+    setSelectedAgent(nextAgent);
+    setThreadId(nextThreadId);
     setRunDetailsOpen(false);
   }
 
@@ -49,6 +152,13 @@ export default function Home() {
             <p className="workspace-caption">Agent Harness</p>
           </div>
         </div>
+
+        <TaskAgentSwitcher
+          agents={taskAgents}
+          selected={selectedAgent}
+          loading={agentsLoading}
+          onChange={switchAgent}
+        />
 
         <div className="header-actions">
           <button
@@ -83,8 +193,13 @@ export default function Home() {
         />
         <section className="chat-stage" aria-label="Agent 任务对话">
           <div className="chat-surface">
-            {threadId ? (
-              <AssistantRuntimeShell key={`${threadId}:${refreshToken}`} threadId={threadId}>
+            {threadId && selectedAgent ? (
+              <AssistantRuntimeShell
+                key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}:${refreshToken}`}
+                threadId={threadId}
+                agentName={selectedAgent.name}
+                agentVersion={selectedAgent.version}
+              >
                 <AgentThread />
               </AssistantRuntimeShell>
             ) : (
@@ -95,7 +210,11 @@ export default function Home() {
                   <span className="chat-loading-line" />
                   <span className="chat-loading-card" />
                 </div>
-                <span>正在恢复任务…</span>
+                <span>
+                  {agentsError
+                    ? `智能体目录不可用：${agentsError}`
+                    : "正在恢复任务与智能体版本…"}
+                </span>
               </div>
             )}
           </div>

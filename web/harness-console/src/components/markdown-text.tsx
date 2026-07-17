@@ -46,7 +46,6 @@ function MarkdownTextImpl() {
       className="aui-md"
       remarkPlugins={[remarkGfm]}
       components={{ CodeHeader, a: SourceLink, table: ScrollableTable }}
-      defer
     />
   );
 }

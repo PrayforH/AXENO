@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAuth } from "../auth-provider";
 import {
   DEFAULT_STUDIO_DRAFT,
@@ -117,7 +117,9 @@ export function AgentStudioWorkbench() {
     useState<StudioSection>("capabilities");
   const [agentQuery, setAgentQuery] = useState("");
   const [inspected, setInspected] = useState(false);
+  const [promptFocusMode, setPromptFocusMode] = useState(false);
   const [notice, setNotice] = useState("正在读取控制面草稿…");
+  const promptEditorRef = useRef<HTMLTextAreaElement>(null);
   const canEdit = membership.role !== "viewer";
   const canPublish = membership.role === "owner" || membership.role === "admin";
   const options = useMemo(
@@ -219,6 +221,45 @@ export function AgentStudioWorkbench() {
     setConflict(false);
     setVersionConflict(false);
     setNotice("有尚未保存的修改");
+  }
+
+  function moveToPromptSection(heading: string) {
+    const existingIndex = draft.systemPrompt.indexOf(heading);
+    if (existingIndex >= 0) {
+      promptEditorRef.current?.focus();
+      promptEditorRef.current?.setSelectionRange(
+        existingIndex,
+        existingIndex + heading.length,
+      );
+      return;
+    }
+    const separator = draft.systemPrompt.trimEnd() ? "\n\n" : "";
+    const nextPrompt = `${draft.systemPrompt.trimEnd()}${separator}${heading}\n\n`;
+    updateDraft({ systemPrompt: nextPrompt });
+    window.requestAnimationFrame(() => {
+      const cursor = nextPrompt.length;
+      promptEditorRef.current?.focus();
+      promptEditorRef.current?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function handlePromptEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "s") {
+      event.preventDefault();
+      if (canEdit && dirty && !saving) void saveDraft();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    event.preventDefault();
+    const editor = event.currentTarget;
+    const start = editor.selectionStart;
+    const end = editor.selectionEnd;
+    const nextPrompt = `${draft.systemPrompt.slice(0, start)}  ${draft.systemPrompt.slice(end)}`;
+    updateDraft({ systemPrompt: nextPrompt });
+    window.requestAnimationFrame(() => {
+      editor.focus();
+      editor.setSelectionRange(start + 2, start + 2);
+    });
   }
 
   function toggleBuiltin(tool: string) {
@@ -1147,23 +1188,95 @@ export function AgentStudioWorkbench() {
                   title="写稳定行为契约，不堆易变知识"
                   description="生产门禁要求五个章节。业务 SOP 放入 Skills，确定性约束留给 Tools 和 Policy。"
                 />
-                <div className={styles.promptChecklist}>
-                  {REQUIRED_PROMPT_HEADINGS.map((heading) => (
-                    <span
-                      key={heading}
-                      className={draft.systemPrompt.includes(heading) ? styles.checkPresent : styles.checkMissing}
-                    >
-                      {draft.systemPrompt.includes(heading) ? "✓" : "·"} {heading.replace("## ", "")}
-                    </span>
-                  ))}
+                <div
+                  className={styles.promptWorkspace}
+                  data-focus={promptFocusMode ? "true" : "false"}
+                >
+                  <aside className={styles.promptOutline} aria-label="System Prompt 结构">
+                    <div className={styles.promptOutlineHeading}>
+                      <div>
+                        <span>行为契约结构</span>
+                        <strong>{contract.promptSections} / 5 完整</strong>
+                      </div>
+                      <small>选择章节可定位；缺失章节会自动补到文末。</small>
+                    </div>
+                    <div className={styles.promptChecklist}>
+                      {REQUIRED_PROMPT_HEADINGS.map((heading, index) => {
+                        const present = draft.systemPrompt.includes(heading);
+                        return (
+                          <button
+                            type="button"
+                            key={heading}
+                            className={present ? styles.checkPresent : styles.checkMissing}
+                            onClick={() => moveToPromptSection(heading)}
+                          >
+                            <span aria-hidden="true">{present ? "✓" : "+"}</span>
+                            <span>
+                              <strong>{heading.replace("## ", "")}</strong>
+                              <small>{present ? `章节 ${index + 1} · 已包含` : "点击补充"}</small>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className={styles.promptBoundaryNote}>
+                      <strong>放什么在这里？</strong>
+                      <p>角色、目标、证据要求、安全边界和输出格式。</p>
+                      <span>易变业务知识和长 SOP 请放入 Skills。</span>
+                    </div>
+                  </aside>
+                  <div className={styles.promptEditorShell}>
+                    <div className={styles.promptEditorToolbar}>
+                      <div>
+                        <span className={styles.promptFileMark} aria-hidden="true">M↓</span>
+                        <span>
+                          <strong>system.md</strong>
+                          <small>{dirty ? "本轮修改尚未保存" : `已保存 · revision ${draft.revision}`}</small>
+                        </span>
+                      </div>
+                      <div className={styles.promptEditorActions}>
+                        <button
+                          type="button"
+                          onClick={() => setPromptFocusMode((current) => !current)}
+                          aria-pressed={promptFocusMode}
+                        >
+                          {promptFocusMode ? "退出专注" : "专注编辑"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveDraft()}
+                          disabled={!canEdit || saving || !dirty}
+                        >
+                          {saving ? "保存中…" : "保存"}
+                        </button>
+                      </div>
+                    </div>
+                    <label className={styles.promptEditorLabel} htmlFor="system-prompt-editor">
+                      Markdown
+                      <span>Tab 缩进 · Ctrl / ⌘ S 保存</span>
+                    </label>
+                    <textarea
+                      ref={promptEditorRef}
+                      id="system-prompt-editor"
+                      className={styles.codeEditor}
+                      aria-label="System Prompt"
+                      aria-describedby="system-prompt-stats"
+                      spellCheck={false}
+                      readOnly={!canEdit}
+                      value={draft.systemPrompt}
+                      onKeyDown={handlePromptEditorKeyDown}
+                      onChange={(event) => updateDraft({ systemPrompt: event.target.value })}
+                    />
+                    <div className={styles.promptEditorFooter} id="system-prompt-stats">
+                      <span>{draft.systemPrompt.split("\n").length} 行</span>
+                      <span>{draft.systemPrompt.length.toLocaleString("zh-CN")} 字符</span>
+                      <span>{new Blob([draft.systemPrompt]).size.toLocaleString("zh-CN")} bytes</span>
+                      <span data-state={contract.promptSections === 5 ? "ready" : "missing"}>
+                        {contract.promptSections === 5 ? "结构门禁已满足" : `缺少 ${5 - contract.promptSections} 个章节`}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <textarea
-                  className={styles.codeEditor}
-                  aria-label="System Prompt"
-                  spellCheck={false}
-                  value={draft.systemPrompt}
-                  onChange={(event) => updateDraft({ systemPrompt: event.target.value })}
-                />
               </section>
             )}
 
@@ -1372,6 +1485,42 @@ export function AgentStudioWorkbench() {
                       }
                     />
                   </Field>
+                </div>
+                <div className={styles.skillFiles}>
+                  <div className={styles.groupHeading}>
+                    <div>
+                      <h3>Skill 附加文件</h3>
+                      <p>风险规则、报告契约等内容会随 Skill 一起进入不可变 Bundle。</p>
+                    </div>
+                    <span>{skill.files?.length ?? 0} 个文件</span>
+                  </div>
+                  {(skill.files ?? []).map((file, index) => (
+                    <article className={styles.skillFileCard} key={file.path}>
+                      <code>{file.path}</code>
+                      <textarea
+                        aria-label={`编辑 ${file.path}`}
+                        rows={8}
+                        value={file.content}
+                        onChange={(event) =>
+                          updateDraft({
+                            skills: [{
+                              ...skill,
+                              files: (skill.files ?? []).map((candidate, fileIndex) =>
+                                fileIndex === index
+                                  ? { ...candidate, content: event.target.value }
+                                  : candidate,
+                              ),
+                            }],
+                          })
+                        }
+                      />
+                    </article>
+                  ))}
+                  {(skill.files?.length ?? 0) === 0 && (
+                    <div className={styles.skillFilesEmpty}>
+                      当前 Skill 没有 references、scripts 或 assets。
+                    </div>
+                  )}
                 </div>
               </section>
             )}

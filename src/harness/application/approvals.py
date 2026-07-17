@@ -15,6 +15,7 @@ from harness.core.ports import (
     TaskQueue,
 )
 from harness.core.state_machine import transition
+from harness.observability.provider import Observability
 
 
 class ApprovalService:
@@ -29,6 +30,7 @@ class ApprovalService:
         queue: TaskQueue | None = None,
         ttl: timedelta = timedelta(minutes=15),
         decision_poll_interval_seconds: float = 0.25,
+        observability: Observability | None = None,
     ) -> None:
         if decision_poll_interval_seconds <= 0:
             raise ValueError("approval decision poll interval must be positive")
@@ -40,8 +42,40 @@ class ApprovalService:
         self._queue = queue
         self._ttl = ttl
         self._decision_poll_interval = decision_poll_interval_seconds
+        self._observability = observability
         self._inline_waiters: dict[str, asyncio.Future[ApprovalStatus]] = {}
         self._inline_tenants: dict[str, str] = {}
+
+    def _record_span(
+        self,
+        run: Run,
+        approval: ApprovalRequest,
+        *,
+        name: str,
+        status: str,
+    ) -> None:
+        if self._observability is None:
+            return
+        with self._observability.span(
+            name,
+            carrier=run.trace_context,
+            attributes={
+                "run.id": run.run_id,
+                "harness.approval.id": approval.approval_id,
+                "harness.approval.tool_call_id": approval.tool_call_id,
+                "harness.approval.tool_name": approval.tool_name or "unknown",
+                "harness.approval.status": status,
+                "harness.approval.risk": approval.risk or "unknown",
+                "harness.policy.rule": approval.policy_rule or "unknown",
+            },
+        ):
+            self._observability.annotate_current_io(
+                input_value={
+                    "reason": approval.reason,
+                    "arguments": approval.argument_summary,
+                },
+                output_value={"status": status},
+            )
 
     def has_inline_waiter(self, approval_id: str) -> bool:
         return approval_id in self._inline_waiters
@@ -291,6 +325,12 @@ class ApprovalService:
             payload=payload,
         )
         await self._move(run, RunStatus.WAITING_APPROVAL)
+        self._record_span(
+            run,
+            approval,
+            name="harness.approval.request",
+            status="pending",
+        )
         return approval
 
     async def decide(
@@ -324,6 +364,12 @@ class ApprovalService:
             session_id=run.session_id,
             event_type=f"approval.{decision.value}",
             payload={"approval_id": approval_id},
+        )
+        self._record_span(
+            run,
+            updated,
+            name="harness.approval.decision",
+            status=decision.value,
         )
         inline = current.inline
         if decision is ApprovalStatus.APPROVED or inline:

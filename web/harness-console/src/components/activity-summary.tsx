@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState, type MouseEvent } from "react";
 import type { RunActivity } from "../lib/activity-schema";
 import { useRunViewModel } from "../lib/activity-store";
 import {
@@ -10,6 +11,10 @@ import {
   type RunViewModel,
   type WorkStatus,
 } from "../lib/run-view-model";
+import {
+  toolActivitySentence,
+  toolBatchTitle,
+} from "../lib/tool-presentation";
 
 const phaseLabels: Record<RunPhase, string> = {
   queued: "等待处理",
@@ -65,62 +70,73 @@ function ToolRow({ tool }: { tool: RunToolNode }) {
   return (
     <div className={`execution-tool tool-${tool.status}`}>
       <span className="execution-node" aria-hidden="true" />
-      <code>{tool.name}</code>
+      <span className="execution-tool-copy">
+        <span className="execution-tool-heading">
+          <strong>{toolActivitySentence(tool)}</strong>
+        </span>
+        {tool.resultSummary && (
+          <span className="execution-tool-details">
+            <em>{tool.resultSummary}</em>
+          </span>
+        )}
+      </span>
       <small>{workLabels[tool.status]}</small>
     </div>
   );
 }
 
-const standaloneToolNames = new Set([
-  "Task",
-  "Agent",
-  "harness_request_approval",
-  "harness_present_artifact",
-  "harness_run_activity",
-]);
-
-function isFoldableTool(tool: RunToolNode) {
-  return tool.status === "completed" && !standaloneToolNames.has(tool.name);
+interface CommentaryNode {
+  id: string;
+  text: string;
+  sequence: number;
 }
 
-type ToolDisplayNode =
-  | { kind: "tool"; tool: RunToolNode }
-  | { kind: "processed"; tools: RunToolNode[] };
+type TimelineNode =
+  | { kind: "commentary"; sequence: number; commentary: CommentaryNode }
+  | { kind: "task"; sequence: number; task: RunTaskNode }
+  | { kind: "tool"; sequence: number; tool: RunToolNode };
 
-export function groupProcessedTools(tools: readonly RunToolNode[]): ToolDisplayNode[] {
-  const processed = tools.filter(isFoldableTool);
-  if (processed.length < 2) {
-    return tools.map((tool) => ({ kind: "tool", tool }));
+function commentaryNodes(view: RunViewModel): CommentaryNode[] {
+  const actionSequences = view.items
+    .filter(
+      (item) =>
+        item.event_type === "tool.request" ||
+        item.event_type === "subagent.started",
+    )
+    .map((item) => item.sequence)
+    .sort((left, right) => left - right);
+  const grouped = new Map<number, CommentaryNode>();
+
+  for (const item of view.items) {
+    if (item.event_type !== "message.delta" || !item.summary?.trim()) continue;
+    const nextAction = actionSequences.find((sequence) => sequence > item.sequence);
+    if (nextAction === undefined) continue;
+    const existing = grouped.get(nextAction);
+    grouped.set(nextAction, {
+      id: existing?.id ?? item.id,
+      sequence: existing?.sequence ?? item.sequence,
+      text: `${existing?.text ?? ""}${item.summary}`,
+    });
   }
-  const processedIds = new Set(processed.map((tool) => tool.id));
-  const firstId = processed[0].id;
-  return tools.flatMap((tool): ToolDisplayNode[] => {
-    if (!processedIds.has(tool.id)) return [{ kind: "tool", tool }];
-    return tool.id === firstId ? [{ kind: "processed", tools: processed }] : [];
-  });
+  return [...grouped.values()];
 }
 
-function processedDigest(tools: readonly RunToolNode[]) {
-  const counts = new Map<string, number>();
-  for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1);
-  return [...counts]
-    .map(([name, count]) => count > 1 ? `${name} ×${count}` : name)
-    .join(" · ");
-}
-
-function ProcessedTools({ tools }: { tools: RunToolNode[] }) {
-  return (
-    <details className="execution-tool-batch">
-      <summary>
-        <span className="execution-batch-chevron" aria-hidden="true" />
-        <span>已处理 {tools.length} 项</span>
-        <small>{processedDigest(tools)}</small>
-      </summary>
-      <div className="execution-tool-batch-items">
-        {tools.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
-      </div>
-    </details>
-  );
+function executionTimeline(view: RunViewModel): TimelineNode[] {
+  return [
+    ...commentaryNodes(view).map(
+      (commentary): TimelineNode => ({
+        kind: "commentary",
+        sequence: commentary.sequence,
+        commentary,
+      }),
+    ),
+    ...view.tasks.map(
+      (task): TimelineNode => ({ kind: "task", sequence: task.sequence, task }),
+    ),
+    ...view.tools.map(
+      (tool): TimelineNode => ({ kind: "tool", sequence: tool.sequence, tool }),
+    ),
+  ].sort((left, right) => left.sequence - right.sequence);
 }
 
 function ribbonFacts(view: RunViewModel) {
@@ -131,27 +147,94 @@ function ribbonFacts(view: RunViewModel) {
   return facts;
 }
 
-export function ActivitySummary({ activity }: { activity: RunActivity }) {
+function activeElapsedMs(view: RunViewModel, now: number | null) {
+  if (now === null) return view.elapsedMs;
+  const started = Date.parse(view.startedAt);
+  return Number.isFinite(started)
+    ? Math.max(view.elapsedMs, now - started)
+    : view.elapsedMs;
+}
+
+function ribbonSummary(view: RunViewModel) {
+  if (
+    view.phase !== "queued" &&
+    view.phase !== "running" &&
+    view.phase !== "waiting_approval"
+  ) {
+    return view.summary;
+  }
+  const activeTool = [...view.tools]
+    .reverse()
+    .find((tool) => tool.status === "running" || tool.status === "waiting");
+  return activeTool ? toolActivitySentence(activeTool) : view.summary;
+}
+
+function ribbonLabel(view: RunViewModel) {
+  if (view.phase !== "completed" || view.tools.length === 0) {
+    return phaseLabels[view.phase];
+  }
+  return toolBatchTitle(view.tools);
+}
+
+export function ActivitySummary({
+  activity,
+  responseStarted = false,
+}: {
+  activity: RunActivity;
+  responseStarted?: boolean;
+}) {
   const observed = useRunViewModel();
   const view =
     observed?.runId === activity.run_id
       ? observed
       : reduceRunViewModel(undefined, activity);
-  const facts = ribbonFacts(view);
+  const [manualDisclosure, setManualDisclosure] = useState<{
+    runId: string;
+    open: boolean;
+  } | null>(null);
+  const manuallyOpen =
+    manualDisclosure?.runId === view.runId ? manualDisclosure.open : null;
+  const active =
+    view.phase === "queued" ||
+    view.phase === "running" ||
+    view.phase === "waiting_approval";
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      setNow(null);
+      return;
+    }
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(timer);
+  }, [active, view.runId]);
+  const open = manuallyOpen ?? (active && !responseStarted);
+  const facts = ribbonFacts({
+    ...view,
+    elapsedMs: activeElapsedMs(view, now),
+  });
+  const timeline = executionTimeline(view);
   const model = [...view.items]
     .reverse()
     .find((item) => item.event_type === "model.route.selected")?.summary;
-  const displayedTools = groupProcessedTools(view.tools);
+
+  function toggleDisclosure(event: MouseEvent<HTMLElement>) {
+    event.preventDefault();
+    setManualDisclosure({ runId: view.runId, open: !open });
+  }
 
   return (
     <details
       className={`execution-ribbon phase-${view.phase}`}
-      aria-label="执行进度"
+      aria-label={`执行进度 ${view.runId}`}
+      data-run-id={view.runId}
+      open={open}
     >
-      <summary>
+      <summary onClick={toggleDisclosure} aria-expanded={open}>
         <span className="execution-state-mark" aria-hidden="true"><i /></span>
-        <span className="execution-phase">{phaseLabels[view.phase]}</span>
-        <span className="execution-summary">{view.summary}</span>
+        <span className="execution-phase">{ribbonLabel(view)}</span>
+        <span className="execution-summary">{ribbonSummary(view)}</span>
         <span className="execution-facts">
           {facts.map((fact) => (
             <span key={fact}>{fact}</span>
@@ -160,22 +243,19 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
         <span className="execution-chevron" aria-hidden="true" />
       </summary>
       <div className="execution-tree">
-        {view.tasks.length > 0 && (
-          <section aria-label="子任务">
-            <h4>子任务</h4>
-            {view.tasks.map((task) => (
-              <TaskRow key={task.id} task={task} />
-            ))}
-          </section>
-        )}
-        {view.tools.length > 0 && (
-          <section aria-label="使用的工具">
-            <h4>使用的工具</h4>
-            {displayedTools.map((node) => node.kind === "processed" ? (
-              <ProcessedTools key={`processed-${node.tools[0].id}`} tools={node.tools} />
-            ) : (
-              <ToolRow key={node.tool.id} tool={node.tool} />
-            ))}
+        {timeline.length > 0 && (
+          <section className="execution-log" aria-label="思考与行动">
+            {timeline.map((entry) =>
+              entry.kind === "commentary" ? (
+                <p className="execution-commentary" key={entry.commentary.id}>
+                  {entry.commentary.text}
+                </p>
+              ) : entry.kind === "task" ? (
+                <TaskRow key={entry.task.id} task={entry.task} />
+              ) : (
+                <ToolRow key={entry.tool.id} tool={entry.tool} />
+              ),
+            )}
           </section>
         )}
         {model && (
@@ -184,7 +264,7 @@ export function ActivitySummary({ activity }: { activity: RunActivity }) {
             <code>{model}</code>
           </section>
         )}
-        {view.tasks.length === 0 && view.tools.length === 0 && (
+        {timeline.length === 0 && (
           <p className="execution-empty">{view.summary}</p>
         )}
       </div>

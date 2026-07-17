@@ -11,6 +11,7 @@ import {
   type ActivityPatchOperation,
   activityStore,
 } from "./activity-store";
+import { liveResponseStore } from "./live-response-store";
 import { redirectOnUnauthorized } from "./client-auth";
 
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
@@ -62,6 +63,34 @@ export class HarnessHttpAgent extends HttpAgent {
     }
     const wrapped: AgentSubscriber = {
       ...subscriber,
+      onRunStartedEvent: async (params) => {
+        liveResponseStore.startRun(params.event.runId);
+        return subscriber?.onRunStartedEvent?.(params);
+      },
+      onTextMessageStartEvent: async (params) => {
+        liveResponseStore.startMessage(params.event.messageId);
+        return subscriber?.onTextMessageStartEvent?.(params);
+      },
+      onTextMessageContentEvent: async (params) => {
+        liveResponseStore.append(params.event.messageId, params.event.delta);
+        return subscriber?.onTextMessageContentEvent?.(params);
+      },
+      onTextMessageEndEvent: async (params) => {
+        liveResponseStore.completeMessage(params.event.messageId);
+        return subscriber?.onTextMessageEndEvent?.(params);
+      },
+      onToolCallStartEvent: async (params) => {
+        liveResponseStore.clearMessage();
+        return subscriber?.onToolCallStartEvent?.(params);
+      },
+      onRunFinishedEvent: async (params) => {
+        liveResponseStore.completeRun();
+        return subscriber?.onRunFinishedEvent?.(params);
+      },
+      onRunErrorEvent: async (params) => {
+        liveResponseStore.failRun();
+        return subscriber?.onRunErrorEvent?.(params);
+      },
       onActivitySnapshotEvent: async (params) => {
         if (params.event.activityType === "harness.run.v1") {
           const parsed = runActivitySchema.safeParse(params.event.content);

@@ -15,6 +15,7 @@ dependencies = [
     "claude-agent-sdk>=0.1,<1",
     "certifi>=2025.6",
     "daytona>=0.196,<1",
+    "e2b>=2.33,<3",
     "fastapi>=0.116,<1",
     "httpx>=0.28,<1",
     "mcp>=1.28,<2",

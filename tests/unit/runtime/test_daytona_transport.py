@@ -3,7 +3,13 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server
+from claude_agent_sdk import (
+    ClaudeAgentOptions,
+    SessionKey,
+    SessionListSubkeysKey,
+    SessionStoreEntry,
+    create_sdk_mcp_server,
+)
 
 from harness.runtime.daytona_transport import (
     DaytonaClaudeTransport,
@@ -33,6 +39,12 @@ class FakeRemoteSession:
         self.writes: list[str] = []
         self.ended = False
         self.terminated = False
+        self.staged_config: tuple[str, dict[str, bytes]] | None = None
+
+    async def stage_config(
+        self, remote_directory: str, files: dict[str, bytes]
+    ) -> None:
+        self.staged_config = (remote_directory, files)
 
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
         self.started = (argv, cwd, env)
@@ -83,6 +95,16 @@ def test_command_uses_native_cli_and_contains_required_streaming_flags() -> None
     assert command[command.index("--tools") + 1] == "Read,Bash"
     assert "--include-partial-messages" in command
     assert "--strict-mcp-config" in command
+
+
+def test_command_enables_transcript_mirror_for_external_session_store() -> None:
+    configured = replace(options(), session_store=cast(Any, object()))
+
+    command = build_remote_claude_command(
+        configured, cli_path="/home/daytona/.local/bin/claude"
+    )
+
+    assert "--session-mirror" in command
 
 
 @pytest.mark.asyncio
@@ -136,6 +158,64 @@ async def test_transport_rejects_in_process_sdk_mcp_server() -> None:
         await transport.connect()
 
     assert session.started is None
+
+
+@pytest.mark.asyncio
+async def test_transport_materializes_external_session_store_for_remote_resume() -> None:
+    session_id = "12345678-1234-4234-8234-123456789abc"
+
+    class FakeStore:
+        async def append(
+            self, _key: SessionKey, _entries: list[SessionStoreEntry]
+        ) -> None:
+            return
+
+        async def load(self, _key: SessionKey) -> list[SessionStoreEntry]:
+            return [
+                cast(
+                    SessionStoreEntry,
+                    {
+                        "type": "user",
+                        "uuid": "87654321-4321-4321-8321-cba987654321",
+                        "sessionId": session_id,
+                        "message": {"role": "user", "content": "first turn"},
+                    },
+                )
+            ]
+
+        async def list_subkeys(self, _key: SessionListSubkeysKey) -> list[str]:
+            return []
+
+    configured = replace(
+        options(),
+        resume=session_id,
+        session_store=FakeStore(),
+        env={
+            **options().env,
+            "CLAUDE_CONFIG_DIR": "/remote/config/session-a",
+        },
+    )
+    session = FakeRemoteSession([None])
+    transport = DaytonaClaudeTransport(
+        session=session,
+        options=configured,
+        remote_workspace="/workspace/run-b",
+        cli_path="/home/daytona/.local/bin/claude",
+    )
+
+    await transport.connect()
+
+    assert session.staged_config is not None
+    remote_directory, files = session.staged_config
+    assert remote_directory == "/remote/config/session-a"
+    transcript_paths = [
+        path for path in files if path.endswith(f"/{session_id}.jsonl")
+    ]
+    assert len(transcript_paths) == 1
+    assert b"first turn" in files[transcript_paths[0]]
+    assert session.started is not None
+    assert session.started[2]["CLAUDE_CONFIG_DIR"] == remote_directory
+    await transport.close()
 
 
 @pytest.mark.asyncio

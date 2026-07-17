@@ -1,0 +1,42 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: similar-case-analysis-agent
+  version: 0.1.0
+  labels:
+    domain: similar-case-analysis
+    template: analyst
+    display-name: 类案分析
+    description: 基于规则检索类案原文，生成带 case_id/chunk_id 引用和反例检查的证据化分析。
+    source: nexau-import
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: new-api-default
+    model: claude-sonnet-4-6
+    fallbackRoute: anthropic-official
+    fallbackModel: claude-sonnet-4-6
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/case-skill-index
+    - skills/case-skill-search
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+  subagents: []
+  hooks: []
+  permissions:
+    policy: production-standard
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 36
+    timeoutSeconds: 1800
+    maxBudgetUsd: 4
+    maxModelTokens: 400000

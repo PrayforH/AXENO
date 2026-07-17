@@ -6,6 +6,22 @@ import {
 } from "../src/lib/agent-studio";
 
 describe("Agent Studio effective contract", () => {
+  it("keeps the full public-opinion prompt, workflow and reference files", () => {
+    const skill = DEFAULT_STUDIO_DRAFT.skills[0];
+
+    expect(DEFAULT_STUDIO_DRAFT.version).toBe("0.2.1");
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt.length).toBeGreaterThan(1_000);
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain("外部检索必须由 Lead Agent");
+    expect(skill.instructions.length).toBeGreaterThan(1_000);
+    expect(skill.instructions).toContain("Build an evidence ledger");
+    expect(skill.files?.map((file) => file.path)).toEqual([
+      "references/report-contract.md",
+      "references/risk-rubric.md",
+    ]);
+    expect(skill.files?.[0].content).toContain("9. **来源清单**");
+    expect(skill.files?.[1].content).toContain("## Level 3 — critical");
+  });
+
   it("models Tavily as controlled MCP egress while keeping sandbox mandatory", () => {
     const contract = evaluateStudioDraft(DEFAULT_STUDIO_DRAFT);
 

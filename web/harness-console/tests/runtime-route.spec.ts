@@ -9,7 +9,9 @@ describe("assistant-ui AG-UI runtime", () => {
       "utf8",
     );
 
-    expect(shell).toContain('url: "/api/agui"');
+    expect(shell).toContain("agent_name: agentName");
+    expect(shell).toContain("agent_version: agentVersion");
+    expect(shell).toContain("`/api/agui?${query.toString()}`");
     expect(shell).toContain("useAgUiRuntime");
     expect(shell).toContain("createInputAttachmentAdapter");
     expect(shell).not.toContain("CopilotKit");

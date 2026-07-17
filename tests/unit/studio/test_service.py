@@ -199,6 +199,9 @@ class DriftRegistry:
             return stored.model_copy(update={"manifest_hash": "f" * 64})
         return stored
 
+    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
+        return await self._delegate.list_for_tenant(tenant_id)
+
 
 @pytest.mark.asyncio
 async def test_subagent_hash_drift_blocks_lead_publication() -> None:

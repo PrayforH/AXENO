@@ -26,6 +26,7 @@ class SandboxHandle(BaseModel):
     runtime_transport_factory: Callable[[object], object] | None = Field(
         default=None, exclude=True, repr=False
     )
+    deferred_tool_execution: bool = Field(default=False, exclude=True)
 
 
 class SandboxCommandResult(BaseModel):

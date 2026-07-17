@@ -28,6 +28,8 @@ export interface RunToolNode {
   name: string;
   status: WorkStatus;
   sequence: number;
+  arguments?: Record<string, unknown>;
+  resultSummary?: string;
 }
 
 export interface RunViewModel {
@@ -139,12 +141,13 @@ function taskNodes(items: readonly ActivityItem[]): RunTaskNode[] {
     const taskId = realTaskId ?? toolCallId ?? item.id;
     if (typeof taskId !== "string") continue;
     const parent = item.metadata.parent_tool_use_id;
+    const existing = tasks.get(taskId);
     tasks.set(taskId, {
       id: taskId,
       parentId: typeof parent === "string" ? parent : undefined,
       title: item.summary || item.title,
       status: workStatus(item),
-      sequence: item.sequence,
+      sequence: existing?.sequence ?? item.sequence,
       alias: typeof item.metadata.alias === "string" ? item.metadata.alias : undefined,
       agentVersion:
         typeof item.metadata.agent_version === "string"
@@ -177,11 +180,18 @@ function toolNodes(items: readonly ActivityItem[]): RunToolNode[] {
           : undefined;
     if (!toolCallId) continue;
     if (item.event_type === "tool.request" && item.kind === "tool") {
+      const argumentsValue = item.metadata.arguments;
       tools.set(toolCallId, {
         id: toolCallId,
         name: typeof item.metadata.name === "string" ? item.metadata.name : "工具",
         status: "running",
         sequence: item.sequence,
+        arguments:
+          typeof argumentsValue === "object" &&
+          argumentsValue !== null &&
+          !Array.isArray(argumentsValue)
+            ? argumentsValue as Record<string, unknown>
+            : undefined,
       });
       continue;
     }
@@ -196,6 +206,10 @@ function toolNodes(items: readonly ActivityItem[]): RunToolNode[] {
         tools.set(toolCallId, {
           ...tool,
           status: item.status === "failed" ? "failed" : "completed",
+          resultSummary:
+            typeof item.metadata.result_summary === "string"
+              ? item.metadata.result_summary
+              : undefined,
         });
       }
     }
@@ -215,7 +229,16 @@ export function reduceRunViewModel(
   const updated = Date.parse(lastTimestamp);
   const latestActive = [...items]
     .reverse()
-    .find((item) => !["run.queued", "run.provisioning"].includes(item.event_type));
+    .find(
+      (item) =>
+        ![
+          "run.queued",
+          "run.provisioning",
+          // Routing is an auditable per-Run fact, not a user-visible unit of
+          // work. Keep it in Run details without replacing the active status.
+          "model.route.selected",
+        ].includes(item.event_type),
+    );
   return {
     runId: activity.run_id,
     phase: phaseFor(previous?.runId === activity.run_id ? previous : undefined, items),

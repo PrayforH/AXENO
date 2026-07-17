@@ -7,8 +7,12 @@ def test_repository_agent_catalog_is_production_ready(tmp_path: Path) -> None:
     reports = check_catalog(Path("agents"), output_directory=tmp_path)
 
     assert {report.snapshot.manifest.metadata.name for report in reports} == {
+        "archive-assistant-agent",
+        "archive-file-classifier-agent",
         "echo-agent",
+        "govdoc-writer-agent",
         "helper-agent",
         "public-opinion-agent",
+        "similar-case-analysis-agent",
     }
-    assert len(list(tmp_path.glob("*.zip"))) == 3
+    assert len(list(tmp_path.glob("*.zip"))) == 7

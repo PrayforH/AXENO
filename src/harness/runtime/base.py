@@ -1,6 +1,6 @@
 """Runtime contract independent from a specific Agent SDK."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -8,9 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.core.models import ExecutionIdentity, Run, Session
 from harness.runtime.artifact_tools import ArtifactPublisher
-from harness.sandbox.base import SandboxIsolation
+from harness.sandbox.base import SandboxCommandResult, SandboxIsolation
 
 RuntimeTransportFactory = Callable[[object], object]
+SandboxCommandExecutor = Callable[
+    [Sequence[str], Mapping[str, str] | None, float],
+    Awaitable[SandboxCommandResult],
+]
 
 
 class RuntimeExecutionTimeoutError(TimeoutError):
@@ -34,12 +38,16 @@ class RuntimeContext(BaseModel):
     workspace: Path
     sandbox_provider: str = "local"
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE
+    remote_workspace: str | None = Field(default=None, exclude=True)
     assistant_message_id: str = Field(default="", exclude=True)
     input_files: tuple[str, ...] = ()
     identity: ExecutionIdentity | None = None
     memory_projection: str = Field(default="", exclude=True, repr=False)
     processed_input_paths: tuple[str, ...] = ()
     runtime_transport_factory: RuntimeTransportFactory | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    sandbox_command_executor: SandboxCommandExecutor | None = Field(
         default=None, exclude=True, repr=False
     )
     artifact_publisher: ArtifactPublisher | None = Field(

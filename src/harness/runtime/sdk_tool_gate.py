@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
@@ -22,6 +23,7 @@ from claude_agent_sdk.types import (
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.core.models import ApprovalStatus
+from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult
 from harness.policy.profiles import PolicyProfileRegistry
 from harness.policy.rules import PolicyEngine
@@ -35,6 +37,7 @@ from harness.runtime.input_redaction import (
     staged_input_paths,
     staged_read_path,
 )
+from harness.runtime.sandbox_tools import canonical_tool_name, proxy_tool_name
 
 
 class ToolGate(Protocol):
@@ -102,6 +105,11 @@ class _RunFileCapabilities:
 
     def __init__(self, context: RuntimeContext) -> None:
         self._workspace = context.workspace.resolve()
+        self._remote_workspace = (
+            PurePosixPath(context.remote_workspace)
+            if context.remote_workspace is not None
+            else None
+        )
         self._initial_exists: dict[Path, bool] = {}
         self._generated: set[Path] = set()
         self._pending_writes: dict[str, Path] = {}
@@ -117,6 +125,14 @@ class _RunFileCapabilities:
         pure = PurePosixPath(value)
         if pure.is_absolute() and len(pure.parts) >= 2 and pure.parts[1] == "workspace":
             candidate = self._workspace.joinpath(*pure.parts[2:])
+        elif (
+            pure.is_absolute()
+            and self._remote_workspace is not None
+            and pure.is_relative_to(self._remote_workspace)
+        ):
+            candidate = self._workspace.joinpath(
+                *pure.relative_to(self._remote_workspace).parts
+            )
         else:
             candidate = Path(value)
             if not candidate.is_absolute():
@@ -150,7 +166,7 @@ class _RunFileCapabilities:
 
     def note_success(self, hook_input: PostToolUseHookInput) -> None:
         target = self._pending_writes.pop(hook_input["tool_use_id"], None)
-        if hook_input["tool_name"] == "Write" and target is not None:
+        if canonical_tool_name(hook_input["tool_name"]) == "Write" and target is not None:
             self._generated.add(target)
 
     def note_failure(self, hook_input: PostToolUseFailureHookInput) -> None:
@@ -168,6 +184,7 @@ class SdkToolGate:
         approvals: ApprovalService,
         events: EventService,
         quotas: QuotaService | None = None,
+        observability: Observability | None = None,
     ) -> None:
         if (policy is None) == (profiles is None):
             raise ValueError("configure exactly one policy engine or profile registry")
@@ -176,6 +193,7 @@ class SdkToolGate:
         self._approvals = approvals
         self._events = events
         self._quotas = quotas
+        self._observability = observability
 
     def hooks(
         self,
@@ -202,6 +220,41 @@ class SdkToolGate:
                 }
         implicit_deny = PolicyEngine([])
         file_capabilities = _RunFileCapabilities(context)
+        tool_traces: dict[str, tuple[int, str, dict[str, Any], str]] = {}
+
+        def finish_tool_trace(
+            hook_input: PostToolUseHookInput | PostToolUseFailureHookInput,
+            *,
+            status: str,
+            error_type: str | None = None,
+        ) -> None:
+            if self._observability is None:
+                return
+            state = tool_traces.pop(hook_input["tool_use_id"], None)
+            if state is None:
+                return
+            started_at_ns, tool_name, arguments, selected_policy_id = state
+            ended_at_ns = time.time_ns()
+            self._observability.record_completed_span(
+                "harness.tool.run",
+                started_at_ns=started_at_ns,
+                ended_at_ns=ended_at_ns,
+                attributes={
+                    "run.id": context.run.run_id,
+                    "harness.tool.name": tool_name,
+                    "harness.tool.call_id": hook_input["tool_use_id"],
+                    "harness.tool.status": status,
+                    "harness.tool.duration_ms": max(
+                        0, round((ended_at_ns - started_at_ns) / 1_000_000)
+                    ),
+                    "harness.policy.profile": selected_policy_id,
+                    "harness.sandbox.provider": context.sandbox_provider,
+                    "harness.sandbox.isolation": context.sandbox_isolation.value,
+                },
+                input_value=arguments,
+                output_value={"status": status},
+                error_type=error_type,
+            )
 
         async def pre_tool_use(
             hook_input: HookInput,
@@ -226,13 +279,45 @@ class SdkToolGate:
                 elif agent_type or agent_id:
                     selected_policy_id = "unknown-subagent"
                     selected_policy = implicit_deny
-            return await self._authorize(
+            canonical_name = canonical_tool_name(typed_input["tool_name"])
+            tool_traces[typed_input["tool_use_id"]] = (
+                time.time_ns(),
+                canonical_name,
+                redact_tool_arguments(
+                    canonical_name,
+                    dict(typed_input["tool_input"]),
+                ),
+                selected_policy_id,
+            )
+            output = await self._authorize(
                 context,
                 typed_input,
                 policy=selected_policy,
                 policy_id=selected_policy_id,
                 file_capabilities=file_capabilities,
+                allowed_subagent_aliases=frozenset(subagent_policies),
             )
+            specific = cast(dict[str, Any], output).get("hookSpecificOutput", {})
+            decision = (
+                str(cast(dict[str, Any], specific).get("permissionDecision", ""))
+                if isinstance(specific, dict)
+                else ""
+            )
+            if decision == "deny":
+                denied = cast(
+                    PostToolUseFailureHookInput,
+                    {
+                        **typed_input,
+                        "hook_event_name": "PostToolUseFailure",
+                        "error": "policy denied",
+                    },
+                )
+                finish_tool_trace(
+                    denied,
+                    status="denied",
+                    error_type="policy_denied",
+                )
+            return output
 
         async def post_tool_use(
             hook_input: HookInput,
@@ -248,6 +333,30 @@ class SdkToolGate:
             _hook_context: HookContext,
         ) -> HookJSONOutput:
             file_capabilities.note_failure(cast(PostToolUseFailureHookInput, hook_input))
+            return cast(HookJSONOutput, {})
+
+        async def trace_tool_success(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _hook_context: HookContext,
+        ) -> HookJSONOutput:
+            finish_tool_trace(
+                cast(PostToolUseHookInput, hook_input),
+                status="succeeded",
+            )
+            return cast(HookJSONOutput, {})
+
+        async def trace_tool_failure(
+            hook_input: HookInput,
+            _tool_use_id: str | None,
+            _hook_context: HookContext,
+        ) -> HookJSONOutput:
+            typed_input = cast(PostToolUseFailureHookInput, hook_input)
+            finish_tool_trace(
+                typed_input,
+                status="failed",
+                error_type=redact_text(str(typed_input.get("error", "tool_failed"))),
+            )
             return cast(HookJSONOutput, {})
 
         async def release_delegation(
@@ -268,12 +377,20 @@ class SdkToolGate:
         return {
             "PreToolUse": [HookMatcher(matcher=None, hooks=[pre_tool_use], timeout=900.0)],
             "PostToolUse": [
-                HookMatcher(matcher="Write", hooks=[post_tool_use]),
+                HookMatcher(
+                    matcher=f"Write|{proxy_tool_name('Write')}",
+                    hooks=[post_tool_use],
+                ),
                 HookMatcher(matcher="Task|Agent", hooks=[release_delegation]),
+                HookMatcher(matcher=None, hooks=[trace_tool_success]),
             ],
             "PostToolUseFailure": [
-                HookMatcher(matcher="Write", hooks=[post_tool_use_failure]),
+                HookMatcher(
+                    matcher=f"Write|{proxy_tool_name('Write')}",
+                    hooks=[post_tool_use_failure],
+                ),
                 HookMatcher(matcher="Task|Agent", hooks=[release_delegation]),
+                HookMatcher(matcher=None, hooks=[trace_tool_failure]),
             ],
         }
 
@@ -285,8 +402,10 @@ class SdkToolGate:
         policy: PolicyEngine,
         policy_id: str,
         file_capabilities: _RunFileCapabilities,
+        allowed_subagent_aliases: frozenset[str] = frozenset(),
     ) -> SyncHookJSONOutput:
-        tool_name = hook_input["tool_name"]
+        raw_tool_name = hook_input["tool_name"]
+        tool_name = canonical_tool_name(raw_tool_name)
         tool_call_id = hook_input["tool_use_id"]
         arguments = hook_input["tool_input"]
         request_payload: dict[str, Any] = {
@@ -326,6 +445,21 @@ class SdkToolGate:
             event_type="tool.request",
             payload=request_payload,
         )
+        if tool_name in {"Task", "Agent"} and allowed_subagent_aliases:
+            requested_alias = next(
+                (
+                    str(arguments[key])
+                    for key in ("subagent_type", "agent", "name")
+                    if isinstance(arguments.get(key), str) and arguments[key]
+                ),
+                "",
+            )
+            if requested_alias not in allowed_subagent_aliases:
+                reason = (
+                    "subagent role is not declared by the published Agent Manifest"
+                )
+                await self._append_denied(context, tool_call_id, reason)
+                return _hook_output("deny", reason)
         write_target: Path | None = None
         if tool_name in {"Write", "Edit"}:
             write_target = file_capabilities.target(arguments)
@@ -390,7 +524,7 @@ class SdkToolGate:
 
         if self._quotas is not None:
             try:
-                if tool_name.startswith("mcp__"):
+                if raw_tool_name.startswith("mcp__"):
                     await self._quotas.consume(
                         tenant_id=context.run.tenant_id,
                         resource=QuotaResource.MCP_REQUESTS,

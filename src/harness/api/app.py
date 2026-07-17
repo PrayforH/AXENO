@@ -91,8 +91,14 @@ async def _trace_request(request: Request, call_next: RequestResponseEndpoint) -
     container: ApiContainer = request.app.state.container
     started = monotonic()
     operation = _metric_operation(request.method, request.url.path)
+    carrier = {
+        name: value
+        for name in ("traceparent", "tracestate", "baggage")
+        if (value := request.headers.get(name))
+    }
     with container.observability.span(
         "harness.api.request",
+        carrier=carrier or None,
         attributes={"http.method": request.method, "http.route": request.url.path},
     ):
         try:

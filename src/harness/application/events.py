@@ -1,11 +1,17 @@
 """Ordered event persistence and fan-out."""
 
-from typing import Any
+from typing import Any, Protocol
 
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import EventSequenceConflictError
 from harness.core.events import RunEvent
 from harness.core.ports import EventBus, EventRepository
+
+
+class TraceContext(Protocol):
+    def current_trace_id(self) -> str | None: ...
+
+    def current_span_id(self) -> str | None: ...
 
 
 class EventService:
@@ -16,11 +22,13 @@ class EventService:
         *,
         clock: Clock,
         id_generator: IdGenerator,
+        trace_context: TraceContext | None = None,
     ) -> None:
         self._repository = repository
         self._bus = bus
         self._clock = clock
         self._id_generator = id_generator
+        self._trace_context = trace_context
 
     async def list_after(
         self,
@@ -48,6 +56,16 @@ class EventService:
             type=event_type,
             timestamp=self._clock(),
             payload=payload or {},
+            trace_id=(
+                self._trace_context.current_trace_id()
+                if self._trace_context is not None
+                else None
+            ),
+            span_id=(
+                self._trace_context.current_span_id()
+                if self._trace_context is not None
+                else None
+            ),
         )
         while True:
             current = await self._repository.list_after(tenant_id, run_id, 0)

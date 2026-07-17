@@ -64,12 +64,41 @@ class AguiHistoryToolCall(BaseModel):
     function: AguiHistoryFunction
 
 
+class AguiHistoryTextPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["text"] = "text"
+    text: str
+
+
+class AguiHistoryInputSource(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["url"] = "url"
+    value: str
+    mime_type: str = Field(serialization_alias="mimeType")
+
+
+class AguiHistoryInputMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    filename: str
+
+
+class AguiHistoryInputPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["image", "audio", "video", "document"]
+    source: AguiHistoryInputSource
+    metadata: AguiHistoryInputMetadata
+
+
 class AguiHistoryMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
     role: str
-    content: str
+    content: str | list[AguiHistoryTextPart | AguiHistoryInputPart]
     tool_calls: list[AguiHistoryToolCall] | None = Field(
         default=None, serialization_alias="toolCalls"
     )
@@ -266,9 +295,48 @@ async def get_agui_thread_history(
     for run in sorted(runs, key=lambda item: (item.created_at, item.run_id)):
         prompt = run.input.get("prompt")
         if isinstance(prompt, str) and prompt:
+            raw_input_ids = run.input.get("input_artifact_ids", [])
+            input_ids = (
+                [
+                    item
+                    for item in cast(list[object], raw_input_ids)
+                    if isinstance(item, str) and item
+                ]
+                if isinstance(raw_input_ids, list)
+                else []
+            )
+            input_artifacts = (
+                await container.input_artifacts.resolve_for_run(
+                    tenant_id=identity.tenant_id,
+                    user_id=identity.user_id,
+                    input_artifact_ids=input_ids,
+                )
+                if input_ids
+                else []
+            )
+            content: str | list[AguiHistoryTextPart | AguiHistoryInputPart]
+            if input_artifacts:
+                content = [
+                    AguiHistoryTextPart(text=prompt),
+                    *(
+                        AguiHistoryInputPart(
+                            type=_history_input_type(artifact.media_type),
+                            source=AguiHistoryInputSource(
+                                value=artifact.input_artifact_id,
+                                mime_type=artifact.media_type,
+                            ),
+                            metadata=AguiHistoryInputMetadata(
+                                filename=artifact.name
+                            ),
+                        )
+                        for artifact in input_artifacts
+                    ),
+                ]
+            else:
+                content = prompt
             messages.append(
                 AguiHistoryMessage(
-                    id=f"user-{run.run_id}", role="user", content=prompt
+                    id=f"user-{run.run_id}", role="user", content=content
                 )
             )
         events = await container.observed_events.list_after(
@@ -351,6 +419,18 @@ async def get_agui_thread_history(
             for artifact in artifacts
         )
     return AguiThreadHistory(thread_id=thread_id, messages=messages)
+
+
+def _history_input_type(
+    media_type: str,
+) -> Literal["image", "audio", "video", "document"]:
+    if media_type.startswith("image/"):
+        return "image"
+    if media_type.startswith("audio/"):
+        return "audio"
+    if media_type.startswith("video/"):
+        return "video"
+    return "document"
 
 
 def _conversation_prompts(runs: list[Run]) -> list[str]:

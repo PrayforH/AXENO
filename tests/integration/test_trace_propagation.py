@@ -1,8 +1,13 @@
+from dataclasses import replace
+
 import pytest
+from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import StatusCode
 
+from harness.api.app import create_app
+from harness.api.dependencies import build_memory_container
 from harness.config import Settings
 from harness.observability.provider import build_observability
 
@@ -40,6 +45,42 @@ def test_trace_context_propagates_api_to_worker_runtime() -> None:
     assert worker_context.trace_id == runtime_context.trace_id
     assert by_name["worker.run"].parent is not None
     assert by_name["runtime.execute"].parent is not None
+
+
+@pytest.mark.asyncio
+async def test_api_request_continues_incoming_web_trace() -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+
+    trace_id = "1234567890abcdef1234567890abcdef"
+    parent_span_id = "1234567890abcdef"
+    container = replace(
+        build_memory_container(),
+        observability=observability,
+    )
+    app = create_app(container)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/healthz",
+            headers={
+                "traceparent": f"00-{trace_id}-{parent_span_id}-01",
+            },
+        )
+
+    assert response.status_code == 200
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    api = spans["harness.api.request"]
+    assert api.context is not None
+    assert api.context.trace_id == int(trace_id, 16)
+    assert api.parent is not None
+    assert f"{api.parent.span_id:016x}" == parent_span_id
 
 
 def test_bound_attributes_propagate_to_nested_spans() -> None:
@@ -106,6 +147,53 @@ def test_trace_resource_labels_the_deployment_environment() -> None:
     resource = exporter.get_finished_spans()[0].resource
     assert resource.attributes["service.name"] == "claude-agent-harness"
     assert resource.attributes["deployment.environment.name"] == "staging"
+
+
+def test_trace_content_is_opt_in_redacted_and_bounded() -> None:
+    disabled_exporter = InMemorySpanExporter()
+    disabled = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=disabled_exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    with disabled.span("content.off"):
+        disabled.annotate_current_io(
+            input_value="private question",
+            output_value="private answer",
+            trace_level=True,
+        )
+    disabled_attributes = disabled_exporter.get_finished_spans()[0].attributes
+    assert disabled_attributes is not None
+    assert "langfuse.trace.input" not in disabled_attributes
+    assert "langfuse.trace.output" not in disabled_attributes
+
+    exporter = InMemorySpanExporter()
+    enabled = build_observability(
+        Settings(
+            otel_enabled=True,
+            otlp_endpoint="http://unused/v1/traces",
+            otel_content_capture="redacted",
+            otel_content_max_chars=256,
+        ),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    with enabled.span("content.redacted"):
+        enabled.annotate_current_io(
+            input_value="question token=top-secret " + ("context " * 80),
+            output_value="answer authorization: Bearer private-value",
+            trace_level=True,
+        )
+    attributes = exporter.get_finished_spans()[0].attributes
+    assert attributes is not None
+    trace_input = str(attributes["langfuse.trace.input"])
+    assert len(trace_input) == 256
+    assert trace_input.endswith("…")
+    assert attributes["langfuse.trace.output"] == (
+        "answer authorization: [REDACTED]"
+    )
+    assert "top-secret" not in repr(attributes)
+    assert "private-value" not in repr(attributes)
 
 
 def test_span_records_failure_without_exporting_sensitive_attributes() -> None:

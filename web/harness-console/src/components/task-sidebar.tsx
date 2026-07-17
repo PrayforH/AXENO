@@ -83,7 +83,7 @@ export function TaskSidebar({
   currentThreadId: string;
   collapsed: boolean;
   onToggle: () => void;
-  onSelect: (threadId: string) => void;
+  onSelect: (task: TaskSummary) => void;
   onNewTask: () => void;
   refreshToken: number;
   onApprovalHandled: () => void;
@@ -218,7 +218,7 @@ export function TaskSidebar({
                 role="listitem"
                 key={task.thread_id}
                 className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
-                onClick={() => onSelect(task.thread_id)}
+                onClick={() => onSelect(task)}
               >
                 <span className="task-list-title">{task.title}</span>
                 <span className="task-list-meta">

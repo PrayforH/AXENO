@@ -11,6 +11,9 @@ from harness.core.errors import NotFoundError
 
 FIXTURE_MANIFEST = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 HEADERS = {"X-Tenant-ID": "tenant-a", "X-User-ID": "user-1"}
+PPTX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+)
 
 
 def _request(*, thread_id: str, run_id: str, prompt: str) -> dict[str, object]:
@@ -201,6 +204,75 @@ async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agui_history_restores_user_input_attachments() -> None:
+    app = create_memory_app(auto_execute=True)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
+        )
+        upload = await client.post(
+            "/v1/input-artifacts",
+            files={
+                "file": (
+                    "quarterly-review.pptx",
+                    b"presentation",
+                    PPTX_MEDIA_TYPE,
+                )
+            },
+            headers=HEADERS,
+        )
+        input_artifact_id = upload.json()["input_artifact_id"]
+        request = _request(
+            thread_id="thread-with-ppt",
+            run_id="client-with-ppt",
+            prompt="根据附件生成汇报",
+        )
+        request["messages"] = [
+            {
+                "id": "message-with-ppt",
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "根据附件生成汇报"},
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "data",
+                            "value": input_artifact_id,
+                            "mimeType": PPTX_MEDIA_TYPE,
+                        },
+                        "metadata": {"filename": "quarterly-review.pptx"},
+                    },
+                ],
+            }
+        ]
+        response = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json=request,
+            headers=HEADERS,
+        )
+        history = await client.get(
+            "/v1/agui/threads/thread-with-ppt/history", headers=HEADERS
+        )
+
+    assert upload.status_code == 201
+    assert response.status_code == 200
+    user = history.json()["messages"][0]
+    assert user["content"][0] == {
+        "type": "text",
+        "text": "根据附件生成汇报",
+    }
+    assert user["content"][1] == {
+        "type": "document",
+        "source": {
+            "type": "url",
+            "value": input_artifact_id,
+            "mimeType": PPTX_MEDIA_TYPE,
+        },
+        "metadata": {"filename": "quarterly-review.pptx"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_edited_multiturn_branch_updates_title_and_hides_superseded_turn() -> None:
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -243,11 +315,20 @@ async def test_edited_multiturn_branch_updates_title_and_hides_superseded_turn()
     assistant_messages = [
         item["content"] for item in messages if item["role"] == "assistant"
     ]
+    assistant_activity_runs = [
+        json.loads(item["toolCalls"][0]["function"]["arguments"])["activity"][
+            "run_id"
+        ]
+        for item in messages
+        if item["role"] == "assistant"
+    ]
     assert user_messages == ["你好", "不写入了，先单次生成可下载报告"]
     assert assistant_messages == [
         "Echo: 你好",
         "Echo: 不写入了，先单次生成可下载报告",
     ]
+    assert len(assistant_activity_runs) == 2
+    assert len(set(assistant_activity_runs)) == 2
 
 
 @pytest.mark.asyncio

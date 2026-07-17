@@ -79,7 +79,11 @@ async def test_create_run_annotates_the_api_trace_with_session_identity() -> Non
     ids = id_generator()
     exporter = InMemorySpanExporter()
     observability = build_observability(
-        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        Settings(
+            otel_enabled=True,
+            otlp_endpoint="http://unused/v1/traces",
+            otel_content_capture="redacted",
+        ),
         exporter=exporter,
         processor_factory=SimpleSpanProcessor,
     )
@@ -104,13 +108,22 @@ async def test_create_run_annotates_the_api_trace_with_session_identity() -> Non
     )
 
     with observability.span("harness.api.request"):
-        run = await service.create("tenant-a", "session-1", "idem-1")
+        run = await service.create(
+            "tenant-a",
+            "session-1",
+            "idem-1",
+            input={"prompt": "用户问题 token=private-value"},
+        )
 
     span = exporter.get_finished_spans()[0]
     assert span.attributes is not None
     assert span.attributes["langfuse.session.id"] == "session-1"
+    assert span.attributes["langfuse.trace.metadata.run_id"] == run.run_id
     assert span.attributes["session.id"] == "session-1"
     assert span.attributes["run.id"] == run.run_id
+    assert span.attributes["langfuse.trace.input"] == (
+        "用户问题 token=[REDACTED]"
+    )
     assert "traceparent" in run.trace_context
 
 

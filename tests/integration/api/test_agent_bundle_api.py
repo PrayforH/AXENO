@@ -58,6 +58,35 @@ async def test_production_api_accepts_bundle_and_rejects_server_local_path(
 
 
 @pytest.mark.asyncio
+async def test_published_bundle_is_available_in_the_task_agent_catalog(
+    tmp_path: Path,
+) -> None:
+    archive, _report = pack_agent_package(MANIFEST, output_directory=tmp_path)
+    app = create_memory_app(settings=production_settings())
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        published = await client.post(
+            "/v1/agents/bundles",
+            content=archive.read_bytes(),
+            headers={**HEADERS, "Content-Type": "application/zip"},
+        )
+        catalog = await client.get("/v1/agents", headers=HEADERS)
+
+    assert published.status_code == 201
+    assert catalog.status_code == 200
+    assert catalog.json() == [
+        {
+            "name": "public-opinion-agent",
+            "version": "0.1.2",
+            "display_name": "public-opinion-agent",
+            "domain": "public-opinion",
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_bundle_api_returns_structured_validation_error() -> None:
     app = create_memory_app(settings=production_settings())
 

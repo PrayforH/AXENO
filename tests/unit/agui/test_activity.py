@@ -10,6 +10,8 @@ def event(
     event_type: str,
     payload: dict[str, object] | None = None,
     sequence: int = 1,
+    *,
+    trace_id: str | None = "0123456789abcdef0123456789abcdef",
 ) -> RunEvent:
     return RunEvent(
         event_id=f"event-{sequence}",
@@ -20,6 +22,7 @@ def event(
         type=event_type,
         timestamp=NOW,
         payload=payload or {},
+        trace_id=trace_id,
     )
 
 
@@ -33,6 +36,7 @@ def test_run_queued_creates_one_stable_activity_snapshot() -> None:
     assert dumped["activityType"] == "harness.run.v1"
     assert dumped["content"] == {
         "run_id": "run-1",
+        "trace_id": "0123456789abcdef0123456789abcdef",
         "status": "queued",
         "started_at": "2026-07-13T00:00:00Z",
         "items": [
@@ -101,14 +105,72 @@ def test_model_and_result_append_safe_activity_deltas() -> None:
     assert "private-session" not in repr(result)
 
 
-def test_suppresses_token_and_thinking_noise() -> None:
-    assert activity_projection(event("message.delta", {"text": "token"})) == []
+def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -> None:
+    commentary = activity_projection(
+        event(
+            "message.delta",
+            {"text": "我先读取配置，再验证运行结果。", "message_id": "assistant-1"},
+        )
+    )[0].model_dump(by_alias=True)
+
+    assert commentary["patch"][0]["value"]["kind"] == "analysis"
+    assert commentary["patch"][0]["value"]["summary"] == (
+        "我先读取配置，再验证运行结果。"
+    )
+    assert commentary["patch"][0]["value"]["metadata"] == {
+        "message_id": "assistant-1"
+    }
     assert (
         activity_projection(
             event("runtime.system", {"subtype": "thinking_tokens"})
         )
         == []
     )
+
+
+def test_tool_activity_keeps_redacted_arguments_and_compact_result_facts() -> None:
+    request = activity_projection(
+        event(
+            "tool.request",
+            {
+                "tool_call_id": "tool-1",
+                "name": "Grep",
+                "arguments": {
+                    "pattern": "publishedVersion",
+                    "path": "web/harness-console",
+                    "api_key": "never-show",
+                },
+            },
+            2,
+        )
+    )[0].model_dump(by_alias=True)
+    result = activity_projection(
+        event(
+            "tool.result",
+            {
+                "tool_call_id": "tool-1",
+                "content": "first match\nsecond match\nthird match",
+                "is_error": False,
+            },
+            3,
+        )
+    )[0].model_dump(by_alias=True)
+
+    assert request["patch"][0]["value"]["metadata"] == {
+        "name": "Grep",
+        "tool_call_id": "tool-1",
+        "arguments": {
+            "pattern": "publishedVersion",
+            "path": "web/harness-console",
+            "api_key": "[REDACTED]",
+        },
+    }
+    assert result["patch"][0]["value"]["metadata"] == {
+        "tool_call_id": "tool-1",
+        "result_summary": "返回 3 行 · 36 字符",
+    }
+    assert "never-show" not in repr(request)
+    assert "first match" not in repr(result)
 
 
 def test_subagent_activity_keeps_parent_and_summary() -> None:
@@ -171,6 +233,7 @@ def test_build_run_activity_folds_each_turn_for_history_replay() -> None:
 
     assert activity is not None
     assert activity["run_id"] == "run-1"
+    assert activity["trace_id"] == "0123456789abcdef0123456789abcdef"
     assert activity["status"] == "succeeded"
     assert activity["metrics"] == {"turns": 2, "cost_usd": 0.01}
     assert [item["event_type"] for item in activity["items"]] == [

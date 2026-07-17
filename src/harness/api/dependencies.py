@@ -107,11 +107,12 @@ from harness.runtime.default_tools import (
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
-from harness.sandbox.base import SandboxProvider
 from harness.sandbox.daytona import (
     DaytonaSandboxProvider,
     SdkDaytonaClient,
 )
+from harness.sandbox.deferred import DeferredToolSandboxProvider
+from harness.sandbox.e2b import E2BSandboxProvider, SdkE2BClient
 from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
@@ -273,9 +274,7 @@ def build_memory_container(
         for name in ("object-store", "sdk-session", "memory", "langfuse", "postgresql")
     )
 
-    async def lifecycle_scopes(
-        tenant_id: str, scope: LifecycleScope
-    ) -> tuple[LifecycleScope, ...]:
+    async def lifecycle_scopes(tenant_id: str, scope: LifecycleScope) -> tuple[LifecycleScope, ...]:
         if scope.kind is not LifecycleScopeKind.SESSION:
             return (scope,)
         session = await sessions.get(tenant_id, scope.subject_id)
@@ -331,6 +330,7 @@ def build_memory_container(
         bus,
         clock=clock,
         id_generator=id_generator,
+        trace_context=observability,
     )
 
     async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
@@ -361,6 +361,7 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
         queue=queue,
+        observability=observability,
     )
     artifact_service = ArtifactService(
         runs=runs,
@@ -448,16 +449,12 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
     )
-    memory_tokens = MemoryWorkloadTokenService(
-        resolved_settings.memory_workload_token_secret
-    )
+    memory_tokens = MemoryWorkloadTokenService(resolved_settings.memory_workload_token_secret)
     memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
     remote_memory_mcp = RemoteMemoryMcpProvider(
         resolved_settings.memory_mcp_public_url, memory_tokens
     )
-    memory_service = UserMemoryService(
-        memory_repository, clock=clock, memory_bank=memory_bank
-    )
+    memory_service = UserMemoryService(memory_repository, clock=clock, memory_bank=memory_bank)
     workspace_service = WorkspaceService(
         artifact_store,
         snapshots=workspace_snapshot_repository,
@@ -504,7 +501,7 @@ def build_memory_container(
         daytona_api_key = resolved_settings.daytona_api_key.get_secret_value()
         if not daytona_api_key:
             raise ValueError("HARNESS_DAYTONA_API_KEY is required for Daytona")
-        sandbox: SandboxProvider = DaytonaSandboxProvider(
+        daytona = DaytonaSandboxProvider(
             client=SdkDaytonaClient.from_config(
                 api_key=daytona_api_key,
                 api_url=resolved_settings.daytona_api_url or None,
@@ -517,6 +514,26 @@ def build_memory_container(
             delete_on_destroy=resolved_settings.daytona_delete_on_destroy,
             auto_stop_interval_minutes=(resolved_settings.daytona_auto_stop_interval_minutes),
             auto_delete_interval_minutes=(resolved_settings.daytona_auto_delete_interval_minutes),
+            session_reuse_enabled=resolved_settings.daytona_session_reuse_enabled,
+            session_idle_timeout_seconds=(resolved_settings.daytona_session_idle_timeout_seconds),
+            warm_pool_max_sessions=(resolved_settings.daytona_warm_pool_max_sessions),
+            max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
+            max_collect_members=resolved_settings.workspace_archive_max_members,
+        )
+        sandbox = daytona
+        sandbox_maintenance = daytona.reap_expired
+    elif resolved_settings.sandbox_provider == "e2b":
+        e2b_api_key = resolved_settings.e2b_api_key.get_secret_value()
+        if not e2b_api_key:
+            raise ValueError("HARNESS_E2B_API_KEY is required for E2B")
+        sandbox = E2BSandboxProvider(
+            client=SdkE2BClient(api_key=e2b_api_key),
+            template=resolved_settings.e2b_template,
+            timeout_seconds=resolved_settings.e2b_timeout_seconds,
+            allow_internet_access=resolved_settings.e2b_allow_internet_access,
+            remote_workspace_root=resolved_settings.e2b_remote_workspace_root,
+            cli_version=resolved_settings.e2b_claude_cli_version,
+            cli_path=resolved_settings.e2b_claude_cli_path,
             max_collect_bytes=resolved_settings.workspace_archive_max_bytes,
             max_collect_members=resolved_settings.workspace_archive_max_members,
         )
@@ -569,6 +586,20 @@ def build_memory_container(
         sandbox_maintenance = kubernetes.reap_expired
     else:
         sandbox = LocalSandboxProvider()
+    preflight_sandbox = sandbox
+    if (
+        resolved_settings.runtime == "claude-sdk"
+        and resolved_settings.sandbox_execution_mode == "worker_cli_deferred"
+    ):
+        if resolved_settings.sandbox_provider == "local":
+            raise ValueError(
+                "HARNESS_SANDBOX_EXECUTION_MODE=worker_cli_deferred requires "
+                "Daytona, E2B, or Kubernetes"
+            )
+        sandbox = DeferredToolSandboxProvider(
+            preflight_sandbox,
+            provider_name=resolved_settings.sandbox_provider,
+        )
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
         model_probe = FakeModelPreflightProbe()
@@ -589,6 +620,7 @@ def build_memory_container(
                 approvals=approval_service,
                 events=event_service,
                 quotas=quotas,
+                observability=observability,
             ),
             memory_service=memory_service,
             memory_bank=memory_bank,
@@ -599,7 +631,7 @@ def build_memory_container(
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
     preflight_runner = LivePreflightRunner(
         studio=studio_service,
-        sandbox=sandbox,
+        sandbox=preflight_sandbox,
         model_probe=model_probe,
         mcp_probe=mcp_probe,
         policies=policy_profiles,
@@ -677,9 +709,7 @@ def build_memory_container(
         MaintenanceReaper("memory-expiry", "memory", memory_bank.reap_expired),
     ]
     if sandbox_maintenance is not None:
-        maintenance.append(
-            MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance)
-        )
+        maintenance.append(MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance))
     reliability_controller = ReliabilityController(
         runs=runs,
         events=event_service,
@@ -828,9 +858,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "operations:read",
         }
     ),
-    "viewer": frozenset(
-        {"tasks:read", "studio:read", "data:lifecycle:self", "operations:read"}
-    ),
+    "viewer": frozenset({"tasks:read", "studio:read", "data:lifecycle:self", "operations:read"}),
 }
 
 

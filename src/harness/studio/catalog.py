@@ -180,6 +180,27 @@ def default_capability_catalog() -> CapabilityCatalog:
             ),
             ExecutionProfileMetadata.model_validate(
                 {
+                    "profileId": "e2b-public-egress",
+                    "label": "E2B 公网隔离执行",
+                    "description": ("在 E2B 隔离微虚拟机中执行，允许访问审核过的公网模型与 MCP。"),
+                    "sandboxProvider": "e2b",
+                    "networkAccess": (
+                        NetworkAccess.NONE,
+                        NetworkAccess.EXTERNAL,
+                    ),
+                    "risk": CapabilityRisk.MEDIUM,
+                    "cpuMillis": 2000,
+                    "memoryMiB": 4096,
+                    "diskMiB": 20480,
+                    "ttlSeconds": 3600,
+                    "networkPolicyId": "registered-public-mcp",
+                    "allowedMcpReferences": ("tavily-readonly",),
+                    "providerConfigReference": "e2b-managed",
+                    "productionAllowed": True,
+                }
+            ),
+            ExecutionProfileMetadata.model_validate(
+                {
                     "profileId": "gvisor-production",
                     "label": "私有化 gVisor",
                     "description": "每个 Run 在 Kubernetes gVisor Pod 中强隔离执行。",

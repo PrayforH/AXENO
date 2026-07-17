@@ -51,6 +51,22 @@ export function downloadArtifact(
   );
 }
 
+export function downloadInputArtifact(
+  inputArtifactId: string,
+  request: Request,
+  fetcher: typeof fetch = fetch,
+  environment: ServerEnvironment = process.env,
+): Promise<Response> {
+  const config = getHarnessServerConfig(environment);
+  return authenticatedFetch(
+    request,
+    `${config.apiUrl}/v1/input-artifacts/${encodeURIComponent(inputArtifactId)}/content`,
+    {},
+    config,
+    fetcher,
+  );
+}
+
 async function authenticatedFetch(
   request: Request,
   url: string,

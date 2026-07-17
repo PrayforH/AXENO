@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5,10 +6,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from claude_agent_sdk import ClaudeAgentOptions
+from daytona import DaytonaNotFoundError
 
 from harness.core.models import Run, RunStatus
 from harness.sandbox import daytona as daytona_module
-from harness.sandbox.base import SandboxIsolation
+from harness.sandbox.base import SandboxHandle, SandboxIsolation
 from harness.sandbox.daytona import (
     DaytonaRemoteSandbox,
     DaytonaSandboxProvider,
@@ -225,12 +228,20 @@ class FakeSandbox:
         self.uploads: dict[str, bytes] = {}
         self.remote_files: dict[str, bytes] = {}
         self.ensured_cli: tuple[str, str] | None = None
+        self.ensure_cli_calls = 0
         self.command_session = FakeRemoteCommandSession()
 
+    async def healthcheck(self) -> bool:
+        return True
+
     async def ensure_claude_cli(self, *, version: str, path: str) -> None:
+        self.ensure_cli_calls += 1
         self.ensured_cli = (version, path)
 
     async def create_folder(self, path: str) -> None:
+        del path
+
+    async def remove_tree(self, path: str) -> None:
         del path
 
     async def upload(self, remote_path: str, content: bytes) -> None:
@@ -279,10 +290,15 @@ class FakeClient:
         self.deleted.append(sandbox.id)
 
 
-def run(*, existing: str | None = None) -> Run:
+def run(
+    *,
+    existing: str | None = None,
+    run_id: str = "run-a",
+    session_id: str = "session-a",
+) -> Run:
     return Run(
-        run_id="run-a",
-        session_id="session-a",
+        run_id=run_id,
+        session_id=session_id,
         tenant_id="tenant-a",
         status=RunStatus.PROVISIONING,
         idempotency_key="daytona",
@@ -290,6 +306,65 @@ def run(*, existing: str | None = None) -> Run:
         updated_at=datetime(2026, 7, 13, tzinfo=UTC),
         input={"daytona_sandbox_id": existing} if existing else {},
     )
+
+
+class WarmFakeSandbox(FakeSandbox):
+    def __init__(self, sandbox_id: str, name: str) -> None:
+        super().__init__(sandbox_id)
+        self.name = name
+        self.removed: list[str] = []
+        self.healthy = True
+
+    async def healthcheck(self) -> bool:
+        return self.healthy
+
+    async def remove_tree(self, path: str) -> None:
+        self.removed.append(path)
+
+
+class WarmFakeClient:
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+        self.by_name: dict[str, WarmFakeSandbox] = {}
+        self.started: list[str] = []
+        self.stopped: list[str] = []
+        self.deleted: list[str] = []
+
+    async def create(self, **parameters: Any) -> WarmFakeSandbox:
+        sandbox = WarmFakeSandbox(
+            f"daytona-{len(self.created) + 1}",
+            str(parameters["name"]),
+        )
+        self.created.append(parameters)
+        self.by_name[sandbox.name] = sandbox
+        return sandbox
+
+    async def get(self, sandbox_id: str) -> WarmFakeSandbox:
+        sandbox = self.by_name.get(sandbox_id)
+        if sandbox is None:
+            sandbox = next(
+                (
+                    item
+                    for item in self.by_name.values()
+                    if item.id == sandbox_id
+                ),
+                None,
+            )
+        if sandbox is None:
+            raise DaytonaNotFoundError("missing", status_code=404)
+        return sandbox
+
+    async def start(self, sandbox: DaytonaRemoteSandbox) -> None:
+        self.started.append(sandbox.id)
+
+    async def stop(self, sandbox: DaytonaRemoteSandbox) -> None:
+        self.stopped.append(sandbox.id)
+
+    async def delete(self, sandbox: DaytonaRemoteSandbox) -> None:
+        self.deleted.append(sandbox.id)
+        for name, item in tuple(self.by_name.items()):
+            if item.id == sandbox.id:
+                del self.by_name[name]
 
 
 @pytest.mark.asyncio
@@ -333,6 +408,12 @@ async def test_provider_creates_identity_labeled_sandbox_and_syncs_workspace(
         "harness.session": "session-a",
         "harness.run": "run-a",
     }
+    assert handle.runtime_transport_factory is not None
+    transport_options = ClaudeAgentOptions()
+    handle.runtime_transport_factory(transport_options)
+    assert transport_options.env["CLAUDE_CONFIG_DIR"].startswith(
+        "/workspace/harness/.claude-config/"
+    )
     assert client.sandbox.uploads[
         "/workspace/harness/run-a/inputs/facts.txt"
     ] == b"facts"
@@ -359,6 +440,169 @@ async def test_provider_reuses_and_starts_named_sandbox(tmp_path: Path) -> None:
     assert client.started == ["daytona-existing"]
     assert client.stopped == ["daytona-existing"]
     assert client.deleted == []
+
+
+@pytest.mark.asyncio
+async def test_provider_reuses_warm_sandbox_for_same_session(tmp_path: Path) -> None:
+    client = WarmFakeClient()
+    now = [100.0]
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        delete_on_destroy=True,
+        session_reuse_enabled=True,
+        session_idle_timeout_seconds=600,
+        monotonic=lambda: now[0],
+    )
+
+    first = await provider.provision(run(run_id="run-a"))
+    await provider.prepare(first)
+    await provider.destroy(first)
+    second = await provider.provision(run(run_id="run-b"))
+    await provider.prepare(second)
+    await provider.destroy(second)
+
+    assert first.sandbox_id == second.sandbox_id
+    assert len(client.created) == 1
+    assert client.started == []
+    assert client.stopped == []
+    assert client.deleted == []
+    sandbox = next(iter(client.by_name.values()))
+    assert sandbox.removed == [
+        "/home/daytona/harness/run-a",
+        "/home/daytona/harness/run-b",
+    ]
+    assert sandbox.ensure_cli_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_serializes_concurrent_runs_in_same_session(
+    tmp_path: Path,
+) -> None:
+    client = WarmFakeClient()
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        session_reuse_enabled=True,
+    )
+
+    first = await provider.provision(run(run_id="run-a"))
+    blocked = asyncio.create_task(provider.provision(run(run_id="run-b")))
+    await asyncio.sleep(0)
+
+    assert not blocked.done()
+
+    await provider.destroy(first)
+    second = await asyncio.wait_for(blocked, timeout=1)
+    await provider.destroy(second)
+
+    assert first.sandbox_id == second.sandbox_id
+    assert len(client.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_recovers_session_sandbox_after_provider_restart(
+    tmp_path: Path,
+) -> None:
+    client = WarmFakeClient()
+    first_provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        session_reuse_enabled=True,
+    )
+    first = await first_provider.provision(run(run_id="run-a"))
+    await first_provider.destroy(first)
+
+    restarted_provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        session_reuse_enabled=True,
+    )
+    second = await restarted_provider.provision(run(run_id="run-b"))
+    await restarted_provider.destroy(second)
+
+    assert first.sandbox_id == second.sandbox_id
+    assert len(client.created) == 1
+    assert client.started == [first.sandbox_id]
+
+
+@pytest.mark.asyncio
+async def test_provider_rebuilds_unhealthy_warm_session_sandbox(
+    tmp_path: Path,
+) -> None:
+    client = WarmFakeClient()
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        delete_on_destroy=True,
+        session_reuse_enabled=True,
+    )
+    first = await provider.provision(run(run_id="run-a"))
+    await provider.destroy(first)
+    client.by_name[next(iter(client.by_name))].healthy = False
+
+    second = await provider.provision(run(run_id="run-b"))
+    await provider.destroy(second)
+
+    assert first.sandbox_id != second.sandbox_id
+    assert len(client.created) == 2
+    assert first.sandbox_id in client.stopped
+    assert first.sandbox_id in client.deleted
+
+
+@pytest.mark.asyncio
+async def test_provider_reaps_expired_warm_session_sandbox(tmp_path: Path) -> None:
+    client = WarmFakeClient()
+    now = [100.0]
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        delete_on_destroy=True,
+        session_reuse_enabled=True,
+        session_idle_timeout_seconds=60,
+        monotonic=lambda: now[0],
+    )
+    handle = await provider.provision(run())
+    await provider.destroy(handle)
+
+    now[0] = 161.0
+    reaped = await provider.reap_expired()
+
+    assert reaped == 1
+    assert client.stopped == [handle.sandbox_id]
+    assert client.deleted == [handle.sandbox_id]
+
+
+@pytest.mark.asyncio
+async def test_provider_evicts_oldest_warm_session_above_capacity(
+    tmp_path: Path,
+) -> None:
+    client = WarmFakeClient()
+    now = [100.0]
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        delete_on_destroy=True,
+        session_reuse_enabled=True,
+        warm_pool_max_sessions=2,
+        monotonic=lambda: now[0],
+    )
+
+    handles: list[SandboxHandle] = []
+    for index, session_id in enumerate(("session-a", "session-b", "session-c")):
+        handle = await provider.provision(
+            run(run_id=f"run-{index}", session_id=session_id)
+        )
+        handles.append(handle)
+        await provider.destroy(handle)
+        now[0] += 1
+
+    assert len(client.created) == 3
+    assert client.stopped == [handles[0].sandbox_id]
+    assert client.deleted == [handles[0].sandbox_id]
+    assert sorted(sandbox.id for sandbox in client.by_name.values()) == sorted(
+        [handles[1].sandbox_id, handles[2].sandbox_id]
+    )
 
 
 @pytest.mark.asyncio

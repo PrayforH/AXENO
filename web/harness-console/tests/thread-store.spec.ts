@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { createNewThread, loadOrCreateThread } from "../src/lib/thread-store";
+import {
+  bindThreadAgent,
+  createNewThread,
+  loadOrCreateThread,
+  loadThreadAgent,
+} from "../src/lib/thread-store";
 
 function memoryStorage(initial?: string) {
-  let value = initial ?? null;
+  const values = new Map<string, string>();
+  if (initial) values.set("harness-console-thread", initial);
   return {
-    getItem: () => value,
-    setItem: (_key: string, next: string) => {
-      value = next;
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, next: string) => {
+      values.set(key, next);
     },
-    removeItem: () => {
-      value = null;
+    removeItem: (key: string) => {
+      values.delete(key);
     },
-    value: () => value,
+    value: () => values.get("harness-console-thread") ?? null,
   };
 }
 
@@ -37,5 +43,24 @@ describe("thread store", () => {
       "thread-replacement",
     );
     expect(storage.value()).toBe("thread-replacement");
+  });
+
+  it("binds an immutable agent coordinate to each thread", () => {
+    const storage = memoryStorage("thread-existing");
+
+    bindThreadAgent(storage, "thread-existing", {
+      name: "public-opinion-agent",
+      version: "0.2.0",
+      displayName: "舆情研判 Agent",
+      domain: "public-opinion",
+    });
+
+    expect(loadThreadAgent(storage, "thread-existing")).toEqual({
+      name: "public-opinion-agent",
+      version: "0.2.0",
+      displayName: "舆情研判 Agent",
+      domain: "public-opinion",
+    });
+    expect(loadThreadAgent(storage, "another-thread")).toBeNull();
   });
 });

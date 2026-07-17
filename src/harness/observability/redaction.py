@@ -1,6 +1,8 @@
 """Conservative recursive redaction before telemetry export."""
 
 import hashlib
+import json
+import re
 from typing import Any, cast
 
 _SENSITIVE_MARKERS = (
@@ -28,6 +30,12 @@ _SAFE_NUMERIC_METRICS = frozenset(
     }
 )
 
+_AUTHORIZATION_TEXT = re.compile(r"(?i)\b(authorization\s*[:=]\s*)([^'\"\n]+)")
+_BEARER_TEXT = re.compile(r"(?i)\b(bearer\s+)([^\s'\"&]+)")
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(token|api[_-]?key|secret|password)(\s*[:=]\s*)([^\s'\"&]+)"
+)
+
 
 def _is_safe_numeric_metric(key: object, value: object) -> bool:
     return (
@@ -42,6 +50,24 @@ def correlation_hash(value: str) -> str:
     """Return a stable, non-reversible short identity correlation value."""
 
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def redact_content(value: object, *, limit: int) -> str:
+    """Return bounded debug content with common credential forms removed."""
+
+    if isinstance(value, str):
+        serialized = value
+    else:
+        serialized = json.dumps(
+            redact(value),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    sanitized = _AUTHORIZATION_TEXT.sub(r"\1[REDACTED]", serialized)
+    sanitized = _BEARER_TEXT.sub(r"\1[REDACTED]", sanitized)
+    sanitized = _SECRET_ASSIGNMENT.sub(r"\1\2[REDACTED]", sanitized)
+    return sanitized if len(sanitized) <= limit else f"{sanitized[: limit - 1]}…"
 
 
 def redact(value: Any) -> Any:

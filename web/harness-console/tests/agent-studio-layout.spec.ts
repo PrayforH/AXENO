@@ -64,6 +64,18 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".capabilitySpine");
   });
 
+  it("provides a structured prompt editor instead of an undifferentiated textarea", () => {
+    expect(workbench).toContain('aria-label="System Prompt 结构"');
+    expect(workbench).toContain("选择章节可定位");
+    expect(workbench).toContain("专注编辑");
+    expect(workbench).toContain("Ctrl / ⌘ S 保存");
+    expect(workbench).toContain("moveToPromptSection");
+    expect(workbench).toContain("handlePromptEditorKeyDown");
+    expect(styles).toContain(".promptWorkspace");
+    expect(styles).toContain(".promptEditorToolbar");
+    expect(styles).toContain(".promptEditorFooter");
+  });
+
   it("shows a Lead topology with editable, version-pinned Sub Agent roles", () => {
     expect(workbench).toContain('aria-label="多智能体协同拓扑"');
     expect(workbench).toContain("Lead 是唯一面向用户的主线");

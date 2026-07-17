@@ -49,6 +49,13 @@ class AgentService:
             ).snapshot
         return load_manifest(path, environment=active_environment)
 
+    async def list_published(self, tenant_id: str) -> list[AgentVersion]:
+        return [
+            version
+            for version in await self._registry.list_for_tenant(tenant_id)
+            if version.status is AgentVersionStatus.PUBLISHED
+        ]
+
     async def publish(
         self,
         tenant_id: str,

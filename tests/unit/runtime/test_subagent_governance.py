@@ -97,7 +97,7 @@ def test_unbound_alias_and_concurrency_fail_closed() -> None:
         subagent_versions={"fact-checker": version, "risk-reviewer": version},
     )
 
-    with pytest.raises(SubagentGovernanceError, match="not bound"):
+    with pytest.raises(SubagentGovernanceError, match="undeclared"):
         governor.process(_started("unknown", "writer"), run_id="run-1")
 
     governor.process(_started("one", "fact-checker"), run_id="run-1")

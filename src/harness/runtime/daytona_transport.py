@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, Transport
+from claude_agent_sdk._internal.session_resume import materialize_resume_session
 
 
 class DaytonaTransportError(RuntimeError):
@@ -17,6 +19,10 @@ class DaytonaTransportError(RuntimeError):
 
 
 class RemoteClaudeSession(Protocol):
+    async def stage_config(
+        self, remote_directory: str, files: dict[str, bytes]
+    ) -> None: ...
+
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None: ...
 
     async def write(self, data: str) -> None: ...
@@ -75,6 +81,8 @@ def build_remote_claude_command(
         command.extend(["--permission-mode", options.permission_mode])
     if options.resume:
         command.extend(["--resume", options.resume])
+    if options.session_store is not None:
+        command.append("--session-mirror")
     if options.include_partial_messages:
         command.append("--include-partial-messages")
     if options.strict_mcp_config:
@@ -103,9 +111,33 @@ class DaytonaClaudeTransport(Transport):
         self._ready = False
         self._stderr_task: asyncio.Task[None] | None = None
 
+    async def _stage_resume_config(self) -> None:
+        if self._options.session_store is None or self._options.resume is None:
+            return
+        remote_config_dir = self._options.env.get("CLAUDE_CONFIG_DIR")
+        if not remote_config_dir or not remote_config_dir.startswith("/"):
+            raise DaytonaTransportError(
+                "remote session resume requires an absolute CLAUDE_CONFIG_DIR"
+            )
+        materialized = await materialize_resume_session(
+            replace(self._options, cwd=Path(self._remote_workspace))
+        )
+        if materialized is None:
+            return
+        try:
+            files = {
+                path.relative_to(materialized.config_dir).as_posix(): path.read_bytes()
+                for path in materialized.config_dir.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            }
+            await self._session.stage_config(remote_config_dir, files)
+        finally:
+            await materialized.cleanup()
+
     async def connect(self) -> None:
         if self._ready:
             return
+        await self._stage_resume_config()
         environment = {
             **self._options.env,
             "CLAUDE_CODE_ENTRYPOINT": "sdk-py",

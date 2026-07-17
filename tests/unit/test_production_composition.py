@@ -18,6 +18,8 @@ from harness.core.models import ExecutionIdentity
 from harness.execution.credentials import BrokerMcpCredentialProvider, InMemoryCredentialBroker
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import ToolResolver
+from harness.sandbox.deferred import DeferredToolSandboxProvider
+from harness.sandbox.e2b import E2BSandboxProvider
 from harness.sandbox.kubernetes import KubernetesSandboxProvider
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.redis import RedisTaskQueue
@@ -105,9 +107,7 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
             mcp_secret_references_json=json.dumps(
                 {"tavily-readonly": {"api_key": "TAVILY_API_KEY"}}
             ),
-            mcp_server_secrets_json=SecretStr(
-                json.dumps({"TAVILY_API_KEY": "production-key"})
-            ),
+            mcp_server_secrets_json=SecretStr(json.dumps({"TAVILY_API_KEY": "production-key"})),
         )
     )
     try:
@@ -122,9 +122,7 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
         tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])
-        assert tavily.get("url") == (
-            "https://mcp.tavily.com/mcp/?tavilyApiKey=production-key"
-        )
+        assert tavily.get("url") == ("https://mcp.tavily.com/mcp/?tavilyApiKey=production-key")
     finally:
         assert container.close is not None
         await container.close()
@@ -132,9 +130,7 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
 
 def test_production_container_fails_fast_without_gateway_credentials() -> None:
     with pytest.raises(ValueError, match="production requires HARNESS_NEW_API"):
-        build_production_container(
-            production_settings(new_api_key=SecretStr(""), new_api_model="")
-        )
+        build_production_container(production_settings(new_api_key=SecretStr(""), new_api_model=""))
 
 
 def test_production_container_rejects_empty_gateway_capabilities() -> None:
@@ -144,8 +140,63 @@ def test_production_container_rejects_empty_gateway_capabilities() -> None:
 
 def test_production_container_rejects_implicit_local_sandbox() -> None:
     with pytest.raises(ValueError, match="ALLOW_UNSAFE_LOCAL_SANDBOX"):
+        build_production_container(production_settings(allow_unsafe_local_sandbox=False))
+
+
+@pytest.mark.asyncio
+async def test_production_container_wires_e2b_provider() -> None:
+    container = build_production_container(
+        production_settings(
+            sandbox_provider="e2b",
+            allow_unsafe_local_sandbox=False,
+            e2b_api_key=SecretStr("e2b-test-key"),
+        )
+    )
+    try:
+        assert isinstance(vars(container.worker)["_sandbox"], E2BSandboxProvider)
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
+@pytest.mark.asyncio
+async def test_production_container_can_defer_remote_sandbox_until_tool_use() -> None:
+    container = build_production_container(
+        production_settings(
+            sandbox_provider="e2b",
+            sandbox_execution_mode="worker_cli_deferred",
+            allow_unsafe_local_sandbox=False,
+            e2b_api_key=SecretStr("e2b-test-key"),
+        )
+    )
+    try:
+        assert isinstance(
+            vars(container.worker)["_sandbox"],
+            DeferredToolSandboxProvider,
+        )
+        preflight = vars(container.preview_controller)["_provisioner"]
+        runner = vars(preflight)["_runner"]
+        assert isinstance(vars(runner)["_sandbox"], E2BSandboxProvider)
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
+def test_deferred_execution_rejects_unsafe_local_backend() -> None:
+    with pytest.raises(ValueError, match="requires Daytona, E2B, or Kubernetes"):
         build_production_container(
-            production_settings(allow_unsafe_local_sandbox=False)
+            production_settings(sandbox_execution_mode="worker_cli_deferred")
+        )
+
+
+def test_production_container_requires_e2b_key() -> None:
+    with pytest.raises(ValueError, match="HARNESS_E2B_API_KEY"):
+        build_production_container(
+            production_settings(
+                sandbox_provider="e2b",
+                allow_unsafe_local_sandbox=False,
+                e2b_api_key=SecretStr(""),
+            )
         )
 
 

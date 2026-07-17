@@ -21,7 +21,10 @@ cp deploy/docker-compose/.env.docker.example deploy/docker-compose/.env.docker
 - `HARNESS_API_BEARER_TOKEN`（至少 32 个随机字符）
 - `HARNESS_NEW_API_COMPATIBILITY`
 - `HARNESS_NEW_API_CAPABILITIES`
-- `HARNESS_SANDBOX_PROVIDER`（生产建议 `daytona`）
+- `HARNESS_SANDBOX_PROVIDER`（`daytona`、`e2b`、`kubernetes` 或显式不安全的 `local`）
+- `HARNESS_SANDBOX_EXECUTION_MODE`：`remote_cli` 让 Claude CLI 在沙箱中运行；
+  `worker_cli_deferred` 让 CLI 常驻 Worker，首次文件或 Bash 工具调用时才创建远端沙箱，
+  可显著降低纯对话首 Token 延迟
 
 `HARNESS_NEW_API_*` 直接连接 Anthropic-compatible 网关，包括 new-api；生产链路不依赖 cc-switch。凭据只通过容器环境注入，不应写进镜像或提交到 Git。`HARNESS_API_BEARER_TOKEN` 用于 Web BFF、seed、E2E 与 API 之间的服务认证，不进入浏览器 bundle。`COMPATIBILITY` 可取 `full/degraded/unsupported`，`CAPABILITIES` 是逗号分隔的已验证能力（例如 `streaming,tool_use`）。只声明实际通过 `uv run python scripts/smoke_new_api.py` 黑盒验证的能力；Manifest 要求的能力不在该集合时，Run 会在模型请求前 fail closed。
 
@@ -112,6 +115,8 @@ LANGFUSE_OTLP_ENDPOINT=https://cloud.langfuse.com/api/public/otel
 LANGFUSE_PUBLIC_KEY=pk-lf-replace-me
 LANGFUSE_SECRET_KEY=sk-lf-replace-me
 LANGFUSE_ENVIRONMENT=production
+HARNESS_OTEL_CONTENT_CAPTURE=off
+HARNESS_OTEL_CONTENT_MAX_CHARS=12000
 ```
 
 然后启动 observability profile：
@@ -120,9 +125,13 @@ LANGFUSE_ENVIRONMENT=production
 make docker-up-observability
 ```
 
-应用只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 的 Basic Auth extension 将公钥和私钥转成认证头，并携带 `x-langfuse-ingestion-version: 4` 转发到 Langfuse。应用容器不会收到 Langfuse 密钥。Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse 实例的 `/api/public/otel` 基础入口，Exporter 会追加 `/v1/traces`。`LANGFUSE_BASE_URL` 和 `LANGFUSE_PROJECT_ID` 仅提供给 Web 容器，用于右侧运行面板跳转到对应项目的 Trace 搜索页，不包含摄取密钥。自托管实例需要支持该 OTel 入口。Trace Resource 使用 `LANGFUSE_ENVIRONMENT` 写入 `deployment.environment.name`，内容仍经过 Harness 脱敏，不记录模型密钥和原始上传内容。
+Web、API 和 Worker 都只发送 OTLP/HTTP 到本地 Collector；Collector 使用 `deploy/otel-collector/collector.yaml` 的 Basic Auth extension 将公钥和私钥转成认证头，并携带 `x-langfuse-ingestion-version: 4` 转发到 Langfuse。应用容器不会收到 Langfuse 密钥。Web 在用户提交问题时创建 `harness.web.question`，通过 W3C `traceparent`/`tracestate` 传给 API；API 的 `harness.api.request` 提取该上下文，创建 Run 时继续注入 Worker；Worker 再覆盖沙箱、记忆、模型、MCP、工具、审批、制品和清理阶段。持久化 Run Event 同时记录当时的 `trace_id` 与 `span_id`，用于事件回放和 Trace 互相定位。
 
-一次 Run 对应一个分布式 Trace；同一网页对话的多个 Run 使用 `langfuse.session.id` 聚合。`harness.model.run` 提供 Agent 版本、运行时内容哈希、package hash、Provider、模型、route、Policy Profile、Skill 数量、轮次、耗时、成本和白名单化 Token 计数等低敏检索维度，不输出原始 prompt、模型响应或 Provider 原始 usage 数据。
+Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse 实例的 `/api/public/otel` 基础入口，Exporter 会追加 `/v1/traces`。`LANGFUSE_BASE_URL` 和 `LANGFUSE_PROJECT_ID` 仅提供给 Web 容器，用于右侧运行面板跳转到对应项目的 Trace 搜索页，不包含摄取密钥。自托管实例需要支持该 OTel 入口。Trace Resource 使用 `LANGFUSE_ENVIRONMENT` 写入 `deployment.environment.name`，内容仍经过 Harness 脱敏，不记录模型密钥、原始 prompt、模型响应和上传内容。
+
+一次 Run 对应一个分布式 Trace；同一网页对话的多个 Run 使用 `langfuse.session.id` 聚合。`harness.model.run` 提供 Agent 版本、运行时内容哈希、package hash、Provider、模型、route、Policy Profile、Skill 数量、轮次、耗时、成本和白名单化 Token 计数等低敏检索维度。默认不输出 prompt、模型响应或 Provider 原始 usage 数据；只有下述显式内容观测开关可以增加脱敏后的问题与回答。
+
+内容观测由 `HARNESS_OTEL_CONTENT_CAPTURE` 显式控制。默认值 `off` 在所有环境都不导出问题和回答；仅在受控调试环境设置为 `redacted` 时，才会把经过凭据脱敏且受 `HARNESS_OTEL_CONTENT_MAX_CHARS` 限制的问题和最终回答映射为 Langfuse Trace/Observation 的 input 与 output。不存在绕过脱敏的 raw 模式。生产环境应保持 `off`，工具读取结果和上传文件正文无论何种模式都不会作为 Trace 内容导出。
 
 未启用 `observability` profile 时 Collector 不启动，`make docker-up` 不要求任何 Langfuse 配置。宿主机 OTLP 端口只绑定 `127.0.0.1`。
 
@@ -188,6 +197,9 @@ HARNESS_DAYTONA_CLAUDE_CLI_PATH=/home/daytona/.local/bin/claude
 HARNESS_DAYTONA_DELETE_ON_DESTROY=true
 HARNESS_DAYTONA_AUTO_STOP_INTERVAL_MINUTES=15
 HARNESS_DAYTONA_AUTO_DELETE_INTERVAL_MINUTES=60
+HARNESS_DAYTONA_SESSION_REUSE_ENABLED=true
+HARNESS_DAYTONA_SESSION_IDLE_TIMEOUT_SECONDS=600
+HARNESS_DAYTONA_WARM_POOL_MAX_SESSIONS=3
 HARNESS_MEMORY_WORKLOAD_TOKEN_SECRET=replace-with-an-independent-32-character-secret
 HARNESS_MEMORY_MCP_PUBLIC_URL=https://harness.example.com/mcp/memory/mcp
 ```
@@ -208,7 +220,29 @@ Claude SDK 的 `create_sdk_mcp_server()` 保存的是 worker 进程内 Python �
 
 Daytona Cloud 无法访问部署机的 loopback 或未打通路由的私网 new-api 地址；模型网关必须是 sandbox 可达且受 TLS、鉴权和网络策略保护的端点。内网 new-api 应配合同网段/VPN/VPC 内的自托管 Daytona，并分别验证 worker → Daytona API 与 sandbox → new-api 两段网络。部署前运行 `make smoke-daytona`，以一次性 sandbox 完成无模型凭据的连通性探针。
 
-`HARNESS_DAYTONA_CLAUDE_CLI_VERSION` 与当前 Python Agent SDK 捆绑版本保持一致。无 Snapshot 时 Harness 使用 Anthropic 官方安装器在 sandbox 中安装并核验该原生 CLI；生产应在受控 Snapshot 中预装 `HARNESS_DAYTONA_CLAUDE_CLI_PATH`，缩短启动时间并减少运行时供应链依赖。Harness 新建的每 Run sandbox 默认在结束后删除；显式传入的外部 sandbox 只停止、不删除。自动停止/删除时间是创建请求中断后的孤儿资源保险，不替代正常清理。
+### E2B 公网隔离执行
+
+公网模型与 MCP 无法从 Daytona 出口访问时，可以切换到 E2B：
+
+```dotenv
+HARNESS_SANDBOX_PROVIDER=e2b
+HARNESS_E2B_API_KEY=secret-reference-value
+HARNESS_E2B_TEMPLATE=base
+HARNESS_E2B_TIMEOUT_SECONDS=3600
+HARNESS_E2B_ALLOW_INTERNET_ACCESS=true
+HARNESS_E2B_REMOTE_WORKSPACE_ROOT=/home/user/harness
+HARNESS_E2B_CLAUDE_CLI_PATH=/home/user/.local/bin/claude
+```
+
+E2B Provider 为每个 Run 创建独立安全沙箱，将 Agent 资产上传到远程工作区，在沙箱内运行固定版本 Claude CLI，结束后收集制品并销毁沙箱。生产密钥只能由服务端环境或 Secret Manager 注入，不得写入 Agent Bundle、Studio Draft 或事件。`allow_internet_access=true` 只代表具备公网出口；可调用的业务能力仍由 Manifest MCP 声明、工具白名单和 Policy 共同约束。
+
+`HARNESS_DAYTONA_CLAUDE_CLI_VERSION` 与当前 Python Agent SDK 捆绑版本保持一致。无 Snapshot 时 Harness 使用 Anthropic 官方安装器在 sandbox 中安装并核验该原生 CLI；生产应在受控 Snapshot 中预装 `HARNESS_DAYTONA_CLAUDE_CLI_PATH`，缩短启动时间并减少运行时供应链依赖。
+
+默认按 `(tenant_id, session_id)` 复用 Harness 自建 sandbox。同一会话串行持有租约，每个 Run 使用独立远端工作目录；结束后清理该目录并把 sandbox 留在 warm pool。空闲超过 `HARNESS_DAYTONA_SESSION_IDLE_TIMEOUT_SECONDS` 或 warm 数超过 `HARNESS_DAYTONA_WARM_POOL_MAX_SESSIONS` 时，维护任务停止并按 `HARNESS_DAYTONA_DELETE_ON_DESTROY` 删除资源。确定性 sandbox 名称允许 Worker 重启后重新连接；失效实例会被丢弃并重建。显式传入的外部 sandbox 不进入共享池，仍只停止、不删除。
+
+远程 Claude 配置目录按租户和 Harness Session 隔离，不放在 Run 工作目录内。CLI 的 `transcript_mirror` 事件会写入 PostgreSQL `SessionStore`；下一轮即使换 Worker、Daytona 实例或 Kubernetes Pod，Transport 也会先把对应转录物化到远端 `CLAUDE_CONFIG_DIR`，再执行 `--resume`。因此 warm sandbox 是性能优化，而不是多轮记忆的唯一持久层。
+
+`HARNESS_DAYTONA_AUTO_STOP_INTERVAL_MINUTES` 应大于会话空闲窗口，推荐至少比 `HARNESS_DAYTONA_SESSION_IDLE_TIMEOUT_SECONDS / 60` 多 5 分钟。自动停止/删除是进程异常后的孤儿资源保险，不替代正常回收。
 
 仅做私网网关的单机黑盒验证时可以临时使用：
 

@@ -242,6 +242,49 @@ class KubectlRemoteSession:
         self._process: asyncio.subprocess.Process | None = None
         self._end_input_marker = f"__HARNESS_END_INPUT_{uuid4().hex}__"
 
+    async def stage_config(
+        self, remote_directory: str, files: dict[str, bytes]
+    ) -> None:
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as tar:
+            for relative, content in files.items():
+                relative_path = PurePosixPath(relative)
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    raise ValueError(
+                        "remote Claude config path escaped config directory"
+                    )
+                info = tarfile.TarInfo(relative_path.as_posix())
+                info.size = len(content)
+                info.mode = 0o600
+                tar.addfile(info, io.BytesIO(content))
+        command = [
+            *self._kubectl_argv,
+            "-n",
+            self._namespace,
+            "exec",
+            "-i",
+            self._pod_name,
+            "-c",
+            self._container,
+            "--",
+            "sh",
+            "-c",
+            'rm -rf -- "$1" && mkdir -p -- "$1" && tar -C "$1" -xf -',
+            "harness-config",
+            remote_directory,
+        ]
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await process.communicate(archive.getvalue())
+        if process.returncode != 0:
+            raise KubernetesSandboxError(
+                "failed to stage remote Claude config directory"
+            )
+
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
         if not argv:
             raise ValueError("remote command argv must not be empty")
@@ -663,9 +706,14 @@ class KubernetesSandboxProvider:
             raise
 
         def transport_factory(raw_options: object) -> object:
+            options = cast(ClaudeAgentOptions, raw_options)
+            options.env = {
+                **options.env,
+                "CLAUDE_CONFIG_DIR": "/tmp/harness-claude-config",
+            }
             return DaytonaClaudeTransport(
                 session=self._client.remote_session(pod_name),
-                options=cast(ClaudeAgentOptions, raw_options),
+                options=options,
                 remote_workspace=self._remote_workspace,
                 cli_path=self._cli_path,
             )

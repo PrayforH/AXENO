@@ -98,6 +98,11 @@ class FakeSession:
         self.ended = False
         self.terminated = False
 
+    async def stage_config(
+        self, _remote_directory: str, _files: dict[str, bytes]
+    ) -> None:
+        return
+
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
         self.started = (argv, cwd, env)
 

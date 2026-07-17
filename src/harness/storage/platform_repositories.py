@@ -67,6 +67,16 @@ class PostgresAgentRegistry:
                 raise NotFoundError(f"agent version not found: {name}@{version}")
             return AgentVersion.model_validate(row.payload)
 
+    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
+        statement = (
+            select(AgentVersionRow.payload)
+            .where(AgentVersionRow.tenant_id == tenant_id)
+            .order_by(AgentVersionRow.name, AgentVersionRow.version)
+        )
+        async with self._sessions() as session:
+            payloads = (await session.scalars(statement)).all()
+            return [AgentVersion.model_validate(payload) for payload in payloads]
+
 
 class PostgresSessionRepository:
     def __init__(self, sessions: SessionFactory) -> None:

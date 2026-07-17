@@ -45,6 +45,16 @@ class InMemoryAgentRegistry:
         except KeyError as error:
             raise NotFoundError(f"agent version not found: {name}@{version}") from error
 
+    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
+        return sorted(
+            (
+                version
+                for (stored_tenant, _name, _version), version in self._items.items()
+                if stored_tenant == tenant_id
+            ),
+            key=lambda version: (version.name, version.version),
+        )
+
 
 class InMemorySessionRepository:
     def __init__(self) -> None:

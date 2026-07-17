@@ -14,6 +14,7 @@ export const activityItemSchema = z.object({
 
 export const runActivitySchema = z.object({
   run_id: z.string(),
+  trace_id: z.string().nullish(),
   status: z.string(),
   started_at: z.string(),
   items: z.array(activityItemSchema),

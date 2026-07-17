@@ -1,0 +1,173 @@
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from harness.core.models import Run, RunStatus
+from harness.sandbox.base import SandboxCommandResult, SandboxHandle, SandboxIsolation
+from harness.sandbox.deferred import DeferredToolSandboxProvider
+
+
+class RecordingSandbox:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.provisions = 0
+        self.prepares = 0
+        self.executions = 0
+        self.collections = 0
+        self.destroys = 0
+
+    async def provision(self, run: Run) -> SandboxHandle:
+        self.provisions += 1
+        path = self.root / f"remote-{run.run_id}"
+        path.mkdir()
+        return SandboxHandle(
+            sandbox_id=f"remote-{run.run_id}",
+            path=path,
+            provider="remote",
+            isolation_level=SandboxIsolation.CONTAINER,
+            remote_workspace="/workspace",
+        )
+
+    async def prepare(self, handle: SandboxHandle) -> None:
+        self.prepares += 1
+        assert (handle.path / "restored.txt").read_text() == "session state"
+
+    async def execute(
+        self,
+        handle: SandboxHandle,
+        argv: Sequence[str],
+        *,
+        environment: Mapping[str, str] | None = None,
+        timeout_seconds: float = 30,
+    ) -> SandboxCommandResult:
+        del environment, timeout_seconds
+        self.executions += 1
+        (handle.path / "generated.txt").write_text(" ".join(argv))
+        return SandboxCommandResult(exit_code=0, stdout="ok")
+
+    async def collect(self, handle: SandboxHandle) -> None:
+        self.collections += 1
+        assert (handle.path / "generated.txt").exists()
+
+    async def destroy(self, handle: SandboxHandle) -> None:
+        self.destroys += 1
+        assert handle.sandbox_id.startswith("remote-")
+
+
+def run() -> Run:
+    now = datetime(2026, 7, 17, tzinfo=UTC)
+    return Run(
+        run_id="run-deferred",
+        session_id="session-deferred",
+        tenant_id="tenant-a",
+        status=RunStatus.PROVISIONING,
+        idempotency_key="deferred",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_pure_model_run_never_allocates_remote_sandbox(tmp_path: Path) -> None:
+    backend = RecordingSandbox(tmp_path)
+    provider = DeferredToolSandboxProvider(
+        backend,
+        provider_name="daytona",
+        local_root=tmp_path,
+    )
+
+    handle = await provider.provision(run())
+    await provider.prepare(handle)
+    await provider.collect(handle)
+    await provider.destroy(handle)
+
+    assert handle.provider == "daytona-deferred"
+    assert handle.isolation_level is SandboxIsolation.CONTAINER
+    assert handle.deferred_tool_execution is True
+    assert backend.provisions == 0
+    assert backend.prepares == 0
+    assert backend.collections == 0
+    assert backend.destroys == 0
+
+
+@pytest.mark.asyncio
+async def test_first_tool_allocates_once_and_reuses_remote_sandbox(
+    tmp_path: Path,
+) -> None:
+    backend = RecordingSandbox(tmp_path)
+    provider = DeferredToolSandboxProvider(
+        backend,
+        provider_name="daytona",
+        local_root=tmp_path,
+    )
+    handle = await provider.provision(run())
+    (handle.path / "restored.txt").write_text("session state")
+
+    first = await provider.execute(handle, ("bash", "-lc", "first"))
+    second = await provider.execute(handle, ("bash", "-lc", "second"))
+    await provider.collect(handle)
+    await provider.destroy(handle)
+
+    assert first.stdout == "ok"
+    assert second.stdout == "ok"
+    assert backend.provisions == 1
+    assert backend.prepares == 1
+    assert backend.executions == 2
+    assert backend.collections == 1
+    assert backend.destroys == 1
+
+
+@pytest.mark.asyncio
+async def test_read_only_tools_do_not_collect_remote_workspace(tmp_path: Path) -> None:
+    backend = RecordingSandbox(tmp_path)
+    provider = DeferredToolSandboxProvider(
+        backend,
+        provider_name="daytona",
+        local_root=tmp_path,
+    )
+    handle = await provider.provision(run())
+    (handle.path / "restored.txt").write_text("session state")
+
+    await provider.execute(
+        handle,
+        ("python3", "-c", "script", "glob", '{"pattern":"**/*"}'),
+    )
+    await provider.execute(
+        handle,
+        ("python3", "-c", "script", "read", '{"file_path":"restored.txt"}'),
+    )
+    await provider.collect(handle)
+    await provider.destroy(handle)
+
+    assert backend.provisions == 1
+    assert backend.prepares == 1
+    assert backend.executions == 2
+    assert backend.collections == 0
+    assert backend.destroys == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["write", "edit"])
+async def test_file_mutations_collect_remote_workspace(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    backend = RecordingSandbox(tmp_path)
+    provider = DeferredToolSandboxProvider(
+        backend,
+        provider_name="daytona",
+        local_root=tmp_path,
+    )
+    handle = await provider.provision(run())
+    (handle.path / "restored.txt").write_text("session state")
+
+    await provider.execute(
+        handle,
+        ("python3", "-c", "script", operation, "{}"),
+    )
+    await provider.collect(handle)
+    await provider.destroy(handle)
+
+    assert backend.collections == 1

@@ -80,6 +80,8 @@ from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.runtime.session_store import PostgresSessionStore
 from harness.sandbox.base import SandboxProvider
 from harness.sandbox.daytona import DaytonaSandboxProvider, SdkDaytonaClient
+from harness.sandbox.deferred import DeferredToolSandboxProvider
+from harness.sandbox.e2b import E2BSandboxProvider, SdkE2BClient
 from harness.sandbox.kubernetes import (
     KubectlKubernetesClient,
     KubernetesSandboxProvider,
@@ -242,6 +244,21 @@ def _sandbox(settings: Settings) -> SandboxProvider:
             max_collect_bytes=settings.workspace_archive_max_bytes,
             max_collect_members=settings.workspace_archive_max_members,
         )
+    if settings.sandbox_provider == "e2b":
+        api_key = settings.e2b_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("HARNESS_E2B_API_KEY is required for E2B")
+        return E2BSandboxProvider(
+            client=SdkE2BClient(api_key=api_key),
+            template=settings.e2b_template,
+            timeout_seconds=settings.e2b_timeout_seconds,
+            allow_internet_access=settings.e2b_allow_internet_access,
+            remote_workspace_root=settings.e2b_remote_workspace_root,
+            cli_version=settings.e2b_claude_cli_version,
+            cli_path=settings.e2b_claude_cli_path,
+            max_collect_bytes=settings.workspace_archive_max_bytes,
+            max_collect_members=settings.workspace_archive_max_members,
+        )
     api_key = settings.daytona_api_key.get_secret_value()
     if not api_key:
         raise ValueError("HARNESS_DAYTONA_API_KEY is required for Daytona")
@@ -258,8 +275,28 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         delete_on_destroy=settings.daytona_delete_on_destroy,
         auto_stop_interval_minutes=settings.daytona_auto_stop_interval_minutes,
         auto_delete_interval_minutes=settings.daytona_auto_delete_interval_minutes,
+        session_reuse_enabled=settings.daytona_session_reuse_enabled,
+        session_idle_timeout_seconds=settings.daytona_session_idle_timeout_seconds,
+        warm_pool_max_sessions=settings.daytona_warm_pool_max_sessions,
         max_collect_bytes=settings.workspace_archive_max_bytes,
         max_collect_members=settings.workspace_archive_max_members,
+    )
+
+
+def _runtime_sandbox(
+    settings: Settings,
+    backend: SandboxProvider,
+) -> SandboxProvider:
+    if settings.sandbox_execution_mode == "remote_cli":
+        return backend
+    if settings.sandbox_provider == "local":
+        raise ValueError(
+            "HARNESS_SANDBOX_EXECUTION_MODE=worker_cli_deferred requires "
+            "Daytona, E2B, or Kubernetes"
+        )
+    return DeferredToolSandboxProvider(
+        backend,
+        provider_name=settings.sandbox_provider,
     )
 
 
@@ -279,11 +316,13 @@ def build_production_container(
             CcSwitchClaudeConfig,
             CcSwitchClaudeConfig | None,
             SandboxProvider,
+            SandboxProvider,
             DynamicMcpCredentialProvider,
             InMemoryCredentialBroker,
         ]
         | None
     ) = None
+    preflight_sandbox: SandboxProvider | None = None
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     credential_broker: InMemoryCredentialBroker | None = None
     try:
@@ -292,9 +331,13 @@ def build_production_container(
         title_gateway = None
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
-        sandbox = _sandbox(settings)
-        if isinstance(sandbox, KubernetesSandboxProvider):
-            sandbox_maintenance = sandbox.reap_expired
+        sandbox_backend = _sandbox(settings)
+        preflight_sandbox = sandbox_backend
+        if isinstance(sandbox_backend, KubernetesSandboxProvider):
+            sandbox_maintenance = sandbox_backend.reap_expired
+        elif isinstance(sandbox_backend, DaytonaSandboxProvider):
+            sandbox_maintenance = sandbox_backend.reap_expired
+        sandbox = _runtime_sandbox(settings, sandbox_backend)
         references_raw = json.loads(settings.mcp_secret_references_json)
         secrets_raw = json.loads(settings.mcp_server_secrets_json.get_secret_value())
         if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
@@ -331,6 +374,7 @@ def build_production_container(
             primary_gateway,
             fallback_gateway,
             sandbox,
+            sandbox_backend,
             credential_provider,
             credential_broker,
         )
@@ -392,9 +436,7 @@ def build_production_container(
     )
     observability = build_observability(settings)
     reliability_metrics = ReliabilityMetrics()
-    observed_event_repository = ObservedEventRepository(
-        raw_event_repository, reliability_metrics
-    )
+    observed_event_repository = ObservedEventRepository(raw_event_repository, reliability_metrics)
 
     def clock() -> datetime:
         return datetime.now(UTC)
@@ -430,9 +472,7 @@ def build_production_container(
         PostgresLifecycleAdapter(sessions),
     )
 
-    async def lifecycle_scopes(
-        tenant_id: str, scope: LifecycleScope
-    ) -> tuple[LifecycleScope, ...]:
+    async def lifecycle_scopes(tenant_id: str, scope: LifecycleScope) -> tuple[LifecycleScope, ...]:
         if scope.kind is not LifecycleScopeKind.SESSION:
             return (scope,)
         session = await session_repository.get(tenant_id, scope.subject_id)
@@ -503,7 +543,13 @@ def build_production_container(
         id_generator=lambda: ids("preview"),
         quotas=quotas,
     )
-    events = EventService(raw_event_repository, bus, clock=clock, id_generator=ids)
+    events = EventService(
+        raw_event_repository,
+        bus,
+        clock=clock,
+        id_generator=ids,
+        trace_context=observability,
+    )
     session_service = SessionService(
         registry,
         session_repository,
@@ -539,6 +585,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         queue=queue,
+        observability=observability,
     )
     artifact_service = ArtifactService(
         runs=runs,
@@ -635,12 +682,8 @@ def build_production_container(
     )
     memory_tokens = MemoryWorkloadTokenService(settings.memory_workload_token_secret)
     memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
-    remote_memory_mcp = RemoteMemoryMcpProvider(
-        settings.memory_mcp_public_url, memory_tokens
-    )
-    memory_service = UserMemoryService(
-        memory_repository, clock=clock, memory_bank=memory_bank
-    )
+    remote_memory_mcp = RemoteMemoryMcpProvider(settings.memory_mcp_public_url, memory_tokens)
+    memory_service = UserMemoryService(memory_repository, clock=clock, memory_bank=memory_bank)
     workspace_service = WorkspaceService(
         store,
         snapshots=snapshot_repository,
@@ -689,6 +732,7 @@ def build_production_container(
             primary_gateway,
             fallback_gateway,
             runtime_sandbox,
+            runtime_sandbox_backend,
             credential_provider,
             credential_broker,
         ) = execution_config
@@ -703,6 +747,7 @@ def build_production_container(
                 approvals=approval_service,
                 events=events,
                 quotas=quotas,
+                observability=observability,
             ),
             memory_service=memory_service,
             memory_bank=memory_bank,
@@ -737,9 +782,11 @@ def build_production_container(
                 raise RuntimeError("deployment_execution_profile_unavailable")
             actual = (
                 "gvisor"
-                if isinstance(runtime_sandbox, KubernetesSandboxProvider)
+                if isinstance(runtime_sandbox_backend, KubernetesSandboxProvider)
+                else "e2b"
+                if isinstance(runtime_sandbox_backend, E2BSandboxProvider)
                 else "daytona"
-                if isinstance(runtime_sandbox, DaytonaSandboxProvider)
+                if isinstance(runtime_sandbox_backend, DaytonaSandboxProvider)
                 else "local"
             )
             if profile.sandbox_provider != actual:
@@ -750,11 +797,14 @@ def build_production_container(
     else:
         runtime = FakeRuntime()
         runtime_sandbox = LocalSandboxProvider()
+        runtime_sandbox_backend = runtime_sandbox
+        preflight_sandbox = runtime_sandbox
         model_probe = FakeModelPreflightProbe()
         mcp_probe = FakeMcpPreflightProbe()
+    assert preflight_sandbox is not None
     preflight_runner = LivePreflightRunner(
         studio=studio_service,
-        sandbox=runtime_sandbox,
+        sandbox=preflight_sandbox,
         model_probe=model_probe,
         mcp_probe=mcp_probe,
         policies=policy_profiles,
@@ -842,16 +892,14 @@ def build_production_container(
         totals = {str(resource): int(total) for resource, total in rows}
         checked_out = getattr(engine.pool, "checkedout", None)
         active_sandboxes = (
-            await runtime_sandbox.active_count()
-            if isinstance(runtime_sandbox, KubernetesSandboxProvider)
+            await runtime_sandbox_backend.active_count()
+            if isinstance(runtime_sandbox_backend, KubernetesSandboxProvider)
             else None
         )
         return {
             "active_sandboxes": active_sandboxes,
             "database_pool_checked_out": (
-                int(cast(Callable[[], Any], checked_out)())
-                if callable(checked_out)
-                else None
+                int(cast(Callable[[], Any], checked_out)()) if callable(checked_out) else None
             ),
             "artifact_bytes": totals.get(QuotaResource.ARTIFACT_BYTES.value, 0),
             "snapshot_bytes": totals.get(QuotaResource.SNAPSHOT_BYTES.value, 0),
@@ -892,9 +940,7 @@ def build_production_container(
             )
         )
     if sandbox_maintenance is not None:
-        maintenance.append(
-            MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance)
-        )
+        maintenance.append(MaintenanceReaper("sandbox-expiry", "sandbox", sandbox_maintenance))
     reliability_controller = ReliabilityController(
         runs=runs,
         events=events,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  proxyAgentCatalogRequest,
   proxyAguiRequest,
   proxyDataLifecycleRequest,
   proxyInputArtifactRequest,
@@ -66,6 +67,34 @@ describe("Harness same-origin proxies", () => {
     expect(await response.text()).toBe("data: first\n\ndata: second\n\n");
   });
 
+  it("continues W3C trace context across the Web-to-API boundary", async () => {
+    const traceparent =
+      "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01";
+    let upstreamHeaders = new Headers();
+    const request = new Request("http://console.test/api/agui", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        traceparent,
+        tracestate: "vendor=value",
+      },
+      body: "{}",
+    });
+
+    const response = await proxyAguiRequest(
+      request,
+      config,
+      async (_input, init) => {
+        upstreamHeaders = new Headers(init?.headers);
+        return new Response("done", { status: 200 });
+      },
+    );
+
+    expect(upstreamHeaders.get("traceparent")).toBe(traceparent);
+    expect(upstreamHeaders.get("tracestate")).toBe("vendor=value");
+    expect(await response.text()).toBe("done");
+  });
+
   it("routes cancellation through the same identity boundary", async () => {
     let upstreamUrl = "";
     const fetcher: typeof fetch = async (input) => {
@@ -87,6 +116,52 @@ describe("Harness same-origin proxies", () => {
     expect(upstreamUrl).toBe(
       "http://harness.internal:8000/v1/agui/threads/thread%2F1/runs/run%2F1/cancel",
     );
+  });
+
+  it("forwards a validated per-thread agent coordinate for task switching", async () => {
+    let upstreamUrl = "";
+    await proxyAguiRequest(
+      new Request(
+        "http://console.test/api/agui?agent_name=public-opinion-agent&agent_version=0.2.0",
+        { method: "POST", body: "{}" },
+      ),
+      config,
+      async (input) => {
+        upstreamUrl = String(input);
+        return new Response(null, { status: 200 });
+      },
+    );
+
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/v1/agui?agent_name=public-opinion-agent&agent_version=0.2.0",
+    );
+  });
+
+  it("loads the published runtime catalog through the authenticated BFF", async () => {
+    let upstreamUrl = "";
+    const response = await proxyAgentCatalogRequest(
+      new Request("http://console.test/api/harness/agents", {
+        headers: { Cookie: "harness_access_token=user-jwt" },
+      }),
+      config,
+      async (input, init) => {
+        upstreamUrl = String(input);
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer user-jwt",
+        );
+        return Response.json([
+          {
+            name: "public-opinion-agent",
+            version: "0.1.1",
+            display_name: "public-opinion-agent",
+            domain: "public-opinion",
+          },
+        ]);
+      },
+    );
+
+    expect(upstreamUrl).toBe("http://harness.internal:8000/v1/agents");
+    expect(await response.json()).toHaveLength(1);
   });
 
   it("forwards multipart bytes without exposing internal identity in the response", async () => {

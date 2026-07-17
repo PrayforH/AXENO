@@ -17,10 +17,13 @@ class Settings(BaseSettings):
 
     environment: Literal["local", "test", "production"] = "local"
     runtime: Literal["fake", "claude-sdk"] = "fake"
-    sandbox_provider: Literal["local", "daytona", "kubernetes"] = "local"
+    sandbox_provider: Literal["local", "daytona", "e2b", "kubernetes"] = "local"
+    sandbox_execution_mode: Literal["remote_cli", "worker_cli_deferred"] = "remote_cli"
     allow_unsafe_local_sandbox: bool = False
     cc_switch_settings_path: str = "~/.claude/settings.json"
     otel_enabled: bool = False
+    otel_content_capture: Literal["off", "redacted"] = "off"
+    otel_content_max_chars: int = Field(default=12_000, ge=256, le=100_000)
     local_auto_execute: bool = False
     api_bearer_token: SecretStr = SecretStr("")
 
@@ -75,6 +78,16 @@ class Settings(BaseSettings):
     daytona_delete_on_destroy: bool = True
     daytona_auto_stop_interval_minutes: int = Field(default=15, ge=1)
     daytona_auto_delete_interval_minutes: int = Field(default=60, ge=1)
+    daytona_session_reuse_enabled: bool = True
+    daytona_session_idle_timeout_seconds: int = Field(default=600, ge=30, le=86_400)
+    daytona_warm_pool_max_sessions: int = Field(default=3, ge=1, le=1000)
+    e2b_api_key: SecretStr = SecretStr("")
+    e2b_template: str = "base"
+    e2b_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)
+    e2b_remote_workspace_root: str = "/home/user/harness"
+    e2b_claude_cli_version: str = "2.1.206"
+    e2b_claude_cli_path: str = "/home/user/.local/bin/claude"
+    e2b_allow_internet_access: bool = True
     kubernetes_namespace: str = "harness-sandboxes"
     kubernetes_image: str = ""
     kubernetes_runtime_class_name: str = "gvisor"

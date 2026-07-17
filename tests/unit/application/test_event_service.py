@@ -3,10 +3,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import pytest
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from harness.adapters.memory import InMemoryEventBus, InMemoryEventRepository
 from harness.application.events import EventService
+from harness.config import Settings
 from harness.core.events import RunEvent
+from harness.observability.provider import build_observability
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
@@ -76,3 +80,36 @@ async def test_concurrent_appends_retry_sequence_conflicts_in_order() -> None:
     stored = await repository.list_after("tenant-a", "run-1", 0)
     assert sorted(event.sequence for event in emitted) == [1, 2]
     assert [event.sequence for event in stored] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_events_keep_the_active_trace_and_span_for_replay_correlation() -> None:
+    repository = InMemoryEventRepository()
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    service = EventService(
+        repository,
+        InMemoryEventBus(),
+        clock=lambda: NOW,
+        id_generator=_ids(),
+        trace_context=observability,
+    )
+
+    with observability.span("harness.worker.stage"):
+        expected_trace_id = observability.current_trace_id()
+        expected_span_id = observability.current_span_id()
+        emitted = await service.append(
+            tenant_id="tenant-a",
+            run_id="run-1",
+            session_id="session-1",
+            event_type="tool.request",
+        )
+
+    assert emitted.trace_id == expected_trace_id
+    assert emitted.span_id == expected_span_id
+    assert expected_trace_id is not None
+    assert expected_span_id is not None

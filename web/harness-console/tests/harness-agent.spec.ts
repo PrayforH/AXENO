@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunAgentInput } from "@ag-ui/client";
 import { HarnessHttpAgent } from "../src/lib/harness-agent";
+import { liveResponseStore } from "../src/lib/live-response-store";
 
 describe("HarnessHttpAgent", () => {
   it("notifies Harness when CopilotRuntime stops an active thread", () => {
@@ -112,5 +113,48 @@ describe("HarnessHttpAgent", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("publishes text deltas before the run finishes", async () => {
+    const observed: string[] = [];
+    liveResponseStore.clear();
+    const unsubscribe = liveResponseStore.subscribe(() => {
+      observed.push(liveResponseStore.getSnapshot().text);
+    });
+    const streamFetch: typeof fetch = async () =>
+      new Response(
+        [
+          'data: {"type":"RUN_STARTED","threadId":"thread-stream","runId":"run-stream"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_START","messageId":"message-stream","role":"assistant"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-stream","delta":"第一段"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-stream","delta":"第二段"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"message-stream"}',
+          "",
+          'data: {"type":"RUN_FINISHED","threadId":"thread-stream","runId":"run-stream"}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+    });
+
+    await agent.runAgent({ runId: "run-stream" });
+
+    expect(observed).toContain("第一段");
+    expect(observed).toContain("第一段第二段");
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-stream",
+      messageId: "message-stream",
+      text: "第一段第二段",
+      status: "complete",
+    });
+    unsubscribe();
   });
 });

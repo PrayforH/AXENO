@@ -181,7 +181,7 @@ export function DeveloperDrawer({
             <div className="inspector-section-title"><span>外部观测</span><span>Langfuse</span></div>
             <a
               className="observability-link"
-              href={`/api/harness/observability?run_id=${encodeURIComponent(activity.run_id)}`}
+              href={`/api/harness/observability?run_id=${encodeURIComponent(activity.run_id)}${activity.trace_id ? `&trace_id=${encodeURIComponent(activity.trace_id)}` : ""}`}
               target="_blank"
               rel="noreferrer"
             >

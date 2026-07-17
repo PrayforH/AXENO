@@ -41,6 +41,8 @@ describe("developer drawer", () => {
 
     expect(identifiersStart).toBeGreaterThan(-1);
     expect(panel).toContain("/api/harness/observability?run_id=");
+    expect(panel).toContain("&trace_id=");
+    expect(panel).toContain("activity.trace_id");
     expect(panel.slice(identifiersStart)).toContain("activity.run_id");
     expect(panel.slice(identifiersStart)).toContain("threadId");
     expect(panel).not.toContain("developerRows(threadId)");

@@ -563,6 +563,7 @@ async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
     assert all(
         span.attributes is not None
         and span.attributes["langfuse.session.id"] == "session-1"
+        and span.attributes["langfuse.trace.metadata.run_id"] == "run-1"
         for span in spans
         if span.name.startswith("harness.")
     )

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -47,6 +47,7 @@ from harness.runtime.tools import (
     ToolResolutionError,
     ToolResolver,
 )
+from harness.sandbox.base import SandboxCommandResult
 
 
 class RecordingToolGate:
@@ -98,12 +99,17 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
             is_error=False,
             num_turns=1,
             session_id="sdk-session",
+            result="fake response",
         )
 
     gate = RecordingToolGate()
     trace_exporter = InMemorySpanExporter()
     observability = build_observability(
-        Settings(otel_enabled=True, otlp_endpoint="http://unused/v1/traces"),
+        Settings(
+            otel_enabled=True,
+            otlp_endpoint="http://unused/v1/traces",
+            otel_content_capture="redacted",
+        ),
         exporter=trace_exporter,
         processor_factory=SimpleSpanProcessor,
     )
@@ -161,6 +167,107 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
         "harness.mcp.resolve",
         "harness.model.run",
     }
+    model_span = next(
+        span
+        for span in trace_exporter.get_finished_spans()
+        if span.name == "harness.model.run"
+    )
+    assert model_span.attributes is not None
+    assert model_span.attributes["langfuse.observation.input"] == "hello"
+    assert model_span.attributes["langfuse.observation.output"] == "fake response"
+    assert model_span.attributes["langfuse.trace.output"] == "fake response"
+
+
+@pytest.mark.asyncio
+async def test_deferred_sandbox_replaces_file_builtins_but_keeps_coordination_local(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    now = datetime.now(UTC)
+    version = AgentVersion(
+        tenant_id="tenant-a",
+        name="echo-agent",
+        version="0.1.0",
+        status=AgentVersionStatus.PUBLISHED,
+        manifest_hash=snapshot.content_hash,
+        snapshot=snapshot.model_dump(mode="json"),
+        created_at=now,
+    )
+    route = ModelRoute(
+        route_id="new-api-default",
+        provider="new-api",
+        base_url="https://new-api.example/v1",
+        model="gateway-model",
+        compatibility=ModelCompatibility.FULL,
+        capabilities=frozenset({"streaming", "tool_use"}),
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str,
+        options: ClaudeAgentOptions,
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield AssistantMessage(
+            content=[TextBlock(text="no sandbox needed")],
+            model="gateway-model",
+        )
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    sandbox_calls: list[Sequence[str]] = []
+
+    async def execute_sandbox(
+        argv: Sequence[str],
+        _environment: Mapping[str, str] | None,
+        _timeout_seconds: float,
+    ) -> SandboxCommandResult:
+        sandbox_calls.append(argv)
+        return SandboxCommandResult(exit_code=0, stdout="unused")
+
+    runtime = ClaudeSdkRuntime(
+        agent_version=version,
+        routes=[route],
+        route_secrets={"new-api-default": "secret"},
+        query_factory=fake_query,
+    )
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-deferred-tools",
+            session_id="session-deferred-tools",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="deferred-tools",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "hello"},
+        ),
+        session=Session(
+            session_id="session-deferred-tools",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+        sandbox_command_executor=execute_sandbox,
+    )
+
+    _events = [event async for event in runtime.execute(context)]
+
+    options = captured[0]
+    assert options.tools == ["Task"]
+    assert isinstance(options.mcp_servers, dict)
+    assert "harness-sandbox" in options.mcp_servers
+    assert "mcp__harness-sandbox__read" in options.allowed_tools
+    assert sandbox_calls == []
 
 
 @pytest.mark.asyncio
@@ -445,6 +552,29 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
             event={"type": "message_stop"},
         )
         yield AssistantMessage(content=[TextBlock(text="streamed")], model="gateway-model")
+        yield StreamEvent(
+            uuid="start-again",
+            session_id="sdk-session",
+            parent_tool_use_id=None,
+            event={"type": "message_start", "message": {}},
+        )
+        for index, character in enumerate("again"):
+            yield StreamEvent(
+                uuid=f"again-{index}",
+                session_id="sdk-session",
+                parent_tool_use_id=None,
+                event={
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": character},
+                },
+            )
+        yield StreamEvent(
+            uuid="stop-again",
+            session_id="sdk-session",
+            parent_tool_use_id=None,
+            event={"type": "message_stop"},
+        )
+        yield AssistantMessage(content=[TextBlock(text="again")], model="gateway-model")
         yield SystemMessage(
             subtype="thinking_tokens",
             data={"session_id": "sdk-session", "tokens": 100},
@@ -513,11 +643,21 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
         "model.route.selected",
         "message.start",
         "message.delta",
+        "message.delta",
+        "message.completed",
+        "message.start",
+        "message.delta",
+        "message.delta",
         "message.completed",
         "subagent.completed",
         "runtime.result",
     ]
-    assert [event.payload.get("text") for event in events].count("streamed") == 1
+    text_deltas = [
+        str(event.payload.get("text", ""))
+        for event in events
+        if event.type == "message.delta"
+    ]
+    assert text_deltas == ["s", "treamed", "a", "gain"]
     terminal = next(event for event in events if event.type == "subagent.completed")
     assert terminal.payload["summary"] == "Safe final summary"
     assert "never-show" not in repr(events)

@@ -50,10 +50,19 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert services["api"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
     assert services["web"]["depends_on"]["seed"]["condition"] == "service_completed_successfully"
-    assert (
-        "public-opinion-agent/agent.yaml"
-        in services["seed"]["environment"]["HARNESS_SEED_AGENT_MANIFESTS"]
-    )
+    seed_manifests = services["seed"]["environment"]["HARNESS_SEED_AGENT_MANIFESTS"]
+    for manifest in (
+        "public-opinion-agent/agent.yaml",
+        "archive-file-classifier-agent/agent.yaml",
+    ):
+        assert manifest in seed_manifests
+    studio_manifests = services["seed"]["environment"]["HARNESS_SEED_STUDIO_MANIFESTS"]
+    for manifest in (
+        "similar-case-analysis-agent/agent.yaml",
+        "govdoc-writer-agent/agent.yaml",
+        "archive-assistant-agent/agent.yaml",
+    ):
+        assert manifest in studio_manifests
     assert services["otel-collector"]["profiles"] == ["observability"]
     assert "postgres-data" in compose()["volumes"]
     assert "redis-data" in compose()["volumes"]
@@ -70,6 +79,10 @@ def test_images_run_as_non_root_and_expose_health_checks() -> None:
     assert "HEALTHCHECK" in web
     assert "--no-dev" in api
     assert "pypi.tuna.tsinghua.edu.cn" in api
+    assert "uv export" in api
+    assert "--no-emit-project" in api
+    assert '.venv/bin/pip install --no-cache-dir' in api
+    assert "uv sync" not in api
     assert "registry.npmmirror.com" in web
     assert 'output: "standalone"' in (ROOT / "web/harness-console/next.config.ts").read_text()
 
@@ -154,6 +167,17 @@ def test_observability_profile_scopes_external_langfuse_secrets() -> None:
         assert "LANGFUSE_PUBLIC_KEY" not in service_environment
         assert "LANGFUSE_SECRET_KEY" not in service_environment
         assert "HARNESS_LANGFUSE_SECRET_KEY" not in service_environment
+    web_environment = cast(dict[str, Any], services["web"]["environment"])
+    assert web_environment["HARNESS_OTEL_ENABLED"] == "${HARNESS_OTEL_ENABLED:-false}"
+    assert web_environment["HARNESS_OTEL_ENVIRONMENT"] == (
+        "${LANGFUSE_ENVIRONMENT:-production}"
+    )
+    assert web_environment["OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"] == (
+        "http://otel-collector:4318/v1/traces"
+    )
+    assert web_environment["OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"] == "http/protobuf"
+    assert "LANGFUSE_PUBLIC_KEY" not in web_environment
+    assert "LANGFUSE_SECRET_KEY" not in web_environment
     quality_environment = cast(dict[str, Any], services["quality-sync"])["environment"]
     assert quality_environment["HARNESS_LANGFUSE_PUBLIC_KEY"] == (
         "${LANGFUSE_PUBLIC_KEY:?set LANGFUSE_PUBLIC_KEY}"

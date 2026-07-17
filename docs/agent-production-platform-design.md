@@ -690,6 +690,7 @@ Manifest 只保存逻辑 ID，例如 `tavily-readonly`。服务端 Registration 
 | --- | --- | --- |
 | local-unsafe | 纯开发测试 | 必须显式开启，生产禁止 |
 | daytona-standard | 当前生产基线 | 远端 Workspace、受控生命周期、Bash 默认审批 |
+| e2b-public-egress | 公网模型/MCP | 每 Run 隔离沙箱、显式公网出口、TTL 自动回收 |
 | gvisor-standard | [规划] 私有化执行 | gVisor 容器、网络策略、只读基础镜像、临时写层 |
 | high-isolation | [规划] 高风险任务 | 每 Run 独立实例、更严格出口、短 TTL、无共享缓存 |
 

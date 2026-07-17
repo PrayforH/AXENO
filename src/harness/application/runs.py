@@ -74,11 +74,16 @@ class RunService:
         session = await self._sessions.get(tenant_id, session_id)
         existing = await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
         if existing is not None:
-            self._annotate_trace(session_id, existing.run_id)
+            self._annotate_trace(
+                session_id,
+                existing.run_id,
+                existing.input.get("prompt"),
+            )
             return existing
         timestamp = self._clock()
         run_id = self._id_generator("run")
-        self._annotate_trace(session_id, run_id)
+        run_input = input or {}
+        self._annotate_trace(session_id, run_id, run_input.get("prompt"))
         run = Run(
             run_id=run_id,
             session_id=session_id,
@@ -87,7 +92,7 @@ class RunService:
             idempotency_key=idempotency_key,
             created_at=timestamp,
             updated_at=timestamp,
-            input=input or {},
+            input=run_input,
             trace_context=(self._observability.inject() if self._observability is not None else {}),
         )
         admitted = False
@@ -124,15 +129,25 @@ class RunService:
         await self._queue.enqueue(RunTask(tenant_id=tenant_id, run_id=run.run_id))
         return run
 
-    def _annotate_trace(self, session_id: str, run_id: str) -> None:
+    def _annotate_trace(
+        self,
+        session_id: str,
+        run_id: str,
+        prompt: object | None = None,
+    ) -> None:
         if self._observability is None:
             return
         self._observability.annotate_current_span(
             {
                 "langfuse.session.id": session_id,
+                "langfuse.trace.metadata.run_id": run_id,
                 "session.id": session_id,
                 "run.id": run_id,
             }
+        )
+        self._observability.annotate_current_io(
+            input_value=prompt,
+            trace_level=True,
         )
 
     async def get(self, tenant_id: str, run_id: str) -> Run:

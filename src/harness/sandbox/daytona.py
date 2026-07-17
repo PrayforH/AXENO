@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import logging
 import os
 import re
 import shlex
 import shutil
 import ssl
 import tempfile
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 from uuid import uuid4
@@ -21,6 +25,8 @@ from daytona import (
     AsyncDaytona,
     CreateSandboxFromSnapshotParams,
     DaytonaConfig,
+    DaytonaConflictError,
+    DaytonaNotFoundError,
 )
 from daytona._async.sandbox import AsyncSandbox
 from daytona.common.process import SessionExecuteRequest
@@ -37,6 +43,7 @@ from harness.sandbox.base import (
 )
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+logger = logging.getLogger(__name__)
 
 
 def configure_default_ca_bundle() -> None:
@@ -52,9 +59,13 @@ def configure_default_ca_bundle() -> None:
 class DaytonaRemoteSandbox(Protocol):
     id: str
 
+    async def healthcheck(self) -> bool: ...
+
     async def ensure_claude_cli(self, *, version: str, path: str) -> None: ...
 
     async def create_folder(self, path: str) -> None: ...
+
+    async def remove_tree(self, path: str) -> None: ...
 
     async def upload(self, remote_path: str, content: bytes) -> None: ...
 
@@ -88,6 +99,28 @@ class SdkDaytonaRemoteSession:
         self._stdout: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._stderr: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._logs_task: asyncio.Task[None] | None = None
+
+    async def stage_config(
+        self, remote_directory: str, files: dict[str, bytes]
+    ) -> None:
+        quoted_directory = shlex.quote(remote_directory)
+        prepared = await self._sandbox.process.exec(
+            f"rm -rf -- {quoted_directory} && mkdir -p -- {quoted_directory}"
+        )
+        if prepared.exit_code != 0:
+            raise RuntimeError("failed to prepare remote Claude config directory")
+        for relative, content in files.items():
+            relative_path = PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError("remote Claude config path escaped config directory")
+            remote_path = str(PurePosixPath(remote_directory) / relative_path)
+            parent = str(PurePosixPath(remote_path).parent)
+            created = await self._sandbox.process.exec(
+                f"mkdir -p -- {shlex.quote(parent)}"
+            )
+            if created.exit_code != 0:
+                raise RuntimeError("failed to create remote Claude config directory")
+            await self._sandbox.fs.upload_file(content, remote_path)
 
     async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
         if not argv:
@@ -221,6 +254,13 @@ class SdkDaytonaRemoteSandbox:
         self._sandbox = sandbox
         self.id = sandbox.id
 
+    async def healthcheck(self) -> bool:
+        try:
+            response = await self._sandbox.process.exec("true", timeout=10)
+        except Exception:  # noqa: BLE001 - a stale remote is a cache miss
+            return False
+        return response.exit_code == 0
+
     async def ensure_claude_cli(self, *, version: str, path: str) -> None:
         quoted_path = shlex.quote(path)
         expected = f"{version} (Claude Code)"
@@ -248,6 +288,13 @@ class SdkDaytonaRemoteSandbox:
         )
         if response.exit_code != 0:
             raise RuntimeError("failed to create Daytona workspace directory")
+
+    async def remove_tree(self, path: str) -> None:
+        response = await self._sandbox.process.exec(
+            f"rm -rf -- {shlex.quote(path)}"
+        )
+        if response.exit_code != 0:
+            raise RuntimeError("failed to clean Daytona workspace directory")
 
     async def upload(self, remote_path: str, content: bytes) -> None:
         await self._sandbox.fs.upload_file(content, remote_path)
@@ -301,13 +348,35 @@ class SdkDaytonaClient:
         return SdkDaytonaRemoteSandbox(await self._sdk.get(sandbox_id))
 
     async def start(self, sandbox: DaytonaRemoteSandbox) -> None:
-        await self._sdk.start(cast(SdkDaytonaRemoteSandbox, sandbox).sdk_sandbox)
+        sdk_sandbox = cast(SdkDaytonaRemoteSandbox, sandbox).sdk_sandbox
+        state = getattr(sdk_sandbox.state, "value", sdk_sandbox.state)
+        if state != "started":
+            await self._sdk.start(sdk_sandbox)
 
     async def stop(self, sandbox: DaytonaRemoteSandbox) -> None:
         await self._sdk.stop(cast(SdkDaytonaRemoteSandbox, sandbox).sdk_sandbox)
 
     async def delete(self, sandbox: DaytonaRemoteSandbox) -> None:
         await self._sdk.delete(cast(SdkDaytonaRemoteSandbox, sandbox).sdk_sandbox)
+
+
+SessionKey = tuple[str, str]
+
+
+@dataclass
+class _SandboxEntry:
+    sandbox: DaytonaRemoteSandbox
+    owned: bool
+    session_key: SessionKey | None
+    released_at: float | None = None
+    prepared_cli: tuple[str, str] | None = None
+
+
+@dataclass
+class _SandboxLease:
+    entry: _SandboxEntry
+    session_lock: asyncio.Lock | None
+    reusable: bool
 
 
 class DaytonaSandboxProvider:
@@ -323,11 +392,20 @@ class DaytonaSandboxProvider:
         delete_on_destroy: bool = False,
         auto_stop_interval_minutes: int = 15,
         auto_delete_interval_minutes: int = 60,
+        session_reuse_enabled: bool = False,
+        session_idle_timeout_seconds: float = 600,
+        warm_pool_max_sessions: int = 3,
         max_collect_bytes: int = 512 * 1024 * 1024,
         max_collect_members: int = 10_000,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        if max_collect_bytes <= 0 or max_collect_members <= 0:
-            raise ValueError("Daytona collection limits must be positive")
+        if (
+            max_collect_bytes <= 0
+            or max_collect_members <= 0
+            or session_idle_timeout_seconds <= 0
+            or warm_pool_max_sessions <= 0
+        ):
+            raise ValueError("Daytona lifecycle and collection limits must be positive")
         self._client = client
         self._local_root = local_root
         self._snapshot = snapshot
@@ -337,41 +415,177 @@ class DaytonaSandboxProvider:
         self._delete_on_destroy = delete_on_destroy
         self._auto_stop_interval_minutes = auto_stop_interval_minutes
         self._auto_delete_interval_minutes = auto_delete_interval_minutes
+        self._session_reuse_enabled = session_reuse_enabled
+        self._session_idle_timeout_seconds = session_idle_timeout_seconds
+        self._warm_pool_max_sessions = warm_pool_max_sessions
         self._max_collect_bytes = max_collect_bytes
         self._max_collect_members = max_collect_members
-        self._sandboxes: dict[str, tuple[DaytonaRemoteSandbox, bool]] = {}
+        self._monotonic = monotonic
+        self._sandboxes: dict[str, _SandboxEntry] = {}
+        self._leases: dict[str, _SandboxLease] = {}
+        self._session_sandboxes: dict[SessionKey, str] = {}
+        self._session_locks: dict[SessionKey, asyncio.Lock] = {}
+
+    @staticmethod
+    def _session_name(session_key: SessionKey) -> str:
+        tenant_id, session_id = session_key
+        digest = hashlib.sha256(
+            f"{tenant_id}\0{session_id}".encode()
+        ).hexdigest()[:24]
+        return f"harness-session-{digest}"
+
+    def _drop_entry(self, entry: _SandboxEntry) -> None:
+        self._sandboxes.pop(entry.sandbox.id, None)
+        if (
+            entry.session_key is not None
+            and self._session_sandboxes.get(entry.session_key) == entry.sandbox.id
+        ):
+            self._session_sandboxes.pop(entry.session_key, None)
+        if entry.session_key is not None:
+            lock = self._session_locks.get(entry.session_key)
+            if lock is not None and not lock.locked():
+                self._session_locks.pop(entry.session_key, None)
+
+    async def _retire(self, entry: _SandboxEntry) -> None:
+        try:
+            await self._client.stop(entry.sandbox)
+            if self._delete_on_destroy and entry.owned:
+                await self._client.delete(entry.sandbox)
+        except DaytonaNotFoundError:
+            pass
+        else:
+            self._drop_entry(entry)
+            return
+        self._drop_entry(entry)
+
+    async def _create_session_sandbox(
+        self, run: Run, session_key: SessionKey
+    ) -> _SandboxEntry:
+        name = self._session_name(session_key)
+        try:
+            sandbox = await self._client.get(name)
+        except DaytonaNotFoundError:
+            try:
+                sandbox = await self._client.create(
+                    snapshot=self._snapshot,
+                    name=name,
+                    labels={
+                        "harness.scope": "session",
+                        "harness.tenant": run.tenant_id,
+                        "harness.session": run.session_id,
+                        "harness.created_by_run": run.run_id,
+                    },
+                    auto_stop_interval=self._auto_stop_interval_minutes,
+                    auto_delete_interval=(
+                        self._auto_delete_interval_minutes
+                        if self._delete_on_destroy
+                        else None
+                    ),
+                )
+            except DaytonaConflictError:
+                # A second worker won the deterministic-name create race.
+                sandbox = await self._client.get(name)
+                await self._client.start(sandbox)
+        else:
+            await self._client.start(sandbox)
+        entry = _SandboxEntry(
+            sandbox=sandbox,
+            owned=True,
+            session_key=session_key,
+        )
+        self._sandboxes[sandbox.id] = entry
+        self._session_sandboxes[session_key] = sandbox.id
+        return entry
+
+    async def _acquire_session_entry(
+        self, run: Run, session_key: SessionKey
+    ) -> _SandboxEntry:
+        sandbox_id = self._session_sandboxes.get(session_key)
+        entry = self._sandboxes.get(sandbox_id) if sandbox_id is not None else None
+        if entry is not None:
+            if await entry.sandbox.healthcheck():
+                entry.released_at = None
+                return entry
+            logger.warning(
+                "discarding unhealthy warm Daytona sandbox",
+                extra={"sandbox_id": entry.sandbox.id, "session_id": run.session_id},
+            )
+            await self._retire(entry)
+        return await self._create_session_sandbox(run, session_key)
 
     async def provision(self, run: Run) -> SandboxHandle:
         existing = run.input.get("daytona_sandbox_id")
-        if isinstance(existing, str) and existing:
-            sandbox = await self._client.get(existing)
-            await self._client.start(sandbox)
-            owned = False
-        else:
-            sandbox = await self._client.create(
-                snapshot=self._snapshot,
-                name=f"harness-{run.run_id}-{run.fencing_token}"[:64],
-                labels={
-                    "harness.tenant": run.tenant_id,
-                    "harness.session": run.session_id,
-                    "harness.run": run.run_id,
-                },
-                auto_stop_interval=self._auto_stop_interval_minutes,
-                auto_delete_interval=(
-                    self._auto_delete_interval_minutes
-                    if self._delete_on_destroy
-                    else None
-                ),
+        session_key = (run.tenant_id, run.session_id)
+        reusable = self._session_reuse_enabled and not (
+            isinstance(existing, str) and existing
+        )
+        session_lock: asyncio.Lock | None = None
+        if reusable:
+            session_lock = self._session_locks.setdefault(
+                session_key, asyncio.Lock()
             )
-            owned = True
+            await session_lock.acquire()
+        try:
+            if isinstance(existing, str) and existing:
+                sandbox = await self._client.get(existing)
+                await self._client.start(sandbox)
+                entry = _SandboxEntry(
+                    sandbox=sandbox,
+                    owned=False,
+                    session_key=None,
+                )
+                self._sandboxes[sandbox.id] = entry
+            elif reusable:
+                entry = await self._acquire_session_entry(run, session_key)
+                sandbox = entry.sandbox
+            else:
+                sandbox = await self._client.create(
+                    snapshot=self._snapshot,
+                    name=f"harness-{run.run_id}-{run.fencing_token}"[:64],
+                    labels={
+                        "harness.tenant": run.tenant_id,
+                        "harness.session": run.session_id,
+                        "harness.run": run.run_id,
+                    },
+                    auto_stop_interval=self._auto_stop_interval_minutes,
+                    auto_delete_interval=(
+                        self._auto_delete_interval_minutes
+                        if self._delete_on_destroy
+                        else None
+                    ),
+                )
+                entry = _SandboxEntry(
+                    sandbox=sandbox,
+                    owned=True,
+                    session_key=None,
+                )
+                self._sandboxes[sandbox.id] = entry
+            self._leases[sandbox.id] = _SandboxLease(
+                entry=entry,
+                session_lock=session_lock,
+                reusable=reusable,
+            )
+        except BaseException:
+            if session_lock is not None and session_lock.locked():
+                session_lock.release()
+            raise
         path = Path(
             tempfile.mkdtemp(prefix=f"{run.run_id}-", dir=self._local_root)
         )
         remote_workspace = f"{self._remote_workspace_root}/{run.run_id}"
-        self._sandboxes[sandbox.id] = (sandbox, owned)
+        config_digest = hashlib.sha256(
+            f"{run.tenant_id}\0{run.session_id}".encode()
+        ).hexdigest()[:24]
+        remote_config_dir = (
+            f"{self._remote_workspace_root}/.claude-config/{config_digest}"
+        )
 
         def transport_factory(raw_options: object) -> object:
             options = cast(ClaudeAgentOptions, raw_options)
+            options.env = {
+                **options.env,
+                "CLAUDE_CONFIG_DIR": remote_config_dir,
+            }
             return DaytonaClaudeTransport(
                 session=sandbox.remote_session(),
                 options=options,
@@ -389,12 +603,16 @@ class DaytonaSandboxProvider:
         )
 
     async def prepare(self, handle: SandboxHandle) -> None:
-        sandbox, _ = self._sandboxes[handle.sandbox_id]
+        entry = self._sandboxes[handle.sandbox_id]
+        sandbox = entry.sandbox
         assert handle.remote_workspace is not None
-        await sandbox.ensure_claude_cli(
-            version=self._cli_version,
-            path=self._cli_path,
-        )
+        cli_identity = (self._cli_version, self._cli_path)
+        if entry.prepared_cli != cli_identity:
+            await sandbox.ensure_claude_cli(
+                version=self._cli_version,
+                path=self._cli_path,
+            )
+            entry.prepared_cli = cli_identity
         await sandbox.create_folder(handle.remote_workspace)
         for path in sorted(handle.path.rglob("*")):
             relative = path.relative_to(handle.path).as_posix()
@@ -405,7 +623,7 @@ class DaytonaSandboxProvider:
                 await sandbox.upload(remote, path.read_bytes())
 
     async def collect(self, handle: SandboxHandle) -> None:
-        sandbox, _ = self._sandboxes[handle.sandbox_id]
+        sandbox = self._sandboxes[handle.sandbox_id].sandbox
         assert handle.remote_workspace is not None
         remote_files = await sandbox.list_files(handle.remote_workspace)
         if len(remote_files) > self._max_collect_members:
@@ -445,7 +663,7 @@ class DaytonaSandboxProvider:
             raise ValueError("sandbox command argv must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("sandbox command timeout must be positive")
-        sandbox, _ = self._sandboxes[handle.sandbox_id]
+        sandbox = self._sandboxes[handle.sandbox_id].sandbox
         if handle.remote_workspace is None:
             raise ValueError("Daytona command requires a remote workspace")
         session = sandbox.remote_session()
@@ -475,10 +693,117 @@ class DaytonaSandboxProvider:
         )
 
     async def destroy(self, handle: SandboxHandle) -> None:
-        entry = self._sandboxes.pop(handle.sandbox_id, None)
-        if entry is not None:
-            sandbox, owned = entry
-            await self._client.stop(sandbox)
-            if self._delete_on_destroy and owned:
-                await self._client.delete(sandbox)
-        shutil.rmtree(handle.path, ignore_errors=True)
+        lease = self._leases.pop(handle.sandbox_id, None)
+        should_evict = False
+        try:
+            if lease is None:
+                return
+            if lease.reusable:
+                try:
+                    assert handle.remote_workspace is not None
+                    await lease.entry.sandbox.remove_tree(handle.remote_workspace)
+                except Exception:  # noqa: BLE001 - retire contaminated warm state
+                    logger.exception(
+                        "failed to clean warm Daytona workspace; retiring sandbox",
+                        extra={"sandbox_id": handle.sandbox_id},
+                    )
+                    self._drop_entry(lease.entry)
+                    try:
+                        await self._retire(lease.entry)
+                    except Exception:  # noqa: BLE001 - remote auto-delete is fallback
+                        logger.exception(
+                            "failed to retire contaminated Daytona sandbox",
+                            extra={"sandbox_id": handle.sandbox_id},
+                        )
+                else:
+                    lease.entry.released_at = self._monotonic()
+                    should_evict = True
+            else:
+                self._drop_entry(lease.entry)
+                await self._client.stop(lease.entry.sandbox)
+                if self._delete_on_destroy and lease.entry.owned:
+                    await self._client.delete(lease.entry.sandbox)
+        finally:
+            shutil.rmtree(handle.path, ignore_errors=True)
+            if lease is not None and lease.session_lock is not None:
+                if lease.session_lock.locked():
+                    lease.session_lock.release()
+                session_key = lease.entry.session_key
+                if (
+                    session_key is not None
+                    and session_key not in self._session_sandboxes
+                    and not lease.session_lock.locked()
+                ):
+                    self._session_locks.pop(session_key, None)
+        if should_evict:
+            await self._evict_excess_warm()
+
+    async def _reap_warm_entry(
+        self, entry: _SandboxEntry, *, released_before: float | None = None
+    ) -> bool:
+        session_key = entry.session_key
+        if session_key is None:
+            return False
+        lock = self._session_locks.setdefault(session_key, asyncio.Lock())
+        await lock.acquire()
+        try:
+            current = self._sandboxes.get(entry.sandbox.id)
+            if current is not entry or entry.released_at is None:
+                return False
+            if released_before is not None and entry.released_at > released_before:
+                return False
+            await self._retire(entry)
+            return True
+        finally:
+            lock.release()
+            if session_key not in self._session_sandboxes and not lock.locked():
+                self._session_locks.pop(session_key, None)
+
+    async def _evict_excess_warm(self) -> int:
+        warm = sorted(
+            (
+                entry
+                for entry in self._sandboxes.values()
+                if entry.released_at is not None
+            ),
+            key=lambda entry: cast(float, entry.released_at),
+        )
+        excess = max(0, len(warm) - self._warm_pool_max_sessions)
+        reaped = 0
+        for entry in warm[:excess]:
+            try:
+                retired = await self._reap_warm_entry(entry)
+            except Exception:  # noqa: BLE001 - retry on the next maintenance pass
+                logger.exception(
+                    "failed to evict excess warm Daytona sandbox",
+                    extra={"sandbox_id": entry.sandbox.id},
+                )
+            else:
+                if not retired:
+                    continue
+                reaped += 1
+        return reaped
+
+    async def reap_expired(self) -> int:
+        cutoff = self._monotonic() - self._session_idle_timeout_seconds
+        expired = [
+            entry
+            for entry in tuple(self._sandboxes.values())
+            if entry.released_at is not None and entry.released_at <= cutoff
+        ]
+        reaped = 0
+        for entry in expired:
+            try:
+                retired = await self._reap_warm_entry(
+                    entry, released_before=cutoff
+                )
+            except Exception:  # noqa: BLE001 - retry on the next maintenance pass
+                logger.exception(
+                    "failed to reap expired warm Daytona sandbox",
+                    extra={"sandbox_id": entry.sandbox.id},
+                )
+            else:
+                if not retired:
+                    continue
+                reaped += 1
+        return reaped + await self._evict_excess_warm()

@@ -44,6 +44,17 @@ from harness.runtime.mcp_credentials import redact_mcp_credentials
 from harness.runtime.memory_tools import create_memory_mcp_server, memory_execution_context
 from harness.runtime.message_mapper import map_sdk_message, result_subtype, result_usage
 from harness.runtime.model_router import ModelRouter
+from harness.runtime.sandbox_tools import (
+    COORDINATION_BUILTINS,
+    create_sandbox_tools_mcp_server,
+    proxy_tool_name,
+)
+from harness.runtime.sandbox_tools import (
+    SERVER_NAME as SANDBOX_MCP_SERVER_NAME,
+)
+from harness.runtime.sandbox_tools import (
+    SUPPORTED_BUILTINS as SANDBOX_BUILTINS,
+)
 from harness.runtime.sdk_tool_gate import ToolGate
 from harness.runtime.subagent_governance import SubagentRuntimeGovernor
 from harness.runtime.tools import ResolvedTools, ToolResolutionError, ToolResolver
@@ -110,6 +121,7 @@ class ClaudeSdkRuntime:
         *,
         run_id: str,
         route: ModelRoute,
+        prompt: str,
     ) -> AsyncIterator[object]:
         manifest = self._snapshot.manifest
         base_attributes: dict[str, str | bool | int | float] = {
@@ -130,6 +142,8 @@ class ClaudeSdkRuntime:
             run_id=run_id,
             attributes=base_attributes,
         ):
+            if self._observability is not None:
+                self._observability.annotate_current_io(input_value=prompt)
             async for message in messages:
                 if isinstance(message, ResultMessage) and self._observability is not None:
                     subtype = result_subtype(message)
@@ -167,6 +181,13 @@ class ClaudeSdkRuntime:
                         if source in usage:
                             result_attributes[target] = usage[source]
                     self._observability.annotate_current_span(result_attributes)
+                    self._observability.annotate_current_io(
+                        output_value=message.result,
+                    )
+                    self._observability.annotate_current_io(
+                        output_value=message.result,
+                        trace_level=True,
+                    )
                     if message.is_error:
                         self._observability.mark_current_span_error(subtype)
                 yield message
@@ -209,6 +230,7 @@ class ClaudeSdkRuntime:
         resolved_tools = await self._tool_resolver.resolve(manifest, context.identity)
         mcp_servers = dict(resolved_tools.mcp_servers)
         allowed_tools = list(resolved_tools.allowed_tools)
+        builtin_tools = list(resolved_tools.builtin_tools)
         remote_transport = context.runtime_transport_factory is not None
         if (
             remote_transport
@@ -220,6 +242,45 @@ class ClaudeSdkRuntime:
             )
             mcp_servers = dict(resolved_tools.mcp_servers)
             allowed_tools = list(resolved_tools.allowed_tools)
+            builtin_tools = list(resolved_tools.builtin_tools)
+        sandbox_proxy_enabled = context.sandbox_command_executor is not None
+        if sandbox_proxy_enabled:
+            if remote_transport:
+                raise ToolResolutionError(
+                    "deferred sandbox tools require the Claude CLI to run in the worker"
+                )
+            declared_builtins = set(builtin_tools)
+            for snapshot in subagent_snapshots.values():
+                declared_builtins.update(
+                    tool.builtin
+                    for tool in snapshot.manifest.spec.tools
+                    if tool.builtin is not None
+                )
+            unsupported = declared_builtins - SANDBOX_BUILTINS - COORDINATION_BUILTINS
+            if unsupported:
+                names = ", ".join(sorted(unsupported))
+                raise ToolResolutionError(
+                    f"builtins cannot run through deferred sandbox tools: {names}"
+                )
+            proxied = declared_builtins.intersection(SANDBOX_BUILTINS)
+            if proxied:
+                if SANDBOX_MCP_SERVER_NAME in mcp_servers:
+                    raise ToolResolutionError(
+                        f"duplicate MCP server name: {SANDBOX_MCP_SERVER_NAME}"
+                    )
+                assert context.sandbox_command_executor is not None
+                mcp_servers[SANDBOX_MCP_SERVER_NAME] = (
+                    create_sandbox_tools_mcp_server(
+                        context.sandbox_command_executor,
+                        proxied,
+                    )
+                )
+                for builtin in sorted(proxied):
+                    allowed_tools.append(proxy_tool_name(builtin))
+                allowed_tools = list(dict.fromkeys(allowed_tools))
+            builtin_tools = [
+                builtin for builtin in builtin_tools if builtin in COORDINATION_BUILTINS
+            ]
         if not remote_transport:
             # The production container runs as an unprivileged user whose HOME
             # is the read-only application directory. Claude CLI needs a
@@ -270,7 +331,11 @@ class ClaudeSdkRuntime:
                     f"subagent custom tools are not supported: {name}"
                 )
             subagent_tools = [
-                tool.builtin
+                (
+                    proxy_tool_name(tool.builtin)
+                    if sandbox_proxy_enabled and tool.builtin in SANDBOX_BUILTINS
+                    else tool.builtin
+                )
                 for tool in subagent_manifest.spec.tools
                 if tool.builtin is not None
             ]
@@ -289,7 +354,7 @@ class ClaudeSdkRuntime:
             )
         store = cast(SessionStore, self._session_store) if self._session_store is not None else None
         options = ClaudeAgentOptions(
-            tools=list(resolved_tools.builtin_tools),
+            tools=builtin_tools,
             allowed_tools=allowed_tools,
             mcp_servers=mcp_servers,
             system_prompt=self._snapshot.system_prompt,
@@ -405,6 +470,7 @@ class ClaudeSdkRuntime:
         partial_text_seen = False
         stream_message_open = False
         pending_text = ""
+        first_text_delta_flushed = False
         pending_task_terminals: dict[str, RuntimeEvent] = {}
         with ExitStack() as execution_context:
             execution_context.callback(
@@ -435,6 +501,7 @@ class ClaudeSdkRuntime:
                 query_messages,
                 run_id=context.run.run_id,
                 route=decision.route,
+                prompt=prompt,
             ):
                 mapped = [
                     self._redact_event(event, resolved_tools)
@@ -483,13 +550,27 @@ class ClaudeSdkRuntime:
                         if event.type == "message.start":
                             if not stream_message_open:
                                 stream_message_open = True
+                                first_text_delta_flushed = False
                                 yield event
                         elif event.type == "message.delta":
                             partial_text_seen = True
                             if not stream_message_open:
                                 stream_message_open = True
+                                first_text_delta_flushed = False
                                 yield RuntimeEvent(type="message.start")
-                            pending_text += str(event.payload.get("text", ""))
+                            text = str(event.payload.get("text", ""))
+                            if text and not first_text_delta_flushed:
+                                # TTFT takes priority over event coalescing. Flush the
+                                # provider's first visible text immediately, then batch
+                                # later character-sized deltas to avoid one durable DB
+                                # event per token.
+                                first_text_delta_flushed = True
+                                yield RuntimeEvent(
+                                    type="message.delta",
+                                    payload={"text": text},
+                                )
+                                continue
+                            pending_text += text
                             should_flush = len(pending_text) >= _TEXT_DELTA_FLUSH_CHARS or (
                                 len(pending_text) >= _TEXT_DELTA_PUNCTUATION_CHARS
                                 and pending_text[-1:] in _TEXT_DELTA_BOUNDARIES

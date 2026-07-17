@@ -1,0 +1,52 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: archive-assistant-agent
+  version: 0.1.1
+  labels:
+    domain: archive-management
+    template: orchestrator
+    display-name: 档案智能归档
+    description: 盘点、分类、去重并生成归档方案，经用户确认和平台审批后执行重命名与移动。
+    source: nexau-import
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: new-api-default
+    model: claude-sonnet-4-6
+    fallbackRoute: anthropic-official
+    fallbackModel: claude-sonnet-4-6
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/archive-rules
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+    - builtin: Bash
+    - builtin: Task
+  subagents:
+    - ref: archive-file-classifier-agent@0.1.1
+      alias: file-classifier
+      description: 只读并行分类文件，返回门类、期限、依据、可信度和待复核项。
+      background: true
+  hooks: []
+  permissions:
+    policy: production-orchestrator
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 40
+    timeoutSeconds: 2400
+    maxBudgetUsd: 5
+    maxModelTokens: 500000
+    maxSubagents: 4
+    maxSubagentTasks: 12
+    maxConcurrentSubagents: 4
+    maxSubagentDepth: 1
+    maxSubagentUsageUnits: 300000

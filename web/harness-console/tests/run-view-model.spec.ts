@@ -10,6 +10,7 @@ function activity(
     kind?: "run" | "analysis" | "tool" | "subagent" | "artifact" | "result" | "error";
     status?: string;
     title?: string;
+    summary?: string;
     sequence: number;
     metadata?: Record<string, unknown>;
   }>,
@@ -79,6 +80,32 @@ describe("run view model", () => {
     expect(model.phase).toBe("running");
   });
 
+  it("keeps model routing as metadata instead of the active work summary", async () => {
+    const { reduceRunViewModel } = await moduleUnderTest();
+    const model = reduceRunViewModel(
+      undefined,
+      activity("running", [
+        {
+          id: "running",
+          event_type: "run.running",
+          status: "running",
+          title: "Agent 开始执行",
+          sequence: 1,
+        },
+        {
+          id: "route",
+          event_type: "model.route.selected",
+          status: "succeeded",
+          title: "模型路由已选择",
+          summary: "deepseek-v4-pro",
+          sequence: 2,
+        },
+      ]),
+    );
+
+    expect(model.summary).toBe("Agent 开始执行");
+  });
+
   it("tracks pending approval and returns to running after a decision", async () => {
     const { reduceRunViewModel } = await moduleUnderTest();
     const waiting = reduceRunViewModel(
@@ -131,7 +158,11 @@ describe("run view model", () => {
           event_type: "tool.request",
           kind: "tool",
           sequence: 2,
-          metadata: { tool_call_id: "tool-1", name: "Read" },
+          metadata: {
+            tool_call_id: "tool-1",
+            name: "Read",
+            arguments: { file_path: "README.md" },
+          },
         },
         {
           id: "tool-allowed",
@@ -146,7 +177,10 @@ describe("run view model", () => {
           kind: "tool",
           status: "succeeded",
           sequence: 4,
-          metadata: { tool_call_id: "tool-1" },
+          metadata: {
+            tool_call_id: "tool-1",
+            result_summary: "返回 12 行 · 480 字符",
+          },
         },
       ]),
     );
@@ -154,7 +188,13 @@ describe("run view model", () => {
     expect(model.tasks).toHaveLength(1);
     expect(model.tasks[0]).toMatchObject({ id: "task-1", parentId: "parent-1" });
     expect(model.tools).toEqual([
-      expect.objectContaining({ id: "tool-1", name: "Read", status: "completed" }),
+      expect.objectContaining({
+        id: "tool-1",
+        name: "Read",
+        status: "completed",
+        arguments: { file_path: "README.md" },
+        resultSummary: "返回 12 行 · 480 字符",
+      }),
     ]);
     expect(model.toolCount).toBe(1);
     expect(model.taskCount).toBe(1);

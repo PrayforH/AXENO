@@ -3,7 +3,14 @@
 import asyncio
 import hashlib
 import mimetypes
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from contextlib import AbstractContextManager, nullcontext, suppress
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -46,7 +53,12 @@ from harness.runtime.input_redaction import (
     staged_input_paths,
     staged_read_path,
 )
-from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
+from harness.sandbox.base import (
+    SandboxCommandResult,
+    SandboxHandle,
+    SandboxIsolation,
+    SandboxProvider,
+)
 
 RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[[str, str, str], Awaitable[PolicyEngine]]
@@ -58,6 +70,28 @@ T = TypeVar("T")
 
 class _RunCancellationRequestedError(RuntimeExecutionTimeoutError):
     """Internal control flow used to stop a long-running orchestration stage."""
+
+
+def _bind_sandbox_command_executor(
+    sandbox: SandboxProvider,
+    handle: SandboxHandle,
+) -> Callable[
+    [Sequence[str], Mapping[str, str] | None, float],
+    Awaitable[SandboxCommandResult],
+]:
+    async def execute(
+        argv: Sequence[str],
+        environment: Mapping[str, str] | None,
+        timeout_seconds: float,
+    ) -> SandboxCommandResult:
+        return await sandbox.execute(
+            handle,
+            argv,
+            environment=environment,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return execute
 
 
 def read_runtime_artifact(
@@ -474,6 +508,7 @@ class RunOrchestrator:
         session = await self._sessions.get(tenant_id, run.session_id)
         correlation_attributes: dict[str, str] = {
             "langfuse.session.id": run.session_id,
+            "langfuse.trace.metadata.run_id": run.run_id,
             "session.id": run.session_id,
             "agent.name": session.agent_name,
             "agent.version": session.agent_version,
@@ -675,6 +710,7 @@ class RunOrchestrator:
                 workspace=handle.path,
                 sandbox_provider=handle.provider,
                 sandbox_isolation=handle.isolation_level,
+                remote_workspace=handle.remote_workspace,
                 assistant_message_id=f"assistant-{run_id}-{uuid4().hex}",
                 input_files=tuple(
                     path for item in staged_inputs for path in (item.path, *item.processed_paths)
@@ -685,6 +721,11 @@ class RunOrchestrator:
                     path for item in staged_inputs for path in item.processed_paths
                 ),
                 runtime_transport_factory=handle.runtime_transport_factory,
+                sandbox_command_executor=(
+                    _bind_sandbox_command_executor(active_sandbox, handle)
+                    if handle.deferred_tool_execution
+                    else None
+                ),
                 artifact_publisher=artifact_publisher,
             )
             output_baseline = (

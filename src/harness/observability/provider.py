@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.trace import (
     NoOpTracerProvider,
+    Span,
     Status,
     StatusCode,
     Tracer,
@@ -19,7 +20,7 @@ from opentelemetry.trace import (
 )
 
 from harness.config import Settings
-from harness.observability.redaction import redact
+from harness.observability.redaction import redact, redact_content
 
 ProcessorFactory = Callable[[SpanExporter], SpanProcessor]
 AttributeValue = str | bool | int | float
@@ -58,10 +59,14 @@ class Observability:
         enabled: bool,
         tracer: Tracer,
         exporter: SpanExporter | None,
+        content_capture: str = "off",
+        content_max_chars: int = 12_000,
     ) -> None:
         self.enabled = enabled
         self.tracer = tracer
         self.exporter = exporter
+        self.content_capture = content_capture
+        self.content_max_chars = content_max_chars
         self._bound_attributes: ContextVar[dict[str, AttributeValue] | None] = ContextVar(
             f"harness_observability_attributes_{id(self)}",
             default=None,
@@ -75,6 +80,10 @@ class Observability:
     def current_trace_id(self) -> str | None:
         context = get_current_span().get_span_context()
         return f"{context.trace_id:032x}" if context.is_valid else None
+
+    def current_span_id(self) -> str | None:
+        context = get_current_span().get_span_context()
+        return f"{context.span_id:016x}" if context.is_valid else None
 
     @contextmanager
     def bind_attributes(
@@ -95,6 +104,83 @@ class Observability:
         span = get_current_span()
         for key, value in _safe_attributes(attributes).items():
             span.set_attribute(key, value)
+
+    @property
+    def captures_content(self) -> bool:
+        return self.enabled and self.content_capture == "redacted"
+
+    def annotate_current_io(
+        self,
+        *,
+        input_value: object | None = None,
+        output_value: object | None = None,
+        trace_level: bool = False,
+    ) -> None:
+        if not self.captures_content:
+            return
+        self._annotate_span_io(
+            get_current_span(),
+            input_value=input_value,
+            output_value=output_value,
+            trace_level=trace_level,
+        )
+
+    def _annotate_span_io(
+        self,
+        span: Span,
+        *,
+        input_value: object | None,
+        output_value: object | None,
+        trace_level: bool,
+    ) -> None:
+        prefix = "langfuse.trace" if trace_level else "langfuse.observation"
+        if input_value is not None:
+            span.set_attribute(
+                f"{prefix}.input",
+                redact_content(input_value, limit=self.content_max_chars),
+            )
+        if output_value is not None:
+            span.set_attribute(
+                f"{prefix}.output",
+                redact_content(output_value, limit=self.content_max_chars),
+            )
+
+    def record_completed_span(
+        self,
+        name: str,
+        *,
+        started_at_ns: int,
+        ended_at_ns: int,
+        attributes: Mapping[str, AttributeValue] | None = None,
+        input_value: object | None = None,
+        output_value: object | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        if not self.enabled:
+            return
+        safe_attributes = {
+            **(self._bound_attributes.get() or {}),
+            **_safe_attributes(attributes),
+        }
+        span = self.tracer.start_span(
+            name,
+            attributes=safe_attributes,
+            start_time=started_at_ns,
+            record_exception=False,
+            set_status_on_exception=False,
+        )
+        if self.captures_content:
+            self._annotate_span_io(
+                span,
+                input_value=input_value,
+                output_value=output_value,
+                trace_level=False,
+            )
+        if error_type:
+            safe_type = str(redact(error_type))
+            span.add_event("error", {"error.type": safe_type})
+            span.set_status(Status(StatusCode.ERROR, safe_type))
+        span.end(end_time=max(started_at_ns, ended_at_ns))
 
     def mark_current_span_error(self, error_type: str) -> None:
         safe_type = str(redact(error_type))
@@ -153,6 +239,8 @@ def build_observability(
             enabled=False,
             tracer=provider.get_tracer("harness"),
             exporter=None,
+            content_capture=settings.otel_content_capture,
+            content_max_chars=settings.otel_content_max_chars,
         )
     selected_exporter = exporter
     if selected_exporter is None:
@@ -171,4 +259,6 @@ def build_observability(
         enabled=True,
         tracer=provider.get_tracer("harness"),
         exporter=selected_exporter,
+        content_capture=settings.otel_content_capture,
+        content_max_chars=settings.otel_content_max_chars,
     )

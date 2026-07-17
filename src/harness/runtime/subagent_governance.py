@@ -134,6 +134,10 @@ class SubagentRuntimeGovernor:
         for candidate in candidates:
             if isinstance(candidate, str) and candidate in self._bindings:
                 return candidate
+        if any(isinstance(candidate, str) and candidate for candidate in candidates):
+            raise SubagentGovernanceError(
+                "subagent event references an undeclared role alias"
+            )
         if len(self._bindings) == 1:
             return next(iter(self._bindings))
         raise SubagentGovernanceError(

@@ -2,14 +2,23 @@
 
 import {
   ActionBarPrimitive,
+  AttachmentPrimitive,
   AuiIf,
   MessagePrimitive,
+  TextMessagePartProvider,
+  useAttachment,
   useAuiState,
   useThreadRuntime,
   type ReasoningMessagePartComponent,
+  type TextMessagePartProps,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
-import { type FormEvent, useState } from "react";
+import {
+  createContext,
+  type FormEvent,
+  useContext,
+  useState,
+} from "react";
 import {
   AssistantActionBar,
   AssistantMessage,
@@ -26,12 +35,16 @@ import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity, useRunViewModel } from "../lib/activity-store";
-import { selectComposerDisabled } from "../lib/run-view-model";
+import {
+  selectComposerDisabled,
+  type RunPhase,
+} from "../lib/run-view-model";
 import {
   hasRunActivityToolCall,
   runActivitySchema,
 } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
+import { useLiveResponse } from "../lib/live-response-store";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -178,9 +191,27 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function useAssistantResponseStarted() {
+  return useAuiState((state) =>
+    state.message.content.some(
+      (part) => part.type === "text" && part.text.trim().length > 0,
+    ),
+  );
+}
+
+export function hasProjectedTool(
+  view: ReturnType<typeof useRunViewModel>,
+  toolCallId: string | undefined,
+) {
+  return Boolean(
+    toolCallId && view?.tools.some((tool) => tool.id === toolCallId),
+  );
+}
+
 function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
+  const runView = useRunViewModel();
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
     return parsed.success ? (
@@ -217,6 +248,9 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
   if (part.toolName === "harness_present_artifact") {
     return <ArtifactCard details={args as unknown as ArtifactDetails} />;
   }
+  if (hasProjectedTool(runView, part.toolCallId)) {
+    return null;
+  }
   return (
     <ToolCard
       toolCallId={part.toolCallId}
@@ -240,7 +274,91 @@ const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
   </details>
 );
 
+function liveResponseVisible(text: string, phase: RunPhase | undefined) {
+  return Boolean(
+    text.trim() &&
+      phase !== "completed" &&
+      phase !== "failed" &&
+      phase !== "rejected" &&
+      phase !== "cancelled",
+  );
+}
+
+type ProjectedThreadMessage = {
+  role?: string;
+  content?: readonly {
+    type?: string;
+    text?: string;
+  }[];
+};
+
+export function hasCurrentTurnAssistantText(
+  messages: readonly ProjectedThreadMessage[],
+) {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+  return messages.slice(latestUserIndex + 1).some(
+    (message) =>
+      message.role === "assistant" &&
+      message.content?.some(
+        (part) => part.type === "text" && Boolean(part.text?.trim()),
+      ),
+  );
+}
+
+export function isIntermediateAssistantMessage(
+  view: ReturnType<typeof useRunViewModel>,
+  messageId: string,
+) {
+  return Boolean(
+    view?.items.some(
+      (item) =>
+        item.event_type === "tool.request" &&
+        item.metadata.message_id === messageId,
+    ),
+  );
+}
+
+function HarnessAssistantText(_part: TextMessagePartProps) {
+  const messageId = useAuiState((state) => state.message.id);
+  const runView = useRunViewModel();
+  if (isIntermediateAssistantMessage(runView, messageId)) return null;
+  return <MarkdownText />;
+}
+
+function LiveAssistantResponse() {
+  const live = useLiveResponse();
+  const runView = useRunViewModel();
+  const hasProjectedText = useAuiState((state) =>
+    hasCurrentTurnAssistantText(state.thread.messages),
+  );
+  if (
+    hasProjectedText ||
+    !liveResponseVisible(live.text, runView?.phase)
+  ) {
+    return null;
+  }
+  return (
+    <div className="live-assistant-response" aria-live="polite">
+      <TextMessagePartProvider
+        text={live.text}
+        isRunning={live.status === "streaming"}
+      >
+        <MarkdownText />
+      </TextMessagePartProvider>
+    </div>
+  );
+}
+
 function HarnessAssistantMessage() {
+  const messageId = useAuiState((state) => state.message.id);
+  const runView = useRunViewModel();
+  const intermediate = isIntermediateAssistantMessage(runView, messageId);
   return (
     <AssistantMessage.Root className="harness-assistant-message">
       <AuiIf condition={(state) => state.message.isLast}>
@@ -248,15 +366,21 @@ function HarnessAssistantMessage() {
       </AuiIf>
       <AssistantMessage.Content
         components={{
-          Text: MarkdownText,
+          Text: HarnessAssistantText,
           Reasoning: ReasoningPart,
         }}
       />
-      <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
-        <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
-      </AuiIf>
-      <BranchPicker />
-      <AssistantActionBar />
+      {!intermediate && (
+        <>
+          <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
+            <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
+          </AuiIf>
+          <div className="assistant-message-controls">
+            <BranchPicker />
+            <AssistantActionBar />
+          </div>
+        </>
+      )}
     </AssistantMessage.Root>
   );
 }
@@ -279,29 +403,103 @@ function CopyMessageIcon() {
   );
 }
 
+function AttachmentFileIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5.5 2.8h5.8l3.2 3.3v11.1H5.5Z" />
+      <path d="M11.2 2.8v3.5h3.3" />
+      <path d="M7.8 10h4.4M7.8 13h4.4" />
+    </svg>
+  );
+}
+
+export function inputArtifactDownloadHref(
+  data: string | undefined,
+  attachmentId: string,
+) {
+  const artifactId = data?.startsWith("input_artifact_")
+    ? data
+    : attachmentId.startsWith("input_artifact_")
+      ? attachmentId
+      : undefined;
+  return artifactId
+    ? `/api/input-artifacts/${encodeURIComponent(artifactId)}/content`
+    : undefined;
+}
+
+function HarnessMessageAttachment() {
+  const attachment = useAttachment((state) => state);
+  const filePart = attachment.content?.find((part) => part.type === "file");
+  const data = filePart?.type === "file" ? filePart.data : undefined;
+  const href = inputArtifactDownloadHref(data, attachment.id);
+  const extension = attachment.name.split(".").at(-1)?.toUpperCase() || "文件";
+  const content = (
+    <>
+      <span className="message-attachment-icon"><AttachmentFileIcon /></span>
+      <span className="message-attachment-copy">
+        <strong>{attachment.name}</strong>
+        <small>{extension} 文件{href ? " · 点击下载" : ""}</small>
+      </span>
+    </>
+  );
+  return (
+    <AttachmentPrimitive.Root className="message-attachment-card">
+      {href ? (
+        <a href={href} download={attachment.name} title={`下载 ${attachment.name}`}>
+          {content}
+        </a>
+      ) : (
+        <span className="message-attachment-static">{content}</span>
+      )}
+    </AttachmentPrimitive.Root>
+  );
+}
+
+type MessageEditorState = {
+  messageId: string;
+  draft: string;
+} | null;
+
+type MessageEditorController = {
+  editor: MessageEditorState;
+  setEditor: (editor: MessageEditorState) => void;
+};
+
+const MessageEditorContext = createContext<MessageEditorController | null>(null);
+
+function useMessageEditor() {
+  const controller = useContext(MessageEditorContext);
+  if (!controller) throw new Error("Message editor must be rendered inside AgentThread");
+  return controller;
+}
+
 function HarnessUserMessage() {
   const message = useAuiState((state) => state.message);
   const threadRunning = useAuiState((state) => state.thread.isRunning);
+  const isLatestUserMessage = useAuiState((state) => {
+    for (let index = state.thread.messages.length - 1; index >= 0; index -= 1) {
+      const candidate = state.thread.messages[index];
+      if (candidate?.role === "user") return candidate.id === state.message.id;
+    }
+    return false;
+  });
   const thread = useThreadRuntime();
+  const { editor, setEditor } = useMessageEditor();
   const originalText = message.content
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n");
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(originalText);
+  const editing = editor?.messageId === message.id;
+  const draft = editing ? editor.draft : originalText;
 
   function beginEdit() {
-    setDraft(originalText);
-    setEditing(true);
+    setEditor({ messageId: message.id, draft: originalText });
   }
 
   function submitEdit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || text === originalText.trim()) {
-      setEditing(false);
-      return;
-    }
+    if (!text || threadRunning || !isLatestUserMessage) return;
     const parentId =
       message.index > 0 ? thread.getState().messages[message.index - 1]?.id ?? null : null;
     thread.append({
@@ -312,27 +510,34 @@ function HarnessUserMessage() {
       attachments: message.attachments,
       startRun: true,
     });
-    setEditing(false);
+    setEditor(null);
   }
 
   return (
-    <UserMessage.Root className="harness-user-message">
-      <UserMessage.Attachments />
+      <UserMessage.Root className="harness-user-message">
+      <UserMessage.Attachments
+        components={{ Attachment: HarnessMessageAttachment }}
+      />
       <MessagePrimitive.If hasContent>
         {editing ? (
           <form className="user-message-editor" onSubmit={submitEdit}>
-            <label htmlFor={`edit-${message.id}`}>编辑用户输入</label>
             <textarea
-              id={`edit-${message.id}`}
+              className="user-message-editor-input"
+              aria-label="编辑用户输入"
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setEditor({ messageId: message.id, draft: event.target.value });
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setEditor(null);
+              }}
               autoFocus
               rows={Math.min(8, Math.max(2, draft.split("\n").length))}
             />
-            <div>
-              <button type="button" onClick={() => setEditing(false)}>取消</button>
-              <button type="submit" disabled={!draft.trim() || draft.trim() === originalText.trim()}>
-                更新并重新运行
+            <div className="user-message-editor-actions">
+              <button type="button" onClick={() => setEditor(null)}>取消</button>
+              <button type="submit" disabled={!draft.trim() || threadRunning}>
+                发送
               </button>
             </div>
           </form>
@@ -343,16 +548,6 @@ function HarnessUserMessage() {
               className="harness-user-action-bar"
               autohide="never"
             >
-              <button
-                className="user-message-action"
-                type="button"
-                aria-label="编辑消息"
-                title={threadRunning ? "运行结束后可编辑" : "编辑消息"}
-                disabled={threadRunning}
-                onClick={beginEdit}
-              >
-                <EditMessageIcon />
-              </button>
               <ActionBarPrimitive.Copy
                 className="user-message-action"
                 aria-label="复制消息"
@@ -361,6 +556,17 @@ function HarnessUserMessage() {
               >
                 <CopyMessageIcon />
               </ActionBarPrimitive.Copy>
+              {isLatestUserMessage && !threadRunning ? (
+                <button
+                  className="user-message-action"
+                  type="button"
+                  aria-label="编辑消息"
+                  title="编辑消息"
+                  onClick={beginEdit}
+                >
+                  <EditMessageIcon />
+                </button>
+              ) : null}
             </ActionBarPrimitive.Root>
           </>
         )}
@@ -373,20 +579,28 @@ function HarnessUserMessage() {
 function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
+  const live = useLiveResponse();
+  const finalResponseStarted =
+    useAssistantResponseStarted() || live.text.trim().length > 0;
   const hasDurableActivity = useAuiState((state) =>
     hasRunActivityToolCall(state.message.content),
   );
   if (!activity || !runView || hasDurableActivity) return null;
   return (
     <div className={`latest-activity ${runView.phase}`}>
-      <ActivitySummary activity={activity} />
+      <ActivitySummary
+        activity={activity}
+        responseStarted={finalResponseStarted}
+      />
     </div>
   );
 }
 
 export function AgentThread() {
+  const [editor, setEditor] = useState<MessageEditorState>(null);
   return (
-    <Thread
+    <MessageEditorContext.Provider value={{ editor, setEditor }}>
+      <Thread
       assistantMessage={{
         allowCopy: true,
         allowReload: true,
@@ -402,6 +616,7 @@ export function AgentThread() {
         AssistantMessage: HarnessAssistantMessage,
         UserMessage: HarnessUserMessage,
         Composer: HarnessComposer,
+        MessagesFooter: LiveAssistantResponse,
         ThreadWelcome: UserTaskWelcome,
       }}
       strings={{
@@ -429,6 +644,7 @@ export function AgentThread() {
         },
         editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
       }}
-    />
+      />
+    </MessageEditorContext.Provider>
   );
 }

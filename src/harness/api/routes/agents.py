@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -10,10 +10,64 @@ from harness.api.dependencies import (
     get_container,
     require_identity,
 )
-from harness.api.schemas import PublishAgentRequest
+from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _manifest_mapping(version: AgentVersion) -> dict[str, object]:
+    manifest = version.snapshot.get("manifest")
+    return cast(dict[str, object], manifest) if isinstance(manifest, dict) else {}
+
+
+def _subagent_coordinates(version: AgentVersion) -> set[str]:
+    spec = _manifest_mapping(version).get("spec")
+    if not isinstance(spec, dict):
+        return set()
+    subagents = cast(dict[str, object], spec).get("subagents")
+    if not isinstance(subagents, list):
+        return set()
+    coordinates: set[str] = set()
+    for item in cast(list[object], subagents):
+        if not isinstance(item, dict):
+            continue
+        reference = cast(dict[str, object], item).get("ref")
+        if isinstance(reference, str):
+            coordinates.add(reference)
+    return coordinates
+
+
+def _is_internal(version: AgentVersion) -> bool:
+    metadata = _manifest_mapping(version).get("metadata")
+    labels = (
+        cast(dict[str, object], metadata).get("labels")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if not isinstance(labels, dict):
+        return False
+    return cast(dict[str, object], labels).get("visibility") == "internal"
+
+
+@router.get("", response_model=list[AgentCatalogItem])
+async def list_agents(
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[AgentCatalogItem]:
+    ensure_permission(identity, "tasks:read")
+    versions = await container.agents.list_published(identity.tenant_id)
+    dependency_coordinates = {
+        coordinate
+        for version in versions
+        for coordinate in _subagent_coordinates(version)
+    }
+    return [
+        AgentCatalogItem.from_version(version)
+        for version in versions
+        if f"{version.name}@{version.version}" not in dependency_coordinates
+        and not _is_internal(version)
+    ]
 
 
 @router.post("", response_model=AgentVersion, status_code=status.HTTP_201_CREATED)

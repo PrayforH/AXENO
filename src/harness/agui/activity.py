@@ -1,11 +1,12 @@
 """Project durable Harness facts into one replayable AG-UI ActivityMessage."""
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from ag_ui.core import ActivityDeltaEvent, ActivitySnapshotEvent, BaseEvent
 
 from harness.core.events import RunEvent
+from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
 
 ACTIVITY_TYPE = "harness.run.v1"
 
@@ -16,6 +17,44 @@ def _timestamp(event: RunEvent) -> str:
 
 def _metadata(**values: object) -> dict[str, object]:
     return {key: value for key, value in values.items() if value is not None}
+
+
+def _safe_tool_arguments(name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    arguments = payload.get("arguments")
+    if not isinstance(arguments, dict):
+        return None
+    return redact_tool_arguments(name, cast(dict[str, Any], arguments))
+
+
+def _tool_result_summary(payload: dict[str, Any]) -> str | None:
+    if payload.get("redacted") is True:
+        return "输入文件内容已隐藏"
+    if payload.get("is_error") is True:
+        error = payload.get("error")
+        if isinstance(error, dict):
+            error_values = cast(dict[str, Any], error)
+            message = error_values.get("message") or error_values.get("code")
+            if isinstance(message, str) and message:
+                return redact_text(message, limit=180)
+        return "工具返回错误"
+    content = payload.get("content")
+    if isinstance(content, str):
+        stripped = content.strip()
+        if not stripped:
+            return "无输出"
+        lines = len(stripped.splitlines())
+        return (
+            f"返回 {lines} 行 · {len(stripped)} 字符"
+            if lines > 1
+            else f"返回 {len(stripped)} 字符"
+        )
+    if isinstance(content, list):
+        values = cast(list[Any], content)
+        return f"返回 {len(values)} 项"
+    if isinstance(content, dict):
+        values = cast(dict[str, Any], content)
+        return f"返回 {len(values)} 个字段"
+    return None
 
 
 def _item(
@@ -99,6 +138,18 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             summary=str(payload["status"]) if "status" in payload else None,
             metadata=_metadata(subtype=subtype or None),
         )
+    if event.type == "message.delta":
+        text = str(payload.get("text", ""))
+        if not text.strip():
+            return None
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="进展说明",
+            summary=redact_text(text, limit=2_000),
+            metadata=_metadata(message_id=payload.get("message_id")),
+        )
     if event.type == "message.start":
         return _item(
             event,
@@ -123,6 +174,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             metadata=_metadata(
                 name=name,
                 tool_call_id=payload.get("tool_call_id"),
+                arguments=_safe_tool_arguments(name, payload),
             ),
         )
     if event.type in {"tool.result", "tool.allowed"}:
@@ -132,7 +184,10 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             kind="tool",
             status="failed" if failed else "succeeded",
             title="工具调用失败" if failed else "工具调用完成",
-            metadata=_metadata(tool_call_id=payload.get("tool_call_id")),
+            metadata=_metadata(
+                tool_call_id=payload.get("tool_call_id"),
+                result_summary=_tool_result_summary(payload),
+            ),
         )
     if event.type == "approval.requested":
         return _item(
@@ -240,6 +295,7 @@ def build_run_activity(events: Sequence[RunEvent]) -> dict[str, Any] | None:
     )
     return {
         "run_id": first.run_id,
+        "trace_id": first.trace_id,
         "status": status,
         "started_at": _timestamp(first),
         "items": items,
@@ -259,6 +315,7 @@ def activity_projection(event: RunEvent) -> list[BaseEvent]:
                 activity_type=ACTIVITY_TYPE,
                 content={
                     "run_id": event.run_id,
+                    "trace_id": event.trace_id,
                     "status": "queued",
                     "started_at": _timestamp(event),
                     "items": [item],

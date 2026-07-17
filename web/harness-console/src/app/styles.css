@@ -1989,11 +1989,11 @@ body,
 }
 
 .tool-batch-row {
-  min-height: 28px;
-  padding: 4px 7px;
+  min-height: 42px;
+  padding: 6px 7px 7px;
   display: grid;
-  grid-template-columns: minmax(110px, auto) minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 10px;
   border-radius: 6px;
   color: #626963;
@@ -2004,16 +2004,52 @@ body,
   background: #f0f2ef;
 }
 
-.tool-batch-row code {
+.tool-batch-copy {
   min-width: 0;
-  overflow: hidden;
+  display: grid;
+  gap: 3px;
+}
+
+.tool-batch-copy > span:first-child,
+.tool-batch-facts {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.tool-batch-copy strong {
+  color: #46524c;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.tool-batch-copy code {
   color: #929792;
   font: 9px/1.3 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.tool-batch-facts {
+  color: #69766f;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.tool-batch-facts > span + span::before,
+.tool-batch-facts > em::before {
+  content: "·";
+  margin-right: 7px;
+  color: #a4ada8;
+}
+
+.tool-batch-facts em {
+  color: #8a948f;
+  font-style: normal;
 }
 
 .tool-batch-row small {
+  padding-top: 2px;
   color: #929792;
   font-size: 9px;
 }
@@ -2792,7 +2828,7 @@ textarea:not(.aui-composer-input):focus-visible,
   min-height: 58px;
   padding: 8px 10px;
   align-items: center;
-  column-gap: 6px;
+  column-gap: 0;
   border-color: #d4d8d3;
   border-radius: 16px;
   background: #fff;
@@ -2815,7 +2851,7 @@ textarea:not(.aui-composer-input):focus-visible,
   min-width: 0;
   min-height: 40px;
   margin: 0;
-  padding: 8px;
+  padding: 8px 8px 8px 2px;
   line-height: 24px;
 }
 
@@ -2860,10 +2896,42 @@ textarea:not(.aui-composer-input):focus-visible,
   overflow-wrap: anywhere;
 }
 
-.harness-assistant-message > .aui-branch-picker-root,
-.harness-assistant-message > .aui-assistant-action-bar-root {
-  align-self: flex-start;
-  margin: 4px 0 0;
+.harness-assistant-message > .latest-activity {
+  order: 0;
+}
+
+.harness-assistant-message > .aui-assistant-message-content {
+  order: 1;
+}
+
+.harness-assistant-message > .aui-message-error {
+  order: 2;
+}
+
+.harness-assistant-message > .assistant-message-controls {
+  order: 3;
+}
+
+.assistant-message-controls {
+  min-height: 28px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.assistant-message-controls > .aui-branch-picker-root,
+.assistant-message-controls > .aui-assistant-action-bar-root {
+  margin: 0;
+}
+
+.assistant-message-controls > .aui-assistant-action-bar-root[data-floating] {
+  position: static;
+  inset: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .harness-assistant-message > .aui-message-error {
@@ -3032,6 +3100,21 @@ textarea:not(.aui-composer-input):focus-visible,
   min-width: 0;
 }
 
+.execution-log {
+  display: grid;
+  gap: 2px;
+}
+
+.execution-commentary {
+  margin: 2px 0 8px;
+  padding: 1px 8px 3px 5px;
+  color: #2f3531;
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .execution-tree h4 {
   margin: 0 0 5px;
   color: #87928d;
@@ -3048,11 +3131,11 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .execution-task > summary,
 .execution-tool {
-  min-height: 29px;
-  padding: 5px 7px 5px 14px;
+  min-height: 42px;
+  padding: 6px 7px 7px 14px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 8px;
   list-style: none;
 }
@@ -3100,13 +3183,53 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .execution-task small,
 .execution-tool small {
+  padding-top: 2px;
   color: #85918b;
   font: 9px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.execution-tool code {
+.execution-tool-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.execution-tool-heading,
+.execution-tool-details {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.execution-tool-heading strong {
+  color: #37463f;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.execution-tool-heading code {
   color: #42534b;
-  font: 11px/1.3 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font: 9px/1.3 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.execution-tool-details {
+  color: #68766f;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.execution-tool-details > span + span::before,
+.execution-tool-details > em::before {
+  content: "·";
+  margin-right: 7px;
+  color: #a2aca7;
+}
+
+.execution-tool-details em {
+  color: #8b9690;
+  font-style: normal;
 }
 
 .execution-task-detail {
@@ -3567,18 +3690,101 @@ textarea:not(.aui-composer-input):focus-visible,
 /* User message actions sit beneath the bubble, matching the reading flow. */
 .harness-user-message {
   position: relative;
+  padding: 12px 0 0;
+}
+
+.harness-user-message .aui-user-message-attachments {
+  width: min(100%, 34rem);
+  margin: 0 0 8px auto;
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+}
+
+.message-attachment-card {
+  max-width: min(100%, 34rem);
+}
+
+.message-attachment-card > a,
+.message-attachment-static {
+  min-height: 58px;
+  padding: 8px 12px 8px 9px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #d9ddd9;
+  border-radius: 13px;
+  background: #f7f8f7;
+  color: #28302b;
+  text-decoration: none;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.message-attachment-card > a:hover,
+.message-attachment-card > a:focus-visible {
+  border-color: #aeb8b1;
+  background: #f0f3f1;
+}
+
+.message-attachment-icon {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #e7ece8;
+  color: #53665a;
+}
+
+.message-attachment-icon svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.message-attachment-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+}
+
+.message-attachment-copy strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-attachment-copy small {
+  color: #7b847e;
+  font-size: 10px;
 }
 
 .harness-user-action-bar {
   min-height: 30px;
-  margin: 3px 3px 0 0;
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 1px);
+  right: 2px;
+  margin: 0;
   display: flex;
   align-items: center;
   align-self: flex-end;
   gap: 2px;
-  opacity: 0.58;
-  pointer-events: auto;
-  transition: opacity 120ms ease;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.harness-user-message + .harness-assistant-message {
+  padding-top: 35px;
 }
 
 .harness-user-message:hover .harness-user-action-bar,
@@ -3627,63 +3833,68 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 .user-message-editor {
-  width: min(100%, 560px);
-  padding: 12px;
+  width: min(100%, 48rem);
+  padding: 20px 20px 16px;
   display: grid;
   align-self: flex-end;
-  gap: 8px;
-  border: 1px solid #bfc8c2;
-  border-radius: 10px;
-  background: #f8faf8;
-  box-shadow: 0 10px 28px rgb(32 43 37 / 8%);
+  gap: 14px;
+  border: 0;
+  border-radius: 20px;
+  background: #f1f2f1;
 }
 
-.user-message-editor label {
-  color: #66716b;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.user-message-editor textarea {
+.user-message-editor-input {
   width: 100%;
-  min-height: 76px;
-  padding: 10px 11px;
-  resize: vertical;
-  border: 1px solid #c9d1cc;
-  border-radius: 6px;
+  min-height: 82px;
+  padding: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
   color: var(--ink);
-  background: white;
-  font: 13px/1.6 "Avenir Next", "Segoe UI", sans-serif;
+  background: transparent;
+  font: 15px/1.65 "Avenir Next", "Segoe UI", sans-serif;
   outline: none;
 }
 
-.user-message-editor textarea:focus {
-  border-color: var(--rail);
-  box-shadow: 0 0 0 3px rgb(47 112 87 / 10%);
+.user-message-editor-input:focus {
+  box-shadow: none;
 }
 
-.user-message-editor > div {
+.user-message-editor-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 7px;
+  gap: 8px;
 }
 
 .user-message-editor button {
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid #c8cfca;
-  border-radius: 5px;
-  color: #4d5752;
+  min-height: 36px;
+  padding: 0 15px;
+  border: 1px solid #dfe2df;
+  border-radius: 10px;
+  color: #303431;
   background: white;
   cursor: pointer;
-  font-size: 11px;
-  font-weight: 620;
+  font-size: 13px;
+  font-weight: 650;
+  transition: background 140ms ease, transform 140ms ease;
 }
 
-.user-message-editor button[type="submit"] {
-  border-color: var(--rail);
+.user-message-editor button:hover:not(:disabled) {
+  background: #e7e9e7;
+}
+
+.user-message-editor button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.user-message-editor-actions button:last-child {
+  border-color: #202522;
   color: white;
-  background: var(--rail);
+  background: #202522;
+}
+
+.user-message-editor-actions button:last-child:hover:not(:disabled) {
+  background: #343a36;
 }
 
 .user-message-editor button:disabled {
@@ -4611,6 +4822,13 @@ textarea:not(.aui-composer-input):focus-visible,
   max-width: 100%;
 }
 
+.live-assistant-response {
+  width: 100%;
+  max-width: var(--aui-thread-max-width);
+  margin: 0 auto;
+  padding: 18px 0 6px;
+}
+
 .aui-table-scroll {
   width: 100%;
   max-width: 100%;
@@ -4791,6 +5009,125 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .task-rail-account .account-trigger-copy {
   display: none;
+}
+
+/* Agent selection is part of task creation. Existing threads remain version-bound. */
+.task-agent-switcher {
+  position: relative;
+  width: min(340px, 34vw);
+  min-width: 220px;
+  min-height: 38px;
+  margin-right: auto;
+  margin-left: clamp(8px, 3vw, 42px);
+  padding: 4px 34px 4px 7px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #d9ded9;
+  border-radius: 9px;
+  color: #29312c;
+  background: #f7f8f6;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.task-agent-switcher:hover,
+.task-agent-switcher:focus-within {
+  border-color: #bfc8c1;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(30 41 35 / 7%);
+}
+
+.task-agent-switcher-mark {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: #e5eee8;
+}
+
+.task-agent-switcher-mark i {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid #39725a;
+  border-radius: 3px;
+}
+
+.task-agent-switcher-mark i:first-child {
+  transform: translate(-2px, -2px);
+}
+
+.task-agent-switcher-mark i:last-child {
+  transform: translate(3px, 3px);
+  background: #e5eee8;
+}
+
+.task-agent-switcher-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  pointer-events: none;
+}
+
+.task-agent-switcher-copy small {
+  color: #7d8781;
+  font: 600 8px/1.1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.task-agent-switcher-copy strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-agent-switcher select {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.task-agent-switcher select:disabled {
+  cursor: wait;
+}
+
+.task-agent-switcher-chevron {
+  position: absolute;
+  top: 50%;
+  right: 13px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid #6b756f;
+  border-bottom: 1.5px solid #6b756f;
+  transform: translateY(-68%) rotate(45deg);
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  .task-agent-switcher {
+    width: 42px;
+    min-width: 42px;
+    margin-right: 0;
+    margin-left: auto;
+    padding: 5px 6px;
+    grid-template-columns: 28px;
+  }
+
+  .task-agent-switcher-copy,
+  .task-agent-switcher-chevron {
+    display: none;
+  }
 }
 
 .task-rail-account .account-popover {

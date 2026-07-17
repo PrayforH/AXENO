@@ -7,6 +7,8 @@ from typing import cast
 import pytest
 from claude_agent_sdk import PreToolUseHookInput
 from claude_agent_sdk.types import PostToolUseHookInput, SyncHookJSONOutput
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from harness.adapters.memory import (
     InMemoryApprovalRepository,
@@ -16,8 +18,10 @@ from harness.adapters.memory import (
 )
 from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
+from harness.config import Settings
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus, Session
+from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
@@ -47,6 +51,7 @@ async def _arrange(
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE,
     use_profiles: bool = False,
     quotas: QuotaService | None = None,
+    observability: Observability | None = None,
 ):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -81,6 +86,7 @@ async def _arrange(
             approvals=approval_service,
             events=events,
             quotas=quotas,
+            observability=observability,
         )
         if use_profiles
         else SdkToolGate(
@@ -88,6 +94,7 @@ async def _arrange(
             approvals=approval_service,
             events=events,
             quotas=quotas,
+            observability=observability,
         )
     )
     context = RuntimeContext(
@@ -222,6 +229,38 @@ async def test_unknown_subagent_identity_fails_closed(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_undeclared_subagent_delegation_fails_before_execution(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path, use_profiles=True)
+    matcher = gate.hooks(
+        context,
+        policy_id="production-orchestrator",
+        subagent_policy_ids={"helper-agent": "production-read-only"},
+    )["PreToolUse"][0]
+
+    output = await matcher.hooks[0](
+        _input(
+            "Agent",
+            {
+                "subagent_type": "general-purpose",
+                "description": "search the public web",
+                "prompt": "find current news",
+            },
+            "tool-undeclared-delegation",
+        ),
+        "tool-undeclared-delegation",
+        {"signal": None},
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, output)) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.result"]
+    assert emitted[-1].payload["error"]["code"] == "policy_denied"
+    assert "not declared" in emitted[-1].payload["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_allows_read_before_tool_execution_and_emits_ordered_events(tmp_path: Path) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
 
@@ -230,6 +269,32 @@ async def test_allows_read_before_tool_execution_and_emits_ordered_events(tmp_pa
     assert _decision(output) == "allow"
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_proxy_tool_is_audited_and_authorized_as_builtin(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(
+        tmp_path,
+        sandbox_isolation=SandboxIsolation.CONTAINER,
+    )
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "mcp__harness-sandbox__read",
+            {"file_path": "evidence.txt"},
+            "tool-proxy-read",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].type == "tool.request"
+    assert emitted[0].payload["name"] == "Read"
+    assert emitted[1].type == "tool.allowed"
 
 
 @pytest.mark.asyncio
@@ -516,6 +581,102 @@ async def test_successful_approved_write_grants_same_run_edit_capability(
 
 
 @pytest.mark.asyncio
+async def test_tool_lifecycle_records_redacted_langfuse_observation(
+    tmp_path: Path,
+) -> None:
+    exporter = InMemorySpanExporter()
+    observability = build_observability(
+        Settings(
+            otel_enabled=True,
+            otlp_endpoint="http://unused/v1/traces",
+            otel_content_capture="redacted",
+        ),
+        exporter=exporter,
+        processor_factory=SimpleSpanProcessor,
+    )
+    gate, _, _, _, context = await _arrange(
+        tmp_path,
+        observability=observability,
+    )
+    hooks = gate.hooks(context)
+    request = _input(
+        "Read",
+        {
+            "file_path": str(tmp_path / "report.md"),
+            "authorization": "Bearer private-value",
+        },
+        "tool-observed-read",
+    )
+
+    output = await hooks["PreToolUse"][0].hooks[0](
+        request,
+        request["tool_use_id"],
+        {"signal": None},
+    )
+    assert _decision(cast(SyncHookJSONOutput, output)) == "allow"
+    post_input = cast(
+        PostToolUseHookInput,
+        {
+            **request,
+            "hook_event_name": "PostToolUse",
+            "tool_response": {"content": "private file body"},
+        },
+    )
+    await hooks["PostToolUse"][2].hooks[0](
+        post_input,
+        post_input["tool_use_id"],
+        {"signal": None},
+    )
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == "harness.tool.run"
+    assert span.attributes is not None
+    assert span.attributes["harness.tool.name"] == "Read"
+    assert span.attributes["harness.tool.status"] == "succeeded"
+    assert span.attributes["langfuse.observation.input"] == (
+        '{"file_path":"'
+        + str(tmp_path / "report.md")
+        + '","authorization":"[REDACTED]"}'
+    )
+    assert span.attributes["langfuse.observation.output"] == '{"status":"succeeded"}'
+    assert "private-value" not in repr(span.attributes)
+    assert "private file body" not in repr(span.attributes)
+
+
+@pytest.mark.asyncio
+async def test_remote_workspace_absolute_write_path_is_mapped_to_local_capability(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    context = context.model_copy(
+        update={
+            "remote_workspace": "/home/user/harness/run-sdk",
+            "sandbox_provider": "e2b",
+            "sandbox_isolation": SandboxIsolation.CONTAINER,
+        }
+    )
+    hooks = gate.hooks(context)
+    pre_tool_use = hooks["PreToolUse"][0].hooks[0]
+    write_input = _input(
+        "Write",
+        {
+            "file_path": "/home/user/harness/run-sdk/outputs/report.md",
+            "content": "draft",
+        },
+        "tool-remote-create-report",
+    )
+    output = await pre_tool_use(
+        write_input, write_input["tool_use_id"], {"signal": None}
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, output)) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+
+
+@pytest.mark.asyncio
 async def test_write_tools_deny_paths_outside_the_run_workspace(tmp_path: Path) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
 
@@ -537,6 +698,33 @@ async def test_write_tools_deny_paths_outside_the_run_workspace(tmp_path: Path) 
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     assert [event.type for event in emitted] == ["tool.request", "tool.result"]
     assert emitted[-1].payload["error"]["code"] == "policy_denied"
+
+
+@pytest.mark.asyncio
+async def test_remote_workspace_sibling_write_path_is_denied(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    context = context.model_copy(
+        update={"remote_workspace": "/home/user/harness/run-sdk"}
+    )
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Write",
+            {
+                "file_path": "/home/user/harness/another-run/report.md",
+                "content": "outside",
+            },
+            "tool-remote-write-outside",
+        ),
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[-1].payload["error"]["message"] == (
+        "write path must stay within the run workspace"
+    )
 
 
 @pytest.mark.asyncio
