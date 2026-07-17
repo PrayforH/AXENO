@@ -152,6 +152,9 @@ class AnthropicSandboxModelProbe:
                 "model": self._config.model,
                 "max_tokens": 64,
                 "stream": True,
+                # Forced tool selection is a deterministic baseline probe. DeepSeek V4
+                # enables thinking by default but rejects tool_choice in that mode.
+                "thinking": {"type": "disabled"},
                 "messages": [
                     {
                         "role": "user",

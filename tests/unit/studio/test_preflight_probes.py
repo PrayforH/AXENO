@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -134,6 +135,8 @@ async def test_model_probe_requires_streaming_tool_use_without_leaking_secret(
     assert evidence.details["streaming"] is True
     assert evidence.details["toolUse"] is True
     assert SECRET in sandbox.environment["HARNESS_PREFLIGHT_AUTH_HEADER"]
+    request = json.loads(sandbox.environment["HARNESS_PREFLIGHT_REQUEST"])
+    assert request["thinking"] == {"type": "disabled"}
     assert SECRET not in repr(evidence)
 
 
