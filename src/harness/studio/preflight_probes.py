@@ -205,6 +205,11 @@ class AnthropicSandboxModelProbe:
             },
             timeout_seconds=self._timeout_seconds + 5,
         )
+        if result.exit_code == 127:
+            raise PreflightCheckError(
+                "model_probe_dependency_missing",
+                "Target Sandbox is missing the curl executable required by Model Preflight",
+            )
         if result.exit_code != 0:
             raise PreflightCheckError(
                 "model_unreachable", "Model endpoint could not complete the streaming probe"

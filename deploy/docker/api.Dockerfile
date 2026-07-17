@@ -27,7 +27,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN groupadd --system --gid 10001 harness \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 harness \
     && useradd --system --uid 10001 --gid harness --home-dir /app harness
 
 WORKDIR /app

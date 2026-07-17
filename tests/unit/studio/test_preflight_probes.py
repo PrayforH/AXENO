@@ -167,6 +167,11 @@ async def test_model_probe_supports_anthropic_api_key_auth_for_compatible_gatewa
         ),
         (
             gateway(),
+            SandboxCommandResult(exit_code=127, stderr="curl: not found"),
+            "model_probe_dependency_missing",
+        ),
+        (
+            gateway(),
             SandboxCommandResult(exit_code=23, stderr="credential rejected"),
             "model_unreachable",
         ),
