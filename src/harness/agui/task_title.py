@@ -53,6 +53,7 @@ class AnthropicCompatibleTaskTitleGenerator:
         model: str,
         credential: SecretStr,
         provider: Literal["new-api", "anthropic"],
+        auth_scheme: Literal["bearer", "x-api-key"] | None = None,
         timeout_seconds: float = 12,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -60,6 +61,9 @@ class AnthropicCompatibleTaskTitleGenerator:
         self._model = model
         self._credential = credential
         self._provider = provider
+        self._auth_scheme = auth_scheme or (
+            "bearer" if provider == "new-api" else "x-api-key"
+        )
         self._timeout = timeout_seconds
         self._http_client = http_client
 
@@ -72,7 +76,7 @@ class AnthropicCompatibleTaskTitleGenerator:
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
         }
-        if self._provider == "new-api":
+        if self._auth_scheme == "bearer":
             headers["Authorization"] = f"Bearer {secret}"
         else:
             headers["x-api-key"] = secret

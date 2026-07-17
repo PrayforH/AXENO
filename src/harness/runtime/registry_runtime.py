@@ -73,6 +73,7 @@ class RegistryClaudeRuntime:
             model=self._config.model,
             compatibility=self._config.compatibility,
             capabilities=self._config.capabilities,
+            auth_scheme=self._config.resolved_auth_scheme,
         )
         routes = [route]
         issued_leases: list[CredentialLease] = []
@@ -101,6 +102,7 @@ class RegistryClaudeRuntime:
                 model=self._fallback_config.model,
                 compatibility=self._fallback_config.compatibility,
                 capabilities=self._fallback_config.capabilities,
+                auth_scheme=self._fallback_config.resolved_auth_scheme,
             )
             routes.append(fallback_route)
             if self._credential_broker is None:

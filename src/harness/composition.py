@@ -156,6 +156,7 @@ def _anthropic_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
         model=settings.anthropic_model,
         provider="anthropic",
         credential=SecretStr(anthropic_key),
+        auth_scheme="x-api-key",
         compatibility=ModelCompatibility.FULL,
         capabilities=frozenset({"streaming", "tool_use"}),
     )
@@ -172,6 +173,7 @@ def _gateways(
                 model=settings.new_api_model,
                 provider="new-api",
                 credential=SecretStr(new_api_key),
+                auth_scheme=settings.new_api_auth_scheme,
                 compatibility=ModelCompatibility(settings.new_api_compatibility),
                 capabilities=_gateway_capabilities(settings.new_api_capabilities),
             ),
@@ -810,6 +812,7 @@ def build_production_container(
                 model=title_gateway.model,
                 credential=title_gateway.credential,
                 provider=title_gateway.provider,
+                auth_scheme=title_gateway.resolved_auth_scheme,
             )
             if title_gateway is not None
             else None

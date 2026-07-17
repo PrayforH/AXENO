@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     new_api_base_url: str = ""
     new_api_key: SecretStr = SecretStr("")
     new_api_model: str = ""
+    new_api_auth_scheme: Literal["bearer", "x-api-key"] = "bearer"
     new_api_compatibility: Literal["full", "degraded", "unsupported"] = "full"
     new_api_capabilities: str = "streaming,tool_use"
 

@@ -20,8 +20,15 @@ class CcSwitchClaudeConfig(BaseModel):
     model: str
     provider: Literal["new-api", "anthropic"]
     credential: SecretStr
+    auth_scheme: Literal["bearer", "x-api-key"] | None = None
     compatibility: ModelCompatibility = ModelCompatibility.FULL
     capabilities: frozenset[str] = frozenset({"streaming", "tool_use"})
+
+    @property
+    def resolved_auth_scheme(self) -> Literal["bearer", "x-api-key"]:
+        if self.auth_scheme is not None:
+            return self.auth_scheme
+        return "bearer" if self.provider == "new-api" else "x-api-key"
 
 
 def load_cc_switch_claude_config(path: str | Path) -> CcSwitchClaudeConfig:
@@ -63,6 +70,7 @@ def load_cc_switch_claude_config(path: str | Path) -> CcSwitchClaudeConfig:
         model=model,
         provider="new-api" if auth_token is not None else "anthropic",
         credential=SecretStr(auth_token or api_key or ""),
+        auth_scheme="bearer" if auth_token is not None else "x-api-key",
     )
 
 

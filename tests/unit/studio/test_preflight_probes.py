@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 from claude_agent_sdk import McpServerConfig
@@ -97,12 +97,14 @@ def gateway(
     *,
     compatibility: ModelCompatibility = ModelCompatibility.FULL,
     capabilities: frozenset[str] = frozenset({"streaming", "tool_use"}),
+    auth_scheme: Literal["bearer", "x-api-key"] | None = None,
 ) -> CcSwitchClaudeConfig:
     return CcSwitchClaudeConfig(
         base_url="https://model.example.test/anthropic",
         model="test-model",
         provider="new-api",
         credential=SecretStr(SECRET),
+        auth_scheme=auth_scheme,
         compatibility=compatibility,
         capabilities=capabilities,
     )
@@ -133,6 +135,21 @@ async def test_model_probe_requires_streaming_tool_use_without_leaking_secret(
     assert evidence.details["toolUse"] is True
     assert SECRET in sandbox.environment["HARNESS_PREFLIGHT_AUTH_HEADER"]
     assert SECRET not in repr(evidence)
+
+
+@pytest.mark.asyncio
+async def test_model_probe_supports_anthropic_api_key_auth_for_compatible_gateway(
+    tmp_path: Path,
+) -> None:
+    sandbox = CommandSandbox(
+        tmp_path, SandboxCommandResult(exit_code=0, stdout=valid_stream())
+    )
+
+    await AnthropicSandboxModelProbe(gateway(auth_scheme="x-api-key")).verify(
+        manifest(), sandbox, await handle(sandbox)
+    )
+
+    assert sandbox.environment["HARNESS_PREFLIGHT_AUTH_HEADER"] == f"x-api-key: {SECRET}"
 
 
 @pytest.mark.parametrize(

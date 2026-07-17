@@ -199,7 +199,10 @@ class ClaudeSdkRuntime:
             "ANTHROPIC_BASE_URL": route.base_url,
             "CLAUDE_AGENT_SDK_CLIENT_APP": "claude-agent-harness/0.1.0",
         }
-        if route.provider == "new-api":
+        auth_scheme = route.auth_scheme or (
+            "bearer" if route.provider == "new-api" else "x-api-key"
+        )
+        if auth_scheme == "bearer":
             environment["ANTHROPIC_AUTH_TOKEN"] = secret
         else:
             environment["ANTHROPIC_API_KEY"] = secret

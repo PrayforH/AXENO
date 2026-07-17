@@ -176,7 +176,7 @@ class AnthropicSandboxModelProbe:
         credential = self._config.credential.get_secret_value()
         authorization = (
             f"Bearer {credential}"
-            if self._config.provider == "new-api"
+            if self._config.resolved_auth_scheme == "bearer"
             else credential
         )
         command = (
@@ -191,7 +191,7 @@ class AnthropicSandboxModelProbe:
         )
         header = (
             f"authorization: {authorization}"
-            if self._config.provider == "new-api"
+            if self._config.resolved_auth_scheme == "bearer"
             else f"x-api-key: {authorization}"
         )
         result = await sandbox.execute(

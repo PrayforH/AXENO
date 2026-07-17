@@ -256,3 +256,4 @@ class ModelRoute(FrozenModel):
     compatibility: ModelCompatibility
     capabilities: frozenset[str] = frozenset()
     fallback_route_id: str | None = None
+    auth_scheme: Literal["bearer", "x-api-key"] | None = None
