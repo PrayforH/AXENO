@@ -2578,7 +2578,18 @@ body,
 .upload-feedback-item button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; }
 @keyframes upload-spin { to { transform: rotate(360deg); } }
 .runtime-disclaimer { margin: 7px 0 0; color: #8b9690; font: 8px/1.4 ui-monospace, monospace; text-align: center; }
-.aui-message-error { margin-top: 10px; padding: 8px 0; border-top: 1px solid #eadbd7; background: transparent; color: #8d4035; font-size: 11px; }
+.aui-message-error {
+  margin-top: 10px;
+  padding: 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #eadbd7;
+  background: transparent;
+  color: #8d4035;
+  font-size: 11px;
+}
 
 button:focus-visible,
 textarea:not(.aui-composer-input):focus-visible,

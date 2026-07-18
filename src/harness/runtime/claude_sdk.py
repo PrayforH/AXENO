@@ -42,7 +42,13 @@ from harness.runtime.base import (
 from harness.runtime.hooks import discard_sdk_stderr
 from harness.runtime.mcp_credentials import redact_mcp_credentials
 from harness.runtime.memory_tools import create_memory_mcp_server, memory_execution_context
-from harness.runtime.message_mapper import map_sdk_message, result_subtype, result_usage
+from harness.runtime.message_mapper import (
+    map_sdk_message,
+    provider_error_user_message,
+    provider_result_error_code,
+    result_subtype,
+    result_usage,
+)
 from harness.runtime.model_router import ModelRouter
 from harness.runtime.sandbox_tools import (
     COORDINATION_BUILTINS,
@@ -192,9 +198,18 @@ class ClaudeSdkRuntime:
                         self._observability.mark_current_span_error(subtype)
                 yield message
                 if isinstance(message, ResultMessage) and message.is_error:
+                    provider_result = (
+                        message.result if isinstance(message.result, str) else ""
+                    )
+                    error_code = provider_result_error_code(
+                        provider_result,
+                        message.api_error_status,
+                    )
                     raise RuntimeResultError(
                         result_subtype(message),
                         api_error_status=message.api_error_status,
+                        error_code=error_code,
+                        user_message=provider_error_user_message(error_code),
                     )
 
     async def _options(

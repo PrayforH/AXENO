@@ -40,6 +40,19 @@ def test_maps_run_and_text_lifecycle_to_standard_events() -> None:
     ]
 
 
+def test_historical_provider_diagnostic_is_sanitized_in_text_replay() -> None:
+    projected = map_harness_event(
+        event("message.delta", {"text": "API Error: 400 Content Exists Risk"})
+    )
+    dumped = [item.model_dump(by_alias=True) for item in projected]
+
+    assert dumped[0]["delta"] == (
+        "模型服务拒绝了本轮上下文，可能由输入或外部检索内容触发。"
+        "请重新运行，或缩小主题与时间范围。"
+    )
+    assert "Content Exists Risk" not in repr(dumped)
+
+
 def test_maps_tool_and_domain_events_to_tool_calls() -> None:
     tool = map_harness_event(
         event(
@@ -172,3 +185,20 @@ def test_runtime_result_sets_immediate_activity_status_and_metrics() -> None:
     assert {"op": "replace", "path": "/status", "value": "succeeded"} in patch
     assert {"op": "add", "path": "/metrics/turns", "value": 2} in patch
     assert {"op": "add", "path": "/metrics/cost_usd", "value": 0.012} in patch
+
+
+def test_run_failure_keeps_safe_code_and_recovery_message() -> None:
+    projected = map_harness_event(
+        event(
+            "run.failed",
+            {
+                "error_code": "provider_content_rejected",
+                "message": "模型服务拒绝了本轮上下文，请重新运行。",
+            },
+        )
+    )
+
+    error = projected[-1].model_dump(by_alias=True)
+    assert error["type"] == "RUN_ERROR"
+    assert error["code"] == "provider_content_rejected"
+    assert error["message"] == "模型服务拒绝了本轮上下文，请重新运行。"

@@ -13,7 +13,11 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from harness.runtime.message_mapper import map_sdk_message
+from harness.runtime.message_mapper import (
+    map_sdk_message,
+    provider_error_user_message,
+    provider_result_error_code,
+)
 
 
 def test_maps_assistant_text_and_tool_use() -> None:
@@ -58,10 +62,25 @@ def test_sdk_provider_diagnostics_do_not_enter_message_events() -> None:
     events = [*map_sdk_message(assistant), *map_sdk_message(stream)]
 
     assert {event.payload["text"] for event in events} == {
-        "The model provider rejected the request. Open run details for the status code."
+        "模型服务拒绝了本轮请求。请打开运行详情查看状态，并稍后重试。"
     }
     assert "private-request-id" not in repr(events)
     assert "quota" not in repr(events)
+
+
+def test_content_risk_diagnostic_is_safe_and_actionable() -> None:
+    diagnostic = "API Error: 400 Content Exists Risk"
+    assistant = AssistantMessage(
+        content=[TextBlock(text=diagnostic)],
+        model="synthetic",
+    )
+
+    events = map_sdk_message(assistant)
+    error_code = provider_result_error_code(diagnostic, 400)
+
+    assert error_code == "provider_content_rejected"
+    assert events[0].payload["text"] == provider_error_user_message(error_code)
+    assert "Content Exists Risk" not in repr(events)
 
 
 def test_maps_partial_text_and_subagent_lifecycle() -> None:

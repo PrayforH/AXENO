@@ -21,6 +21,7 @@ from ag_ui.core import (
 
 from harness.agui.activity import activity_projection
 from harness.core.events import RunEvent
+from harness.runtime.message_mapper import safe_model_text
 
 
 def _custom(event: RunEvent, name: str) -> Sequence[BaseEvent]:
@@ -79,7 +80,7 @@ def _map_standard_event(event: RunEvent) -> Sequence[BaseEvent]:
     if event.type == "message.start":
         return [TextMessageStartEvent(message_id=message_id, role="assistant")]
     if event.type == "message.delta":
-        text = str(event.payload.get("text", ""))
+        text = safe_model_text(str(event.payload.get("text", "")))
         return [] if not text else [TextMessageContentEvent(message_id=message_id, delta=text)]
     if event.type == "message.completed":
         return [TextMessageEndEvent(message_id=message_id)]
