@@ -149,6 +149,21 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 
+  it("keeps runtime and permission surfaces on shared light/dark theme tokens", () => {
+    expect(styles).toMatch(
+      /\.profileFacts span \{[\s\S]*?background: var\(--studio-panel-subtle\);/,
+    );
+    expect(styles).toMatch(
+      /\.isolationCard \{[\s\S]*?background: var\(--studio-panel-subtle\);/,
+    );
+    expect(styles).toMatch(
+      /\.identityBoundary,[\s\S]*?\.continuityBoundary \{[\s\S]*?background: var\(--studio-panel\);/,
+    );
+    expect(styles).toMatch(
+      /\.identityBoundary header em,[\s\S]*?\.continuityBoundary header em \{[\s\S]*?background: var\(--studio-panel-subtle\);/,
+    );
+  });
+
   it("uses authenticated roles and gates immutable publication on server validation", () => {
     expect(workbench).toContain("membership.role");
     expect(workbench).toContain("studioClient.publishDraft");

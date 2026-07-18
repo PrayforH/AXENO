@@ -884,7 +884,7 @@
   border: 1px solid var(--studio-line);
   border-radius: 999px;
   color: var(--studio-muted);
-  background: var(--studio-soft);
+  background: var(--studio-panel-subtle);
   font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -2112,7 +2112,7 @@
   padding: 16px;
   border: 1px solid #bdd3c6;
   border-radius: 12px;
-  background: #f5f9f6;
+  background: var(--studio-panel-subtle);
 }
 
 .isolationGlyph {
@@ -2176,7 +2176,7 @@
 .continuityBoundary {
   min-width: 0;
   padding: 14px;
-  background: #fff;
+  background: var(--studio-panel);
   border: 1px solid var(--studio-line);
   border-radius: 11px;
 }
@@ -2213,7 +2213,7 @@
 .continuityBoundary header em {
   padding: 3px 6px;
   color: var(--studio-faint);
-  background: #f2f4f2;
+  background: var(--studio-panel-subtle);
   border-radius: 6px;
   font-size: 8px;
   font-style: normal;
