@@ -8,6 +8,14 @@ const taskSidebar = readFileSync(
   join(process.cwd(), "src/components/task-sidebar.tsx"),
   "utf8",
 );
+const workspaceNavigation = readFileSync(
+  join(process.cwd(), "src/components/workspace-navigation.tsx"),
+  "utf8",
+);
+const workspaceNavigationStyles = readFileSync(
+  join(process.cwd(), "src/components/workspace-navigation.module.css"),
+  "utf8",
+);
 
 describe("full-page agent workbench", () => {
   it("presents a user task workspace instead of an internal validation console", () => {
@@ -26,20 +34,29 @@ describe("full-page agent workbench", () => {
     expect(taskSidebar).toContain('className="task-sidebar-rail"');
     expect(taskSidebar).toContain('aria-label="收起任务列表"');
     expect(taskSidebar).toContain('aria-label="展开任务列表"');
-    expect(taskSidebar).toContain('<DoubleChevron direction="left" />');
-    expect(taskSidebar).toContain('<DoubleChevron direction="right" />');
+    expect(taskSidebar).toContain("<WorkspaceCollapseIcon collapsed={false} />");
+    expect(taskSidebar).toContain("<WorkspaceCollapseIcon collapsed />");
     expect(styles).toMatch(
       /\.workspace-stage:not\(\.tasks-open\)\s*\{[^}]*grid-template-columns:\s*52px minmax\(0,\s*1fr\);/s,
     );
   });
 
-  it("exposes Agent Studio as a primary workspace tab", () => {
-    expect(taskSidebar).toContain('aria-label="工作区"');
-    expect(taskSidebar).toContain('href="/studio/agents"');
-    expect(taskSidebar).toContain("Agent Studio");
-    expect(taskSidebar).toContain('className="task-rail-studio"');
-    expect(styles).toContain(".task-sidebar-tabs");
-    expect(styles).toContain(".task-sidebar-tab.is-active");
+  it("uses the same four workspace destinations in both sidebars", () => {
+    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" />');
+    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
+    for (const [href, label] of [
+      ["/", "任务"],
+      ["/studio/agents", "智能体"],
+      ["/studio/usage", "用量"],
+      ["/studio/data", "数据"],
+    ]) {
+      expect(workspaceNavigation).toContain(`href: "${href}"`);
+      expect(workspaceNavigation).toContain(`label: "${label}"`);
+    }
+    expect(workspaceNavigationStyles).toContain(".navigationActive");
+    expect(workspaceNavigationStyles).toContain(
+      '[data-workspace-navigation="collapsed"]',
+    );
   });
 
   it("removes the decorative live rail and hard-coded agent coordinate", () => {

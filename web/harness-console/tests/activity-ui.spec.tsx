@@ -9,6 +9,7 @@ import { completedToolBatch } from "../src/components/tool-card";
 import type { RunViewModel } from "../src/lib/run-view-model";
 import {
   hasProjectedTool,
+  shouldKeepActivityInLatestSlot,
   UploadFeedbackContent,
 } from "../src/components/agent-thread";
 import {
@@ -178,6 +179,21 @@ describe("Codex-style activity UI", () => {
 
     expect(hasProjectedTool(view, "read-projected")).toBe(true);
     expect(hasProjectedTool(view, "read-fallback")).toBe(false);
+  });
+
+  it("keeps the current activity in one stable slot through durable handoff", () => {
+    expect(
+      shouldKeepActivityInLatestSlot("run-1", "run-1", "run-1"),
+    ).toBe(true);
+    expect(
+      shouldKeepActivityInLatestSlot("run-1", "run-1", undefined),
+    ).toBe(true);
+    expect(
+      shouldKeepActivityInLatestSlot("run-1", "run-2", "run-2"),
+    ).toBe(false);
+    expect(
+      shouldKeepActivityInLatestSlot("run-1", "run-1", "run-2"),
+    ).toBe(false);
   });
 
   it("selects multiple completed ordinary tools for one collapsed batch", () => {

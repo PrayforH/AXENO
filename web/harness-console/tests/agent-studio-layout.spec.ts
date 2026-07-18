@@ -28,6 +28,14 @@ const sidebarStyles = readFileSync(
   ),
   "utf8",
 );
+const workspaceNavigation = readFileSync(
+  join(process.cwd(), "src/components/workspace-navigation.tsx"),
+  "utf8",
+);
+const workspaceNavigationStyles = readFileSync(
+  join(process.cwd(), "src/components/workspace-navigation.module.css"),
+  "utf8",
+);
 const studioConfig = readFileSync(
   join(process.cwd(), "src/lib/agent-studio.ts"),
   "utf8",
@@ -51,9 +59,10 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("<StudioSidebar");
     expect(workbench).toContain("有效运行契约");
     expect(sidebar).toContain("Agent Studio");
-    expect(sidebar).toContain('aria-label="Agent Studio 工作区"');
-    expect(sidebar).toContain('href: "/"');
-    expect(sidebar).toContain('href: "/studio/agents"');
+    expect(sidebar).toContain("<WorkspaceNavigation");
+    expect(workspaceNavigation).toContain('aria-label="工作区"');
+    expect(workspaceNavigation).toContain('href: "/"');
+    expect(workspaceNavigation).toContain('href: "/studio/agents"');
     expect(page).toContain("AuthProvider");
     expect(workbench).toContain('data-studio-integration="api"');
   });
@@ -70,7 +79,10 @@ describe("Agent Studio management page", () => {
     );
     expect(sidebarStyles).toContain("width: 52px");
     expect(sidebarStyles).toContain("@media (max-width: 980px)");
-    expect(sidebarStyles).toContain(".navigationActive");
+    expect(workspaceNavigationStyles).toContain(".navigationActive");
+    expect(workspaceNavigationStyles).toContain(
+      '[data-workspace-navigation="collapsed"]',
+    );
     expect(styles).toMatch(
       /@media \(max-width: 900px\)[\s\S]*?\.studioShell:has\(> \[data-studio-sidebar="collapsed"\]\)[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\)/,
     );

@@ -1,0 +1,80 @@
+.navigation {
+  margin: 2px 8px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.navigationLink,
+.navigationActive {
+  min-height: 38px;
+  padding: 0 10px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--codex-muted, #a1a1a1);
+  font-size: 11px;
+  font-weight: 620;
+  text-decoration: none;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.navigationLink:hover {
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface-hover, #2a2a2a);
+}
+
+.navigationLink:active,
+.navigationActive:active {
+  transform: scale(0.98);
+}
+
+.navigationActive {
+  border-color: var(--codex-line, #303030);
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface-raised, #242424);
+  box-shadow: inset 2px 0 0 var(--codex-accent, #339cff);
+}
+
+.navigationActive svg {
+  color: var(--codex-accent, #339cff);
+}
+
+.navigation svg,
+.collapseIcon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.navigation[data-workspace-navigation="collapsed"] {
+  margin-inline: 0;
+  justify-items: center;
+}
+
+.navigation[data-workspace-navigation="collapsed"] .navigationLink,
+.navigation[data-workspace-navigation="collapsed"] .navigationActive {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  grid-template-columns: 1fr;
+  place-items: center;
+  gap: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .navigationLink,
+  .navigationActive {
+    transition-duration: 0.01ms;
+  }
+}

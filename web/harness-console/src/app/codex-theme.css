@@ -302,19 +302,19 @@ select {
 }
 
 .workspace-stage.tasks-open {
-  grid-template-columns: 272px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
 }
 
 .workspace-stage.tasks-open.inspector-open {
-  grid-template-columns: 272px minmax(0, 1fr) 356px;
+  grid-template-columns: 248px minmax(0, 1fr) 356px;
 }
 
 .workspace-stage:not(.tasks-open) {
-  grid-template-columns: 50px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr);
 }
 
 .workspace-stage:not(.tasks-open).inspector-open {
-  grid-template-columns: 50px minmax(0, 1fr) 356px;
+  grid-template-columns: 52px minmax(0, 1fr) 356px;
 }
 
 .task-sidebar,
@@ -330,32 +330,17 @@ select {
   background: rgb(255 255 255 / 1.5%);
 }
 
-.task-sidebar-tab {
-  color: var(--codex-muted);
+.task-sidebar-heading-label {
+  color: var(--codex-faint);
 }
 
-.task-sidebar-tab:hover {
-  color: var(--codex-ink);
-  background: var(--codex-surface-hover);
-}
-
-.task-sidebar-tab.is-active {
+.task-sidebar-workspaces {
   border-color: var(--codex-line);
-  color: var(--codex-ink);
-  background: var(--codex-surface-raised);
-  box-shadow: inset 0 -2px 0 var(--codex-accent);
-}
-
-.task-sidebar-tab:last-child:hover,
-.task-rail-studio,
-.task-rail-studio:hover {
-  color: var(--codex-skill);
 }
 
 .task-sidebar-heading button,
 .task-sidebar-heading .task-sidebar-heading-actions button,
 .task-rail-action,
-.task-rail-studio,
 .task-rail-toggle {
   color: var(--codex-muted);
   background: transparent;
@@ -365,7 +350,6 @@ select {
 .task-sidebar-heading button:hover,
 .task-sidebar-heading .task-sidebar-heading-actions button:hover,
 .task-rail-action:hover,
-.task-rail-studio:hover,
 .task-rail-toggle:hover {
   color: var(--codex-ink);
   background: var(--codex-surface-hover);
@@ -378,7 +362,6 @@ select {
 
 .task-sidebar-heading button:active,
 .task-rail-action:active,
-.task-rail-studio:active,
 .task-rail-toggle:active {
   transform: scale(0.96);
 }
@@ -1665,11 +1648,11 @@ body.codex-theme-v1 .console-header {
 }
 
 body.codex-theme-v1 .workspace-stage.tasks-open {
-  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
 }
 
 body.codex-theme-v1 .workspace-stage.tasks-open.inspector-open {
-  grid-template-columns: 264px minmax(0, 1fr) 356px;
+  grid-template-columns: 248px minmax(0, 1fr) 356px;
 }
 
 body.codex-theme-v1 .task-sidebar,
@@ -1682,12 +1665,6 @@ body.codex-theme-v1 .task-sidebar-heading {
   min-height: 48px;
   border-color: var(--codex-line);
   background: transparent;
-}
-
-body.codex-theme-v1 .task-sidebar-tab.is-active {
-  border-color: transparent;
-  background: var(--codex-surface-raised);
-  box-shadow: inset 0 -2px 0 var(--codex-accent);
 }
 
 body.codex-theme-v1 .task-list {
@@ -1960,7 +1937,7 @@ html[data-color-mode="light"] .settings-header {
   }
 
   .workspace-stage:not(.tasks-open).inspector-open {
-    grid-template-columns: 50px minmax(0, 1fr) 320px;
+    grid-template-columns: 52px minmax(0, 1fr) 320px;
   }
 }
 
@@ -1970,7 +1947,7 @@ html[data-color-mode="light"] .settings-header {
   }
 
   .workspace-stage:not(.tasks-open).inspector-open {
-    grid-template-columns: 50px minmax(0, 1fr);
+    grid-template-columns: 52px minmax(0, 1fr);
   }
 
   .workspace-stage.inspector-open .developer-drawer {
