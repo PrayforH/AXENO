@@ -7,6 +7,7 @@ from ag_ui.core import ActivityDeltaEvent, ActivitySnapshotEvent, BaseEvent
 
 from harness.core.events import RunEvent
 from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
+from harness.runtime.message_mapper import safe_model_text
 
 ACTIVITY_TYPE = "harness.run.v1"
 
@@ -101,13 +102,21 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
     }
     if event.type in run_titles:
         status, title = run_titles[event.type]
+        error_code = payload.get("error_code")
+        if error_code == "provider_content_rejected":
+            title = "模型服务拒绝了本轮上下文"
         return _item(
             event,
             kind="error" if status == "failed" else "run",
             status=status,
             title=title,
+            summary=(
+                str(payload["message"])
+                if isinstance(payload.get("message"), str)
+                else None
+            ),
             metadata=_metadata(
-                error_code=payload.get("error_code"),
+                error_code=error_code,
                 error_type=payload.get("error_type"),
             ),
         )
@@ -139,7 +148,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             metadata=_metadata(subtype=subtype or None),
         )
     if event.type == "message.delta":
-        text = str(payload.get("text", ""))
+        text = safe_model_text(str(payload.get("text", "")))
         if not text.strip():
             return None
         return _item(

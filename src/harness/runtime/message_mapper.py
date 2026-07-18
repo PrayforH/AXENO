@@ -27,17 +27,47 @@ _RESULT_USAGE_KEYS = (
 )
 
 _PROVIDER_ERROR_PREFIXES = (
+    "api error:",
     "failed to authenticate. api error:",
     "failed to connect to api:",
 )
-_SAFE_PROVIDER_ERROR_TEXT = (
-    "The model provider rejected the request. Open run details for the status code."
+_PROVIDER_CONTENT_RISK_MARKERS = (
+    "content exists risk",
+    "content risk",
+)
+_SAFE_PROVIDER_ERROR_TEXT = "模型服务拒绝了本轮请求。请打开运行详情查看状态，并稍后重试。"
+_SAFE_PROVIDER_CONTENT_REJECTED_TEXT = (
+    "模型服务拒绝了本轮上下文，可能由输入或外部检索内容触发。"
+    "请重新运行，或缩小主题与时间范围。"
 )
 
 
-def _safe_model_text(text: str) -> str:
+def provider_result_error_code(
+    text: str,
+    api_error_status: int | None,
+) -> str:
+    """Classify known provider failures without persisting raw diagnostics."""
+    normalized = text.strip().lower()
+    if (
+        api_error_status in {None, 400}
+        and any(marker in normalized for marker in _PROVIDER_CONTENT_RISK_MARKERS)
+    ):
+        return "provider_content_rejected"
+    return "runtime_result_error"
+
+
+def provider_error_user_message(error_code: str) -> str | None:
+    if error_code == "provider_content_rejected":
+        return _SAFE_PROVIDER_CONTENT_REJECTED_TEXT
+    return None
+
+
+def safe_model_text(text: str) -> str:
     """Suppress SDK-generated provider diagnostics that can contain quota or request IDs."""
-    if text.strip().lower().startswith(_PROVIDER_ERROR_PREFIXES):
+    normalized = text.strip().lower()
+    if provider_result_error_code(text, None) == "provider_content_rejected":
+        return _SAFE_PROVIDER_CONTENT_REJECTED_TEXT
+    if normalized.startswith(_PROVIDER_ERROR_PREFIXES):
         return _SAFE_PROVIDER_ERROR_TEXT
     return text
 
@@ -68,7 +98,7 @@ def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
                 type="subagent.delta",
                 payload={
                     "parent_tool_use_id": message.parent_tool_use_id,
-                    "text": _safe_model_text(block.text),
+                    "text": safe_model_text(block.text),
                 },
             )
             for block in message.content
@@ -79,7 +109,7 @@ def _map_assistant(message: AssistantMessage) -> list[RuntimeEvent]:
         if isinstance(block, TextBlock):
             events.append(
                 RuntimeEvent(
-                    type="message.delta", payload={"text": _safe_model_text(block.text)}
+                    type="message.delta", payload={"text": safe_model_text(block.text)}
                 )
             )
         elif isinstance(block, ToolUseBlock):
@@ -120,7 +150,7 @@ def _map_stream(message: StreamEvent) -> list[RuntimeEvent]:
                         type="subagent.delta",
                         payload={
                             "parent_tool_use_id": message.parent_tool_use_id,
-                            "text": _safe_model_text(str(typed_delta.get("text", ""))),
+                            "text": safe_model_text(str(typed_delta.get("text", ""))),
                         },
                     )
                 ]
@@ -137,7 +167,7 @@ def _map_stream(message: StreamEvent) -> list[RuntimeEvent]:
                 RuntimeEvent(
                     type="message.delta",
                     payload={
-                        "text": _safe_model_text(str(typed_delta.get("text", "")))
+                        "text": safe_model_text(str(typed_delta.get("text", "")))
                     },
                 )
             )

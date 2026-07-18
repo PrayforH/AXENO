@@ -1132,6 +1132,24 @@ select {
   background: var(--codex-danger-soft);
 }
 
+.aui-message-error .run-retry-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgb(250 66 62 / 34%);
+  border-radius: 7px;
+  color: var(--codex-ink-soft);
+  background: var(--codex-surface-raised);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aui-message-error .run-retry-button:hover {
+  border-color: var(--codex-accent);
+  color: var(--codex-ink);
+  background: var(--codex-surface-hover);
+}
+
 /* Run inspector */
 
 .developer-drawer {

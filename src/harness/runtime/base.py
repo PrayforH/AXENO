@@ -24,9 +24,18 @@ class RuntimeExecutionTimeoutError(TimeoutError):
 class RuntimeResultError(RuntimeError):
     """Raised when Claude SDK returns a terminal error result."""
 
-    def __init__(self, subtype: str, api_error_status: int | None = None) -> None:
+    def __init__(
+        self,
+        subtype: str,
+        api_error_status: int | None = None,
+        *,
+        error_code: str = "runtime_result_error",
+        user_message: str | None = None,
+    ) -> None:
         self.subtype = subtype
         self.api_error_status = api_error_status
+        self.error_code = error_code
+        self.user_message = user_message
         super().__init__(f"Claude SDK returned an error result: {subtype}")
 
 

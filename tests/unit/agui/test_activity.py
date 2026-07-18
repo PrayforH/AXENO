@@ -105,6 +105,23 @@ def test_model_and_result_append_safe_activity_deltas() -> None:
     assert "private-session" not in repr(result)
 
 
+def test_content_rejection_projects_an_actionable_failure() -> None:
+    projected = activity_projection(
+        event(
+            "run.failed",
+            {
+                "error_code": "provider_content_rejected",
+                "message": "模型服务拒绝了本轮上下文，请重新运行。",
+            },
+        )
+    )[0].model_dump(by_alias=True)
+
+    item = projected["patch"][0]["value"]
+    assert item["title"] == "模型服务拒绝了本轮上下文"
+    assert item["summary"] == "模型服务拒绝了本轮上下文，请重新运行。"
+    assert item["metadata"] == {"error_code": "provider_content_rejected"}
+
+
 def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -> None:
     commentary = activity_projection(
         event(
@@ -126,6 +143,19 @@ def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -
         )
         == []
     )
+
+
+def test_historical_provider_diagnostic_is_sanitized_in_activity_replay() -> None:
+    projected = activity_projection(
+        event("message.delta", {"text": "API Error: 400 Content Exists Risk"})
+    )[0].model_dump(by_alias=True)
+
+    summary = projected["patch"][0]["value"]["summary"]
+    assert summary == (
+        "模型服务拒绝了本轮上下文，可能由输入或外部检索内容触发。"
+        "请重新运行，或缩小主题与时间范围。"
+    )
+    assert "Content Exists Risk" not in repr(projected)
 
 
 def test_tool_activity_keeps_redacted_arguments_and_compact_result_facts() -> None:

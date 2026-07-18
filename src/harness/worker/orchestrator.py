@@ -398,12 +398,15 @@ class RunOrchestrator:
         )
         if not await self._runs.compare_and_set(current.status, updated):
             raise ConflictError(f"stale worker attempted to update run: {current.run_id}")
+        event_payload = dict(payload or {})
+        if error_code is not None:
+            event_payload.setdefault("error_code", error_code)
         await self._events.append(
             tenant_id=current.tenant_id,
             run_id=current.run_id,
             session_id=current.session_id,
             event_type=f"run.{target.value}",
-            payload=payload,
+            payload=event_payload,
         )
         return updated
 
@@ -1007,10 +1010,12 @@ class RunOrchestrator:
             payload: dict[str, Any] = {"subtype": error.subtype}
             if error.api_error_status is not None:
                 payload["api_error_status"] = error.api_error_status
+            if error.user_message is not None:
+                payload["message"] = error.user_message
             return await self._move(
                 latest,
                 RunStatus.FAILED,
-                error_code="runtime_result_error",
+                error_code=error.error_code,
                 payload=payload,
             )
         except Exception as error:  # noqa: BLE001 - boundary converts failures to Run state

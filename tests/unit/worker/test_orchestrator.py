@@ -115,6 +115,21 @@ class ErrorResultRuntime(FakeRuntime):
         raise RuntimeResultError("error_max_budget_usd", api_error_status=429)
 
 
+class ContentRejectedRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"is_error": True, "subtype": "api_error_400"},
+        )
+        raise RuntimeResultError(
+            "api_error_400",
+            api_error_status=400,
+            error_code="provider_content_rejected",
+            user_message="模型服务拒绝了本轮上下文，请重新运行。",
+        )
+
+
 class CapturingRuntime(FakeRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -512,6 +527,31 @@ async def test_sdk_error_result_cannot_be_recorded_as_success(tmp_path: Path) ->
     assert emitted[-1].payload == {
         "subtype": "error_max_budget_usd",
         "api_error_status": 429,
+        "error_code": "runtime_result_error",
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_content_rejection_keeps_a_safe_recoverable_failure(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, runs, events = await arrange(
+        tmp_path, runtime_override=ContentRejectedRuntime()
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    assert result.error_code == "provider_content_rejected"
+    assert (await runs.get("tenant-a", "run-1")).error_code == (
+        "provider_content_rejected"
+    )
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-1].payload == {
+        "subtype": "api_error_400",
+        "api_error_status": 400,
+        "message": "模型服务拒绝了本轮上下文，请重新运行。",
+        "error_code": "provider_content_rejected",
     }
 
 

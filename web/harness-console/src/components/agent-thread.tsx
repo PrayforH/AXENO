@@ -350,7 +350,16 @@ function HarnessAssistantMessage() {
         }}
       />
       <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
-        <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
+        <div className="aui-message-error">
+          <span>本次运行未完整结束，可打开“运行详情”查看原因。</span>
+          <ActionBarPrimitive.Reload
+            className="run-retry-button"
+            aria-label="重新运行"
+            title="重新运行"
+          >
+            重新运行
+          </ActionBarPrimitive.Reload>
+        </div>
       </AuiIf>
       <div className="assistant-message-controls">
         <BranchPicker />

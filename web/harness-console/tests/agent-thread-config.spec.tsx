@@ -87,6 +87,9 @@ it("presents task-first guidance through a custom assistant-ui welcome", () => {
 
 it("uses the current run control name in incomplete-run guidance", () => {
   expect(agentThreadSource).toContain("可打开“运行详情”查看原因");
+  expect(agentThreadSource).toContain("<ActionBarPrimitive.Reload");
+  expect(agentThreadSource).toContain('className="run-retry-button"');
+  expect(agentThreadSource).toContain("重新运行");
   expect(agentThreadSource).not.toContain("请查看运行详情");
 });
 
