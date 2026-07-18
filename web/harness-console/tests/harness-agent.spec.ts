@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunAgentInput } from "@ag-ui/client";
 import { HarnessHttpAgent } from "../src/lib/harness-agent";
+import { liveResponseStore } from "../src/lib/live-response-store";
 import { runStreamStore } from "../src/lib/run-stream-store";
 
 describe("HarnessHttpAgent", () => {
@@ -118,6 +119,7 @@ describe("HarnessHttpAgent", () => {
   it("forwards native text deltas while tracking run lifecycle without duplicating text", async () => {
     const lifecycle: string[] = [];
     const deltas: string[] = [];
+    liveResponseStore.clear();
     runStreamStore.clear();
     const unsubscribe = runStreamStore.subscribe(() => {
       lifecycle.push(runStreamStore.getSnapshot().status);
@@ -156,10 +158,90 @@ describe("HarnessHttpAgent", () => {
     );
 
     expect(deltas).toEqual(["第一段", "第二段"]);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-stream",
+      messageId: "message-stream",
+      text: "第一段第二段",
+      status: "complete",
+      visible: true,
+    });
     expect(lifecycle).toEqual(["running", "complete"]);
     expect(runStreamStore.getSnapshot()).toMatchObject({
       runId: "run-stream",
       status: "complete",
+    });
+    unsubscribe();
+  });
+
+  it("publishes the first text chunk before the response stream finishes", async () => {
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let resolveFirstChunk: (() => void) | undefined;
+    const firstChunk = new Promise<void>((resolve) => {
+      resolveFirstChunk = resolve;
+    });
+    liveResponseStore.clear();
+    const unsubscribe = liveResponseStore.subscribe(() => {
+      if (liveResponseStore.getSnapshot().text === "第一段") {
+        resolveFirstChunk?.();
+      }
+    });
+    const streamFetch: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(nextController) {
+            controller = nextController;
+            nextController.enqueue(
+              encoder.encode(
+                [
+                  'data: {"type":"RUN_STARTED","threadId":"thread-live","runId":"run-live"}',
+                  "",
+                  'data: {"type":"TEXT_MESSAGE_START","messageId":"message-live","role":"assistant"}',
+                  "",
+                  'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-live","delta":"第一段"}',
+                  "",
+                  "",
+                ].join("\n"),
+              ),
+            );
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+    });
+
+    const run = agent.runAgent({ runId: "run-live" });
+    await firstChunk;
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "第一段",
+      status: "streaming",
+      visible: true,
+    });
+
+    controller?.enqueue(
+      encoder.encode(
+        [
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-live","delta":"第二段"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"message-live"}',
+          "",
+          'data: {"type":"RUN_FINISHED","threadId":"thread-live","runId":"run-live"}',
+          "",
+          "",
+        ].join("\n"),
+      ),
+    );
+    controller?.close();
+    await run;
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "第一段第二段",
+      status: "complete",
+      visible: true,
     });
     unsubscribe();
   });

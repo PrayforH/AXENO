@@ -67,6 +67,48 @@ describe("Harness same-origin proxies", () => {
     expect(await response.text()).toBe("data: first\n\ndata: second\n\n");
   });
 
+  it("forwards each AG-UI chunk before the upstream stream closes", async () => {
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const response = await proxyAguiRequest(
+      new Request("http://console.test/api/agui", {
+        method: "POST",
+        body: "{}",
+      }),
+      config,
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(nextController) {
+              controller = nextController;
+              nextController.enqueue(encoder.encode("data: first\n\n"));
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              "Cache-Control": "no-cache",
+              "Content-Type": "text/event-stream",
+              "X-Accel-Buffering": "no",
+            },
+          },
+        ),
+    );
+    const reader = response.body?.getReader();
+
+    expect(reader).toBeDefined();
+    const first = await reader!.read();
+    expect(new TextDecoder().decode(first.value)).toBe("data: first\n\n");
+    expect(first.done).toBe(false);
+
+    controller?.enqueue(encoder.encode("data: second\n\n"));
+    controller?.close();
+    const second = await reader!.read();
+
+    expect(new TextDecoder().decode(second.value)).toBe("data: second\n\n");
+    expect(second.done).toBe(false);
+  });
+
   it("continues W3C trace context across the Web-to-API boundary", async () => {
     const traceparent =
       "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01";
