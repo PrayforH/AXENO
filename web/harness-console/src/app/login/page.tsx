@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
+import { ThemeToggle } from "../../components/theme-toggle";
 
 type AuthConfig = {
   registration_enabled: boolean;
@@ -68,7 +69,7 @@ export default function LoginPage() {
 
   const hasSso = Boolean(config?.providers.google || config?.providers.github);
   return (
-    <main className="login-shell">
+    <main className="login-shell" id="main-content">
       <section className="login-context" aria-label="Agent Harness 简介">
         <div className="login-brand">
           <span className="brand-mark">H</span>
@@ -90,6 +91,7 @@ export default function LoginPage() {
       </section>
 
       <section className="login-panel" aria-label={mode === "login" ? "登录" : "创建账户"}>
+        <ThemeToggle className="login-theme-toggle" />
         <div className="login-card">
           <header>
             <p>{mode === "login" ? "欢迎回来" : "开始使用"}</p>

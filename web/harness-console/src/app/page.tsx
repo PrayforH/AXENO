@@ -7,6 +7,7 @@ import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
 import { DeveloperDrawer } from "../components/developer-drawer";
 import { TaskAgentSwitcher } from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
+import { ThemeToggle } from "../components/theme-toggle";
 import {
   bindThreadAgent,
   createNewThread,
@@ -29,6 +30,12 @@ export default function Home() {
   const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
+
+  useEffect(() => {
+    if (window.matchMedia("(max-width: 820px)").matches) {
+      setTaskSidebarOpen(false);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -141,15 +148,15 @@ export default function Home() {
 
   return (
     <AuthProvider>
-    <main className="console-shell">
+    <main className="console-shell" id="main-content">
       <header className="console-header">
         <div className="brand-lockup" aria-label="智能任务助手">
           <span className="brand-mark" aria-hidden="true">
             H
           </span>
           <div>
-            <h1>智能任务助手</h1>
-            <p className="workspace-caption">Agent Harness</p>
+            <h1>Agent Harness</h1>
+            <p className="workspace-caption">智能任务工作台</p>
           </div>
         </div>
 
@@ -161,6 +168,7 @@ export default function Home() {
         />
 
         <div className="header-actions">
+          <ThemeToggle />
           <button
             className="icon-button"
             type="button"
