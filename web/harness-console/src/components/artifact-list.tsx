@@ -21,6 +21,7 @@ export function ArtifactCard({ details }: { details: ArtifactDetails }) {
     mediaType.startsWith("image/") ||
     mediaType === "application/json" ||
     mediaType === "application/pdf";
+  const primaryUrl = previewable ? `${contentUrl}?preview=1` : contentUrl;
   const filemark = mediaType.includes("json")
     ? "JSON"
     : mediaType.includes("pdf")
@@ -30,17 +31,29 @@ export function ArtifactCard({ details }: { details: ArtifactDetails }) {
         : "FILE";
   return (
     <section className="domain-card artifact-domain-card">
-      <div className="artifact-filemark" aria-hidden="true">
-        {filemark}
-      </div>
-      <div className="artifact-copy">
-        <div className="domain-card-kicker">运行产物</div>
-        <h3>{details.name || "未命名产物"}</h3>
-        <p>
-          {mediaType} · {formatBytes(details.size_bytes)}
-        </p>
-        {details.sha256 && <code>sha256 {details.sha256.slice(0, 12)}…</code>}
-      </div>
+      <a
+        className="artifact-primary-link"
+        href={primaryUrl}
+        target={previewable ? "_blank" : undefined}
+        rel={previewable ? "noreferrer" : undefined}
+        download={previewable ? undefined : details.name}
+        title={previewable ? `打开 ${details.name || "运行产物"}` : `下载 ${details.name || "运行产物"}`}
+      >
+        <div className="artifact-filemark" aria-hidden="true">
+          {filemark}
+        </div>
+        <div className="artifact-copy">
+          <div className="domain-card-kicker">运行产物</div>
+          <h3>
+            {details.name || "未命名产物"}
+            <span aria-hidden="true">{previewable ? "↗" : "↓"}</span>
+          </h3>
+          <p>
+            {mediaType} · {formatBytes(details.size_bytes)}
+          </p>
+          {details.sha256 && <code>sha256 {details.sha256.slice(0, 12)}…</code>}
+        </div>
+      </a>
       <div className="artifact-actions">
         {previewable && (
           <a
@@ -52,7 +65,7 @@ export function ArtifactCard({ details }: { details: ArtifactDetails }) {
             <span>预览</span><i aria-hidden="true">↗</i>
           </a>
         )}
-        <a className="download-button" href={contentUrl}>
+        <a className="download-button" href={contentUrl} download={details.name}>
           <span>下载</span><i aria-hidden="true">↓</i>
         </a>
       </div>

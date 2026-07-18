@@ -158,18 +158,28 @@
 
 .sidebarFooter {
   margin-top: auto;
-  padding: 8px;
-  display: grid;
-  gap: 8px;
+  min-height: 58px;
+  padding: 9px 10px 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   border-top: 1px solid var(--sidebar-line);
 }
 
 .footerContent {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
-.themeToggle {
-  justify-self: end;
+.sidebar .themeToggle {
+  width: 32px;
+  min-width: 32px;
+  padding: 3px;
+}
+
+.sidebar .themeToggle :global(.theme-toggle-label) {
+  display: none;
 }
 
 .sidebar[data-studio-sidebar="collapsed"] .brand {
@@ -184,6 +194,7 @@
 
 .sidebar[data-studio-sidebar="collapsed"] .sidebarFooter {
   justify-items: center;
+  justify-content: center;
   padding-inline: 8px;
 }
 

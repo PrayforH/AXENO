@@ -2,14 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
-import { ApprovalCard } from "./approval-card";
 import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
 } from "./workspace-navigation";
-import type { ApprovalDecision } from "../lib/harness-server";
 import { loadTasks, type TaskSummary } from "../lib/task-history";
-import { requireAuthenticatedResponse } from "../lib/client-auth";
 
 const statusLabels: Record<string, string> = {
   idle: "新任务",
@@ -50,7 +47,6 @@ export function TaskSidebar({
   onSelect,
   onNewTask,
   refreshToken,
-  onApprovalHandled,
   onCurrentTaskStatusChange,
 }: {
   currentThreadId: string;
@@ -59,7 +55,6 @@ export function TaskSidebar({
   onSelect: (task: TaskSummary) => void;
   onNewTask: () => void;
   refreshToken: number;
-  onApprovalHandled: () => void;
   onCurrentTaskStatusChange: (status: string) => void;
 }) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -106,20 +101,6 @@ export function TaskSidebar({
       onCurrentTaskStatusChange(selected.status);
     }
   }, [onCurrentTaskStatusChange, selected]);
-
-  async function decide(approvalId: string, decision: ApprovalDecision) {
-    const response = requireAuthenticatedResponse(
-      await fetch(`/api/harness/approvals/${encodeURIComponent(approvalId)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision }),
-      }),
-    );
-    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
-    const next = await loadTasks();
-    setTasks(next);
-    onApprovalHandled();
-  }
 
   return (
     <aside
@@ -190,17 +171,6 @@ export function TaskSidebar({
             )}
             {error && <p className="task-list-error">任务列表暂时不可用</p>}
           </div>
-          {selected?.pending_approval && (
-            <div className="task-approval-panel">
-              <ApprovalCard
-                details={selected.pending_approval}
-                complete={false}
-                onDecision={(decision) =>
-                  decide(selected.pending_approval!.approval_id, decision)
-                }
-              />
-            </div>
-          )}
           <div className="task-sidebar-account">
             <AccountMenu />
           </div>

@@ -196,7 +196,6 @@ export default function Home() {
           onSelect={switchTask}
           onNewTask={startNewTask}
           refreshToken={refreshToken}
-          onApprovalHandled={refreshCurrentTask}
           onCurrentTaskStatusChange={refreshCurrentTask}
         />
         <section className="chat-stage" aria-label="Agent 任务对话">

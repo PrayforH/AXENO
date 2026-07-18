@@ -93,30 +93,22 @@ export function ApprovalCard({
   const contextRows = approvalContextRows(details);
   const riskLabel = details.risk ? riskLabels[details.risk] ?? details.risk : undefined;
   return (
-    <section className="domain-card approval-domain-card" aria-live="polite">
-      <div className="approval-heading-row">
-        <div className="domain-card-kicker">
-          <span className="domain-card-icon" aria-hidden="true">!</span>
-          <span>{settled ? "审批已处理" : approvalLabel("pending")}</span>
+    <section className="approval-card" aria-live="polite">
+      <div className="approval-card-main">
+        <span className="approval-card-icon" aria-hidden="true">!</span>
+        <div className="approval-card-copy">
+          <div className="approval-card-kicker">
+            <span>{settled ? "审批已处理" : approvalLabel("pending")}</span>
+            {riskLabel && (
+              <span className={`risk-badge risk-${details.risk}`}>
+                {riskLabel}风险
+              </span>
+            )}
+          </div>
+          <h3>允许执行这个操作？</h3>
+          <p>{formatApprovalReason(details.reason)}</p>
         </div>
-        {riskLabel && <span className={`risk-badge risk-${details.risk}`}>{riskLabel}风险</span>}
       </div>
-      <h3>允许执行这个操作？</h3>
-      <p>{formatApprovalReason(details.reason)}</p>
-      <dl className="domain-metadata">
-        {contextRows.map((row) => (
-          <div key={row.label}>
-            <dt>{row.label}</dt>
-            <dd>{row.value}</dd>
-          </div>
-        ))}
-        {contextRows.length === 0 && (
-          <div>
-            <dt>工具调用</dt>
-            <dd>{details.tool_call_id || "未提供"}</dd>
-          </div>
-        )}
-      </dl>
       {error && <p className="domain-error">{error}</p>}
       <div className="domain-actions">
         <button
@@ -141,6 +133,26 @@ export function ApprovalCard({
           </span>
         )}
       </div>
+      <details className="approval-details">
+        <summary>
+          <span>操作详情</span>
+          <span>{details.tool_name || "工具调用"}</span>
+        </summary>
+        <dl className="domain-metadata">
+          {contextRows.map((row) => (
+            <div key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+          {contextRows.length === 0 && (
+            <div>
+              <dt>工具调用</dt>
+              <dd>{details.tool_call_id || "未提供"}</dd>
+            </div>
+          )}
+        </dl>
+      </details>
     </section>
   );
 }

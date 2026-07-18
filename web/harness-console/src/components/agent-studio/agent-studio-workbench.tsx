@@ -830,8 +830,8 @@ export function AgentStudioWorkbench() {
         active="agents"
         footer={
           <div className={styles.railFooter}>
-            <strong>租户控制面</strong>
-            <span>列表与 revision 均来自 Agent Studio API；浏览器不保存主数据。</span>
+            <strong>Agent Studio</strong>
+            <span>智能体、版本与发布状态由工作区统一管理。</span>
           </div>
         }
       >
