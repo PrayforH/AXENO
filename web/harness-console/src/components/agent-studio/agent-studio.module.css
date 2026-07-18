@@ -23,6 +23,10 @@
   letter-spacing: -0.01em;
 }
 
+.studioShell:has(> [data-studio-sidebar="collapsed"]) {
+  grid-template-columns: 52px minmax(680px, 1fr) 318px;
+}
+
 .studioShell *,
 .studioShell *::before,
 .studioShell *::after {
@@ -210,9 +214,13 @@
 }
 
 .agentList {
+  min-height: 0;
   display: grid;
+  align-content: start;
+  flex: 1 1 auto;
   gap: 3px;
   padding: 0 9px;
+  overflow-y: auto;
 }
 
 .agentListEmpty {
@@ -288,9 +296,7 @@
 .railFooter {
   display: grid;
   gap: 7px;
-  margin-top: auto;
-  padding: 16px;
-  border-top: 1px solid var(--studio-line);
+  padding: 2px;
 }
 
 .railFooter span {
@@ -3324,6 +3330,10 @@
     grid-template-columns: 226px minmax(640px, 1fr);
   }
 
+  .studioShell:has(> [data-studio-sidebar="collapsed"]) {
+    grid-template-columns: 52px minmax(640px, 1fr);
+  }
+
   .contractRail {
     position: relative;
     grid-column: 2;
@@ -3343,24 +3353,16 @@
 }
 
 @media (max-width: 900px) {
-  .studioShell {
-    display: block;
+  .studioShell,
+  .studioShell:has(> [data-studio-sidebar="collapsed"]) {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
     min-width: 0;
   }
 
-  .agentRail {
-    position: relative;
-    width: 100%;
-    height: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--studio-line-strong);
-  }
-
-  .agentList,
-  .agentSearch,
-  .railHeading,
-  .railFooter {
-    display: none;
+  .editorShell,
+  .contractRail {
+    grid-column: 2;
   }
 
   .editorHeader {
@@ -3412,7 +3414,7 @@
   }
 
   .contractRail {
-    grid-column: auto;
+    grid-column: 2;
   }
 
   .subagentTopology {
@@ -3492,6 +3494,17 @@
 }
 
 @media (max-width: 620px) {
+  .headerActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .headerActions button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
   .formGrid,
   .routeCards,
   .toolGrid,

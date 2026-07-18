@@ -17,6 +17,17 @@ const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
 );
+const sidebar = readFileSync(
+  join(process.cwd(), "src/components/agent-studio/studio-sidebar.tsx"),
+  "utf8",
+);
+const sidebarStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/studio-sidebar.module.css",
+  ),
+  "utf8",
+);
 const studioConfig = readFileSync(
   join(process.cwd(), "src/lib/agent-studio.ts"),
   "utf8",
@@ -37,13 +48,35 @@ const loadingBoundary = readFileSync(
 describe("Agent Studio management page", () => {
   it("is an independent control-plane route", () => {
     expect(page).toContain("AgentStudioWorkbench");
-    expect(workbench).toContain("Agent Studio");
+    expect(workbench).toContain("<StudioSidebar");
     expect(workbench).toContain("有效运行契约");
-    expect(workbench).toContain('aria-label="工作区"');
-    expect(workbench).toContain('href="/"');
-    expect(workbench).toContain('href="/studio/agents"');
+    expect(sidebar).toContain("Agent Studio");
+    expect(sidebar).toContain('aria-label="Agent Studio 工作区"');
+    expect(sidebar).toContain('href: "/"');
+    expect(sidebar).toContain('href: "/studio/agents"');
     expect(page).toContain("AuthProvider");
     expect(workbench).toContain('data-studio-integration="api"');
+  });
+
+  it("shares a persistent task-style collapsible control-plane rail", () => {
+    expect(sidebar).toContain("agent-studio-sidebar-collapsed");
+    expect(sidebar).toContain("data-studio-sidebar");
+    expect(sidebar).toContain("收起 Agent Studio 侧栏");
+    expect(sidebar).toContain("展开 Agent Studio 侧栏");
+    expect(sidebar).toContain("aria-expanded={!collapsed}");
+    expect(sidebar).toContain("<ThemeToggle");
+    expect(sidebarStyles).toContain(
+      '.sidebar[data-studio-sidebar="collapsed"]',
+    );
+    expect(sidebarStyles).toContain("width: 52px");
+    expect(sidebarStyles).toContain("@media (max-width: 980px)");
+    expect(sidebarStyles).toContain(".navigationActive");
+    expect(styles).toMatch(
+      /@media \(max-width: 900px\)[\s\S]*?\.studioShell:has\(> \[data-studio-sidebar="collapsed"\]\)[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\)/,
+    );
+    expect(styles).toMatch(
+      /@media \(max-width: 620px\)[\s\S]*?\.headerActions[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+    );
   });
 
   it("organizes authoring as a capability chain instead of one giant form", () => {
@@ -136,7 +169,7 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("版本差异");
     expect(workbench).toContain("必须调用");
     expect(workbench).toContain("禁止");
-    expect(errorBoundary).toContain("Studio 没有正常加载");
+    expect(errorBoundary).toContain("Agent Studio 没有正常加载");
     expect(errorBoundary).toContain("重新加载");
     expect(loadingBoundary).toContain("正在恢复 Agent Studio");
     expect(styles).toContain(".studioStateShell");

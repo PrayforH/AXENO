@@ -70,11 +70,11 @@ export default function LoginPage() {
   const hasSso = Boolean(config?.providers.google || config?.providers.github);
   return (
     <main className="login-shell" id="main-content">
-      <section className="login-context" aria-label="Agent Harness 简介">
+      <section className="login-context" aria-label="Agent Studio 简介">
         <div className="login-brand">
-          <span className="brand-mark">H</span>
+          <span className="brand-mark">AS</span>
           <div>
-            <strong>Agent Harness</strong>
+            <strong>Agent Studio</strong>
             <span>智能任务工作台</span>
           </div>
         </div>

@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAuth } from "../auth-provider";
-import { ThemeToggle } from "../theme-toggle";
+import { StudioSidebar } from "./studio-sidebar";
 import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
@@ -205,7 +204,9 @@ export function AgentStudioWorkbench() {
         }
       } catch (error) {
         if (!active) return;
-        setLoadError(error instanceof Error ? error.message : "Studio API 当前不可用");
+        setLoadError(
+          error instanceof Error ? error.message : "Agent Studio API 当前不可用",
+        );
       } finally {
         if (active) setLoading(false);
       }
@@ -817,45 +818,23 @@ export function AgentStudioWorkbench() {
   }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
-    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
+    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>AS</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
   }
   if (loadError) {
-    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Agent Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
   }
 
   return (
     <main className={styles.studioShell} id="main-content" data-studio-integration="api">
-      <aside className={styles.agentRail} aria-label="Agent 列表">
-        <div className={styles.studioBrand}>
-          <span className={styles.brandMark} aria-hidden="true">
-            H
-          </span>
-          <div>
-            <strong>Agent Studio</strong>
-            <span>Harness control plane</span>
+      <StudioSidebar
+        active="agents"
+        footer={
+          <div className={styles.railFooter}>
+            <strong>租户控制面</strong>
+            <span>列表与 revision 均来自 Agent Studio API；浏览器不保存主数据。</span>
           </div>
-          <ThemeToggle className={styles.themeToggle} />
-        </div>
-
-        <nav className={styles.workspaceTabs} aria-label="工作区">
-          <Link className={styles.workspaceTab} href="/">
-            任务
-          </Link>
-          <Link
-            className={styles.workspaceTabActive}
-            href="/studio/agents"
-            aria-current="page"
-          >
-            智能体
-          </Link>
-          <Link className={styles.workspaceTab} href="/studio/usage">
-            用量
-          </Link>
-          <Link className={styles.workspaceTab} href="/studio/data">
-            数据
-          </Link>
-        </nav>
-
+        }
+      >
         <div className={styles.railHeading}>
           <span>智能体目录</span>
           <button
@@ -909,12 +888,7 @@ export function AgentStudioWorkbench() {
             <div className={styles.agentListEmpty}>没有匹配的智能体</div>
           )}
         </nav>
-
-        <div className={styles.railFooter}>
-          <strong>租户控制面</strong>
-          <span>列表与 revision 均来自 Studio API；浏览器不保存主数据。</span>
-        </div>
-      </aside>
+      </StudioSidebar>
 
       <section className={styles.editorShell} data-readonly={!canEdit}>
         {drafts.length === 0 && !draft.id && (

@@ -16,6 +16,10 @@
   font-family: "Aptos", "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
 }
 
+.shell:has(> [data-studio-sidebar="collapsed"]) {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
 .shell * { box-sizing: border-box; }
 .shell a, .shell button, .shell input { outline: none; }
 .shell a:focus-visible, .shell button:focus-visible, .shell input:focus-visible { box-shadow: 0 0 0 3px rgb(46 112 88 / 18%); }
@@ -44,7 +48,7 @@
 .railCopy { padding: 22px 16px; border-top: 1px solid var(--line); }
 .railCopy strong { font-size: 13px; }
 .railCopy p { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.railFact { margin: auto 12px 14px; padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.railFact { margin: 0; padding: 10px; display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
 .railFact span, .railFact small { color: var(--muted); font-size: 10px; }
 .railFact strong { color: var(--violet); font: 700 12px/1 ui-monospace, monospace; }
 .railFact small { grid-column: 1 / -1; }
@@ -103,10 +107,8 @@
 .state span { color: #69736e; font-size: 12px; }
 
 @media (max-width: 980px) {
-  .shell { grid-template-columns: 1fr; }
-  .rail { position: static; height: auto; }
-  .railCopy, .railFact { display: none; }
-  .content { width: min(100% - 32px, 760px); padding-top: 36px; }
+  .shell { grid-template-columns: 52px minmax(0, 1fr); }
+  .content { grid-column: 2; width: min(100% - 32px, 760px); padding-top: 36px; }
   .ledger { grid-template-columns: repeat(2, 1fr); }
   .meter:nth-child(3n) { border-right: 1px solid var(--line); }
   .meter:nth-child(2n) { border-right: 0; }

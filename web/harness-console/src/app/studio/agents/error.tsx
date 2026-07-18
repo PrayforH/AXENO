@@ -19,7 +19,7 @@ export default function AgentStudioError({
     <main className={styles.studioStateShell}>
       <section className={styles.studioStateCard} role="alert">
         <span className={styles.studioStateMark} aria-hidden="true">!</span>
-        <h1>Studio 没有正常加载</h1>
+        <h1>Agent Studio 没有正常加载</h1>
         <p>
           当前配置不会因此发布或覆盖。可以重试加载；如果仍失败，先返回任务页，草稿仍保留在浏览器或控制面中。
         </p>

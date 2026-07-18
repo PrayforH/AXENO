@@ -97,9 +97,9 @@ function SettingsContent() {
   return (
     <main className="settings-shell" id="main-content">
       <header className="settings-header">
-        <a className="settings-brand" href="/" aria-label="返回智能任务助手">
-          <span className="brand-mark" aria-hidden="true">H</span>
-          <span><strong>智能任务助手</strong><small>Agent Harness</small></span>
+        <a className="settings-brand" href="/" aria-label="返回 Agent Studio">
+          <span className="brand-mark" aria-hidden="true">AS</span>
+          <span><strong>Agent Studio</strong><small>智能任务工作台</small></span>
         </a>
         <div className="settings-header-actions">
           <ThemeToggle />
