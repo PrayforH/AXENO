@@ -292,7 +292,20 @@ const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
 
 type AssistantPartLike = {
   type?: string;
+  toolName?: string;
 };
+
+const responseProjectionToolNames = new Set([
+  "harness_run_activity",
+  "harness_present_artifact",
+]);
+
+function isOperationalToolPart(part: AssistantPartLike) {
+  return (
+    part.type === "tool-call" &&
+    !responseProjectionToolNames.has(part.toolName ?? "")
+  );
+}
 
 export function isIntermediateAssistantTextPart(
   parts: readonly AssistantPartLike[],
@@ -301,7 +314,7 @@ export function isIntermediateAssistantTextPart(
   return (
     partIndex >= 0 &&
     parts[partIndex]?.type === "text" &&
-    parts.slice(partIndex + 1).some((part) => part.type === "tool-call")
+    parts.slice(partIndex + 1).some(isOperationalToolPart)
   );
 }
 

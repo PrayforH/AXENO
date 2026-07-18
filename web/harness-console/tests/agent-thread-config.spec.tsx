@@ -174,7 +174,7 @@ it("projects only pre-tool assistant prose as activity commentary", () => {
     isIntermediateAssistantTextPart(
       [
         { type: "text" },
-        { type: "tool-call" },
+        { type: "tool-call", toolName: "Read" },
         { type: "text" },
       ],
       0,
@@ -184,7 +184,7 @@ it("projects only pre-tool assistant prose as activity commentary", () => {
     isIntermediateAssistantTextPart(
       [
         { type: "text" },
-        { type: "tool-call" },
+        { type: "tool-call", toolName: "Read" },
         { type: "text" },
       ],
       2,
@@ -196,6 +196,28 @@ it("projects only pre-tool assistant prose as activity commentary", () => {
       0,
     ),
   ).toBe(false);
+});
+
+it("keeps the final answer visible before durable activity projections", () => {
+  const historyParts = [
+    { type: "text" },
+    { type: "tool-call", toolName: "Read" },
+    { type: "text" },
+    { type: "tool-call", toolName: "harness_run_activity" },
+    { type: "tool-call", toolName: "harness_present_artifact" },
+  ];
+
+  expect(isIntermediateAssistantTextPart(historyParts, 0)).toBe(true);
+  expect(isIntermediateAssistantTextPart(historyParts, 2)).toBe(false);
+  expect(
+    isIntermediateAssistantTextPart(
+      [
+        { type: "text" },
+        { type: "tool-call", toolName: "harness_request_approval" },
+      ],
+      0,
+    ),
+  ).toBe(true);
 });
 
 it("uses one stable native assistant message for streaming output", () => {
