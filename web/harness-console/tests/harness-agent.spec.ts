@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { RunAgentInput } from "@ag-ui/client";
 import { HarnessHttpAgent } from "../src/lib/harness-agent";
-import { liveResponseStore } from "../src/lib/live-response-store";
+import { runStreamStore } from "../src/lib/run-stream-store";
 
 describe("HarnessHttpAgent", () => {
   it("notifies Harness when CopilotRuntime stops an active thread", () => {
@@ -115,11 +115,12 @@ describe("HarnessHttpAgent", () => {
     }
   });
 
-  it("publishes text deltas before the run finishes", async () => {
-    const observed: string[] = [];
-    liveResponseStore.clear();
-    const unsubscribe = liveResponseStore.subscribe(() => {
-      observed.push(liveResponseStore.getSnapshot().text);
+  it("forwards native text deltas while tracking run lifecycle without duplicating text", async () => {
+    const lifecycle: string[] = [];
+    const deltas: string[] = [];
+    runStreamStore.clear();
+    const unsubscribe = runStreamStore.subscribe(() => {
+      lifecycle.push(runStreamStore.getSnapshot().status);
     });
     const streamFetch: typeof fetch = async () =>
       new Response(
@@ -145,14 +146,19 @@ describe("HarnessHttpAgent", () => {
       fetch: streamFetch,
     });
 
-    await agent.runAgent({ runId: "run-stream" });
+    await agent.runAgent(
+      { runId: "run-stream" },
+      {
+        onTextMessageContentEvent: ({ event }) => {
+          deltas.push(event.delta);
+        },
+      },
+    );
 
-    expect(observed).toContain("第一段");
-    expect(observed).toContain("第一段第二段");
-    expect(liveResponseStore.getSnapshot()).toMatchObject({
+    expect(deltas).toEqual(["第一段", "第二段"]);
+    expect(lifecycle).toEqual(["running", "complete"]);
+    expect(runStreamStore.getSnapshot()).toMatchObject({
       runId: "run-stream",
-      messageId: "message-stream",
-      text: "第一段第二段",
       status: "complete",
     });
     unsubscribe();

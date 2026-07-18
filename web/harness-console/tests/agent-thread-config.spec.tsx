@@ -58,9 +58,8 @@ vi.mock("@assistant-ui/react-ui", async (importOriginal) => {
 
 import {
   AgentThread,
-  hasCurrentTurnAssistantText,
   inputArtifactDownloadHref,
-  isIntermediateAssistantMessage,
+  isIntermediateAssistantTextPart,
 } from "../src/components/agent-thread";
 
 const agentThreadSource = readFileSync(
@@ -147,7 +146,7 @@ it("places each run activity before its assistant answer", () => {
     'data-activity-source="current-run"',
   );
   expect(agentThreadSource).toContain(
-    "live.runId,",
+    "stream.runId,",
   );
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");
 });
@@ -162,68 +161,50 @@ it("renders uploaded message files with a same-origin download link", () => {
 
 it("keeps final assistant text mounted while tool-bearing responses stream", () => {
   expect(agentThreadSource).toContain(
-    "function HarnessAssistantText(_part: TextMessagePartProps)",
+    "function HarnessAssistantText(part: TextMessagePartProps)",
   );
-  expect(agentThreadSource).toContain("return <MarkdownText />;");
+  expect(agentThreadSource).toContain("<MarkdownText />");
   expect(agentThreadSource).toContain(
-    "if (isIntermediateAssistantMessage(runView, messageId)) return null;",
+    "if (isIntermediateAssistantTextPart(parts, partIndex)) return null;",
   );
 });
 
-it("projects pre-tool assistant prose only as activity commentary", () => {
+it("projects only pre-tool assistant prose as activity commentary", () => {
   expect(
-    isIntermediateAssistantMessage(
-      {
-        runId: "run-1",
-        phase: "running",
-        startedAt: "2026-07-17T00:00:00Z",
-        updatedAt: "2026-07-17T00:00:01Z",
-        elapsedMs: 1000,
-        summary: "正在执行",
-        items: [
-          {
-            id: "tool-1",
-            event_type: "tool.request",
-            kind: "tool",
-            status: "running",
-            title: "调用 Glob",
-            timestamp: "2026-07-17T00:00:01Z",
-            sequence: 1,
-            metadata: { message_id: "assistant-progress" },
-          },
-        ],
-        tasks: [],
-        tools: [],
-        taskCount: 0,
-        toolCount: 0,
-      },
-      "assistant-progress",
+    isIntermediateAssistantTextPart(
+      [
+        { type: "text" },
+        { type: "tool-call" },
+        { type: "text" },
+      ],
+      0,
     ),
   ).toBe(true);
-});
-
-it("renders raw AG-UI text deltas before the durable message is finalized", () => {
-  expect(agentThreadSource).toContain("MessagesFooter: LiveAssistantResponse");
-  expect(agentThreadSource).toContain('className="live-assistant-response"');
-  expect(agentThreadSource).toContain("TextMessagePartProvider");
-  expect(agentThreadSource).toContain("hasCurrentTurnAssistantText(state.thread.messages)");
-  expect(agentThreadSource).toContain("hasProjectedText ||");
-});
-
-it("suppresses the live fallback once the current turn has projected assistant text", () => {
   expect(
-    hasCurrentTurnAssistantText([
-      { role: "assistant", content: [{ type: "text", text: "older answer" }] },
-      { role: "user", content: [{ type: "text", text: "new question" }] },
-      { role: "assistant", content: [{ type: "text", text: "new answer" }] },
-      { role: "tool", content: [] },
-    ]),
-  ).toBe(true);
-  expect(
-    hasCurrentTurnAssistantText([
-      { role: "assistant", content: [{ type: "text", text: "older answer" }] },
-      { role: "user", content: [{ type: "text", text: "new question" }] },
-      { role: "tool", content: [] },
-    ]),
+    isIntermediateAssistantTextPart(
+      [
+        { type: "text" },
+        { type: "tool-call" },
+        { type: "text" },
+      ],
+      2,
+    ),
   ).toBe(false);
+  expect(
+    isIntermediateAssistantTextPart(
+      [{ type: "text" }],
+      0,
+    ),
+  ).toBe(false);
+});
+
+it("uses one stable native assistant message for streaming output", () => {
+  expect(agentThreadSource).toContain('className="assistant-answer"');
+  expect(agentThreadSource).toContain(
+    'data-streaming={part.status.type === "running" ? "true" : "false"}',
+  );
+  expect(agentThreadSource).not.toContain("MessagesFooter:");
+  expect(agentThreadSource).not.toContain("LiveAssistantResponse");
+  expect(agentThreadSource).not.toContain("TextMessagePartProvider");
+  expect(agentThreadSource).not.toContain("hasCurrentTurnAssistantText");
 });

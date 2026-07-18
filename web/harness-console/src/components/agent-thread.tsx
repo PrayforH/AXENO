@@ -5,8 +5,8 @@ import {
   AttachmentPrimitive,
   AuiIf,
   MessagePrimitive,
-  TextMessagePartProvider,
   useAttachment,
+  useAui,
   useAuiState,
   useThreadRuntime,
   type ReasoningMessagePartComponent,
@@ -35,13 +35,10 @@ import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity, useRunViewModel } from "../lib/activity-store";
-import {
-  selectComposerDisabled,
-  type RunPhase,
-} from "../lib/run-view-model";
+import { selectComposerDisabled } from "../lib/run-view-model";
 import { runActivitySchema } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
-import { useLiveResponse } from "../lib/live-response-store";
+import { useRunStream } from "../lib/run-stream-store";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -220,6 +217,7 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
   const runView = useRunViewModel();
+  const stream = useRunStream();
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
     if (
@@ -227,14 +225,14 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
       shouldKeepActivityInLatestSlot(
         parsed.data.run_id,
         runView?.runId,
-        undefined,
+        stream.runId,
       )
     ) {
       return null;
     }
     return (
       <div className="turn-activity-summary">
-        <ActivitySummary activity={parsed.data} />
+        <ActivitySummary activity={parsed.data} responseStarted />
       </div>
     );
   }
@@ -292,91 +290,41 @@ const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
   </details>
 );
 
-function liveResponseVisible(text: string, phase: RunPhase | undefined) {
-  return Boolean(
-    text.trim() &&
-      phase !== "completed" &&
-      phase !== "failed" &&
-      phase !== "rejected" &&
-      phase !== "cancelled",
-  );
-}
-
-type ProjectedThreadMessage = {
-  role?: string;
-  content?: readonly {
-    type?: string;
-    text?: string;
-  }[];
+type AssistantPartLike = {
+  type?: string;
 };
 
-export function hasCurrentTurnAssistantText(
-  messages: readonly ProjectedThreadMessage[],
+export function isIntermediateAssistantTextPart(
+  parts: readonly AssistantPartLike[],
+  partIndex: number,
 ) {
-  let latestUserIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  return messages.slice(latestUserIndex + 1).some(
-    (message) =>
-      message.role === "assistant" &&
-      message.content?.some(
-        (part) => part.type === "text" && Boolean(part.text?.trim()),
-      ),
-  );
-}
-
-export function isIntermediateAssistantMessage(
-  view: ReturnType<typeof useRunViewModel>,
-  messageId: string,
-) {
-  return Boolean(
-    view?.items.some(
-      (item) =>
-        item.event_type === "tool.request" &&
-        item.metadata.message_id === messageId,
-    ),
-  );
-}
-
-function HarnessAssistantText(_part: TextMessagePartProps) {
-  const messageId = useAuiState((state) => state.message.id);
-  const runView = useRunViewModel();
-  if (isIntermediateAssistantMessage(runView, messageId)) return null;
-  return <MarkdownText />;
-}
-
-function LiveAssistantResponse() {
-  const live = useLiveResponse();
-  const runView = useRunViewModel();
-  const hasProjectedText = useAuiState((state) =>
-    hasCurrentTurnAssistantText(state.thread.messages),
-  );
-  if (
-    hasProjectedText ||
-    !liveResponseVisible(live.text, runView?.phase)
-  ) {
-    return null;
-  }
   return (
-    <div className="live-assistant-response" aria-live="polite">
-      <TextMessagePartProvider
-        text={live.text}
-        isRunning={live.status === "streaming"}
-      >
-        <MarkdownText />
-      </TextMessagePartProvider>
+    partIndex >= 0 &&
+    parts[partIndex]?.type === "text" &&
+    parts.slice(partIndex + 1).some((part) => part.type === "tool-call")
+  );
+}
+
+function HarnessAssistantText(part: TextMessagePartProps) {
+  const aui = useAui();
+  const parts = useAuiState((state) => state.message.content);
+  const partIndex =
+    aui.part.source === "message" && aui.part.query.type === "index"
+      ? aui.part.query.index
+      : -1;
+  if (isIntermediateAssistantTextPart(parts, partIndex)) return null;
+  return (
+    <div
+      className="assistant-answer"
+      data-streaming={part.status.type === "running" ? "true" : "false"}
+      aria-busy={part.status.type === "running"}
+    >
+      <MarkdownText />
     </div>
   );
 }
 
 function HarnessAssistantMessage() {
-  const messageId = useAuiState((state) => state.message.id);
-  const runView = useRunViewModel();
-  const intermediate = isIntermediateAssistantMessage(runView, messageId);
   return (
     <AssistantMessage.Root className="harness-assistant-message">
       <AuiIf condition={(state) => state.message.isLast}>
@@ -388,17 +336,13 @@ function HarnessAssistantMessage() {
           Reasoning: ReasoningPart,
         }}
       />
-      {!intermediate && (
-        <>
-          <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
-            <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
-          </AuiIf>
-          <div className="assistant-message-controls">
-            <BranchPicker />
-            <AssistantActionBar />
-          </div>
-        </>
-      )}
+      <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
+        <div className="aui-message-error">本次运行未完整结束，可打开“运行详情”查看原因。</div>
+      </AuiIf>
+      <div className="assistant-message-controls">
+        <BranchPicker />
+        <AssistantActionBar />
+      </div>
     </AssistantMessage.Root>
   );
 }
@@ -597,16 +541,15 @@ function HarnessUserMessage() {
 function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
-  const live = useLiveResponse();
-  const finalResponseStarted =
-    useAssistantResponseStarted() || live.text.trim().length > 0;
+  const stream = useRunStream();
+  const finalResponseStarted = useAssistantResponseStarted();
   if (
     !activity ||
     !runView ||
     !shouldKeepActivityInLatestSlot(
       activity.run_id,
       runView.runId,
-      live.runId,
+      stream.runId,
     )
   ) {
     return null;
@@ -644,7 +587,6 @@ export function AgentThread() {
         AssistantMessage: HarnessAssistantMessage,
         UserMessage: HarnessUserMessage,
         Composer: HarnessComposer,
-        MessagesFooter: LiveAssistantResponse,
         ThreadWelcome: UserTaskWelcome,
       }}
       strings={{
