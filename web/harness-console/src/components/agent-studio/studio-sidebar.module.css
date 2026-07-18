@@ -137,8 +137,7 @@
   transform: scale(0.96);
 }
 
-.collapseButton svg,
-.navigation svg {
+.collapseButton svg {
   width: 18px;
   height: 18px;
   fill: none;
@@ -146,50 +145,6 @@
   stroke-width: 1.65;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.navigation {
-  margin: 2px 8px 10px;
-  display: grid;
-  gap: 3px;
-}
-
-.navigationLink,
-.navigationActive {
-  min-height: 38px;
-  padding: 0 10px;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 9px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--sidebar-muted);
-  font-size: 11px;
-  font-weight: 620;
-  text-decoration: none;
-  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
-}
-
-.navigationLink:hover {
-  color: var(--sidebar-ink);
-  background: var(--sidebar-hover);
-}
-
-.navigationLink:active,
-.navigationActive:active {
-  transform: scale(0.98);
-}
-
-.navigationActive {
-  border-color: var(--sidebar-line);
-  color: var(--sidebar-ink);
-  background: var(--sidebar-raised);
-  box-shadow: inset 2px 0 0 var(--sidebar-accent);
-}
-
-.navigationActive svg {
-  color: var(--sidebar-accent);
 }
 
 .sidebarBody {
@@ -225,24 +180,6 @@
 .sidebar[data-studio-sidebar="collapsed"] .toolbar {
   justify-content: center;
   padding-inline: 8px;
-}
-
-.sidebar[data-studio-sidebar="collapsed"] .navigation {
-  margin-inline: 8px;
-}
-
-.sidebar[data-studio-sidebar="collapsed"] .navigationLink,
-.sidebar[data-studio-sidebar="collapsed"] .navigationActive {
-  width: 34px;
-  min-height: 34px;
-  padding: 0;
-  grid-template-columns: 1fr;
-  place-items: center;
-  gap: 0;
-}
-
-.sidebar[data-studio-sidebar="collapsed"] .navigationActive {
-  box-shadow: inset 2px 0 0 var(--sidebar-accent);
 }
 
 .sidebar[data-studio-sidebar="collapsed"] .sidebarFooter {
@@ -281,9 +218,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sidebar,
-  .collapseButton,
-  .navigationLink,
-  .navigationActive {
+  .collapseButton {
     transition-duration: 0.01ms;
   }
 }

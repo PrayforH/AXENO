@@ -140,7 +140,15 @@ it("places each run activity before its assistant answer", () => {
   expect(content).toBeGreaterThan(activity);
   expect(agentThreadSource).toContain('className="assistant-message-controls"');
   expect(agentThreadSource).toContain('part.toolName === "harness_run_activity"');
-  expect(agentThreadSource).toContain("hasRunActivityToolCall(state.message.content)");
+  expect(agentThreadSource).toContain(
+    "shouldKeepActivityInLatestSlot(",
+  );
+  expect(agentThreadSource).toContain(
+    'data-activity-source="current-run"',
+  );
+  expect(agentThreadSource).toContain(
+    "live.runId,",
+  );
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");
 });
 

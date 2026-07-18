@@ -1,9 +1,12 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import { ApprovalCard } from "./approval-card";
+import {
+  WorkspaceCollapseIcon,
+  WorkspaceNavigation,
+} from "./workspace-navigation";
 import type { ApprovalDecision } from "../lib/harness-server";
 import { loadTasks, type TaskSummary } from "../lib/task-history";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
@@ -36,36 +39,6 @@ function NewTaskIcon() {
     <svg className="task-new-icon" viewBox="0 0 20 20" aria-hidden="true">
       <rect x="3.5" y="5.5" width="11" height="11" rx="2" />
       <path d="M8 13.2 8.5 11l6.8-6.8a1.4 1.4 0 0 1 2 2L10.5 13Z" />
-    </svg>
-  );
-}
-
-function TasksIcon() {
-  return (
-    <svg className="task-tab-icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M5 5.5h10M5 10h10M5 14.5h7" />
-    </svg>
-  );
-}
-
-function StudioIcon() {
-  return (
-    <svg className="task-tab-icon" viewBox="0 0 20 20" aria-hidden="true">
-      <circle cx="6" cy="6" r="2" />
-      <circle cx="14" cy="6" r="2" />
-      <circle cx="10" cy="14" r="2" />
-      <path d="m7.7 7.1 1.4 4.8m3.2-4.8-1.4 4.8M8 6h4" />
-    </svg>
-  );
-}
-
-function DoubleChevron({ direction }: { direction: "left" | "right" }) {
-  const path = direction === "left"
-    ? "m11.5 4-6 6 6 6m5-12-6 6 6 6"
-    : "m8.5 4 6 6-6 6m-5-12 6 6-6 6";
-  return (
-    <svg className="task-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
-      <path d={path} />
     </svg>
   );
 }
@@ -156,6 +129,16 @@ export function TaskSidebar({
       {collapsed ? (
         <div className="task-sidebar-rail">
           <button
+            className="task-rail-toggle"
+            type="button"
+            onClick={onToggle}
+            aria-label="展开任务列表"
+            title="展开任务列表"
+          >
+            <WorkspaceCollapseIcon collapsed />
+          </button>
+          <WorkspaceNavigation active="tasks" collapsed />
+          <button
             className="task-rail-action"
             type="button"
             onClick={onNewTask}
@@ -164,23 +147,6 @@ export function TaskSidebar({
           >
             <NewTaskIcon />
           </button>
-          <Link
-            className="task-rail-studio"
-            href="/studio/agents"
-            aria-label="Agent Studio"
-            title="Agent Studio"
-          >
-            <StudioIcon />
-          </Link>
-          <button
-            className="task-rail-toggle"
-            type="button"
-            onClick={onToggle}
-            aria-label="展开任务列表"
-            title="展开任务列表"
-          >
-            <DoubleChevron direction="right" />
-          </button>
           <div className="task-rail-account">
             <AccountMenu />
           </div>
@@ -188,28 +154,18 @@ export function TaskSidebar({
       ) : (
         <>
           <div className="task-sidebar-heading">
-            <nav className="task-sidebar-tabs" aria-label="工作区">
-              <Link
-                className="task-sidebar-tab is-active"
-                href="/"
-                aria-current="page"
-              >
-                <TasksIcon />
-                <span>任务</span>
-              </Link>
-              <Link className="task-sidebar-tab" href="/studio/agents">
-                <StudioIcon />
-                <span>Agent Studio</span>
-              </Link>
-            </nav>
+            <span className="task-sidebar-heading-label">工作区</span>
             <div className="task-sidebar-heading-actions">
               <button type="button" onClick={onNewTask} aria-label="新建任务" title="新建任务">
                 <NewTaskIcon />
               </button>
               <button type="button" onClick={onToggle} aria-label="收起任务列表" title="收起任务列表">
-                <DoubleChevron direction="left" />
+                <WorkspaceCollapseIcon collapsed={false} />
               </button>
             </div>
+          </div>
+          <div className="task-sidebar-workspaces">
+            <WorkspaceNavigation active="tasks" />
           </div>
           <div className="task-list" role="list">
             {tasks.map((task) => (

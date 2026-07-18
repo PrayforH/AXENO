@@ -39,10 +39,7 @@ import {
   selectComposerDisabled,
   type RunPhase,
 } from "../lib/run-view-model";
-import {
-  hasRunActivityToolCall,
-  runActivitySchema,
-} from "../lib/activity-schema";
+import { runActivitySchema } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
 import { useLiveResponse } from "../lib/live-response-store";
 import {
@@ -208,17 +205,38 @@ export function hasProjectedTool(
   );
 }
 
+export function shouldKeepActivityInLatestSlot(
+  activityRunId: string,
+  viewRunId: string | undefined,
+  liveRunId: string | undefined,
+) {
+  return (
+    viewRunId === activityRunId &&
+    (liveRunId === undefined || liveRunId === activityRunId)
+  );
+}
+
 function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
   const runView = useRunViewModel();
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
-    return parsed.success ? (
+    if (
+      !parsed.success ||
+      shouldKeepActivityInLatestSlot(
+        parsed.data.run_id,
+        runView?.runId,
+        undefined,
+      )
+    ) {
+      return null;
+    }
+    return (
       <div className="turn-activity-summary">
         <ActivitySummary activity={parsed.data} />
       </div>
-    ) : null;
+    );
   }
   if (part.toolName === "Task" || part.toolName === "Agent") {
     return <SubagentCard status={status} parameters={args} result={part.result} />;
@@ -582,12 +600,22 @@ function LatestActivity() {
   const live = useLiveResponse();
   const finalResponseStarted =
     useAssistantResponseStarted() || live.text.trim().length > 0;
-  const hasDurableActivity = useAuiState((state) =>
-    hasRunActivityToolCall(state.message.content),
-  );
-  if (!activity || !runView || hasDurableActivity) return null;
+  if (
+    !activity ||
+    !runView ||
+    !shouldKeepActivityInLatestSlot(
+      activity.run_id,
+      runView.runId,
+      live.runId,
+    )
+  ) {
+    return null;
+  }
   return (
-    <div className={`latest-activity ${runView.phase}`}>
+    <div
+      className={`latest-activity ${runView.phase}`}
+      data-activity-source="current-run"
+    >
       <ActivitySummary
         activity={activity}
         responseStarted={finalResponseStarted}
