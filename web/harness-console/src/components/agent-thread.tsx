@@ -5,6 +5,7 @@ import {
   AttachmentPrimitive,
   AuiIf,
   MessagePrimitive,
+  TextMessagePartProvider,
   useAttachment,
   useAui,
   useAuiState,
@@ -38,6 +39,10 @@ import { useRunActivity, useRunViewModel } from "../lib/activity-store";
 import { selectComposerDisabled } from "../lib/run-view-model";
 import { runActivitySchema } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
+import {
+  type LiveResponseSnapshot,
+  useLiveResponse,
+} from "../lib/live-response-store";
 import { useRunStream } from "../lib/run-stream-store";
 import {
   type UploadFeedback,
@@ -337,9 +342,38 @@ function HarnessAssistantText(part: TextMessagePartProps) {
   );
 }
 
-function HarnessAssistantMessage() {
+function LiveAssistantResponse({
+  live,
+  isLast,
+}: {
+  live: LiveResponseSnapshot;
+  isLast: boolean;
+}) {
+  if (!isLast || !live.visible || !live.text.trim()) return null;
+  const streaming = live.status === "streaming";
   return (
-    <AssistantMessage.Root className="harness-assistant-message">
+    <div
+      className="assistant-answer live-assistant-response"
+      data-streaming={streaming ? "true" : "false"}
+      aria-busy={streaming}
+      aria-live="polite"
+    >
+      <TextMessagePartProvider text={live.text} isRunning={streaming}>
+        <MarkdownText />
+      </TextMessagePartProvider>
+    </div>
+  );
+}
+
+function HarnessAssistantMessage() {
+  const live = useLiveResponse();
+  const isLast = useAuiState((state) => state.message.isLast);
+  const directStream = isLast && Boolean(live.text.trim());
+  return (
+    <AssistantMessage.Root
+      className="harness-assistant-message"
+      data-direct-stream={directStream ? "true" : "false"}
+    >
       <AuiIf condition={(state) => state.message.isLast}>
         <LatestActivity />
       </AuiIf>
@@ -349,6 +383,7 @@ function HarnessAssistantMessage() {
           Reasoning: ReasoningPart,
         }}
       />
+      <LiveAssistantResponse live={live} isLast={isLast} />
       <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
         <div className="aui-message-error">
           <span>本次运行未完整结束，可打开“运行详情”查看原因。</span>

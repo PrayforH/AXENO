@@ -229,7 +229,12 @@ it("uses one stable native assistant message for streaming output", () => {
     'data-streaming={part.status.type === "running" ? "true" : "false"}',
   );
   expect(agentThreadSource).not.toContain("MessagesFooter:");
-  expect(agentThreadSource).not.toContain("LiveAssistantResponse");
-  expect(agentThreadSource).not.toContain("TextMessagePartProvider");
+  expect(agentThreadSource).toContain(
+    'data-direct-stream={directStream ? "true" : "false"}',
+  );
+  expect(agentThreadSource).toContain(
+    "<LiveAssistantResponse live={live} isLast={isLast} />",
+  );
+  expect(agentThreadSource).toContain("<TextMessagePartProvider");
   expect(agentThreadSource).not.toContain("hasCurrentTurnAssistantText");
 });

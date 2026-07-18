@@ -2578,6 +2578,10 @@ body,
 .upload-feedback-item button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; line-height: 1; }
 @keyframes upload-spin { to { transform: rotate(360deg); } }
 .runtime-disclaimer { margin: 7px 0 0; color: #8b9690; font: 8px/1.4 ui-monospace, monospace; text-align: center; }
+.harness-assistant-message[data-direct-stream="true"]
+  .assistant-answer:not(.live-assistant-response) {
+  display: none;
+}
 .aui-message-error {
   margin-top: 10px;
   padding: 8px 0;

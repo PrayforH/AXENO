@@ -11,6 +11,7 @@ import {
   type ActivityPatchOperation,
   activityStore,
 } from "./activity-store";
+import { liveResponseStore } from "./live-response-store";
 import { runStreamStore } from "./run-stream-store";
 import { redirectOnUnauthorized } from "./client-auth";
 
@@ -64,14 +65,33 @@ export class HarnessHttpAgent extends HttpAgent {
     const wrapped: AgentSubscriber = {
       ...subscriber,
       onRunStartedEvent: async (params) => {
+        liveResponseStore.startRun(params.event.runId);
         runStreamStore.startRun(params.event.runId);
         return subscriber?.onRunStartedEvent?.(params);
       },
+      onTextMessageStartEvent: async (params) => {
+        liveResponseStore.startMessage(params.event.messageId);
+        return subscriber?.onTextMessageStartEvent?.(params);
+      },
+      onTextMessageContentEvent: async (params) => {
+        liveResponseStore.append(params.event.messageId, params.event.delta);
+        return subscriber?.onTextMessageContentEvent?.(params);
+      },
+      onTextMessageEndEvent: async (params) => {
+        liveResponseStore.completeMessage(params.event.messageId);
+        return subscriber?.onTextMessageEndEvent?.(params);
+      },
+      onToolCallStartEvent: async (params) => {
+        liveResponseStore.hideForTool();
+        return subscriber?.onToolCallStartEvent?.(params);
+      },
       onRunFinishedEvent: async (params) => {
+        liveResponseStore.completeRun();
         runStreamStore.completeRun(params.event.runId);
         return subscriber?.onRunFinishedEvent?.(params);
       },
       onRunErrorEvent: async (params) => {
+        liveResponseStore.failRun();
         runStreamStore.failRun(
           typeof params.event.runId === "string"
             ? params.event.runId
