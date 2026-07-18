@@ -252,6 +252,8 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("预览");
     expect(html).toContain("?preview=1");
     expect(html).toContain("下载");
+    expect(html).toContain("artifact-primary-link");
+    expect(html).toContain("打开 report.pdf");
   });
 
   it("renders actionable controls for a pending inline approval", () => {

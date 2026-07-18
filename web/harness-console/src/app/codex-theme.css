@@ -1091,6 +1091,65 @@ select {
   background: rgb(255 255 255 / 2%);
 }
 
+.approval-card {
+  border-color: rgb(230 170 74 / 32%);
+  background: linear-gradient(135deg, var(--codex-warning-soft), transparent 48%), var(--codex-surface-raised);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 16%);
+}
+
+.approval-card-icon,
+.approval-card-kicker {
+  color: var(--codex-warning);
+}
+
+.approval-card-icon {
+  background: var(--codex-warning-soft);
+}
+
+.approval-card-copy h3 {
+  color: var(--codex-ink);
+}
+
+.approval-card-copy p,
+.approval-details > summary {
+  color: var(--codex-muted);
+}
+
+.approval-details {
+  border-color: var(--codex-line);
+}
+
+.approval-card .domain-metadata {
+  border-color: var(--codex-line);
+  background: var(--codex-inset);
+}
+
+.approval-card .domain-metadata div {
+  border-color: var(--codex-line);
+  background: transparent;
+}
+
+.approval-card .domain-metadata dd {
+  color: var(--codex-ink-soft);
+}
+
+.approval-card .domain-actions .approve-button {
+  border-color: var(--codex-accent);
+  color: #07111a;
+  background: var(--codex-accent);
+}
+
+.approval-card .domain-actions .reject-button {
+  border-color: rgb(250 66 62 / 38%);
+  color: var(--codex-danger);
+  background: var(--codex-danger-soft);
+}
+
+.approval-card .domain-actions .reject-button:hover {
+  border-color: rgb(250 66 62 / 58%);
+  background: rgb(250 66 62 / 18%);
+}
+
 .approve-button,
 .download-button {
   border-color: var(--codex-accent);
@@ -1107,6 +1166,17 @@ select {
   border-color: rgb(250 66 62 / 32%);
   color: var(--codex-danger);
   background: var(--codex-danger-soft);
+}
+
+.composer-stop-button {
+  border-color: rgb(250 66 62 / 34%);
+  color: #ff7b78;
+  background: var(--codex-danger-soft);
+}
+
+.composer-stop-button:hover {
+  border-color: rgb(250 66 62 / 56%);
+  background: rgb(250 66 62 / 18%);
 }
 
 .artifact-domain-card {

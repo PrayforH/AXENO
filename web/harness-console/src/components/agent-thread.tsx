@@ -18,6 +18,7 @@ import {
   createContext,
   type FormEvent,
   useContext,
+  useEffect,
   useState,
 } from "react";
 import {
@@ -39,6 +40,10 @@ import { useRunActivity, useRunViewModel } from "../lib/activity-store";
 import { selectComposerDisabled } from "../lib/run-view-model";
 import { runActivitySchema } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
+import {
+  approvalStore,
+  usePendingApproval,
+} from "../lib/approval-store";
 import {
   type LiveResponseSnapshot,
   useLiveResponse,
@@ -95,6 +100,8 @@ function UploadFeedbackNotice() {
 
 function HarnessComposer() {
   const runView = useRunViewModel();
+  const thread = useThreadRuntime();
+  const pendingApproval = usePendingApproval();
   const runLocked = selectComposerDisabled(runView);
   const composerHint = runLocked
     ? runView?.phase === "waiting_approval"
@@ -108,14 +115,65 @@ function HarnessComposer() {
       data-run-locked={runLocked ? "true" : "false"}
       aria-busy={runLocked}
     >
+      {pendingApproval.visible && pendingApproval.details ? (
+        <div className="composer-approval-slot">
+          <ApprovalCard
+            details={pendingApproval.details}
+            complete={false}
+            onDecision={async (decision) => {
+              const approvalId = pendingApproval.details!.approval_id;
+              const response = requireAuthenticatedResponse(
+                await fetch(
+                  `/api/harness/approvals/${encodeURIComponent(approvalId)}`,
+                  {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ decision }),
+                  },
+                ),
+              );
+              if (!response.ok) throw new Error(await response.text());
+              approvalStore.settle(approvalId);
+            }}
+          />
+        </div>
+      ) : null}
       <UploadFeedbackNotice />
       <Composer />
       <div className="composer-meta" aria-live="polite">
         <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
-        <span>{composerHint}</span>
+        <div className="composer-run-controls">
+          <span className="composer-hint">{composerHint}</span>
+          {runLocked ? (
+            <button
+              className="composer-stop-button"
+              type="button"
+              onClick={() => thread.cancelRun()}
+              aria-label="停止当前运行"
+              title="停止当前运行"
+            >
+              <span aria-hidden="true" />
+              停止运行
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );
+}
+
+function ApprovalToolBridge({
+  details,
+  complete,
+}: {
+  details: ApprovalDetails;
+  complete: boolean;
+}) {
+  useEffect(() => {
+    if (complete) approvalStore.settle(details.approval_id);
+    else approvalStore.show(details);
+  }, [complete, details]);
+  return null;
 }
 
 const welcomeTasks = [
@@ -247,22 +305,9 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
   if (part.toolName === "harness_request_approval") {
     const details = args as unknown as ApprovalDetails;
     return (
-      <ApprovalCard
+      <ApprovalToolBridge
         details={details}
         complete={part.result !== undefined}
-        onDecision={async (decision) => {
-          const response = requireAuthenticatedResponse(
-            await fetch(
-              `/api/harness/approvals/${encodeURIComponent(details.approval_id)}`,
-              {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ decision }),
-              },
-            ),
-          );
-          if (!response.ok) throw new Error(await response.text());
-        }}
       />
     );
   }

@@ -224,7 +224,8 @@ describe("Agent Studio management page", () => {
   });
 
   it("renders only tenant API rows instead of invented live agents", () => {
-    expect(workbench).toContain("租户控制面");
+    expect(workbench).toContain("<strong>Agent Studio</strong>");
+    expect(workbench).toContain("智能体、版本与发布状态由工作区统一管理。");
     expect(workbench).toContain("studioClient.listDrafts");
     expect(workbench).toContain("studioClient.getDraft");
     expect(workbench).not.toContain("helper-agent-1.0.0");

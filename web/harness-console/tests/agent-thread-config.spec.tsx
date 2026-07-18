@@ -68,11 +68,12 @@ const agentThreadSource = readFileSync(
 );
 
 it("registers the approval renderer through the assistant-ui Thread config", () => {
-  const html = renderToStaticMarkup(<AgentThread />);
+  renderToStaticMarkup(<AgentThread />);
 
-  expect(html).toContain("允许执行这个操作？");
-  expect(html).toContain("允许并继续");
-  expect(html).toContain("拒绝");
+  expect(agentThreadSource).toContain('part.toolName === "harness_request_approval"');
+  expect(agentThreadSource).toContain("<ApprovalToolBridge");
+  expect(agentThreadSource).toContain('className="composer-approval-slot"');
+  expect(agentThreadSource).toContain("<ApprovalCard");
 });
 
 it("presents task-first guidance through a custom assistant-ui welcome", () => {
@@ -98,6 +99,9 @@ it("keeps sandbox and keyboard guidance adjacent to the composer", () => {
   expect(agentThreadSource).toContain("隔离工作区");
   expect(agentThreadSource).toContain("Enter 发送 · Shift + Enter 换行");
   expect(agentThreadSource).toContain("处理审批后，Agent 会从当前步骤继续");
+  expect(agentThreadSource).toContain('className="composer-stop-button"');
+  expect(agentThreadSource).toContain("thread.cancelRun()");
+  expect(agentThreadSource).toContain("停止运行");
 });
 
 it("keeps assistant output avatar-free so activity rows cannot overlap it", () => {
