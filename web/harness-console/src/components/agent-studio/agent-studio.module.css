@@ -3319,7 +3319,7 @@
 .studioLoadingBars i:nth-child(2) { width: 78%; }
 .studioLoadingBars i:nth-child(3) { width: 56%; }
 
-@media (max-width: 1240px) {
+@media (max-width: 1360px) {
   .studioShell {
     grid-template-columns: 226px minmax(640px, 1fr);
   }
@@ -3418,6 +3418,77 @@
   .subagentTopology {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.editorShell,
+.panelViewport {
+  background: var(--studio-paper);
+}
+
+.field input,
+.field textarea,
+.field select,
+.fieldWide input,
+.fieldWide textarea,
+.fieldWide select,
+.skillFileCard textarea {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+  background: #171717;
+}
+
+.field input::placeholder,
+.field textarea::placeholder,
+.fieldWide input::placeholder,
+.fieldWide textarea::placeholder,
+.skillFileCard textarea::placeholder {
+  color: var(--studio-faint);
+}
+
+.routeCard,
+.routeCardActive,
+.toolCard,
+.toolCardEnabled,
+.mcpCard,
+.mcpCardEnabled,
+.identityBoundary,
+.continuityBoundary,
+.evalControlActions button,
+.evalRunSummary button,
+.evalArtifacts button,
+.environmentGrid article > button,
+.deploymentHistory article > button {
+  border-color: var(--studio-line);
+  color: var(--studio-ink-soft, #d6d6d6);
+  background: var(--studio-panel);
+}
+
+.routeCard:hover,
+.toolCard:hover,
+.mcpCard:hover,
+.checkPresent:hover,
+.checkMissing:hover {
+  border-color: var(--studio-line-strong);
+  background: var(--studio-panel-subtle);
+}
+
+.identityBoundary header em,
+.continuityBoundary header em {
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+}
+
+.previewButton:disabled,
+.publishButton:disabled {
+  border-color: var(--studio-line);
+  color: var(--studio-faint);
+  background: var(--studio-panel-subtle);
+}
+
+.environmentGrid article[data-environment="production"] > button:not(:disabled) {
+  border-color: var(--studio-green);
+  color: #07111a;
+  background: var(--studio-green);
 }
 
 @media (max-width: 620px) {
@@ -3567,5 +3638,481 @@
   .switchVisual i,
   .backgroundMode > span i {
     transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, left 140ms ease;
+  }
+}
+
+/* codex-theme-v1 --------------------------------------------------------- */
+
+.studioShell {
+  --studio-ink: var(--codex-ink, #ffffff);
+  --studio-muted: var(--codex-muted, #a1a1a1);
+  --studio-faint: var(--codex-faint, #737373);
+  --studio-line: var(--codex-line, #303030);
+  --studio-line-strong: var(--codex-line-strong, #444444);
+  --studio-paper: var(--codex-surface, #181818);
+  --studio-panel: var(--codex-surface-raised, #242424);
+  --studio-panel-subtle: var(--codex-surface-subtle, #1e1e1e);
+  --studio-sidebar: var(--codex-surface-sidebar, #151515);
+  --studio-green: var(--codex-accent, #339cff);
+  --studio-green-soft: var(--codex-accent-soft, rgb(51 156 255 / 14%));
+  --studio-violet: var(--codex-skill, #ad7bf9);
+  --studio-violet-soft: var(--codex-skill-soft, rgb(173 123 249 / 14%));
+  --studio-amber: var(--codex-warning, #e6aa4a);
+  --studio-amber-soft: var(--codex-warning-soft, rgb(230 170 74 / 14%));
+  --studio-red: var(--codex-danger, #fa423e);
+  --studio-red-soft: var(--codex-danger-soft, rgb(250 66 62 / 13%));
+  color: var(--studio-ink);
+  background: var(--studio-paper);
+  font-family: var(--codex-font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+}
+
+.studioShell button:focus-visible,
+.studioShell a:focus-visible,
+.studioShell input:focus-visible,
+.studioShell textarea:focus-visible,
+.studioShell select:focus-visible {
+  border-color: var(--studio-green);
+  box-shadow: 0 0 0 3px var(--studio-green-soft);
+}
+
+.agentRail {
+  border-color: var(--studio-line);
+  background: var(--studio-sidebar);
+}
+
+.studioBrand,
+.editorHeader,
+.editorFooter,
+.contractHeader,
+.railFooter {
+  border-color: var(--studio-line);
+}
+
+.brandMark {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--studio-line-strong);
+  color: var(--studio-ink);
+  background: var(--studio-panel);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 4%);
+}
+
+.brandMark::after {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 2px;
+  content: "";
+  background: var(--studio-green);
+  box-shadow: 0 0 10px rgb(51 156 255 / 55%);
+}
+
+.workspaceTabs,
+.agentSearch kbd,
+.lifecycleBar,
+.sectionNav,
+.sectionButton:hover,
+.routeCard:hover,
+.infoStrip,
+.promptOutline,
+.checkMissing:hover,
+.promptFileMark,
+.codeEditor:read-only,
+.promptEditorFooter,
+.orchestrationGraph,
+.subagentNodeHeader > span:last-child,
+.catalogBinding,
+.backgroundMode,
+.evalAssertions span,
+.evalControlPlane,
+.qualityControlPlane > header,
+.releaseArchitecture article,
+.deploymentControlPlane > header,
+.editorFooter,
+.studioLoadingBars i {
+  background: var(--studio-panel-subtle);
+}
+
+.contractRail {
+  border-color: var(--studio-line);
+  background: #141414;
+}
+
+.workspaceTabActive,
+.railHeading button:hover,
+.agentRowActive,
+.secondaryButton,
+.lifecycleBar li > span,
+.sectionActive,
+.previewBanner button,
+.conflictBanner button,
+.fieldWide select,
+.routeCardActive,
+.promptWorkspace,
+.promptEditorShell,
+.promptEditorActions button,
+.orchestrationSummary div,
+.leadAgentCard,
+.subagentNode,
+.subagentEditor,
+.skillHeader button,
+.skillFileCard textarea,
+.toolCardEnabled,
+.mcpCardEnabled,
+.continuityBoundary,
+.evalArtifacts button,
+.evalCaseResults li,
+.evalHistory > div > span,
+.qualityControlPlane,
+.qualityScoreGrid article,
+.qualityScoreGrid > p,
+.qualityAlerts article,
+.releaseGate div,
+.deploymentControlPlane,
+.environmentGrid article,
+.deploymentHistory article > button,
+.deploymentHistory article,
+.deploymentHistory p,
+.nodeIndex,
+.contractFacts,
+.studioStateCard,
+.studioStateActions a {
+  background: var(--studio-panel);
+}
+
+.workspaceTab:hover,
+.agentRow:hover,
+.agentSearch input {
+  background: rgb(255 255 255 / 4%);
+}
+
+.workspaceTabActive,
+.agentRowActive,
+.sectionActive {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+  box-shadow: inset 0 -2px 0 var(--studio-green), 0 8px 20px rgb(0 0 0 / 14%);
+}
+
+.agentMonogram,
+.skillGlyph,
+.publicationBadge {
+  border-color: rgb(173 123 249 / 34%);
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+}
+
+.publicationBadge[data-current="true"],
+.emptyBanner,
+.infoStrip,
+.qualityControlPlane > header em,
+.deploymentControlPlane > header em,
+.validationReady {
+  border-color: rgb(51 156 255 / 34%);
+  color: var(--studio-green);
+  background: var(--studio-green-soft);
+}
+
+.qualityControlPlane > header em[data-state="blocked"],
+.conflictBanner,
+.previewBanner[data-status="failed"],
+.validationIssues,
+.studioStateMark {
+  border-color: rgb(250 66 62 / 34%);
+  color: var(--studio-red);
+  background: var(--studio-red-soft);
+}
+
+.readonlyBanner {
+  border-color: rgb(173 123 249 / 34%);
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+}
+
+.warningStrip,
+.mcpCardEnabled {
+  border-color: rgb(230 170 74 / 36%);
+  color: var(--studio-amber);
+  background: var(--studio-amber-soft);
+}
+
+.previewBanner,
+.previewBanner[data-status="ready"] {
+  border-color: rgb(51 156 255 / 34%);
+  background: var(--studio-panel-subtle);
+  box-shadow: inset 3px 0 0 var(--studio-green);
+}
+
+.codeEditor {
+  border-color: var(--studio-line);
+  color: #d8d8d8;
+  background: #101010;
+  caret-color: var(--studio-green);
+  font-family: var(--codex-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.codeEditor::selection {
+  color: var(--studio-ink);
+  background: rgb(51 156 255 / 34%);
+}
+
+.promptEditorLabel,
+.contractFacts dl div {
+  border-color: var(--studio-line);
+}
+
+.orchestrationFanout::before,
+.subagentNode::before,
+.backgroundMode > span,
+.switchVisual {
+  background: var(--studio-line-strong);
+}
+
+.backgroundMode > span i,
+.switchVisual i,
+.toolCheck {
+  color: #07111a;
+  background: var(--studio-ink);
+}
+
+.orchestrationFanout i {
+  border-color: var(--studio-line-strong);
+  background: var(--studio-panel);
+}
+
+.agentMonogram,
+.publicationBadge,
+.checkButton,
+.previewButton,
+.conflictBanner button,
+.routeCardActive,
+.promptFileMark,
+.leadAgentCard,
+.agentIdentityMark,
+.orchestrationFanout i,
+.subagentNode,
+.addSubagentButton,
+.isolationCard,
+.toolCardEnabled,
+.mcpCardEnabled,
+.deploymentHistory article > button,
+.nodeIndex,
+.validationReady,
+.validationIssues,
+.studioStateCard,
+.studioStateActions a {
+  border-color: var(--studio-line-strong);
+}
+
+.checkButton,
+.leadAgentCard,
+.isolationCard,
+.toolCardEnabled,
+.nodeIndex[data-state="ready"],
+.validationReady {
+  border-color: rgb(51 156 255 / 38%);
+}
+
+.previewButton,
+.routeCardActive,
+.subagentNode,
+.addSubagentButton,
+.nodeIndex[data-state="configured"] {
+  border-color: rgb(173 123 249 / 40%);
+}
+
+.conflictBanner button,
+.subagentEditor > header button:hover,
+.validationIssues,
+.nodeIndex[data-state="blocked"] {
+  border-color: rgb(250 66 62 / 40%);
+}
+
+.warningStrip,
+.mcpCardEnabled {
+  border-color: rgb(230 170 74 / 42%);
+}
+
+.secondaryButton,
+.promptEditorActions button,
+.skillHeader button,
+.evalArtifacts button,
+.deploymentHistory article > button,
+.studioStateActions a {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink-soft, #d6d6d6);
+}
+
+.secondaryButton:hover,
+.promptEditorActions button:hover,
+.skillHeader button:hover,
+.evalArtifacts button:hover,
+.deploymentHistory article > button:hover,
+.studioStateActions a:hover {
+  border-color: rgb(51 156 255 / 40%);
+  color: var(--studio-ink);
+  background: var(--studio-green-soft);
+}
+
+.checkButton {
+  color: var(--codex-success, #40c977);
+  background: var(--codex-success-soft, rgb(64 201 119 / 13%));
+}
+
+.previewButton {
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+}
+
+.publishButton,
+.promptEditorActions button:last-child,
+.evalControlActions button:last-child,
+.studioStateActions button {
+  border-color: var(--studio-green);
+  color: #07111a;
+  background: var(--studio-green);
+  box-shadow: 0 10px 28px rgb(51 156 255 / 16%);
+}
+
+.publishButton:hover,
+.promptEditorActions button:last-child:hover,
+.evalControlActions button:last-child:hover,
+.studioStateActions button:hover {
+  border-color: var(--codex-accent-hover, #5aafff);
+  background: var(--codex-accent-hover, #5aafff);
+}
+
+.publishButton:disabled {
+  border-color: var(--studio-line);
+  color: var(--studio-faint);
+  background: var(--studio-panel-subtle);
+  box-shadow: none;
+}
+
+.agentRoleBadge,
+.toolCheck {
+  color: #07111a;
+  background: var(--studio-green);
+}
+
+.skillHeader,
+.skillFileCard,
+.subagentNode,
+.addSubagentButton {
+  color: var(--studio-ink);
+}
+
+.qualityScoreGrid article > code,
+.qualityAlerts a,
+.deploymentControlPlane > header em,
+.studioStateMark[data-tone="loading"] {
+  color: var(--studio-green);
+}
+
+.qualityScoreGrid article[data-value="low"] > code,
+.qualityAlerts article > span,
+.deploymentHistory article[data-status="failed"] > span,
+.conflictBanner,
+.conflictBanner span,
+.conflictBanner button,
+.previewBanner[data-status="failed"],
+.preflightDisclosure li[data-status="timed_out"] {
+  color: var(--studio-red);
+}
+
+.warningStrip {
+  color: var(--studio-amber);
+}
+
+.readonlyBanner {
+  color: var(--studio-violet);
+}
+
+.deploymentHistory article > button[data-active="true"] {
+  border-color: var(--studio-green);
+  color: #07111a;
+  background: var(--studio-green);
+}
+
+.studioStateShell {
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface, #181818);
+}
+
+.studioStateCard {
+  border-color: var(--codex-line-strong, #444444);
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface-raised, #242424);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 42%);
+}
+
+.studioStateCard p,
+.studioStateCard code {
+  color: var(--codex-muted, #a1a1a1);
+}
+
+.studioStateCard code {
+  background: #151515;
+}
+
+.themeToggle {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  margin-left: auto;
+  padding: 3px;
+}
+
+.themeToggle :global(.theme-toggle-label) {
+  display: none;
+}
+
+:global(html[data-color-mode="light"]) .brandMark {
+  border-color: #303030;
+  color: #ffffff;
+  background: #202020;
+}
+
+:global(html[data-color-mode="light"]) .contractRail {
+  background: #f1f1f1;
+}
+
+:global(html[data-color-mode="light"]) .workspaceTab:hover,
+:global(html[data-color-mode="light"]) .agentRow:hover,
+:global(html[data-color-mode="light"]) .agentSearch input {
+  background: rgb(255 255 255 / 72%);
+}
+
+:global(html[data-color-mode="light"]) .backgroundMode > span i,
+:global(html[data-color-mode="light"]) .switchVisual i {
+  color: #ffffff;
+}
+
+:global(html[data-color-mode="light"]) .studioStateCard code {
+  color: var(--studio-muted);
+  background: var(--studio-panel-subtle);
+}
+
+:global(html[data-color-mode="light"]) .field input,
+:global(html[data-color-mode="light"]) .field textarea,
+:global(html[data-color-mode="light"]) .field select,
+:global(html[data-color-mode="light"]) .fieldWide input,
+:global(html[data-color-mode="light"]) .fieldWide textarea,
+:global(html[data-color-mode="light"]) .fieldWide select,
+:global(html[data-color-mode="light"]) .skillFileCard textarea {
+  background: var(--studio-panel);
+}
+
+@media (max-width: 900px) {
+  .agentRail {
+    background: rgb(21 21 21 / 98%);
+    backdrop-filter: blur(18px);
+  }
+
+  .sectionNav {
+    background: rgb(24 24 24 / 94%);
+    backdrop-filter: blur(16px);
   }
 }

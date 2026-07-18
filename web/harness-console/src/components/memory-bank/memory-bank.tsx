@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { type MemoryEntry, type MemoryPolicy, memoryClient } from "../../lib/memory-client";
+import { ThemeToggle } from "../theme-toggle";
 import styles from "./memory-bank.module.css";
 
 const STATUS = { pending: "待确认", active: "使用中", rejected: "已拒绝", deleted: "已删除", expired: "已过期" } as const;
@@ -86,8 +87,8 @@ export function MemoryBank() {
   }
   const counts = useMemo(() => ({ active: entries.filter((item) => item.status === "active").length, pending: entries.filter((item) => item.status === "pending").length, agents: new Set(entries.map((item) => item.agentName)).size }), [entries]);
 
-  return <main className={styles.shell}>
-    <header className={styles.topbar}><Link className={styles.brand} href="/"><span>H</span><div><strong>智能任务助手</strong><small>Agent Harness</small></div></Link><Link className={styles.back} href="/settings">返回设置</Link></header>
+  return <main className={styles.shell} id="main-content">
+    <header className={styles.topbar}><Link className={styles.brand} href="/"><span>H</span><div><strong>智能任务助手</strong><small>Agent Harness</small></div></Link><div className={styles.topbarActions}><ThemeToggle className={styles.themeToggle}/><Link className={styles.back} href="/settings">返回设置</Link></div></header>
     <div className={styles.frame}>
       <header className={styles.hero}><div><p>Managed memory ledger</p><h1>你决定智能体记住什么</h1><span>智能体只能提出记忆建议。默认逐条确认；敏感内容不会因为开启自动保存而绕过确认，密钥和提示注入内容始终拒绝保存。</span></div><div className={styles.scope}><label htmlFor="memory-agent">当前智能体</label><input id="memory-agent" value={agentName} placeholder="例如 public-opinion-agent" onChange={(event) => setAgentName(event.target.value)} onBlur={() => void load()}/><small>输入名称并移开焦点，查看该智能体的记忆与策略。</small></div></header>
       {error && <p className={styles.alert} role="alert">{error}</p>}{notice && <p className={`${styles.alert} ${styles.notice}`} role="status">{notice}</p>}

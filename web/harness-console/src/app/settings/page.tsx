@@ -2,6 +2,7 @@
 
 import { type FormEvent, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
+import { ThemeToggle } from "../../components/theme-toggle";
 
 const ROLE_LABELS = {
   owner: "所有者",
@@ -94,13 +95,16 @@ function SettingsContent() {
   }
 
   return (
-    <main className="settings-shell">
+    <main className="settings-shell" id="main-content">
       <header className="settings-header">
         <a className="settings-brand" href="/" aria-label="返回智能任务助手">
           <span className="brand-mark" aria-hidden="true">H</span>
           <span><strong>智能任务助手</strong><small>Agent Harness</small></span>
         </a>
-        <a className="settings-back" href="/">返回工作台</a>
+        <div className="settings-header-actions">
+          <ThemeToggle />
+          <a className="settings-back" href="/">返回工作台</a>
+        </div>
       </header>
 
       <div className="settings-layout">

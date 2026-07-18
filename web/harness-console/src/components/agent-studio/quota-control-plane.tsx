@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth-provider";
+import { ThemeToggle } from "../theme-toggle";
 import {
   studioClient,
   type QuotaResource,
@@ -85,7 +86,7 @@ export function QuotaControlPlane() {
   }
 
   if (!usage || !globalPolicy) {
-    return <main className={styles.state} aria-busy={!error}><strong>{error ? "无法读取使用量" : "正在读取租户容量"}</strong><span>{error ?? "汇总准入计数器与活动 reservation…"}</span>{error && <button onClick={() => void load()}>重新加载</button>}</main>;
+    return <main className={styles.state} id="main-content" aria-busy={!error}><strong>{error ? "无法读取使用量" : "正在读取租户容量"}</strong><span>{error ?? "汇总准入计数器与活动 reservation…"}</span>{error && <button onClick={() => void load()}>重新加载</button>}</main>;
   }
 
   const counters = new Map<string, StudioQuotaUsage["counters"][number]>();
@@ -96,9 +97,9 @@ export function QuotaControlPlane() {
   }
 
   return (
-    <main className={styles.shell}>
+    <main className={styles.shell} id="main-content">
       <aside className={styles.rail}>
-        <div className={styles.brand}><span>H</span><div><strong>Agent Studio</strong><small>Harness control plane</small></div></div>
+        <div className={styles.brand}><span>H</span><div><strong>Agent Studio</strong><small>Harness control plane</small></div><ThemeToggle className={styles.themeToggle}/></div>
         <nav className={styles.tabs} aria-label="工作区">
           <Link href="/">任务</Link>
           <Link href="/studio/agents">智能体</Link>

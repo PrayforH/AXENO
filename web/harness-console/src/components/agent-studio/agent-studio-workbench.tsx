@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAuth } from "../auth-provider";
+import { ThemeToggle } from "../theme-toggle";
 import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
@@ -816,14 +817,14 @@ export function AgentStudioWorkbench() {
   }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
-    return <main className={styles.studioStateShell} aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
+    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>H</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
   }
   if (loadError) {
-    return <main className={styles.studioStateShell}><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
   }
 
   return (
-    <main className={styles.studioShell} data-studio-integration="api">
+    <main className={styles.studioShell} id="main-content" data-studio-integration="api">
       <aside className={styles.agentRail} aria-label="Agent 列表">
         <div className={styles.studioBrand}>
           <span className={styles.brandMark} aria-hidden="true">
@@ -833,6 +834,7 @@ export function AgentStudioWorkbench() {
             <strong>Agent Studio</strong>
             <span>Harness control plane</span>
           </div>
+          <ThemeToggle className={styles.themeToggle} />
         </div>
 
         <nav className={styles.workspaceTabs} aria-label="工作区">
