@@ -8,6 +8,13 @@ import remarkGfm from "remark-gfm";
 import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import { SourceLink } from "./source-link";
 
+export const codexStreamSmoothing = {
+  drainMs: 140,
+  maxCharIntervalMs: 4,
+  maxCharsPerFrame: 48,
+  minCommitMs: 16,
+} as const;
+
 function CodeHeader({ language, code }: CodeHeaderProps) {
   const [copied, setCopied] = useState(false);
 
@@ -45,6 +52,7 @@ function MarkdownTextImpl() {
     <MarkdownTextPrimitive
       className="aui-md"
       remarkPlugins={[remarkGfm]}
+      smooth={codexStreamSmoothing}
       components={{ CodeHeader, a: SourceLink, table: ScrollableTable }}
     />
   );

@@ -4795,13 +4795,6 @@ textarea:not(.aui-composer-input):focus-visible,
   max-width: 100%;
 }
 
-.live-assistant-response {
-  width: 100%;
-  max-width: var(--aui-thread-max-width);
-  margin: 0 auto;
-  padding: 18px 0 6px;
-}
-
 .aui-table-scroll {
   width: 100%;
   max-width: 100%;

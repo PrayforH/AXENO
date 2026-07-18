@@ -224,6 +224,7 @@ describe("full-page agent workbench", () => {
     expect(markdown).toContain('aria-label="表格，可横向滚动"');
     expect(markdown).toContain("table: ScrollableTable");
     expect(markdown).not.toContain("defer");
+    expect(markdown).toContain("smooth={codexStreamSmoothing}");
     expect(styles).toMatch(
       /\.aui-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s,
     );

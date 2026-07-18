@@ -209,7 +209,7 @@ export function ActivitySummary({
     const timer = window.setInterval(tick, 1_000);
     return () => window.clearInterval(timer);
   }, [active, view.runId]);
-  const open = manuallyOpen ?? (active && !responseStarted);
+  const open = manuallyOpen ?? !responseStarted;
   const facts = ribbonFacts({
     ...view,
     elapsedMs: activeElapsedMs(view, now),
@@ -229,6 +229,7 @@ export function ActivitySummary({
       className={`execution-ribbon phase-${view.phase}`}
       aria-label={`执行进度 ${view.runId}`}
       data-run-id={view.runId}
+      data-response-started={responseStarted ? "true" : "false"}
       open={open}
     >
       <summary onClick={toggleDisclosure} aria-expanded={open}>

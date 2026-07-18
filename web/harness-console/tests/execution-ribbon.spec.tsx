@@ -108,7 +108,7 @@ describe("execution ribbon", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
     expect(html).toContain(
-      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" open="">',
+      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open="">',
     );
     expect(html).toContain("正在处理");
     expect(html).toContain('class="execution-state-mark"');
@@ -127,6 +127,23 @@ describe("execution ribbon", () => {
       '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" open',
     );
     expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("does not collapse a completed run before its response is mounted", () => {
+    const completed = runActivitySchema.parse({
+      ...activity,
+      status: "succeeded",
+    });
+    const waitingForResponse = renderToStaticMarkup(
+      <ActivitySummary activity={completed} />,
+    );
+    const responseMounted = renderToStaticMarkup(
+      <ActivitySummary activity={completed} responseStarted />,
+    );
+
+    expect(waitingForResponse).toContain('data-response-started="false" open');
+    expect(responseMounted).toContain('data-response-started="true"');
+    expect(responseMounted).not.toContain('data-response-started="true" open');
   });
 
   it("interleaves visible model commentary with actions but excludes the final answer", () => {
@@ -419,7 +436,7 @@ describe("execution ribbon", () => {
       expect(html).toContain(label);
       if (phase === "waiting_approval") {
         expect(html).toContain(
-          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" open`,
+          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open`,
         );
       } else {
         expect(html).not.toContain(
