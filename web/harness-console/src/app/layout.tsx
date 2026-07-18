@@ -7,10 +7,10 @@ import "./codex-theme.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "Agent Harness",
-    template: "%s · Agent Harness",
+    default: "Agent Studio",
+    template: "%s · Agent Studio",
   },
-  description: "面向业务 Agent 的任务工作台",
+  description: "面向业务 Agent 的任务与控制工作台",
 };
 
 export const viewport: Viewport = {

@@ -167,8 +167,8 @@ export function TaskSidebar({
           <Link
             className="task-rail-studio"
             href="/studio/agents"
-            aria-label="智能体管理"
-            title="智能体管理"
+            aria-label="Agent Studio"
+            title="Agent Studio"
           >
             <StudioIcon />
           </Link>
@@ -199,7 +199,7 @@ export function TaskSidebar({
               </Link>
               <Link className="task-sidebar-tab" href="/studio/agents">
                 <StudioIcon />
-                <span>智能体</span>
+                <span>Agent Studio</span>
               </Link>
             </nav>
             <div className="task-sidebar-heading-actions">

@@ -11,8 +11,8 @@ const taskSidebar = readFileSync(
 
 describe("full-page agent workbench", () => {
   it("presents a user task workspace instead of an internal validation console", () => {
-    expect(page).toContain("Agent Harness");
-    expect(page).toContain("智能任务助手");
+    expect(page).toContain("Agent Studio");
+    expect(page).not.toContain("Agent Harness");
     expect(page).not.toContain('<span>新任务</span>');
     expect(page).toContain("运行详情");
     expect(page).not.toContain("交互验证台");
@@ -36,7 +36,7 @@ describe("full-page agent workbench", () => {
   it("exposes Agent Studio as a primary workspace tab", () => {
     expect(taskSidebar).toContain('aria-label="工作区"');
     expect(taskSidebar).toContain('href="/studio/agents"');
-    expect(taskSidebar).toContain("智能体");
+    expect(taskSidebar).toContain("Agent Studio");
     expect(taskSidebar).toContain('className="task-rail-studio"');
     expect(styles).toContain(".task-sidebar-tabs");
     expect(styles).toContain(".task-sidebar-tab.is-active");

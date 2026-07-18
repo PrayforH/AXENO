@@ -150,12 +150,12 @@ export default function Home() {
     <AuthProvider>
     <main className="console-shell" id="main-content">
       <header className="console-header">
-        <div className="brand-lockup" aria-label="智能任务助手">
+        <div className="brand-lockup" aria-label="Agent Studio">
           <span className="brand-mark" aria-hidden="true">
-            H
+            AS
           </span>
           <div>
-            <h1>Agent Harness</h1>
+            <h1>Agent Studio</h1>
             <p className="workspace-caption">智能任务工作台</p>
           </div>
         </div>

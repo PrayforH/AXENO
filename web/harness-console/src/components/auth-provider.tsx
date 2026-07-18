@@ -59,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (!value) {
     return (
       <main className="auth-loading" aria-busy="true" aria-label="正在验证登录状态">
-        <span className="auth-loading-mark">H</span>
+        <span className="auth-loading-mark">AS</span>
         <span>正在进入工作台…</span>
       </main>
     );

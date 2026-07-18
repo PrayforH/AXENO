@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth-provider";
-import { ThemeToggle } from "../theme-toggle";
+import { StudioSidebar } from "./studio-sidebar";
 import {
   studioClient,
   type QuotaResource,
@@ -98,17 +97,12 @@ export function QuotaControlPlane() {
 
   return (
     <main className={styles.shell} id="main-content">
-      <aside className={styles.rail}>
-        <div className={styles.brand}><span>H</span><div><strong>Agent Studio</strong><small>Harness control plane</small></div><ThemeToggle className={styles.themeToggle}/></div>
-        <nav className={styles.tabs} aria-label="工作区">
-          <Link href="/">任务</Link>
-          <Link href="/studio/agents">智能体</Link>
-          <Link href="/studio/usage" aria-current="page">用量</Link>
-          <Link href="/studio/data">数据</Link>
-        </nav>
+      <StudioSidebar
+        active="usage"
+        footer={<div className={styles.railFact}><span>策略版本</span><strong>r{globalPolicy.revision}</strong><small>{globalPolicy.updatedBy === "platform-default" ? "平台默认" : `由 ${globalPolicy.updatedBy} 更新`}</small></div>}
+      >
         <div className={styles.railCopy}><strong>容量与成本</strong><p>配额在 API 与 Worker 两条路径执行。页面展示的是控制面事实，不是估算值。</p></div>
-        <div className={styles.railFact}><span>策略版本</span><strong>r{globalPolicy.revision}</strong><small>{globalPolicy.updatedBy === "platform-default" ? "平台默认" : `由 ${globalPolicy.updatedBy} 更新`}</small></div>
-      </aside>
+      </StudioSidebar>
 
       <section className={styles.content}>
         <header className={styles.header}>
