@@ -1,7 +1,6 @@
 /* codex-theme-v1 -----------------------------------------------------------
-   Source palette:
-   surface #181818 · ink #ffffff · accent #339cff
-   diff added #40c977 · diff removed #fa423e · skill #ad7bf9
+   Dark: surface #181818 · ink #ffffff · accent #339cff · contrast 60
+   Light: surface #ffffff · ink #1a1c1f · accent #339cff · contrast 45
 */
 
 :root {
@@ -68,39 +67,39 @@
 
 html[data-color-mode="light"] {
   color-scheme: light;
-  --codex-surface: #f7f7f7;
-  --codex-surface-deep: #ececec;
-  --codex-surface-sidebar: #f1f1f1;
-  --codex-surface-subtle: #f0f0f0;
+  --codex-surface: #ffffff;
+  --codex-surface-deep: #eeeeee;
+  --codex-surface-sidebar: #f7f7f7;
+  --codex-surface-subtle: #f4f4f4;
   --codex-surface-raised: #ffffff;
-  --codex-surface-hover: #e9e9e9;
-  --codex-surface-active: #e1e1e1;
-  --codex-ink: #181818;
-  --codex-ink-soft: #3e3e3e;
-  --codex-muted: #676767;
-  --codex-faint: #8a8a8a;
-  --codex-line: #dedede;
-  --codex-line-strong: #c7c7c7;
-  --codex-accent: #1687e8;
-  --codex-accent-hover: #0876d1;
+  --codex-surface-hover: #f0f0f0;
+  --codex-surface-active: #e8e8e8;
+  --codex-ink: #1a1c1f;
+  --codex-ink-soft: #41454a;
+  --codex-muted: #656a70;
+  --codex-faint: #858b92;
+  --codex-line: #e0e0e0;
+  --codex-line-strong: #c9c9c9;
+  --codex-accent: #339cff;
+  --codex-accent-hover: #1687e8;
   --codex-accent-soft: rgb(51 156 255 / 13%);
   --codex-accent-faint: rgb(51 156 255 / 7%);
-  --codex-success: #16864a;
-  --codex-success-soft: rgb(64 201 119 / 13%);
-  --codex-danger: #cf302c;
-  --codex-danger-soft: rgb(250 66 62 / 10%);
-  --codex-skill: #7b4ac2;
-  --codex-skill-soft: rgb(173 123 249 / 13%);
+  --codex-success: #00a240;
+  --codex-success-soft: rgb(0 162 64 / 11%);
+  --codex-danger: #ba2623;
+  --codex-danger-soft: rgb(186 38 35 / 10%);
+  --codex-skill: #924ff7;
+  --codex-skill-soft: rgb(146 79 247 / 12%);
   --codex-warning: #996510;
   --codex-warning-soft: rgb(230 170 74 / 14%);
   --codex-shadow: 0 18px 54px rgb(27 31 35 / 14%);
   --codex-shadow-soft: 0 8px 24px rgb(27 31 35 / 9%);
-  --codex-header-bg: rgb(247 247 247 / 92%);
+  --codex-header-bg: rgb(255 255 255 / 92%);
   --codex-panel-solid: #ffffff;
   --codex-field: #ffffff;
-  --codex-inset: #f3f3f3;
-  --codex-thread-bg: #f7f7f7;
-  --codex-thread-footer: rgb(247 247 247 / 97%);
+  --codex-inset: #f7f7f7;
+  --codex-thread-bg: #ffffff;
+  --codex-thread-footer: rgb(255 255 255 / 97%);
   --codex-code-inline: #edf4fa;
   --codex-code-surface: #171717;
   --codex-on-accent: #07111a;
