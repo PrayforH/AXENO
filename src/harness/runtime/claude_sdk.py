@@ -390,6 +390,7 @@ class ClaudeSdkRuntime:
                         name: snapshot.manifest.spec.permissions.policy
                         for name, snapshot in subagent_snapshots.items()
                     },
+                    result_trust_by_tool=resolved_tools.result_trust,
                 )
                 if self._tool_gate is not None
                 else None

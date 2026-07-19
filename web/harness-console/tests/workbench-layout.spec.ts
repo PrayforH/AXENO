@@ -41,18 +41,19 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("uses the same four workspace destinations in both sidebars", () => {
+  it("uses the same focused workspace destinations in both sidebars", () => {
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
-      ["/studio/usage", "用量"],
       ["/studio/data", "数据"],
     ]) {
       expect(workspaceNavigation).toContain(`href: "${href}"`);
       expect(workspaceNavigation).toContain(`label: "${label}"`);
     }
+    expect(workspaceNavigation).not.toContain('href: "/studio/usage"');
+    expect(workspaceNavigation).not.toContain('label: "用量"');
     expect(workspaceNavigationStyles).toContain(".navigationActive");
     expect(workspaceNavigationStyles).toContain(
       '[data-workspace-navigation="collapsed"]',

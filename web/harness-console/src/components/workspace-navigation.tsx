@@ -10,7 +10,6 @@ export const workspaceItems: ReadonlyArray<{
 }> = [
   { id: "tasks", href: "/", label: "任务" },
   { id: "agents", href: "/studio/agents", label: "智能体" },
-  { id: "usage", href: "/studio/usage", label: "用量" },
   { id: "data", href: "/studio/data", label: "数据" },
 ];
 

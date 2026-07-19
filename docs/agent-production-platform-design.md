@@ -734,7 +734,24 @@ Agent Builder 只能选择平台暴露的 Execution Profile，不能关闭隔离
 
 审批不得展示模型网关 Token、MCP Secret 或完整敏感参数。
 
-### 14.3 审批恢复
+### 14.3 上下文信任状态
+
+**[已实现]** 工具注册可以为允许的 MCP 工具声明结果信任级别：
+
+- `safe`：受信内部工具结果，不收紧后续策略；
+- `sensitive`：含受保护业务数据，后续副作用工具需要更严格策略；
+- `untrusted`：网页、邮件或用户可控第三方内容，视为可能包含提示注入。
+
+一次 Run 从 `safe` 开始，只能单调提升为 `sensitive` 或 `untrusted`。只有成功的
+PostToolUse 才能改变状态；失败或被拒绝的调用不得污染上下文。Lead 与 Sub Agent
+共享同一 Run 信任状态，委派不能重置信任边界。
+
+后续每次 PreToolUse 都把服务端维护的信任状态加入 `PolicyContext`。默认策略在
+`untrusted` 上下文中拒绝长期记忆写入，在 `sensitive` 上下文中要求审批；Bash
+仍保持审批。`context.trust.changed` 事件只记录调用 ID、工具名和前后等级，不保存
+原始工具结果。
+
+### 14.4 审批恢复
 
 - Approval 与 Run 均持久化；
 - Run 进入 `waiting_approval` 后可以跨页面刷新；

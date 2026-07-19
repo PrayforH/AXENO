@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from types import MappingProxyType
 from typing import Any, cast
@@ -17,6 +17,7 @@ from claude_agent_sdk import (
 
 from harness.core.manifest import AgentManifest
 from harness.core.models import ExecutionIdentity
+from harness.policy.models import ContextTrust
 from harness.runtime.mcp_credentials import (
     DynamicMcpCredentialProvider,
     EmptyMcpCredentialProvider,
@@ -47,6 +48,7 @@ class McpServerRegistration:
     credential_environment: tuple[tuple[str, str], ...] = ()
     credential_query_parameters: tuple[tuple[str, str], ...] = ()
     preflight_smoke: McpSmokeCheck | None = None
+    result_trust: ContextTrust = ContextTrust.UNTRUSTED
 
     def __post_init__(self) -> None:
         public_config = cast(dict[str, object], self.config)
@@ -69,6 +71,9 @@ class ResolvedTools:
     mcp_servers: Mapping[str, McpServerConfig]
     allowed_tools: tuple[str, ...]
     mcp_smokes: Mapping[str, McpSmokeCheck]
+    result_trust: Mapping[str, ContextTrust] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     sensitive_names: frozenset[str] = frozenset()
     sensitive_values: frozenset[str] = frozenset()
 
@@ -95,6 +100,7 @@ class ToolResolver:
         mcp_servers: dict[str, McpServerConfig] = {}
         allowed_tools: list[str] = []
         mcp_smokes: dict[str, McpSmokeCheck] = {}
+        result_trust: dict[str, ContextTrust] = {}
         sensitive_names: set[str] = set()
         sensitive_values: set[str] = set()
 
@@ -192,6 +198,7 @@ class ToolResolver:
             for allowed_tool in registration.allowed_tools:
                 if allowed_tool not in allowed_tools:
                     allowed_tools.append(allowed_tool)
+                result_trust[allowed_tool] = registration.result_trust
 
         self._assert_unique_python_tool_names(python_tools)
         if python_tools:
@@ -208,6 +215,7 @@ class ToolResolver:
             mcp_servers=MappingProxyType(mcp_servers),
             allowed_tools=tuple(allowed_tools),
             mcp_smokes=MappingProxyType(mcp_smokes),
+            result_trust=MappingProxyType(result_trust),
             sensitive_names=frozenset(sensitive_names),
             sensitive_values=frozenset(sensitive_values),
         )

@@ -7,6 +7,7 @@ from pydantic import SecretStr
 
 from harness.core.manifest import AgentManifest
 from harness.core.models import ExecutionIdentity
+from harness.policy.models import ContextTrust
 from harness.runtime.mcp_credentials import (
     DynamicMcpCredentialProvider,
     McpCredentialError,
@@ -72,6 +73,7 @@ async def test_default_resolver_injects_tavily_query_key_and_exact_allowlist() -
     }
     assert resolved.sensitive_names == frozenset({"tavilyApiKey"})
     assert resolved.sensitive_values == frozenset({"test-key"})
+    assert set(resolved.result_trust.values()) == {ContextTrust.UNTRUSTED}
 
 
 @pytest.mark.asyncio

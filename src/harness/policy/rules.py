@@ -2,7 +2,13 @@
 
 from fnmatch import fnmatch
 
-from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult, PolicyRule
+from harness.policy.models import (
+    ContextTrust,
+    PolicyContext,
+    PolicyDecision,
+    PolicyResult,
+    PolicyRule,
+)
 from harness.sandbox.base import SandboxIsolation
 
 _DECISION_PRECEDENCE = {
@@ -29,6 +35,11 @@ def _matches(rule: PolicyRule, context: PolicyContext) -> bool:
         and rule.sandbox_isolation is not context.sandbox_isolation
     ):
         return False
+    if (
+        rule.context_trust is not None
+        and rule.context_trust is not context.context_trust
+    ):
+        return False
     if rule.path_glob is not None and not fnmatch(_path(context), rule.path_glob):
         return False
     if rule.command_contains is not None:
@@ -48,6 +59,7 @@ def _specificity(rule: PolicyRule) -> int:
             rule.path_glob,
             rule.command_contains,
             rule.sandbox_isolation,
+            rule.context_trust,
         )
     )
 
@@ -87,6 +99,20 @@ def default_policy_rules() -> list[PolicyRule]:
         PolicyRule(name="grep", tool="Grep", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate", tool="Task", decision=PolicyDecision.ALLOW),
         PolicyRule(name="delegate-agent", tool="Agent", decision=PolicyDecision.ALLOW),
+        PolicyRule(
+            name="untrusted-memory-deny",
+            tool="mcp__harness-memory__propose_memory",
+            context_trust=ContextTrust.UNTRUSTED,
+            decision=PolicyDecision.DENY,
+            priority=100,
+        ),
+        PolicyRule(
+            name="sensitive-memory-review",
+            tool="mcp__harness-memory__propose_memory",
+            context_trust=ContextTrust.SENSITIVE,
+            decision=PolicyDecision.ASK,
+            priority=100,
+        ),
         PolicyRule(
             name="harness-memory-update",
             tool="mcp__harness-memory__propose_memory",

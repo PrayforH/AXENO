@@ -24,7 +24,12 @@ from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.core.models import ApprovalStatus
 from harness.observability.provider import Observability
-from harness.policy.models import PolicyContext, PolicyDecision, PolicyResult
+from harness.policy.models import (
+    ContextTrust,
+    PolicyContext,
+    PolicyDecision,
+    PolicyResult,
+)
 from harness.policy.profiles import PolicyProfileRegistry
 from harness.policy.rules import PolicyEngine
 from harness.quota.models import QuotaResource
@@ -47,6 +52,7 @@ class ToolGate(Protocol):
         *,
         policy_id: str | None = None,
         subagent_policy_ids: Mapping[str, str] | None = None,
+        result_trust_by_tool: Mapping[str, ContextTrust] | None = None,
     ) -> dict[HookEvent, list[HookMatcher]]: ...
 
 
@@ -62,6 +68,12 @@ _APPROVAL_ARGUMENT_KEYS = (
     "pattern",
     "glob",
 )
+
+_TRUST_PRECEDENCE = {
+    ContextTrust.SAFE: 0,
+    ContextTrust.SENSITIVE: 1,
+    ContextTrust.UNTRUSTED: 2,
+}
 
 
 def _approval_argument_summary(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -201,6 +213,7 @@ class SdkToolGate:
         *,
         policy_id: str | None = None,
         subagent_policy_ids: Mapping[str, str] | None = None,
+        result_trust_by_tool: Mapping[str, ContextTrust] | None = None,
     ) -> dict[HookEvent, list[HookMatcher]]:
         active_policy_id = policy_id or "local-standard"
         policy = (
@@ -221,6 +234,9 @@ class SdkToolGate:
         implicit_deny = PolicyEngine([])
         file_capabilities = _RunFileCapabilities(context)
         tool_traces: dict[str, tuple[int, str, dict[str, Any], str]] = {}
+        current_context_trust = ContextTrust.SAFE
+        pending_result_trust: dict[str, tuple[str, ContextTrust]] = {}
+        declared_result_trust = dict(result_trust_by_tool or {})
 
         def finish_tool_trace(
             hook_input: PostToolUseHookInput | PostToolUseFailureHookInput,
@@ -280,6 +296,15 @@ class SdkToolGate:
                     selected_policy_id = "unknown-subagent"
                     selected_policy = implicit_deny
             canonical_name = canonical_tool_name(typed_input["tool_name"])
+            result_trust = declared_result_trust.get(
+                typed_input["tool_name"],
+                declared_result_trust.get(canonical_name, ContextTrust.SAFE),
+            )
+            if result_trust is not ContextTrust.SAFE:
+                pending_result_trust[typed_input["tool_use_id"]] = (
+                    canonical_name,
+                    result_trust,
+                )
             tool_traces[typed_input["tool_use_id"]] = (
                 time.time_ns(),
                 canonical_name,
@@ -296,6 +321,7 @@ class SdkToolGate:
                 policy_id=selected_policy_id,
                 file_capabilities=file_capabilities,
                 allowed_subagent_aliases=frozenset(subagent_policies),
+                context_trust=current_context_trust,
             )
             specific = cast(dict[str, Any], output).get("hookSpecificOutput", {})
             decision = (
@@ -304,6 +330,7 @@ class SdkToolGate:
                 else ""
             )
             if decision == "deny":
+                pending_result_trust.pop(typed_input["tool_use_id"], None)
                 denied = cast(
                     PostToolUseFailureHookInput,
                     {
@@ -340,8 +367,31 @@ class SdkToolGate:
             _tool_use_id: str | None,
             _hook_context: HookContext,
         ) -> HookJSONOutput:
+            nonlocal current_context_trust
+            typed_input = cast(PostToolUseHookInput, hook_input)
+            pending = pending_result_trust.pop(typed_input["tool_use_id"], None)
+            if (
+                pending is not None
+                and _TRUST_PRECEDENCE[pending[1]]
+                > _TRUST_PRECEDENCE[current_context_trust]
+            ):
+                tool_name, next_trust = pending
+                previous_trust = current_context_trust
+                current_context_trust = next_trust
+                await self._events.append(
+                    tenant_id=context.run.tenant_id,
+                    run_id=context.run.run_id,
+                    session_id=context.run.session_id,
+                    event_type="context.trust.changed",
+                    payload={
+                        "tool_call_id": typed_input["tool_use_id"],
+                        "tool_name": tool_name,
+                        "previous": previous_trust.value,
+                        "current": current_context_trust.value,
+                    },
+                )
             finish_tool_trace(
-                cast(PostToolUseHookInput, hook_input),
+                typed_input,
                 status="succeeded",
             )
             return cast(HookJSONOutput, {})
@@ -352,6 +402,7 @@ class SdkToolGate:
             _hook_context: HookContext,
         ) -> HookJSONOutput:
             typed_input = cast(PostToolUseFailureHookInput, hook_input)
+            pending_result_trust.pop(typed_input["tool_use_id"], None)
             finish_tool_trace(
                 typed_input,
                 status="failed",
@@ -403,6 +454,7 @@ class SdkToolGate:
         policy_id: str,
         file_capabilities: _RunFileCapabilities,
         allowed_subagent_aliases: frozenset[str] = frozenset(),
+        context_trust: ContextTrust = ContextTrust.SAFE,
     ) -> SyncHookJSONOutput:
         raw_tool_name = hook_input["tool_name"]
         tool_name = canonical_tool_name(raw_tool_name)
@@ -414,6 +466,7 @@ class SdkToolGate:
             "arguments": arguments,
             "policy_checked": True,
             "policy_profile": policy_id,
+            "context_trust": context_trust.value,
             "message_id": context.assistant_message_id,
             "sandbox": {
                 "provider": context.sandbox_provider,
@@ -482,6 +535,7 @@ class SdkToolGate:
                     tool_name=tool_name,
                     arguments=arguments,
                     sandbox_isolation=context.sandbox_isolation,
+                    context_trust=context_trust,
                 )
             )
         )

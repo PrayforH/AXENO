@@ -2,7 +2,7 @@
 
 import { type FormEvent, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
-import { ThemeToggle } from "../../components/theme-toggle";
+import { ThemeSelector } from "../../components/theme-toggle";
 
 const ROLE_LABELS = {
   owner: "所有者",
@@ -102,7 +102,6 @@ function SettingsContent() {
           <span><strong>Agent Studio</strong><small>智能任务工作台</small></span>
         </a>
         <div className="settings-header-actions">
-          <ThemeToggle />
           <a className="settings-back" href="/">返回工作台</a>
         </div>
       </header>
@@ -111,6 +110,7 @@ function SettingsContent() {
         <aside className="settings-index" aria-label="设置目录">
           <p>设置</p>
           <a href="#profile">个人资料</a>
+          <a href="#appearance">外观</a>
           <a href="#security">账户安全</a>
           <a href="#data">我的数据</a>
           <a href="#memory">长期记忆</a>
@@ -148,6 +148,20 @@ function SettingsContent() {
                 <button type="submit" disabled={profilePending}>{profilePending ? "正在保存…" : "保存资料"}</button>
               </div>
             </form>
+          </section>
+
+          <section className="settings-section" id="appearance">
+            <div className="settings-section-copy">
+              <h2>外观</h2>
+              <p>整个 Agent Studio 使用同一主题偏好。</p>
+            </div>
+            <div className="settings-form settings-appearance">
+              <div>
+                <strong>界面主题</strong>
+                <small>选择后立即应用，并在刷新和跨页面导航后保持一致。</small>
+              </div>
+              <ThemeSelector />
+            </div>
           </section>
 
           <section className="settings-section" id="security">

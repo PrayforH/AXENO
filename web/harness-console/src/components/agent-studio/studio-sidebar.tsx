@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { type ReactNode, useEffect, useState } from "react";
 import { AccountMenu } from "../account-menu";
-import { ThemeToggle } from "../theme-toggle";
 import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
@@ -78,7 +77,6 @@ export function StudioSidebar({
       <div className={styles.toolbar}>
         {!collapsed && <span>工作区</span>}
         <div className={styles.toolbarActions}>
-          <ThemeToggle className={styles.themeToggle} />
           <button
             className={styles.collapseButton}
             type="button"

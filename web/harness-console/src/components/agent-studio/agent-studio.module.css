@@ -4185,18 +4185,6 @@
   background: #151515;
 }
 
-.themeToggle {
-  width: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  margin-left: auto;
-  padding: 3px;
-}
-
-.themeToggle :global(.theme-toggle-label) {
-  display: none;
-}
-
 :global(html[data-color-mode="light"]) .brandMark {
   border-color: #303030;
   color: #ffffff;

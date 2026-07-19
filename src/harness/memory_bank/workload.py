@@ -194,6 +194,7 @@ class RemoteMemoryMcpProvider:
             mcp_servers=MappingProxyType(servers),
             allowed_tools=allowed,
             mcp_smokes=tools.mcp_smokes,
+            result_trust=tools.result_trust,
             sensitive_names=tools.sensitive_names.union({"Authorization"}),
             sensitive_values=tools.sensitive_values.union({token, f"Bearer {token}"}),
         )

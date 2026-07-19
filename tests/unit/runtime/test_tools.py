@@ -4,6 +4,7 @@ import pytest
 from claude_agent_sdk import McpSdkServerConfig, McpServerConfig
 
 from harness.core.manifest import AgentManifest
+from harness.policy.models import ContextTrust
 from harness.runtime.tools import McpServerRegistration, ToolResolutionError, ToolResolver
 
 
@@ -67,6 +68,9 @@ async def test_resolves_external_mcp_from_server_owned_registry() -> None:
 
     assert resolved.mcp_servers == {"crm-prod": config}
     assert resolved.allowed_tools == ("mcp__crm-prod__search",)
+    assert resolved.result_trust == {
+        "mcp__crm-prod__search": ContextTrust.UNTRUSTED
+    }
 
 
 @pytest.mark.parametrize(

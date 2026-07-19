@@ -20,6 +20,15 @@ const studioSidebar = readFileSync(
 );
 const workbench = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
+const login = readFileSync(join(process.cwd(), "src/app/login/page.tsx"), "utf8");
+const memory = readFileSync(
+  join(process.cwd(), "src/components/memory-bank/memory-bank.tsx"),
+  "utf8",
+);
+const themeSelector = readFileSync(
+  join(process.cwd(), "src/components/theme-toggle.tsx"),
+  "utf8",
+);
 
 describe("account settings", () => {
   it("keeps settings and logout available from the account menu", () => {
@@ -46,6 +55,22 @@ describe("account settings", () => {
     expect(settings).toContain('fetch("/api/auth/profile"');
     expect(settings).toContain('fetch("/api/auth/password"');
     expect(settings).toContain("修改密码后会撤销所有刷新会话");
+  });
+
+  it("keeps the only theme control in account appearance settings", () => {
+    expect(settings).toContain('href="#appearance"');
+    expect(settings).toContain('id="appearance"');
+    expect(settings).toContain("<ThemeSelector />");
+    expect(themeSelector).toContain('"浅色"');
+    expect(themeSelector).toContain('"深色"');
+    expect(workbench).not.toContain("ThemeSelector");
+    expect(workbench).not.toContain("ThemeToggle");
+    expect(studioSidebar).not.toContain("ThemeSelector");
+    expect(studioSidebar).not.toContain("ThemeToggle");
+    expect(login).not.toContain("ThemeSelector");
+    expect(login).not.toContain("ThemeToggle");
+    expect(memory).not.toContain("ThemeSelector");
+    expect(memory).not.toContain("ThemeToggle");
   });
 
   it("keeps the settings page responsive and visually restrained", () => {

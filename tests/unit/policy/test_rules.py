@@ -1,6 +1,6 @@
 import pytest
 
-from harness.policy.models import PolicyContext, PolicyDecision, PolicyRule
+from harness.policy.models import ContextTrust, PolicyContext, PolicyDecision, PolicyRule
 from harness.policy.rules import PolicyEngine, default_policy_rules
 from harness.sandbox.base import SandboxIsolation
 
@@ -130,6 +130,31 @@ def test_isolation_rule_is_more_specific_than_generic_tool_rule() -> None:
 
     assert result.rule_name == "container-write"
     assert result.decision is PolicyDecision.ALLOW
+
+
+@pytest.mark.parametrize(
+    ("trust", "expected"),
+    [
+        (ContextTrust.SAFE, PolicyDecision.ALLOW),
+        (ContextTrust.SENSITIVE, PolicyDecision.ASK),
+        (ContextTrust.UNTRUSTED, PolicyDecision.DENY),
+    ],
+)
+def test_memory_policy_tightens_after_context_crosses_a_trust_boundary(
+    trust: ContextTrust,
+    expected: PolicyDecision,
+) -> None:
+    result = PolicyEngine(default_policy_rules()).evaluate(
+        PolicyContext(
+            tenant_id="tenant-a",
+            agent_name="echo-agent",
+            tool_name="mcp__harness-memory__propose_memory",
+            arguments={"content": "remember this"},
+            context_trust=trust,
+        )
+    )
+
+    assert result.decision is expected
 
 
 def test_more_specific_rule_wins_then_deny_wins_equal_precedence() -> None:

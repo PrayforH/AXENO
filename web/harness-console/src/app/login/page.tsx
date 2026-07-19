@@ -1,7 +1,6 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import { ThemeToggle } from "../../components/theme-toggle";
 
 type AuthConfig = {
   registration_enabled: boolean;
@@ -91,7 +90,6 @@ export default function LoginPage() {
       </section>
 
       <section className="login-panel" aria-label={mode === "login" ? "登录" : "创建账户"}>
-        <ThemeToggle className="login-theme-toggle" />
         <div className="login-card">
           <header>
             <p>{mode === "login" ? "欢迎回来" : "开始使用"}</p>

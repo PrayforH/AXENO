@@ -49,8 +49,6 @@
 .state{color:var(--ink);background:radial-gradient(circle at 50% 36%,rgb(51 156 255 / 9%),transparent 22rem),var(--paper)}
 .state span{color:var(--muted)}
 
-.themeToggle{width:32px;min-width:32px;min-height:32px;margin-left:auto;padding:3px}
-.themeToggle :global(.theme-toggle-label){display:none}
 .input,.holds input,.holds select{background:var(--codex-field,#171717)}
 :global(html[data-color-mode="light"]) .brand>span{border-color:#303030;color:#fff;background:#202020}
 :global(html[data-color-mode="light"]) .tabs a:hover{background:rgb(255 255 255 / 72%)}

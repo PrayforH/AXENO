@@ -7,7 +7,6 @@ import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
 import { DeveloperDrawer } from "../components/developer-drawer";
 import { TaskAgentSwitcher } from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
-import { ThemeToggle } from "../components/theme-toggle";
 import {
   bindThreadAgent,
   createNewThread,
@@ -168,7 +167,6 @@ export default function Home() {
         />
 
         <div className="header-actions">
-          <ThemeToggle />
           <button
             className="icon-button"
             type="button"

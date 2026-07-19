@@ -38,10 +38,7 @@
 .state{color:var(--ink);background:radial-gradient(circle at 50% 36%,rgb(51 156 255 / 9%),transparent 22rem),var(--paper)}
 
 .topbarActions{display:flex;align-items:center;gap:8px}
-.themeToggle{flex:0 0 auto}
 .topbar{background:var(--codex-header-bg,rgb(24 24 24 / 84%))}
 .scope input,.edit textarea,.retention input{background:var(--codex-field,#171717)}
 :global(html[data-color-mode="light"]) .brand>span{border-color:#303030;color:#fff;background:#202020}
 :global(html[data-color-mode="light"]) .entryKind span{background:var(--codex-surface-subtle,#f0f0f0)}
-
-@media(max-width:580px){.themeToggle{width:32px;min-width:32px;padding:3px}.themeToggle :global(.theme-toggle-label){display:none}}

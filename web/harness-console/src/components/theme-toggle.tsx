@@ -21,7 +21,7 @@ function applyColorMode(mode: ColorMode) {
     });
 }
 
-export function ThemeToggle({ className = "" }: { className?: string }) {
+export function ThemeSelector() {
   const [mode, setMode] = useState<ColorMode | null>(null);
 
   const syncColorMode = useCallback(() => {
@@ -46,41 +46,48 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
     };
   }, [syncColorMode]);
 
-  function toggleColorMode() {
-    const current =
-      mode ??
-      (document.documentElement.dataset.colorMode === "light"
-        ? "light"
-        : "dark");
-    const next = current === "dark" ? "light" : "dark";
-    window.localStorage.setItem(STORAGE_KEY, next);
+  function selectColorMode(next: ColorMode) {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next);
+    } catch {
+      // The selected theme still applies for the current page.
+    }
     applyColorMode(next);
     setMode(next);
   }
 
-  const nextLabel = mode === "light" ? "深色" : "浅色";
-
   return (
-    <button
-      className={`theme-toggle ${className}`.trim()}
-      type="button"
+    <div
+      className="theme-selector"
+      role="radiogroup"
+      aria-label="界面主题"
       data-mode={mode ?? undefined}
-      aria-label={`切换到${nextLabel}主题`}
-      title={`切换到${nextLabel}主题`}
-      onClick={toggleColorMode}
     >
-      <span className="theme-toggle-track" aria-hidden="true">
-        <svg className="theme-toggle-sun" viewBox="0 0 20 20">
-          <circle cx="10" cy="10" r="3.2" />
-          <path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6 16 16M16 4l-1.4 1.4M5.4 14.6 4 16" />
-        </svg>
-        <svg className="theme-toggle-moon" viewBox="0 0 20 20">
-          <path d="M16.3 12.6A6.7 6.7 0 0 1 7.4 3.7a6.7 6.7 0 1 0 8.9 8.9Z" />
-        </svg>
-      </span>
-      <span className="theme-toggle-label" aria-hidden="true">
-        {mode === "light" ? "浅色" : mode === "dark" ? "深色" : "主题"}
-      </span>
-    </button>
+      {([
+        ["light", "浅色", "明亮画布，适合白天和高照度环境"],
+        ["dark", "深色", "Codex 深色画布，适合长时间专注"],
+      ] as const).map(([value, label, description]) => (
+        <button
+          className="theme-option"
+          type="button"
+          role="radio"
+          aria-checked={mode === value}
+          data-theme-option={value}
+          onClick={() => selectColorMode(value)}
+          key={value}
+        >
+          <span className="theme-option-preview" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="theme-option-copy">
+            <strong>{label}</strong>
+            <small>{description}</small>
+          </span>
+          <span className="theme-option-check" aria-hidden="true" />
+        </button>
+      ))}
+    </div>
   );
 }

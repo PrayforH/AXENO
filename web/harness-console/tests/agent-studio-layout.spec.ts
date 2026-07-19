@@ -73,7 +73,7 @@ describe("Agent Studio management page", () => {
     expect(sidebar).toContain("收起 Agent Studio 侧栏");
     expect(sidebar).toContain("展开 Agent Studio 侧栏");
     expect(sidebar).toContain("aria-expanded={!collapsed}");
-    expect(sidebar).toContain("<ThemeToggle");
+    expect(sidebar).not.toContain("<ThemeToggle");
     expect(sidebar).toContain("<AccountMenu");
     expect(sidebarStyles).toContain(
       '.sidebar[data-studio-sidebar="collapsed"]',

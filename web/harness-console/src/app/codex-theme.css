@@ -1637,74 +1637,16 @@ select {
   background: var(--codex-danger-soft);
 }
 
-/* Shared appearance control */
+/* The only appearance control lives in account settings. */
 
-.theme-toggle {
-  min-width: 72px;
-  min-height: 32px;
-  padding: 3px 8px 3px 3px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-  border: 1px solid var(--codex-line);
-  border-radius: 9px;
-  color: var(--codex-muted);
-  background: var(--codex-surface-subtle);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 620;
-  line-height: 1;
-  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
-}
-
-.theme-toggle:hover {
-  border-color: var(--codex-line-strong);
-  color: var(--codex-ink);
-  background: var(--codex-surface-hover);
-}
-
-.theme-toggle:active {
-  transform: scale(0.97);
-}
-
-.theme-toggle-track {
-  position: relative;
-  width: 24px;
-  height: 24px;
-  display: grid;
-  place-items: center;
-  border-radius: 7px;
-  color: var(--codex-accent);
-  background: var(--codex-accent-soft);
-}
-
-.theme-toggle svg {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  overflow: visible;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.55;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-html[data-color-mode="light"] .theme-toggle-moon,
-html[data-color-mode="dark"] .theme-toggle-sun {
-  display: none;
-}
-
-.login-panel {
-  position: relative;
-}
-
-.login-theme-toggle {
-  position: absolute;
-  z-index: 2;
-  top: 18px;
-  right: 20px;
+.theme-selector {
+  --line: var(--codex-line);
+  --line-strong: var(--codex-line-strong);
+  --surface-subtle: var(--codex-surface-subtle);
+  --ink: var(--codex-ink);
+  --muted-ink: var(--codex-muted);
+  --rail: var(--codex-accent);
+  --rail-soft: var(--codex-accent-faint);
 }
 
 .settings-header-actions {
@@ -2287,16 +2229,6 @@ html[data-color-mode="light"] .settings-header {
 @media (max-width: 760px) {
   .console-header {
     padding-inline: 8px;
-  }
-
-  .theme-toggle {
-    width: 32px;
-    min-width: 32px;
-    padding: 3px;
-  }
-
-  .theme-toggle-label {
-    display: none;
   }
 
   .brand-lockup > div {

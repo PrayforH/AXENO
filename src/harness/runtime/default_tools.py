@@ -6,6 +6,7 @@ from typing import cast
 from claude_agent_sdk import McpServerConfig
 from pydantic import SecretStr
 
+from harness.policy.models import ContextTrust
 from harness.runtime.mcp_credentials import (
     DynamicMcpCredentialProvider,
     ServerSecretReferenceProvider,
@@ -60,6 +61,7 @@ def default_tool_resolver(
                 ),
                 allowed_tools=TAVILY_ALLOWED_TOOLS,
                 credential_query_parameters=(("tavilyApiKey", "api_key"),),
+                result_trust=ContextTrust.UNTRUSTED,
                 preflight_smoke=McpSmokeCheck(
                     tool="tavily_search",
                     arguments={

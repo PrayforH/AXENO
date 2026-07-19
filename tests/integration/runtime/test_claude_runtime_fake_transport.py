@@ -34,6 +34,7 @@ from harness.core.models import (
     Session,
 )
 from harness.observability.provider import build_observability
+from harness.policy.models import ContextTrust
 from harness.runtime.base import (
     RuntimeContext,
     RuntimeEvent,
@@ -60,6 +61,7 @@ class RecordingToolGate:
         *,
         policy_id: str | None = None,
         subagent_policy_ids: Mapping[str, str] | None = None,
+        result_trust_by_tool: Mapping[str, ContextTrust] | None = None,
     ) -> dict[HookEvent, list[HookMatcher]]:
         self.contexts.append(context)
         return {"PreToolUse": []}

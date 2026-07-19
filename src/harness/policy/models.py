@@ -14,6 +14,14 @@ class PolicyDecision(StrEnum):
     ASK = "ask"
 
 
+class ContextTrust(StrEnum):
+    """Monotonic trust level for data already present in one Run context."""
+
+    SAFE = "safe"
+    SENSITIVE = "sensitive"
+    UNTRUSTED = "untrusted"
+
+
 class PolicyContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -22,6 +30,7 @@ class PolicyContext(BaseModel):
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE
+    context_trust: ContextTrust = ContextTrust.SAFE
 
 
 class PolicyRule(BaseModel):
@@ -35,6 +44,7 @@ class PolicyRule(BaseModel):
     path_glob: str | None = None
     command_contains: str | None = None
     sandbox_isolation: SandboxIsolation | None = None
+    context_trust: ContextTrust | None = None
     priority: int = 0
 
 
