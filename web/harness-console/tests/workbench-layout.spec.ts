@@ -59,6 +59,14 @@ describe("full-page agent workbench", () => {
     );
   });
 
+  it("projects task approvals into the composer surface", () => {
+    expect(taskSidebar).toContain("approvalStore.reset()");
+    expect(taskSidebar).toContain("approvalStore.show(selected.pending_approval)");
+    expect(taskSidebar).toContain('runView?.phase !== "waiting_approval"');
+    expect(taskSidebar).toContain("[refreshToken, runView?.phase]");
+    expect(taskSidebar).not.toContain("task-approval-panel");
+  });
+
   it("removes the decorative live rail and hard-coded agent coordinate", () => {
     expect(page).not.toContain("run-rail");
     expect(page).not.toContain(">LIVE<");
