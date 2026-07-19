@@ -4,7 +4,9 @@ import asyncio
 import shutil
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, cast
 
 from claude_agent_sdk import (
@@ -26,9 +28,20 @@ from harness.core.manifest import (
     materialize_skill_snapshot_set,
 )
 from harness.core.models import AgentVersion, ModelRoute
+from harness.knowledge.models import (
+    KnowledgeResultTrust,
+    KnowledgeSnapshotBinding,
+)
+from harness.knowledge.runtime import (
+    create_knowledge_mcp_server,
+    knowledge_execution_context,
+)
+from harness.knowledge.service import KnowledgeService
+from harness.knowledge.workload import RemoteKnowledgeMcpProvider
 from harness.memory_bank.service import MemoryBankService
 from harness.memory_bank.workload import RemoteMemoryMcpProvider
 from harness.observability.provider import Observability
+from harness.policy.models import ContextTrust
 from harness.runtime.artifact_tools import (
     artifact_execution_context,
     create_artifact_mcp_server,
@@ -96,6 +109,8 @@ class ClaudeSdkRuntime:
         memory_service: UserMemoryService | None = None,
         memory_bank: MemoryBankService | None = None,
         remote_memory_mcp: RemoteMemoryMcpProvider | None = None,
+        knowledge: KnowledgeService | None = None,
+        remote_knowledge_mcp: RemoteKnowledgeMcpProvider | None = None,
         observability: Observability | None = None,
     ) -> None:
         self._agent_version = agent_version
@@ -110,6 +125,8 @@ class ClaudeSdkRuntime:
         self._memory_service = memory_service
         self._memory_bank = memory_bank
         self._remote_memory_mcp = remote_memory_mcp
+        self._knowledge = knowledge
+        self._remote_knowledge_mcp = remote_knowledge_mcp
         self._observability = observability
 
     def _span(
@@ -166,13 +183,9 @@ class ClaudeSdkRuntime:
                         "harness.model.is_error": message.is_error,
                     }
                     if message.total_cost_usd is not None:
-                        result_attributes["harness.model.cost_usd"] = (
-                            message.total_cost_usd
-                        )
+                        result_attributes["harness.model.cost_usd"] = message.total_cost_usd
                     if message.stop_reason is not None:
-                        result_attributes["harness.model.stop_reason"] = (
-                            message.stop_reason
-                        )
+                        result_attributes["harness.model.stop_reason"] = message.stop_reason
                     if message.api_error_status is not None:
                         result_attributes["harness.model.api_error_status"] = (
                             message.api_error_status
@@ -203,9 +216,7 @@ class ClaudeSdkRuntime:
                         self._observability.mark_current_span_error(subtype)
                 yield message
                 if isinstance(message, ResultMessage) and message.is_error:
-                    provider_result = (
-                        message.result if isinstance(message.result, str) else ""
-                    )
+                    provider_result = message.result if isinstance(message.result, str) else ""
                     error_code = provider_result_error_code(
                         provider_result,
                         message.api_error_status,
@@ -259,13 +270,29 @@ class ClaudeSdkRuntime:
         allowed_tools = list(resolved_tools.allowed_tools)
         builtin_tools = list(resolved_tools.builtin_tools)
         remote_transport = context.runtime_transport_factory is not None
+        knowledge_bindings = tuple(
+            KnowledgeSnapshotBinding.model_validate(item)
+            for item in context.session.knowledge_snapshot_bindings
+        )
         if (
             remote_transport
             and self._remote_memory_mcp is not None
             and context.identity is not None
         ):
-            resolved_tools = self._remote_memory_mcp.attach(
-                resolved_tools, context.identity
+            resolved_tools = self._remote_memory_mcp.attach(resolved_tools, context.identity)
+            mcp_servers = dict(resolved_tools.mcp_servers)
+            allowed_tools = list(resolved_tools.allowed_tools)
+            builtin_tools = list(resolved_tools.builtin_tools)
+        if remote_transport and knowledge_bindings:
+            if self._remote_knowledge_mcp is None:
+                raise ToolResolutionError(
+                    "remote knowledge MCP is unavailable for pinned Session knowledge"
+                )
+            assert context.identity is not None
+            resolved_tools = self._remote_knowledge_mcp.attach(
+                resolved_tools,
+                context.identity,
+                knowledge_bindings,
             )
             mcp_servers = dict(resolved_tools.mcp_servers)
             allowed_tools = list(resolved_tools.allowed_tools)
@@ -296,11 +323,9 @@ class ClaudeSdkRuntime:
                         f"duplicate MCP server name: {SANDBOX_MCP_SERVER_NAME}"
                     )
                 assert context.sandbox_command_executor is not None
-                mcp_servers[SANDBOX_MCP_SERVER_NAME] = (
-                    create_sandbox_tools_mcp_server(
-                        context.sandbox_command_executor,
-                        proxied,
-                    )
+                mcp_servers[SANDBOX_MCP_SERVER_NAME] = create_sandbox_tools_mcp_server(
+                    context.sandbox_command_executor,
+                    proxied,
                 )
                 for builtin in sorted(proxied):
                     allowed_tools.append(proxy_tool_name(builtin))
@@ -314,9 +339,7 @@ class ClaudeSdkRuntime:
             # writable config directory to create the transcript files that
             # back SessionStore mirror frames. Keep it inside the disposable
             # Run workspace and remove it before workspace archival.
-            runtime_config_dir = (
-                context.workspace / ".harness-runtime" / "claude-config"
-            )
+            runtime_config_dir = context.workspace / ".harness-runtime" / "claude-config"
             runtime_config_dir.mkdir(parents=True, exist_ok=True)
             environment["CLAUDE_CONFIG_DIR"] = str(runtime_config_dir)
         in_process_servers = tuple(
@@ -339,6 +362,27 @@ class ClaudeSdkRuntime:
                 raise ToolResolutionError("duplicate MCP server name: harness-memory")
             mcp_servers["harness-memory"] = create_memory_mcp_server()
             allowed_tools.append("mcp__harness-memory__propose_memory")
+        if knowledge_bindings and not remote_transport:
+            if self._knowledge is None:
+                raise ToolResolutionError(
+                    "knowledge service is unavailable for pinned Session knowledge"
+                )
+            if "harness-knowledge" in mcp_servers:
+                raise ToolResolutionError("duplicate MCP server name: harness-knowledge")
+            knowledge_tool = "mcp__harness-knowledge__query_knowledge_sources"
+            mcp_servers["harness-knowledge"] = create_knowledge_mcp_server()
+            allowed_tools.append(knowledge_tool)
+            knowledge_trust = (
+                ContextTrust.UNTRUSTED
+                if any(item.trust is KnowledgeResultTrust.UNTRUSTED for item in knowledge_bindings)
+                else ContextTrust.SENSITIVE
+            )
+            result_trust = dict(resolved_tools.result_trust)
+            result_trust[knowledge_tool] = knowledge_trust
+            resolved_tools = replace(
+                resolved_tools,
+                result_trust=MappingProxyType(result_trust),
+            )
         if context.artifact_publisher is not None and not remote_transport:
             if "harness-artifacts" in mcp_servers:
                 raise ToolResolutionError("duplicate MCP server name: harness-artifacts")
@@ -346,17 +390,14 @@ class ClaudeSdkRuntime:
             allowed_tools.append("mcp__harness-artifacts__publish_artifact")
         agents: dict[str, AgentDefinition] = {}
         subagent_bindings = {
-            subagent.runtime_name: subagent
-            for subagent in manifest.spec.subagents
+            subagent.runtime_name: subagent for subagent in manifest.spec.subagents
         }
         for name in self._subagent_versions:
             snapshot = subagent_snapshots[name]
             subagent_manifest = snapshot.manifest
             binding = subagent_bindings.get(name)
             if any(tool.builtin is None for tool in subagent_manifest.spec.tools):
-                raise ToolResolutionError(
-                    f"subagent custom tools are not supported: {name}"
-                )
+                raise ToolResolutionError(f"subagent custom tools are not supported: {name}")
             subagent_tools = [
                 (
                     proxy_tool_name(tool.builtin)
@@ -454,12 +495,7 @@ class ClaudeSdkRuntime:
         yield RuntimeEvent(type="model.route.selected", payload=decision.event_payload)
         prompt = str(context.run.input.get("prompt", ""))
         if context.memory_projection:
-            prompt = (
-                "<user_memory>\n"
-                f"{context.memory_projection}\n"
-                "</user_memory>\n\n"
-                f"{prompt}"
-            )
+            prompt = f"<user_memory>\n{context.memory_projection}\n</user_memory>\n\n{prompt}"
         if context.input_files:
             inventory = "\n".join(f"- {path}" for path in context.input_files)
             prompt = (
@@ -473,24 +509,16 @@ class ClaudeSdkRuntime:
             run_id=context.run.run_id,
             attributes={
                 "harness.policy.profile": self._snapshot.manifest.spec.permissions.policy,
-                "harness.declared_tool.count": len(
-                    self._snapshot.manifest.spec.tools
-                ),
-                "harness.tool.exposure_mode": (
-                    self._snapshot.manifest.spec.tool_exposure_mode
-                ),
+                "harness.declared_tool.count": len(self._snapshot.manifest.spec.tools),
+                "harness.tool.exposure_mode": (self._snapshot.manifest.spec.tool_exposure_mode),
             },
         ):
             options, resolved_tools = await self._options(context, decision.route)
             if self._observability is not None:
                 self._observability.annotate_current_span(
                     {
-                        "harness.resolved_builtin.count": len(
-                            resolved_tools.builtin_tools
-                        ),
-                        "harness.resolved_mcp.count": len(
-                            resolved_tools.mcp_servers
-                        ),
+                        "harness.resolved_builtin.count": len(resolved_tools.builtin_tools),
+                        "harness.resolved_mcp.count": len(resolved_tools.mcp_servers),
                         "harness.tool.directory_hash": (
                             self._snapshot.tool_directory.content_hash
                             if self._snapshot.tool_directory is not None
@@ -502,12 +530,8 @@ class ClaudeSdkRuntime:
             yield RuntimeEvent(
                 type="tool.directory.loaded",
                 payload={
-                    "exposure_mode": (
-                        self._snapshot.tool_directory.exposure_mode
-                    ),
-                    "catalog_revision": (
-                        self._snapshot.tool_directory.catalog_revision
-                    ),
+                    "exposure_mode": (self._snapshot.tool_directory.exposure_mode),
+                    "catalog_revision": (self._snapshot.tool_directory.catalog_revision),
                     "content_hash": self._snapshot.tool_directory.content_hash,
                     "entry_count": len(self._snapshot.tool_directory.entries),
                 },
@@ -532,6 +556,21 @@ class ClaudeSdkRuntime:
                 execution_context.enter_context(
                     memory_execution_context(self._memory_bank, context.identity)
                 )
+            if (
+                self._knowledge is not None
+                and context.identity is not None
+                and context.session.knowledge_snapshot_bindings
+            ):
+                execution_context.enter_context(
+                    knowledge_execution_context(
+                        self._knowledge,
+                        context.identity,
+                        tuple(
+                            KnowledgeSnapshotBinding.model_validate(item)
+                            for item in context.session.knowledge_snapshot_bindings
+                        ),
+                    )
+                )
             if context.artifact_publisher is not None:
                 execution_context.enter_context(
                     artifact_execution_context(context.artifact_publisher)
@@ -554,8 +593,7 @@ class ClaudeSdkRuntime:
                 prompt=prompt,
             ):
                 mapped = [
-                    self._redact_event(event, resolved_tools)
-                    for event in map_sdk_message(message)
+                    self._redact_event(event, resolved_tools) for event in map_sdk_message(message)
                 ]
                 if isinstance(message, TaskUpdatedMessage):
                     immediate: list[RuntimeEvent] = []
@@ -652,18 +690,14 @@ class ClaudeSdkRuntime:
                     continue
                 if isinstance(message, ResultMessage) and stream_message_open:
                     if pending_text:
-                        yield RuntimeEvent(
-                            type="message.delta", payload={"text": pending_text}
-                        )
+                        yield RuntimeEvent(type="message.delta", payload={"text": pending_text})
                         pending_text = ""
                     stream_message_open = False
                     yield RuntimeEvent(type="message.completed")
                 if isinstance(message, AssistantMessage):
                     if partial_text_seen:
                         if pending_text:
-                            yield RuntimeEvent(
-                                type="message.delta", payload={"text": pending_text}
-                            )
+                            yield RuntimeEvent(type="message.delta", payload={"text": pending_text})
                             pending_text = ""
                         for event in mapped:
                             if event.type != "message.delta":

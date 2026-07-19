@@ -123,6 +123,10 @@ class AgentDraftSpec(StudioModel):
         default="eager",
         alias="toolExposureMode",
     )
+    knowledge_references: tuple[str, ...] = Field(
+        default=(),
+        alias="knowledgeReferences",
+    )
     subagents: tuple[DraftSubagent, ...] = ()
     permission_policy: str = Field(alias="permissionPolicy", min_length=1)
     execution_profile: str = Field(
@@ -137,6 +141,7 @@ class AgentDraftSpec(StudioModel):
         for label, values in (
             ("builtin tool", self.builtin_tools),
             ("MCP server", self.mcp_servers),
+            ("Knowledge Base", self.knowledge_references),
         ):
             duplicates = sorted({value for value in values if values.count(value) > 1})
             if duplicates:
@@ -391,6 +396,7 @@ class EffectiveAgentContract(StudioModel):
     mcp_servers: tuple[str, ...] = Field(alias="mcpServers")
     tool_exposure_mode: ToolExposureMode = Field(alias="toolExposureMode")
     tool_directory_entries: int = Field(alias="toolDirectoryEntries", ge=0)
+    knowledge_references: tuple[str, ...] = Field(alias="knowledgeReferences")
     network_access: NetworkAccess = Field(alias="networkAccess")
     network_summary: str = Field(alias="networkSummary")
     permission_policy: str = Field(alias="permissionPolicy")

@@ -26,6 +26,7 @@ import {
   type StudioEvalRun,
   type StudioPreflightCheck,
   type StudioPreview,
+  type StudioKnowledgeBase,
   type StudioQualityGate,
   type StudioQualityIncident,
   type StudioQualityRule,
@@ -93,6 +94,7 @@ export function AgentStudioWorkbench() {
   });
   const [drafts, setDrafts] = useState<StudioDraftSummary[]>([]);
   const [capabilities, setCapabilities] = useState<StudioCapabilities | null>(null);
+  const [knowledgeBases, setKnowledgeBases] = useState<StudioKnowledgeBase[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -172,12 +174,20 @@ export function AgentStudioWorkbench() {
       setLoading(true);
       setLoadError("");
       try {
-        const [serverDrafts, serverCapabilities, serverPreviews, serverDatasets, serverEvalRuns] = await Promise.all([
+        const [
+          serverDrafts,
+          serverCapabilities,
+          serverPreviews,
+          serverDatasets,
+          serverEvalRuns,
+          serverKnowledgeBases,
+        ] = await Promise.all([
           studioClient.listDrafts(),
           studioClient.capabilities(),
           studioClient.listPreviews(),
           studioClient.listEvalDatasets(),
           studioClient.listEvalRuns(),
+          studioClient.listKnowledgeBases(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
@@ -185,6 +195,7 @@ export function AgentStudioWorkbench() {
         setPreviews(serverPreviews);
         setEvalDatasets(serverDatasets);
         setEvalRuns(serverEvalRuns);
+        setKnowledgeBases(serverKnowledgeBases);
         const migration = await migrateLegacyStudioDraft(
           window.localStorage,
           studioClient,
@@ -279,6 +290,14 @@ export function AgentStudioWorkbench() {
       mcpServers: draft.mcpServers.includes(reference)
         ? draft.mcpServers.filter((item) => item !== reference)
         : [...draft.mcpServers, reference],
+    });
+  }
+
+  function toggleKnowledge(reference: string) {
+    updateDraft({
+      knowledgeReferences: draft.knowledgeReferences.includes(reference)
+        ? draft.knowledgeReferences.filter((item) => item !== reference)
+        : [...draft.knowledgeReferences, reference],
     });
   }
 
@@ -1672,6 +1691,46 @@ export function AgentStudioWorkbench() {
                 {draft.mcpServers.includes("tavily-readonly") && (
                   <InfoStrip tone="warning">
                     检索词和待抽取 URL 会发送给 Tavily。发布部署前必须从实际 Sandbox 检查凭据、MCP tools/list 与公网可达性；这不会开放任意 Bash 网络访问。
+                  </InfoStrip>
+                )}
+
+                <div className={styles.groupHeading}>
+                  <div>
+                    <h3>知识库</h3>
+                    <p>运行时只查询发布清单和环境共同允许的不可变快照。</p>
+                  </div>
+                  <span>{draft.knowledgeReferences.length} 个已绑定</span>
+                </div>
+                {knowledgeBases.length ? knowledgeBases.map((base) => {
+                  const enabled = draft.knowledgeReferences.includes(base.reference);
+                  return (
+                    <label
+                      key={base.reference}
+                      className={enabled ? styles.mcpCardEnabled : styles.mcpCard}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={() => toggleKnowledge(base.reference)}
+                      />
+                      <span className={styles.mcpSignal} aria-hidden="true">
+                        <i /><i /><i />
+                      </span>
+                      <span className={styles.mcpCopy}>
+                        <span className={styles.mcpTitleLine}>
+                          <strong>{base.displayName}</strong>
+                          <span>引用检索</span>
+                          <span>{base.sourceReferences.length} 个数据源</span>
+                        </span>
+                        <small>{base.description || "受权限约束的组织知识。"}</small>
+                        <code>{base.reference}</code>
+                      </span>
+                      <span className={styles.switchVisual} aria-hidden="true"><i /></span>
+                    </label>
+                  );
+                }) : (
+                  <InfoStrip tone="neutral">
+                    暂无可绑定知识库。请先在 Studio 的“数据”页添加文件或 Web 数据源并创建知识库。
                   </InfoStrip>
                 )}
               </section>

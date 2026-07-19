@@ -61,10 +61,7 @@ class AgentDraftCompiler:
     def render_manifest(self, draft: AgentDraft) -> str:
         spec = draft.spec
         required_capabilities = list(spec.model.required_capabilities)
-        if (
-            spec.tool_exposure_mode == "on_demand"
-            and "tool_search" not in required_capabilities
-        ):
+        if spec.tool_exposure_mode == "on_demand" and "tool_search" not in required_capabilities:
             required_capabilities.append("tool_search")
         tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
@@ -94,6 +91,7 @@ class AgentDraftCompiler:
                     "skills": [f"skills/{skill.name}" for skill in spec.skills],
                     "tools": tools,
                     "toolExposureMode": spec.tool_exposure_mode,
+                    "knowledgeReferences": list(spec.knowledge_references),
                     "subagents": [
                         {
                             "ref": subagent.ref,
@@ -218,6 +216,7 @@ class AgentDraftCompiler:
             mcpServers=spec.mcp_servers,
             toolExposureMode=spec.tool_exposure_mode,
             toolDirectoryEntries=len(self.tool_directory(draft).entries),
+            knowledgeReferences=spec.knowledge_references,
             networkAccess=network,
             networkSummary=network_summary,
             permissionPolicy=spec.permission_policy,
@@ -269,16 +268,11 @@ class AgentDraftCompiler:
                         path="model.requiredCapabilities",
                     )
                 )
-            if (
-                spec.tool_exposure_mode == "on_demand"
-                and "tool_search" not in route.capabilities
-            ):
+            if spec.tool_exposure_mode == "on_demand" and "tool_search" not in route.capabilities:
                 issues.append(
                     ValidationIssue(
                         code="tool_search_capability_missing",
-                        message=(
-                            f"模型路由不支持按需工具加载：{spec.model.route_id}"
-                        ),
+                        message=(f"模型路由不支持按需工具加载：{spec.model.route_id}"),
                         severity=ValidationSeverity.ERROR,
                         path="toolExposureMode",
                     )
@@ -398,10 +392,7 @@ class AgentDraftCompiler:
             if (capability := mcp_by_reference.get(reference)) is not None
             and capability.preflight_required
         ]
-        if (
-            draft.spec.tool_exposure_mode == "on_demand"
-            and not draft.spec.mcp_servers
-        ):
+        if draft.spec.tool_exposure_mode == "on_demand" and not draft.spec.mcp_servers:
             warnings.append(
                 ValidationIssue(
                     code="tool_search_not_needed",
@@ -413,12 +404,8 @@ class AgentDraftCompiler:
         return tuple(warnings)
 
     def tool_directory(self, draft: AgentDraft) -> ToolDirectorySnapshot:
-        builtin_by_name = {
-            item.name: item for item in self._catalog.builtin_tools
-        }
-        mcp_by_reference = {
-            item.reference: item for item in self._catalog.mcp_servers
-        }
+        builtin_by_name = {item.name: item for item in self._catalog.builtin_tools}
+        mcp_by_reference = {item.reference: item for item in self._catalog.mcp_servers}
         entries: list[ToolDirectoryEntry] = []
         for name in draft.spec.builtin_tools:
             capability = builtin_by_name.get(name)
@@ -440,8 +427,7 @@ class AgentDraftCompiler:
                 continue
             result_trust = (
                 "untrusted"
-                if capability.network_access is NetworkAccess.EXTERNAL
-                or capability.sends_user_data
+                if capability.network_access is NetworkAccess.EXTERNAL or capability.sends_user_data
                 else "sensitive"
             )
             for name in capability.tools:
@@ -451,8 +437,7 @@ class AgentDraftCompiler:
                         source="mcp",
                         logicalReference=reference,
                         description=(
-                            f"{capability.description} Reviewed tool: "
-                            f"{name.rsplit('__', 1)[-1]}."
+                            f"{capability.description} Reviewed tool: {name.rsplit('__', 1)[-1]}."
                         ),
                         risk=capability.risk.value,
                         resultTrust=result_trust,

@@ -156,6 +156,7 @@ type ApiDraftSpec = {
   builtinTools: string[];
   mcpServers: string[];
   toolExposureMode: StudioDraft["toolExposureMode"];
+  knowledgeReferences: string[];
   subagents: StudioDraft["subagents"];
   permissionPolicy: string;
   executionProfile: string;
@@ -195,6 +196,97 @@ export type ApiAgentVersion = {
   manifest_hash: string;
   package_hash: string | null;
   created_at: string;
+};
+
+export type StudioKnowledgeAcl = {
+  visibility: "tenant" | "restricted";
+  userIds: string[];
+  workloadIds: string[];
+};
+
+export type StudioKnowledgeSourceConfig =
+  | {
+    type: "file";
+    documents: Array<{
+      documentId: string;
+      title: string;
+      content: string;
+      sourceUri: string | null;
+    }>;
+  }
+  | {
+    type: "web";
+    url: string;
+    title: string | null;
+    maxBytes: number;
+  };
+
+export type StudioKnowledgeSource = {
+  tenantId: string;
+  reference: string;
+  displayName: string;
+  description: string;
+  kind: "file" | "web";
+  visibility: "tenant" | "restricted";
+  revision: number;
+  health: "pending" | "healthy" | "degraded" | "disabled";
+  activeSnapshotId: string | null;
+  lastSyncId: string | null;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StudioKnowledgeBase = {
+  tenantId: string;
+  reference: string;
+  displayName: string;
+  description: string;
+  sourceReferences: string[];
+  revision: number;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StudioKnowledgeSync = {
+  tenantId: string;
+  syncId: string;
+  sourceReference: string;
+  sourceRevision: number;
+  status: "queued" | "running" | "succeeded" | "unchanged" | "failed";
+  checkpointBefore: Record<string, string | number>;
+  checkpointAfter: Record<string, string | number>;
+  snapshotId: string | null;
+  documentsSeen: number;
+  chunksWritten: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdBy: string;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+export type StudioKnowledgeHit = {
+  content: string;
+  score: number;
+  trust: "sensitive" | "untrusted";
+  citation: {
+    knowledgeBaseReference: string;
+    sourceReference: string;
+    sourceDisplayName: string;
+    snapshotId: string;
+    documentId: string;
+    chunkId: string;
+    title: string;
+    uri: string;
+  };
+  matchedTerms: string[];
 };
 
 export type StudioValidation = {
@@ -677,6 +769,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     builtinTools: spec.builtinTools,
     mcpServers: spec.mcpServers,
     toolExposureMode: spec.toolExposureMode,
+    knowledgeReferences: spec.knowledgeReferences ?? [],
     subagents: spec.subagents,
     policy: spec.permissionPolicy,
     executionProfile: spec.executionProfile,
@@ -720,6 +813,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     builtinTools: draft.builtinTools,
     mcpServers: draft.mcpServers,
     toolExposureMode: draft.toolExposureMode,
+    knowledgeReferences: draft.knowledgeReferences,
     subagents: draft.subagents,
     permissionPolicy: draft.policy,
     executionProfile: draft.executionProfile,
@@ -748,6 +842,66 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
 }
 
 export const studioClient = {
+  listKnowledgeBases: () =>
+    request<StudioKnowledgeBase[]>("knowledge/bases"),
+  createKnowledgeBase: (
+    values: Pick<
+      StudioKnowledgeBase,
+      "reference" | "displayName" | "description" | "sourceReferences"
+    >,
+  ) => request<StudioKnowledgeBase>("knowledge/bases", {
+    method: "POST",
+    body: JSON.stringify(values),
+  }),
+  replaceKnowledgeBase: (
+    value: StudioKnowledgeBase,
+    update: Pick<
+      StudioKnowledgeBase,
+      "displayName" | "description" | "sourceReferences"
+    >,
+  ) => request<StudioKnowledgeBase>(
+    `knowledge/bases/${encodeURIComponent(value.reference)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision: value.revision,
+        ...update,
+      }),
+    },
+  ),
+  listKnowledgeSources: () =>
+    request<StudioKnowledgeSource[]>("knowledge/sources"),
+  createKnowledgeSource: (body: {
+    reference: string;
+    displayName: string;
+    description?: string;
+    kind: "file" | "web";
+    config: StudioKnowledgeSourceConfig;
+    acl?: StudioKnowledgeAcl;
+    syncNow?: boolean;
+  }) => request<{
+    source: StudioKnowledgeSource;
+    sync: StudioKnowledgeSync | null;
+  }>("knowledge/sources", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
+  syncKnowledgeSource: (reference: string) =>
+    request<StudioKnowledgeSync>(
+      `knowledge/sources/${encodeURIComponent(reference)}/sync`,
+      { method: "POST" },
+    ),
+  searchKnowledge: (
+    query: string,
+    knowledgeBaseReferences: string[],
+    limit = 8,
+  ) => request<{ hits: StudioKnowledgeHit[]; searchedSnapshotIds: string[] }>(
+    "knowledge/search",
+    {
+      method: "POST",
+      body: JSON.stringify({ query, knowledgeBaseReferences, limit }),
+    },
+  ),
   quotaUsage: () => request<StudioQuotaUsage>("quotas"),
   replaceQuotaPolicy: (
     policyId: string,

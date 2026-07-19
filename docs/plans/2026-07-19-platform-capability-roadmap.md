@@ -118,6 +118,8 @@ Detailed design: [Phase 3 — versioned tool directory and load-on-demand](./202
 
 ### Phase 4 — governed knowledge sources
 
+- Detailed design:
+  [Phase 4 — governed knowledge sources](./2026-07-19-governed-knowledge-sources.md).
 - Knowledge bases, connectors, checkpointed incremental sync and source health.
 - File/web first, then GitHub and enterprise connectors.
 - Permission filtering before retrieval, hybrid search, reranking and citations.

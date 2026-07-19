@@ -41,6 +41,7 @@ from harness.studio.preview_service import PreviewService
 QualityGate = Callable[[str, str, str], Awaitable[object]]
 ExecutionProfileResolver = Callable[[str, str], Awaitable[ExecutionProfileMetadata]]
 CapabilityCatalogResolver = Callable[[str], Awaitable[CapabilityCatalogRecord]]
+KnowledgeReferenceValidator = Callable[[str, tuple[str, ...]], Awaitable[None]]
 
 
 def _id(prefix: str) -> str:
@@ -63,6 +64,7 @@ class DeploymentService:
         quality_gate: QualityGate | None = None,
         execution_profile_resolver: ExecutionProfileResolver | None = None,
         capability_catalog_resolver: CapabilityCatalogResolver | None = None,
+        knowledge_reference_validator: KnowledgeReferenceValidator | None = None,
         quotas: QuotaService | None = None,
     ) -> None:
         self._environments = environments
@@ -77,6 +79,7 @@ class DeploymentService:
         self._quality_gate = quality_gate
         self._execution_profile_resolver = execution_profile_resolver
         self._capability_catalog_resolver = capability_catalog_resolver
+        self._knowledge_reference_validator = knowledge_reference_validator
         self._quotas = quotas
 
     async def _catalog(self, tenant_id: str) -> CapabilityCatalogRecord:
@@ -111,6 +114,14 @@ class DeploymentService:
         if profile is None or not profile.enabled:
             raise ConflictError(f"Execution Profile is unavailable: {profile_id}")
         return profile
+
+    async def _validate_knowledge_references(
+        self,
+        tenant_id: str,
+        references: tuple[str, ...],
+    ) -> None:
+        if references and self._knowledge_reference_validator is not None:
+            await self._knowledge_reference_validator(tenant_id, references)
 
     @staticmethod
     def _policy_snapshot(
@@ -147,9 +158,7 @@ class DeploymentService:
         )
         if preferred is None:
             raise ConflictError(f"No Execution Profile is available for {name.value}")
-        enabled_mcp = {
-            item.reference for item in catalog.catalog.mcp_servers if item.enabled
-        }
+        enabled_mcp = {item.reference for item in catalog.catalog.mcp_servers if item.enabled}
         budget, tokens, artifacts = {
             EnvironmentName.TEST: (5.0, 500_000, 100 * 1024 * 1024),
             EnvironmentName.CANARY: (2.0, 300_000, 50 * 1024 * 1024),
@@ -206,9 +215,7 @@ class DeploymentService:
             or not profile.enabled
             or profile.version != policy.execution_profile_version
         ):
-            raise ConflictError(
-                "Environment policy references an unavailable Execution Profile"
-            )
+            raise ConflictError("Environment policy references an unavailable Execution Profile")
         if (
             policy.network_profile_id != profile.network_policy_id
             or policy.network_profile_version != profile.version
@@ -217,23 +224,18 @@ class DeploymentService:
             raise ConflictError(
                 "Environment network profile does not match the reviewed Execution Profile"
             )
-        available_routes = {
-            item.route_id for item in catalog.catalog.model_routes if item.enabled
-        }
+        available_routes = {item.route_id for item in catalog.catalog.model_routes if item.enabled}
         missing_routes = sorted(set(policy.allowed_model_routes) - available_routes)
         if missing_routes:
             raise ConflictError(
                 "Environment policy references unavailable model routes: "
                 + ", ".join(missing_routes)
             )
-        available_mcp = {
-            item.reference for item in catalog.catalog.mcp_servers if item.enabled
-        }
+        available_mcp = {item.reference for item in catalog.catalog.mcp_servers if item.enabled}
         missing_mcp = sorted(set(policy.allowed_mcp_references) - available_mcp)
         if missing_mcp:
             raise ConflictError(
-                "Environment policy references unavailable MCP resources: "
-                + ", ".join(missing_mcp)
+                "Environment policy references unavailable MCP resources: " + ", ".join(missing_mcp)
             )
         profile_denied = sorted(
             set(policy.allowed_mcp_references) - set(profile.allowed_mcp_references)
@@ -257,9 +259,7 @@ class DeploymentService:
             execution_profile != policy.execution_profile_id
             or execution_profile_version != policy.execution_profile_version
         ):
-            raise ConflictError(
-                "Deployment Execution Profile is outside the Environment policy"
-            )
+            raise ConflictError("Deployment Execution Profile is outside the Environment policy")
         published_snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
         if (
             published_snapshot.tool_directory is not None
@@ -272,26 +272,26 @@ class DeploymentService:
         manifest = published_snapshot.manifest
         model_routes = {
             manifest.spec.model.route,
-            *(
-                (manifest.spec.model.fallback_route,)
-                if manifest.spec.model.fallback_route
-                else ()
-            ),
+            *((manifest.spec.model.fallback_route,) if manifest.spec.model.fallback_route else ()),
         }
         denied_routes = sorted(model_routes - set(policy.allowed_model_routes))
         if denied_routes:
             raise ConflictError(
-                "Agent model routes are outside the Environment policy: "
-                + ", ".join(denied_routes)
+                "Agent model routes are outside the Environment policy: " + ", ".join(denied_routes)
             )
-        mcp_references = {
-            tool.mcp for tool in manifest.spec.tools if tool.mcp is not None
-        }
+        mcp_references = {tool.mcp for tool in manifest.spec.tools if tool.mcp is not None}
         denied_mcp = sorted(mcp_references - set(policy.allowed_mcp_references))
         if denied_mcp:
             raise ConflictError(
-                "Agent MCP resources are outside the Environment policy: "
-                + ", ".join(denied_mcp)
+                "Agent MCP resources are outside the Environment policy: " + ", ".join(denied_mcp)
+            )
+        denied_knowledge = sorted(
+            set(manifest.spec.knowledge_references) - set(policy.allowed_knowledge_references)
+        )
+        if denied_knowledge:
+            raise ConflictError(
+                "Agent Knowledge Bases are outside the Environment policy: "
+                + ", ".join(denied_knowledge)
             )
 
     async def environment(
@@ -340,9 +340,12 @@ class DeploymentService:
             raise ConflictError("Environment revision changed before policy update")
         catalog = await self._catalog(tenant_id)
         profile = self._validate_policy_catalog(request.policy, catalog)
-        if (
-            environment_name is EnvironmentName.PRODUCTION
-            and (profile.sandbox_provider == "local" or not profile.production_allowed)
+        await self._validate_knowledge_references(
+            tenant_id,
+            request.policy.allowed_knowledge_references,
+        )
+        if environment_name is EnvironmentName.PRODUCTION and (
+            profile.sandbox_provider == "local" or not profile.production_allowed
         ):
             raise ConflictError("Production Environment requires an isolated production Profile")
         for route in current.routes:
@@ -418,6 +421,10 @@ class DeploymentService:
             environment.resource_policy,
             catalog,
         )
+        await self._validate_knowledge_references(
+            tenant_id,
+            environment.resource_policy.allowed_knowledge_references,
+        )
         profile = await self._execution_profile(
             tenant_id,
             request.execution_profile,
@@ -433,13 +440,9 @@ class DeploymentService:
             profile.profile_id != policy_profile.profile_id
             or profile.version != policy_profile.version
             or profile.network_policy_id != policy_profile.network_policy_id
-            or set(environment.resource_policy.network_access).difference(
-                profile.network_access
-            )
+            or set(environment.resource_policy.network_access).difference(profile.network_access)
         ):
-            raise ConflictError(
-                "Deployment Execution Profile is outside the Environment policy"
-            )
+            raise ConflictError("Deployment Execution Profile is outside the Environment policy")
         self._validate_agent_policy(
             version,
             environment.resource_policy,
@@ -628,6 +631,10 @@ class DeploymentService:
         snapshot = await self._deployments.get_snapshot(tenant_id, selected.snapshot_id)
         catalog = await self._catalog(tenant_id)
         self._validate_policy_catalog(environment.resource_policy, catalog)
+        await self._validate_knowledge_references(
+            tenant_id,
+            environment.resource_policy.allowed_knowledge_references,
+        )
         version = await self._registry.get(
             tenant_id,
             snapshot.agent_name,

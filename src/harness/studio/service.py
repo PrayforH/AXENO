@@ -11,6 +11,7 @@ from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import AgentVersion, AgentVersionStatus
 from harness.core.ports import AgentRegistry
+from harness.knowledge.service import KnowledgeService
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import (
     AgentDraftCompiler,
@@ -53,6 +54,7 @@ class AgentStudioService:
         catalogs: CapabilityCatalogService | None = None,
         publisher: AgentBundlePublisher | None = None,
         registry: AgentRegistry | None = None,
+        knowledge: KnowledgeService | None = None,
         audit: AuditService | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
@@ -63,6 +65,7 @@ class AgentStudioService:
         self._catalogs = catalogs
         self._publisher = publisher
         self._registry = registry
+        self._knowledge = knowledge
         self._audit = audit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"draft_{uuid4().hex}")
@@ -141,9 +144,7 @@ class AgentStudioService:
         await self._repository.replace(request.expected_revision, updated)
         return updated
 
-    async def validate(
-        self, tenant_id: str, draft_id: str
-    ) -> DraftValidationResult:
+    async def validate(self, tenant_id: str, draft_id: str) -> DraftValidationResult:
         compiler = await self._compiler_for(tenant_id)
         draft = await self.get(tenant_id, draft_id)
         validation = compiler.validate(draft)
@@ -170,9 +171,7 @@ class AgentStudioService:
         expected_revision: int | None = None,
     ) -> AgentVersion:
         if self._publisher is None:
-            raise StudioPublisherNotConfiguredError(
-                "Agent Studio publisher is not configured"
-            )
+            raise StudioPublisherNotConfiguredError("Agent Studio publisher is not configured")
         draft = await self.get(tenant_id, draft_id)
         compiler = await self._compiler_for(tenant_id)
         try:
@@ -193,16 +192,12 @@ class AgentStudioService:
                     draft_id=draft_id,
                     draft_revision=draft.revision,
                     version=existing,
-                    dependencies=tuple(
-                        sorted({item.ref for item in draft.spec.subagents})
-                    ),
+                    dependencies=tuple(sorted({item.ref for item in draft.spec.subagents})),
                     idempotent=True,
                 )
                 return existing
             try:
-                version = await self._publisher.publish_bundle(
-                    tenant_id, compiled.bundle
-                )
+                version = await self._publisher.publish_bundle(tenant_id, compiled.bundle)
             except ConflictError as error:
                 raise StudioPublicationConflictError(
                     f"Agent version content conflicts with existing immutable release: "
@@ -251,19 +246,44 @@ class AgentStudioService:
         self, tenant_id: str, draft: AgentDraft
     ) -> tuple[ValidationIssue, ...]:
         references = tuple(sorted({item.ref for item in draft.spec.subagents}))
+        knowledge_references = tuple(sorted(set(draft.spec.knowledge_references)))
+        issues: list[ValidationIssue] = []
+        if knowledge_references:
+            if self._knowledge is None:
+                issues.append(
+                    ValidationIssue(
+                        code="knowledge_registry_unavailable",
+                        message="无法复验知识库引用",
+                        severity=ValidationSeverity.ERROR,
+                        path="knowledgeReferences",
+                    )
+                )
+            else:
+                for reference in knowledge_references:
+                    try:
+                        await self._knowledge.get_base(tenant_id, reference)
+                    except NotFoundError:
+                        issues.append(
+                            ValidationIssue(
+                                code="knowledge_base_not_found",
+                                message=f"知识库尚未注册：{reference}",
+                                severity=ValidationSeverity.ERROR,
+                                path="knowledgeReferences",
+                            )
+                        )
         if not references:
-            return ()
+            return tuple(issues)
         if self._registry is None:
-            return (
+            issues.append(
                 ValidationIssue(
                     code="subagent_registry_unavailable",
                     message="无法复验固定版本 Sub Agent",
                     severity=ValidationSeverity.ERROR,
                     path="subagents",
-                ),
+                )
             )
+            return tuple(issues)
         tenant_drafts = await self._repository.list_for_tenant(tenant_id)
-        issues: list[ValidationIssue] = []
         for reference in references:
             name, version_id = reference.rsplit("@", 1)
             try:
@@ -292,17 +312,13 @@ class AgentStudioService:
                 (
                     item
                     for item in tenant_drafts
-                    if item.spec.name == name
-                    and item.published_version == version_id
+                    if item.spec.name == name and item.published_version == version_id
                 ),
                 None,
             )
-            if (
-                studio_source is not None
-                and (
-                    studio_source.published_hash != version.manifest_hash
-                    or studio_source.published_package_hash != version.package_hash
-                )
+            if studio_source is not None and (
+                studio_source.published_hash != version.manifest_hash
+                or studio_source.published_package_hash != version.package_hash
             ):
                 issues.append(
                     ValidationIssue(
@@ -331,9 +347,7 @@ class AgentStudioService:
                 "Published Draft cannot be verified against the Agent Registry"
             )
         try:
-            existing = await self._registry.get(
-                tenant_id, draft.spec.name, draft.spec.version
-            )
+            existing = await self._registry.get(tenant_id, draft.spec.name, draft.spec.version)
         except NotFoundError as error:
             raise StudioPublicationConflictError(
                 "Draft publication metadata points to a missing Agent version"

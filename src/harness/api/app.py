@@ -19,6 +19,7 @@ from harness.api.routes import agents, approvals, artifacts, auth, input_artifac
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
+from harness.knowledge import api as knowledge_routes
 from harness.lifecycle import api as lifecycle_routes
 from harness.memory_bank import api as memory_bank_routes
 from harness.quota.repositories import QuotaExceededError
@@ -214,14 +215,15 @@ def create_app(container: ApiContainer) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-        async with container.memory_mcp_app.router.lifespan_context(
-            container.memory_mcp_app
-        ):
-            try:
-                yield
-            finally:
-                if container.close is not None:
-                    await container.close()
+        async with container.memory_mcp_app.router.lifespan_context(container.memory_mcp_app):
+            async with container.knowledge_mcp_app.router.lifespan_context(
+                container.knowledge_mcp_app
+            ):
+                try:
+                    yield
+                finally:
+                    if container.close is not None:
+                        await container.close()
 
     app = FastAPI(
         title="Claude Agent Harness",
@@ -230,6 +232,7 @@ def create_app(container: ApiContainer) -> FastAPI:
     )
     app.state.container = container
     app.mount("/mcp/memory", container.memory_mcp_app)
+    app.mount("/mcp/knowledge", container.knowledge_mcp_app)
     app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
     app.add_api_route(
         "/metrics",
@@ -272,6 +275,7 @@ def create_app(container: ApiContainer) -> FastAPI:
     ):
         app.include_router(router, prefix="/v1")
     app.include_router(studio_routes.router)
+    app.include_router(knowledge_routes.router)
     app.include_router(trigger_routes.studio_router)
     app.include_router(trigger_routes.public_router)
     return app

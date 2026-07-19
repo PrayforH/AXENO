@@ -1,15 +1,21 @@
 """Session lifecycle use cases."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
+from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersionStatus, Session
 from harness.core.ports import AgentRegistry, SessionRepository
 from harness.deployments.models import DeploymentResolution, EnvironmentName
+from harness.knowledge.models import KnowledgeSnapshotBinding
 
 DeploymentResolver = Callable[[str, str, EnvironmentName, str], Awaitable[DeploymentResolution]]
+KnowledgeBindingResolver = Callable[
+    [str, str, Sequence[str]],
+    Awaitable[Sequence[KnowledgeSnapshotBinding]],
+]
 
 
 class SessionService:
@@ -22,6 +28,7 @@ class SessionService:
         id_generator: IdGenerator,
         require_published_dependencies: bool = False,
         deployment_resolver: DeploymentResolver | None = None,
+        knowledge_binding_resolver: KnowledgeBindingResolver | None = None,
     ) -> None:
         self._registry = registry
         self._sessions = sessions
@@ -29,6 +36,7 @@ class SessionService:
         self._id_generator = id_generator
         self._require_published_dependencies = require_published_dependencies
         self._deployment_resolver = deployment_resolver
+        self._knowledge_binding_resolver = knowledge_binding_resolver
 
     def configure_deployment_resolver(self, resolver: DeploymentResolver) -> None:
         if self._deployment_resolver is not None:
@@ -62,9 +70,7 @@ class SessionService:
                 mode="json",
                 by_alias=True,
             )
-            required_credential_scope = (
-                "workload" if user_id.startswith("trigger:") else "user"
-            )
+            required_credential_scope = "workload" if user_id.startswith("trigger:") else "user"
             allowed_credential_scopes = {
                 item.value
                 for item in resolution.environment_policy_snapshot.resource_policy.credential_scopes
@@ -84,6 +90,19 @@ class SessionService:
                 agent_name=agent_name,
                 agent_version=agent_version,
             )
+        snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+        knowledge_bindings: tuple[dict[str, object], ...] = ()
+        if snapshot.manifest.spec.knowledge_references:
+            if self._knowledge_binding_resolver is None:
+                raise ConflictError("knowledge snapshot resolution is unavailable")
+            resolved = await self._knowledge_binding_resolver(
+                tenant_id,
+                user_id,
+                snapshot.manifest.spec.knowledge_references,
+            )
+            knowledge_bindings = tuple(
+                item.model_dump(mode="json", by_alias=True) for item in resolved
+            )
         session = Session(
             session_id=resolved_session_id,
             tenant_id=tenant_id,
@@ -94,6 +113,7 @@ class SessionService:
             environment=environment.value if environment is not None else None,
             deployment_snapshot_id=deployment_snapshot_id,
             environment_snapshot=environment_snapshot,
+            knowledge_snapshot_bindings=knowledge_bindings,
         )
         try:
             await self._sessions.add(session)
@@ -108,6 +128,7 @@ class SessionService:
                 or existing.environment != (environment.value if environment is not None else None)
                 or existing.deployment_snapshot_id != deployment_snapshot_id
                 or existing.environment_snapshot != environment_snapshot
+                or existing.knowledge_snapshot_bindings != knowledge_bindings
             ):
                 raise ConflictError(
                     "deterministic Session ID was reused for another Eval Case"

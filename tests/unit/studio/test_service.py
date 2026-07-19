@@ -7,7 +7,14 @@ from harness.application.agents import AgentService
 from harness.auth.audit import AuditService
 from harness.auth.repositories import InMemoryAuditRepository
 from harness.core.errors import ConflictError, NotFoundError
+from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersion
+from harness.knowledge.models import (
+    CreateKnowledgeBaseRequest,
+    CreateKnowledgeSourceRequest,
+)
+from harness.knowledge.repositories import InMemoryKnowledgeRepository
+from harness.knowledge.service import KnowledgeService
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import AgentDraftCompiler, DraftCompilationError
 from harness.studio.models import (
@@ -41,6 +48,7 @@ def studio(
     registry: InMemoryAgentRegistry | None = None,
     repository: InMemoryAgentDraftRepository | None = None,
     audit: AuditService | None = None,
+    knowledge: KnowledgeService | None = None,
 ) -> AgentStudioService:
     catalog = default_capability_catalog()
     return AgentStudioService(
@@ -49,6 +57,7 @@ def studio(
         catalog,
         publisher=publisher,
         registry=registry,
+        knowledge=knowledge,
         audit=audit,
         clock=lambda: NOW,
         id_generator=lambda: "draft_contract",
@@ -74,9 +83,7 @@ async def test_replace_uses_optimistic_revision_and_preserves_publication_identi
     created = await service.create(
         tenant_id="tenant-a", user_id="builder", request=create_request()
     )
-    changed_spec = created.spec.model_copy(
-        update={"description": "更新后的合同审查说明。"}
-    )
+    changed_spec = created.spec.model_copy(update={"description": "更新后的合同审查说明。"})
     request = ReplaceAgentDraftRequest(expectedRevision=1, spec=changed_spec)
 
     updated = await service.replace(
@@ -186,6 +193,108 @@ async def test_unpublished_subagent_blocks_validation_and_publication() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_unknown_knowledge_reference_blocks_validation_and_publication() -> None:
+    registry = InMemoryAgentRegistry()
+    publisher = AgentService(registry, clock=lambda: NOW, environment="production")
+    knowledge = KnowledgeService(InMemoryKnowledgeRepository())
+    service = studio(
+        publisher=publisher,
+        registry=registry,
+        knowledge=knowledge,
+    )
+    created = await service.create(
+        tenant_id="tenant-a",
+        user_id="builder",
+        request=create_request(),
+    )
+    updated = await service.replace(
+        tenant_id="tenant-a",
+        user_id="builder",
+        draft_id=created.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=created.revision,
+            spec=created.spec.model_copy(update={"knowledge_references": ("missing-policy",)}),
+        ),
+    )
+
+    validation = await service.validate("tenant-a", updated.draft_id)
+
+    assert validation.ready is False
+    assert "knowledge_base_not_found" in {issue.code for issue in validation.issues}
+    with pytest.raises(DraftCompilationError, match="知识库尚未注册"):
+        await service.publish(
+            tenant_id="tenant-a",
+            user_id="publisher",
+            draft_id=updated.draft_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_registered_knowledge_reference_can_be_published() -> None:
+    registry = InMemoryAgentRegistry()
+    publisher = AgentService(registry, clock=lambda: NOW, environment="production")
+    knowledge = KnowledgeService(InMemoryKnowledgeRepository())
+    await knowledge.create_source(
+        "tenant-a",
+        "builder",
+        CreateKnowledgeSourceRequest.model_validate(
+            {
+                "reference": "handbook",
+                "displayName": "Handbook",
+                "kind": "file",
+                "config": {
+                    "type": "file",
+                    "documents": [
+                        {
+                            "documentId": "leave",
+                            "title": "Leave",
+                            "content": "Annual leave is 15 days.",
+                        }
+                    ],
+                },
+            }
+        ),
+    )
+    await knowledge.create_base(
+        "tenant-a",
+        "builder",
+        CreateKnowledgeBaseRequest(
+            reference="company-policy",
+            displayName="Company policy",
+            sourceReferences=("handbook",),
+        ),
+    )
+    service = studio(
+        publisher=publisher,
+        registry=registry,
+        knowledge=knowledge,
+    )
+    created = await service.create(
+        tenant_id="tenant-a",
+        user_id="builder",
+        request=create_request(),
+    )
+    updated = await service.replace(
+        tenant_id="tenant-a",
+        user_id="builder",
+        draft_id=created.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=created.revision,
+            spec=created.spec.model_copy(update={"knowledge_references": ("company-policy",)}),
+        ),
+    )
+
+    version = await service.publish(
+        tenant_id="tenant-a",
+        user_id="publisher",
+        draft_id=updated.draft_id,
+    )
+
+    snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+    assert snapshot.manifest.spec.knowledge_references == ("company-policy",)
+
+
 class DriftRegistry:
     def __init__(self, delegate: InMemoryAgentRegistry) -> None:
         self._delegate = delegate
@@ -231,9 +340,7 @@ async def test_subagent_hash_drift_blocks_lead_publication() -> None:
             spec=child.spec.model_copy(update={"version": "1.0.0"}),
         ),
     )
-    await child_service.publish(
-        tenant_id="tenant-a", user_id="publisher", draft_id=child.draft_id
-    )
+    await child_service.publish(tenant_id="tenant-a", user_id="publisher", draft_id=child.draft_id)
     lead_service = AgentStudioService(
         repository,
         AgentDraftCompiler(default_capability_catalog()),
@@ -246,9 +353,7 @@ async def test_subagent_hash_drift_blocks_lead_publication() -> None:
     lead = await lead_service.create(
         tenant_id="tenant-a",
         user_id="builder",
-        request=create_request(
-            name="contract-lead", template=AgentTemplate.ORCHESTRATOR
-        ),
+        request=create_request(name="contract-lead", template=AgentTemplate.ORCHESTRATOR),
     )
 
     validation = await lead_service.validate("tenant-a", lead.draft_id)

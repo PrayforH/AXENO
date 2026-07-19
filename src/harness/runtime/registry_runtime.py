@@ -13,6 +13,8 @@ from harness.execution.credentials import (
     CredentialLease,
     CredentialResourceKind,
 )
+from harness.knowledge.service import KnowledgeService
+from harness.knowledge.workload import RemoteKnowledgeMcpProvider
 from harness.memory_bank.service import MemoryBankService
 from harness.memory_bank.workload import RemoteMemoryMcpProvider
 from harness.observability.provider import Observability
@@ -38,6 +40,8 @@ class RegistryClaudeRuntime:
         memory_service: UserMemoryService | None = None,
         memory_bank: MemoryBankService | None = None,
         remote_memory_mcp: RemoteMemoryMcpProvider | None = None,
+        knowledge: KnowledgeService | None = None,
+        remote_knowledge_mcp: RemoteKnowledgeMcpProvider | None = None,
         session_store_factory: Callable[[Session], object] | None = None,
         observability: Observability | None = None,
         credential_broker: CredentialBroker | None = None,
@@ -53,6 +57,8 @@ class RegistryClaudeRuntime:
         self._memory_service = memory_service
         self._memory_bank = memory_bank
         self._remote_memory_mcp = remote_memory_mcp
+        self._knowledge = knowledge
+        self._remote_knowledge_mcp = remote_knowledge_mcp
         self._session_store_factory = session_store_factory
         self._observability = observability
         self._credential_broker = credential_broker
@@ -64,9 +70,7 @@ class RegistryClaudeRuntime:
         legacy_fallback: bool = False,
     ) -> CcSwitchClaudeConfig:
         candidates = tuple(
-            config
-            for config in (self._config, self._fallback_config)
-            if config is not None
+            config for config in (self._config, self._fallback_config) if config is not None
         )
         exact = next(
             (config for config in candidates if config.route_id == route_id),
@@ -112,9 +116,7 @@ class RegistryClaudeRuntime:
                 required_keys=frozenset({"api_key"}),
             )
             issued_leases.append(lease)
-            values = await self._credential_broker.resolve(
-                lease.lease_id, context.identity
-            )
+            values = await self._credential_broker.resolve(lease.lease_id, context.identity)
             route_secret = values["api_key"].get_secret_value()
         route_secrets = {route_id: route_secret}
         fallback_route_id = snapshot.manifest.spec.model.fallback_route
@@ -160,6 +162,8 @@ class RegistryClaudeRuntime:
                 memory_service=self._memory_service,
                 memory_bank=self._memory_bank,
                 remote_memory_mcp=self._remote_memory_mcp,
+                knowledge=self._knowledge,
+                remote_knowledge_mcp=self._remote_knowledge_mcp,
                 observability=self._observability,
                 session_store=(
                     self._session_store_factory(session)
@@ -179,6 +183,8 @@ class RegistryClaudeRuntime:
                 memory_service=self._memory_service,
                 memory_bank=self._memory_bank,
                 remote_memory_mcp=self._remote_memory_mcp,
+                knowledge=self._knowledge,
+                remote_knowledge_mcp=self._remote_knowledge_mcp,
                 observability=self._observability,
                 session_store=(
                     self._session_store_factory(session)

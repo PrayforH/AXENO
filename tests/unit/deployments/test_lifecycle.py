@@ -17,6 +17,11 @@ from harness.deployments.models import (
     ReplaceEnvironmentPolicyRequest,
     RollbackRequest,
 )
+from harness.knowledge.models import (
+    CreateKnowledgeBaseRequest,
+    CreateKnowledgeSourceRequest,
+    ReplaceKnowledgeSourceRequest,
+)
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 from harness.quota.repositories import QuotaExceededError
 from harness.studio.models import (
@@ -311,6 +316,147 @@ async def test_environment_policy_denies_agent_resources_and_workload_scope() ->
 
 
 @pytest.mark.asyncio
+async def test_environment_allows_only_registered_knowledge_and_sessions_pin_snapshot() -> None:
+    container = build_memory_container()
+    source, _ = await container.knowledge.create_source(
+        TENANT,
+        USER,
+        CreateKnowledgeSourceRequest.model_validate(
+            {
+                "reference": "handbook",
+                "displayName": "Handbook",
+                "kind": "file",
+                "config": {
+                    "type": "file",
+                    "documents": [
+                        {
+                            "documentId": "leave",
+                            "title": "Leave",
+                            "content": "Policy revision one.",
+                        }
+                    ],
+                },
+            }
+        ),
+    )
+    await container.knowledge.create_base(
+        TENANT,
+        USER,
+        CreateKnowledgeBaseRequest(
+            reference="company-policy",
+            displayName="Company policy",
+            sourceReferences=("handbook",),
+        ),
+    )
+    draft = await container.studio.create(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=CreateAgentDraftRequest(
+            name="knowledge-agent",
+            domain="policy",
+            displayName="Knowledge Agent",
+            description="Answers from governed policy snapshots.",
+            template=AgentTemplate.ANALYST,
+        ),
+    )
+    updated = await container.studio.replace(
+        tenant_id=TENANT,
+        user_id=USER,
+        draft_id=draft.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=draft.revision,
+            spec=draft.spec.model_copy(update={"knowledge_references": ("company-policy",)}),
+        ),
+    )
+    version = await container.studio.publish(
+        tenant_id=TENANT,
+        user_id=USER,
+        draft_id=updated.draft_id,
+    )
+    environment = await container.deployments.environment(
+        TENANT,
+        updated.spec.name,
+        EnvironmentName.PRODUCTION,
+    )
+    with pytest.raises(ConflictError, match="Knowledge Bases"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=promotion(
+                agent_name=updated.spec.name,
+                version=version.version,
+                revision=environment.revision,
+                key="knowledge-denied",
+            ),
+        )
+
+    allowed = await container.deployments.replace_environment_policy(
+        tenant_id=TENANT,
+        user_id=USER,
+        agent_name=updated.spec.name,
+        environment_name=EnvironmentName.PRODUCTION,
+        request=ReplaceEnvironmentPolicyRequest(
+            expectedEnvironmentRevision=environment.revision,
+            policy=environment.resource_policy.model_copy(
+                update={"allowed_knowledge_references": ("company-policy",)}
+            ),
+        ),
+    )
+    await promote_and_drain(
+        container,
+        promotion(
+            agent_name=updated.spec.name,
+            version=version.version,
+            revision=allowed.revision,
+            key="knowledge-allowed",
+        ),
+    )
+    first_session = await container.sessions.create(
+        TENANT,
+        "user-a",
+        updated.spec.name,
+        None,
+        environment=EnvironmentName.PRODUCTION,
+    )
+    old_binding = first_session.knowledge_snapshot_bindings[0]
+    assert old_binding["snapshotId"] == source.active_snapshot_id
+
+    current = await container.knowledge.get_source(TENANT, "handbook")
+    await container.knowledge.replace_source(
+        TENANT,
+        USER,
+        "handbook",
+        ReplaceKnowledgeSourceRequest(
+            expectedRevision=current.revision,
+            displayName=current.display_name,
+            description=current.description,
+            acl=current.acl,
+            config={
+                "type": "file",
+                "documents": [
+                    {
+                        "documentId": "leave",
+                        "title": "Leave",
+                        "content": "Policy revision two.",
+                    }
+                ],
+            },
+        ),
+    )
+    await container.knowledge.sync_source(TENANT, USER, "handbook")
+    second_session = await container.sessions.create(
+        TENANT,
+        "user-b",
+        updated.spec.name,
+        None,
+        environment=EnvironmentName.PRODUCTION,
+    )
+
+    assert first_session.knowledge_snapshot_bindings == (old_binding,)
+    assert second_session.knowledge_snapshot_bindings[0]["snapshotId"] != old_binding["snapshotId"]
+
+
+@pytest.mark.asyncio
 async def test_promotion_rejects_agent_built_from_a_stale_tool_catalog() -> None:
     container = build_memory_container()
     draft, first_version, _ = await published_versions(
@@ -333,10 +479,7 @@ async def test_promotion_rejects_agent_built_from_a_stale_tool_catalog() -> None
     )
 
     assert updated_catalog.revision == published_catalog.revision + 1
-    assert (
-        environment.resource_policy.capability_catalog_revision
-        == updated_catalog.revision
-    )
+    assert environment.resource_policy.capability_catalog_revision == updated_catalog.revision
     with pytest.raises(ConflictError, match="tool directory catalog revision"):
         await container.deployments.promote(
             tenant_id=TENANT,
@@ -532,9 +675,7 @@ async def test_profile_revision_requires_environment_approval_and_local_is_rejec
     )
     current_version = 1
 
-    async def resolve_profile(
-        _tenant_id: str, profile_id: str
-    ) -> ExecutionProfileMetadata:
+    async def resolve_profile(_tenant_id: str, profile_id: str) -> ExecutionProfileMetadata:
         return ExecutionProfileMetadata(
             profileId=profile_id,
             label="Managed profile",

@@ -65,15 +65,11 @@ class ToolDirectoryEntry(ManifestModel):
     logical_reference: str = Field(alias="logicalReference", min_length=1)
     description: str = Field(min_length=1, max_length=2_000)
     risk: Literal["low", "medium", "high"]
-    result_trust: Literal["safe", "sensitive", "untrusted"] = Field(
-        alias="resultTrust"
-    )
+    result_trust: Literal["safe", "sensitive", "untrusted"] = Field(alias="resultTrust")
 
 
 class ToolDirectorySnapshot(ManifestModel):
-    schema_version: Literal["harness.tool-directory/v1"] = Field(
-        alias="schemaVersion"
-    )
+    schema_version: Literal["harness.tool-directory/v1"] = Field(alias="schemaVersion")
     catalog_revision: int = Field(alias="catalogRevision", ge=1)
     exposure_mode: ToolExposureMode = Field(alias="exposureMode")
     entries: tuple[ToolDirectoryEntry, ...]
@@ -101,9 +97,7 @@ class ToolDirectorySnapshot(ManifestModel):
             "schemaVersion": "harness.tool-directory/v1",
             "catalogRevision": catalog_revision,
             "exposureMode": exposure_mode,
-            "entries": [
-                item.model_dump(mode="json", by_alias=True) for item in ordered
-            ],
+            "entries": [item.model_dump(mode="json", by_alias=True) for item in ordered],
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return cls.model_validate(
@@ -176,6 +170,10 @@ class AgentSpec(ManifestModel):
         default="eager",
         alias="toolExposureMode",
     )
+    knowledge_references: tuple[str, ...] = Field(
+        default=(),
+        alias="knowledgeReferences",
+    )
     subagents: tuple[SubagentSpec, ...] = ()
     hooks: tuple[HookSpec, ...] = ()
     permissions: PermissionSpec
@@ -190,6 +188,13 @@ class AgentSpec(ManifestModel):
             raise ValueError("duplicate subagent runtime name: " + ", ".join(duplicates))
         if len(runtime_names) > self.limits.max_subagents:
             raise ValueError(f"declared subagents exceed maxSubagents={self.limits.max_subagents}")
+        if len(set(self.knowledge_references)) != len(self.knowledge_references):
+            raise ValueError("duplicate Knowledge Base reference")
+        if any(
+            not re.fullmatch(r"[a-z][a-z0-9-]*", reference)
+            for reference in self.knowledge_references
+        ):
+            raise ValueError("invalid Knowledge Base reference")
         return self
 
 
@@ -360,9 +365,7 @@ def _load_tool_directory(
     path = root / TOOL_DIRECTORY_FILENAME
     if not path.exists():
         if manifest.spec.tool_exposure_mode == "on_demand":
-            raise ManifestValidationError(
-                "on-demand tool exposure requires tool-directory.json"
-            )
+            raise ManifestValidationError("on-demand tool exposure requires tool-directory.json")
         return None
     if path.is_symlink() or not path.is_file():
         raise ManifestValidationError("tool-directory.json must be a regular file")
@@ -380,29 +383,17 @@ def _load_tool_directory(
             "tool directory exposure mode does not match the Agent Manifest"
         )
 
-    expected_builtins = {
-        tool.builtin for tool in manifest.spec.tools if tool.builtin is not None
-    }
+    expected_builtins = {tool.builtin for tool in manifest.spec.tools if tool.builtin is not None}
     actual_builtins = {
-        entry.logical_reference
-        for entry in directory.entries
-        if entry.source == "builtin"
+        entry.logical_reference for entry in directory.entries if entry.source == "builtin"
     }
     expected_mcp = {tool.mcp for tool in manifest.spec.tools if tool.mcp is not None}
-    actual_mcp = {
-        entry.logical_reference
-        for entry in directory.entries
-        if entry.source == "mcp"
-    }
+    actual_mcp = {entry.logical_reference for entry in directory.entries if entry.source == "mcp"}
     expected_python = {
-        tool.python_entry
-        for tool in manifest.spec.tools
-        if tool.python_entry is not None
+        tool.python_entry for tool in manifest.spec.tools if tool.python_entry is not None
     }
     actual_python = {
-        entry.logical_reference
-        for entry in directory.entries
-        if entry.source == "python"
+        entry.logical_reference for entry in directory.entries if entry.source == "python"
     }
     if (
         expected_builtins != actual_builtins

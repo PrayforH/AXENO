@@ -116,6 +116,7 @@ class Session(FrozenModel):
     environment: str | None = None
     deployment_snapshot_id: str | None = None
     environment_snapshot: dict[str, Any] | None = None
+    knowledge_snapshot_bindings: tuple[dict[str, Any], ...] = ()
 
 
 class Run(FrozenModel):

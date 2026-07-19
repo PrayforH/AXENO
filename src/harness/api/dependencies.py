@@ -70,6 +70,13 @@ from harness.evals.repositories import (
 )
 from harness.evals.service import EvalControlPlaneService
 from harness.inputs.processors import DefaultInputProcessor
+from harness.knowledge.repositories import InMemoryKnowledgeRepository
+from harness.knowledge.service import KnowledgeService
+from harness.knowledge.workload import (
+    KnowledgeWorkloadTokenService,
+    RemoteKnowledgeMcpProvider,
+    build_knowledge_mcp_app,
+)
 from harness.lifecycle.adapters import EmptyLifecycleAdapter
 from harness.lifecycle.controller import DataLifecycleController
 from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
@@ -192,6 +199,9 @@ class ApiContainer:
     memory_bank: MemoryBankService
     memory_mcp_app: Starlette
     memory_workload_tokens: MemoryWorkloadTokenService
+    knowledge: KnowledgeService
+    knowledge_mcp_app: Starlette
+    knowledge_workload_tokens: KnowledgeWorkloadTokenService
     events: EventRepository
     observed_events: EventRepository
     task_queue: TaskQueue
@@ -218,6 +228,7 @@ def build_memory_container(
     input_artifact_repository = InMemoryInputArtifactRepository()
     memory_repository = InMemoryUserMemoryRepository()
     memory_bank_repository = InMemoryMemoryBankRepository()
+    knowledge_repository = InMemoryKnowledgeRepository()
     thread_file_repository = InMemoryThreadFileRepository()
     workspace_snapshot_repository = InMemoryWorkspaceSnapshotRepository()
     artifact_store = InMemoryArtifactStore()
@@ -265,6 +276,12 @@ def build_memory_container(
     def id_generator(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    knowledge = KnowledgeService(
+        knowledge_repository,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
     quotas = QuotaService(
         InMemoryQuotaRepository(),
         audit=audit,
@@ -315,6 +332,7 @@ def build_memory_container(
         catalogs=capability_catalogs,
         publisher=agent_service,
         registry=registry,
+        knowledge=knowledge,
         audit=audit,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
@@ -356,7 +374,13 @@ def build_memory_container(
         admission=quotas,
         quota_plan_resolver=run_quota_plan,
     )
-    session_service = SessionService(registry, sessions, clock=clock, id_generator=id_generator)
+    session_service = SessionService(
+        registry,
+        sessions,
+        clock=clock,
+        id_generator=id_generator,
+        knowledge_binding_resolver=knowledge.resolve_bindings,
+    )
     trigger_service = AgentTriggerService(
         InMemoryAgentTriggerRepository(),
         sessions=session_service,
@@ -446,6 +470,7 @@ def build_memory_container(
         id_generator=id_generator,
         quality_gate=quality_service.require_promotion_allowed,
         capability_catalog_resolver=capability_catalogs.get,
+        knowledge_reference_validator=knowledge.require_bases,
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
@@ -465,6 +490,14 @@ def build_memory_container(
     memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
     remote_memory_mcp = RemoteMemoryMcpProvider(
         resolved_settings.memory_mcp_public_url, memory_tokens
+    )
+    knowledge_tokens = KnowledgeWorkloadTokenService(
+        resolved_settings.knowledge_workload_token_secret
+    )
+    knowledge_mcp_app = build_knowledge_mcp_app(knowledge, knowledge_tokens)
+    remote_knowledge_mcp = RemoteKnowledgeMcpProvider(
+        resolved_settings.knowledge_mcp_public_url,
+        knowledge_tokens,
     )
     memory_service = UserMemoryService(memory_repository, clock=clock, memory_bank=memory_bank)
     workspace_service = WorkspaceService(
@@ -637,6 +670,8 @@ def build_memory_container(
             memory_service=memory_service,
             memory_bank=memory_bank,
             remote_memory_mcp=remote_memory_mcp,
+            knowledge=knowledge,
+            remote_knowledge_mcp=remote_knowledge_mcp,
             observability=observability,
         )
         model_probe = AnthropicSandboxModelProbe(gateway)
@@ -779,6 +814,9 @@ def build_memory_container(
         memory_bank=memory_bank,
         memory_mcp_app=memory_mcp_app,
         memory_workload_tokens=memory_tokens,
+        knowledge=knowledge,
+        knowledge_mcp_app=knowledge_mcp_app,
+        knowledge_workload_tokens=knowledge_tokens,
         events=raw_events,
         observed_events=observed_events,
         task_queue=queue,

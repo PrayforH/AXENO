@@ -86,6 +86,7 @@ export interface StudioDraft {
   builtinTools: string[];
   mcpServers: string[];
   toolExposureMode: ToolExposureMode;
+  knowledgeReferences: string[];
   subagents: StudioSubagent[];
   policy: string;
   executionProfile: string;
@@ -353,6 +354,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   builtinTools: ["Read", "Glob", "Grep", "Write", "Edit", "Task"],
   mcpServers: ["tavily-readonly"],
   toolExposureMode: "eager",
+  knowledgeReferences: [],
   subagents: [
     {
       alias: "fact-researcher",
@@ -597,7 +599,10 @@ export function evaluateStudioDraft(
     model: draft.model,
     promptSections,
     skillCount: draft.skills.length,
-    toolCount: draft.builtinTools.length + draft.mcpServers.length,
+    toolCount:
+      draft.builtinTools.length
+      + draft.mcpServers.length
+      + (draft.knowledgeReferences.length ? 1 : 0),
     subagentCount: draft.subagents.length,
     backgroundSubagentCount: draft.subagents.filter(
       (subagent) => subagent.background,

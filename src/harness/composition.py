@@ -45,6 +45,12 @@ from harness.execution.credentials import (
     InMemoryCredentialBroker,
 )
 from harness.inputs.processors import DefaultInputProcessor
+from harness.knowledge.service import KnowledgeService
+from harness.knowledge.workload import (
+    KnowledgeWorkloadTokenService,
+    RemoteKnowledgeMcpProvider,
+    build_knowledge_mcp_app,
+)
 from harness.lifecycle.adapters import EmptyLifecycleAdapter, LifecycleAdapter
 from harness.lifecycle.controller import DataLifecycleController
 from harness.lifecycle.models import LifecycleScope, LifecycleScopeKind
@@ -97,6 +103,7 @@ from harness.storage.eval_repository import (
     PostgresEvalDatasetRepository,
     PostgresEvalRunRepository,
 )
+from harness.storage.knowledge_repository import PostgresKnowledgeRepository
 from harness.storage.lifecycle_adapters import (
     LangfuseLifecycleAdapter,
     MemoryLifecycleAdapter,
@@ -394,6 +401,7 @@ def build_production_container(
     input_repository = PostgresInputArtifactRepository(sessions)
     memory_repository = PostgresUserMemoryRepository(sessions)
     memory_bank_repository = PostgresMemoryBankRepository(sessions)
+    knowledge_repository = PostgresKnowledgeRepository(sessions)
     file_repository = PostgresThreadFileRepository(sessions)
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
@@ -449,6 +457,12 @@ def build_production_container(
     def ids(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    knowledge = KnowledgeService(
+        knowledge_repository,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
+    )
     quotas = QuotaService(
         PostgresQuotaRepository(sessions),
         audit=audit,
@@ -515,6 +529,7 @@ def build_production_container(
         catalogs=capability_catalogs,
         publisher=agent_service,
         registry=registry,
+        knowledge=knowledge,
         audit=audit,
         clock=clock,
         id_generator=lambda: ids("draft"),
@@ -561,6 +576,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         require_published_dependencies=True,
+        knowledge_binding_resolver=knowledge.resolve_bindings,
     )
 
     async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
@@ -679,6 +695,7 @@ def build_production_container(
         id_generator=ids,
         quality_gate=quality_service.require_promotion_allowed,
         capability_catalog_resolver=capability_catalogs.get,
+        knowledge_reference_validator=knowledge.require_bases,
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
@@ -697,6 +714,12 @@ def build_production_container(
     memory_tokens = MemoryWorkloadTokenService(settings.memory_workload_token_secret)
     memory_mcp_app = build_memory_mcp_app(memory_bank, memory_tokens)
     remote_memory_mcp = RemoteMemoryMcpProvider(settings.memory_mcp_public_url, memory_tokens)
+    knowledge_tokens = KnowledgeWorkloadTokenService(settings.knowledge_workload_token_secret)
+    knowledge_mcp_app = build_knowledge_mcp_app(knowledge, knowledge_tokens)
+    remote_knowledge_mcp = RemoteKnowledgeMcpProvider(
+        settings.knowledge_mcp_public_url,
+        knowledge_tokens,
+    )
     memory_service = UserMemoryService(memory_repository, clock=clock, memory_bank=memory_bank)
     workspace_service = WorkspaceService(
         store,
@@ -766,6 +789,8 @@ def build_production_container(
             memory_service=memory_service,
             memory_bank=memory_bank,
             remote_memory_mcp=remote_memory_mcp,
+            knowledge=knowledge,
+            remote_knowledge_mcp=remote_knowledge_mcp,
             session_store_factory=lambda session: PostgresSessionStore(
                 sessions,
                 tenant_id=session.tenant_id,
@@ -1018,6 +1043,9 @@ def build_production_container(
         memory_bank=memory_bank,
         memory_mcp_app=memory_mcp_app,
         memory_workload_tokens=memory_tokens,
+        knowledge=knowledge,
+        knowledge_mcp_app=knowledge_mcp_app,
+        knowledge_workload_tokens=knowledge_tokens,
         events=raw_event_repository,
         observed_events=observed_event_repository,
         task_queue=queue,

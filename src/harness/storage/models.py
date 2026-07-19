@@ -439,9 +439,7 @@ class ReliabilityIncidentRow(Base):
 
 class ReaperActionRow(Base):
     __tablename__ = "reaper_actions"
-    __table_args__ = (
-        Index("ix_reaper_actions_tenant_occurred", "tenant_id", "occurred_at"),
-    )
+    __table_args__ = (Index("ix_reaper_actions_tenant_occurred", "tenant_id", "occurred_at"),)
 
     action_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(128))
@@ -455,9 +453,7 @@ class ReaperActionRow(Base):
 
 class CapacitySnapshotRow(Base):
     __tablename__ = "capacity_snapshots"
-    __table_args__ = (
-        Index("ix_capacity_snapshots_captured", "tenant_id", "captured_at"),
-    )
+    __table_args__ = (Index("ix_capacity_snapshots_captured", "tenant_id", "captured_at"),)
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -485,6 +481,103 @@ class AgentTriggerRow(Base):
     revision: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class KnowledgeBaseRow(Base):
+    __tablename__ = "knowledge_bases"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_knowledge_bases_revision_positive"),
+        Index("ix_knowledge_bases_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class KnowledgeSourceRow(Base):
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_knowledge_sources_revision_positive"),
+        Index("ix_knowledge_sources_tenant_health", "tenant_id", "health"),
+        Index(
+            "ix_knowledge_sources_tenant_updated",
+            "tenant_id",
+            "updated_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    health: Mapped[str] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(Integer)
+    active_snapshot_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class KnowledgeSnapshotRow(Base):
+    __tablename__ = "knowledge_snapshots"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_snapshots_source_created",
+            "tenant_id",
+            "source_reference",
+            "created_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_reference: Mapped[str] = mapped_column(String(128))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class KnowledgeChunkRow(Base):
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_chunks_snapshot",
+            "tenant_id",
+            "snapshot_id",
+            "document_id",
+            "ordinal",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    chunk_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_reference: Mapped[str] = mapped_column(String(128))
+    document_id: Mapped[str] = mapped_column(String(256))
+    ordinal: Mapped[int] = mapped_column(Integer)
+    content: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class KnowledgeSyncRunRow(Base):
+    __tablename__ = "knowledge_sync_runs"
+    __table_args__ = (
+        Index(
+            "ix_knowledge_sync_runs_source_created",
+            "tenant_id",
+            "source_reference",
+            "created_at",
+        ),
+        Index("ix_knowledge_sync_runs_status", "status", "created_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sync_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_reference: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

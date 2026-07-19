@@ -59,9 +59,7 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
             "tool-directory.json",
         }.issubset(names)
         manifest = bundle.read("agent.yaml").decode()
-        directory = ToolDirectorySnapshot.model_validate_json(
-            bundle.read("tool-directory.json")
-        )
+        directory = ToolDirectorySnapshot.model_validate_json(bundle.read("tool-directory.json"))
     assert "route: new-api-default" in manifest
     assert "mode: isolated" in manifest
     assert directory.exposure_mode == "eager"
@@ -73,15 +71,33 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
     }
 
 
+def test_knowledge_references_are_pinned_in_manifest_and_effective_contract() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    current = draft()
+    with_knowledge = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(update={"knowledge_references": ("company-policy",)})
+        }
+    )
+
+    validation = compiler.validate(with_knowledge)
+    compiled = compiler.compile(with_knowledge)
+
+    assert validation.ready is True
+    assert validation.contract.knowledge_references == ("company-policy",)
+    assert "knowledgeReferences:" in validation.manifest_yaml
+    assert "- company-policy" in validation.manifest_yaml
+    with ZipFile(BytesIO(compiled.bundle)) as bundle:
+        manifest = bundle.read("agent.yaml").decode()
+    assert "knowledgeReferences:" in manifest
+    assert "- company-policy" in manifest
+
+
 def test_tavily_is_a_controlled_external_mcp_capability_not_general_network() -> None:
     compiler = AgentDraftCompiler(default_capability_catalog())
     current = draft()
     enabled = current.model_copy(
-        update={
-            "spec": current.spec.model_copy(
-                update={"mcp_servers": ("tavily-readonly",)}
-            )
-        }
+        update={"spec": current.spec.model_copy(update={"mcp_servers": ("tavily-readonly",)})}
     )
 
     validation = compiler.validate(enabled)
@@ -139,37 +155,25 @@ def test_on_demand_bundle_pins_reviewed_tool_directory_and_route_capability() ->
     assert directory.catalog_revision == 9
     assert directory.exposure_mode == "on_demand"
     assert directory.content_hash == directory.digest()
-    assert {
-        entry.name for entry in directory.entries if entry.source == "mcp"
-    } == {
+    assert {entry.name for entry in directory.entries if entry.source == "mcp"} == {
         "mcp__tavily__tavily_search",
         "mcp__tavily__tavily_extract",
     }
-    assert {
-        entry.logical_reference
-        for entry in directory.entries
-        if entry.source == "mcp"
-    } == {"tavily-readonly"}
+    assert {entry.logical_reference for entry in directory.entries if entry.source == "mcp"} == {
+        "tavily-readonly"
+    }
 
 
 def test_on_demand_mode_fails_closed_on_route_without_tool_search() -> None:
     current = draft()
     unsupported = current.model_copy(
-        update={
-            "spec": current.spec.model_copy(
-                update={"tool_exposure_mode": "on_demand"}
-            )
-        }
+        update={"spec": current.spec.model_copy(update={"tool_exposure_mode": "on_demand"})}
     )
 
-    validation = AgentDraftCompiler(default_capability_catalog()).validate(
-        unsupported
-    )
+    validation = AgentDraftCompiler(default_capability_catalog()).validate(unsupported)
 
     assert validation.ready is False
-    assert "tool_search_capability_missing" in {
-        issue.code for issue in validation.issues
-    }
+    assert "tool_search_capability_missing" in {issue.code for issue in validation.issues}
 
 
 def test_unknown_model_tool_and_mcp_fail_closed_before_packaging() -> None:
@@ -179,9 +183,7 @@ def test_unknown_model_tool_and_mcp_fail_closed_before_packaging() -> None:
         update={
             "spec": current.spec.model_copy(
                 update={
-                    "model": current.spec.model.model_copy(
-                        update={"route_id": "unreviewed-route"}
-                    ),
+                    "model": current.spec.model.model_copy(update={"route_id": "unreviewed-route"}),
                     "builtin_tools": (*current.spec.builtin_tools, "DangerousTool"),
                     "mcp_servers": ("arbitrary-url",),
                 }
@@ -215,9 +217,7 @@ def test_sandbox_is_mandatory_and_provider_is_not_authored_by_domain_agent() -> 
 def test_local_development_profile_is_explicitly_preview_only() -> None:
     catalog = default_capability_catalog()
     profile = next(
-        item
-        for item in catalog.execution_profiles
-        if item.profile_id == "local-development"
+        item for item in catalog.execution_profiles if item.profile_id == "local-development"
     )
     current = draft()
     local_draft = current.model_copy(
@@ -270,8 +270,7 @@ def test_disabled_catalog_resources_fail_closed() -> None:
                 for item in catalog.policies
             ),
             "execution_profiles": tuple(
-                item.model_copy(update={"enabled": False})
-                for item in catalog.execution_profiles
+                item.model_copy(update={"enabled": False}) for item in catalog.execution_profiles
             ),
         }
     )
@@ -297,20 +296,14 @@ def test_model_and_execution_profile_capabilities_must_be_compatible() -> None:
                 for item in catalog.model_routes
             ),
             "execution_profiles": tuple(
-                item.model_copy(
-                    update={"network_access": (NetworkAccess.NONE,)}
-                )
+                item.model_copy(update={"network_access": (NetworkAccess.NONE,)})
                 for item in catalog.execution_profiles
             ),
         }
     )
     current = draft()
     with_mcp = current.model_copy(
-        update={
-            "spec": current.spec.model_copy(
-                update={"mcp_servers": ("tavily-readonly",)}
-            )
-        }
+        update={"spec": current.spec.model_copy(update={"mcp_servers": ("tavily-readonly",)})}
     )
 
     validation = AgentDraftCompiler(incompatible).validate(with_mcp)
@@ -334,15 +327,9 @@ def test_execution_profile_egress_allows_only_registered_mcp_associations() -> N
     )
     current = draft()
     with_mcp = current.model_copy(
-        update={
-            "spec": current.spec.model_copy(
-                update={"mcp_servers": ("tavily-readonly",)}
-            )
-        }
+        update={"spec": current.spec.model_copy(update={"mcp_servers": ("tavily-readonly",)})}
     )
 
     validation = AgentDraftCompiler(restricted).validate(with_mcp)
 
-    assert "execution_profile_egress_incompatible" in {
-        issue.code for issue in validation.issues
-    }
+    assert "execution_profile_egress_incompatible" in {issue.code for issue in validation.issues}
