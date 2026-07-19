@@ -2377,51 +2377,10 @@ body,
   line-height: 16px;
 }
 
-.composer-run-controls {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-
 .composer-hint {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-stop-button {
-  min-height: 26px;
-  padding: 0 9px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  border: 1px solid #e3c2bf;
-  border-radius: 7px;
-  color: #943f38;
-  background: #f7e9e7;
-  cursor: pointer;
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 1;
-}
-
-.composer-stop-button > span {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: currentColor;
-}
-
-.composer-stop-button:hover {
-  border-color: #c88984;
-  background: #f3dfdc;
-}
-
-.composer-stop-button:active {
-  transform: scale(0.97);
 }
 
 .sandbox-indicator {

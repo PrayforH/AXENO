@@ -10,7 +10,6 @@ import { useEffect, useMemo } from "react";
 import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
-import { approvalStore } from "../lib/approval-store";
 import { liveResponseStore } from "../lib/live-response-store";
 import { runStreamStore } from "../lib/run-stream-store";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
@@ -42,7 +41,6 @@ export function AssistantRuntimeShell({
   const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);
   useEffect(() => {
     activityStore.clear();
-    approvalStore.reset();
     liveResponseStore.clear();
     runStreamStore.clear();
     uploadFeedbackStore.clear();

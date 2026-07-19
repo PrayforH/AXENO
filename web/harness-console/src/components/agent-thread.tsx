@@ -100,7 +100,6 @@ function UploadFeedbackNotice() {
 
 function HarnessComposer() {
   const runView = useRunViewModel();
-  const thread = useThreadRuntime();
   const pendingApproval = usePendingApproval();
   const runLocked = selectComposerDisabled(runView);
   const composerHint = runLocked
@@ -142,21 +141,7 @@ function HarnessComposer() {
       <Composer />
       <div className="composer-meta" aria-live="polite">
         <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
-        <div className="composer-run-controls">
-          <span className="composer-hint">{composerHint}</span>
-          {runLocked ? (
-            <button
-              className="composer-stop-button"
-              type="button"
-              onClick={() => thread.cancelRun()}
-              aria-label="停止当前运行"
-              title="停止当前运行"
-            >
-              <span aria-hidden="true" />
-              停止运行
-            </button>
-          ) : null}
-        </div>
+        <span className="composer-hint">{composerHint}</span>
       </div>
     </div>
   );

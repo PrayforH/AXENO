@@ -6,6 +6,8 @@ import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
 } from "./workspace-navigation";
+import { useRunViewModel } from "../lib/activity-store";
+import { approvalStore } from "../lib/approval-store";
 import { loadTasks, type TaskSummary } from "../lib/task-history";
 
 const statusLabels: Record<string, string> = {
@@ -59,7 +61,12 @@ export function TaskSidebar({
 }) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [error, setError] = useState("");
+  const runView = useRunViewModel();
   const currentStatusRef = useRef<{ threadId: string; status: string } | null>(null);
+
+  useEffect(() => {
+    approvalStore.reset();
+  }, [currentThreadId]);
 
   useEffect(() => {
     let active = true;
@@ -80,12 +87,21 @@ export function TaskSidebar({
       active = false;
       window.clearInterval(timer);
     };
-  }, [refreshToken]);
+  }, [refreshToken, runView?.phase]);
 
   const selected = useMemo(
     () => tasks.find((task) => task.thread_id === currentThreadId),
     [currentThreadId, tasks],
   );
+
+  useEffect(() => {
+    if (!selected) return;
+    if (selected.pending_approval) {
+      approvalStore.show(selected.pending_approval);
+    } else if (runView?.phase !== "waiting_approval") {
+      approvalStore.clear();
+    }
+  }, [runView?.phase, selected]);
 
   useEffect(() => {
     if (!selected) return;
