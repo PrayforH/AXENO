@@ -1,5 +1,6 @@
 .studioShell {
   --studio-ink: #17211c;
+  --studio-ink-soft: #3e3e3e;
   --studio-muted: #69736e;
   --studio-faint: #929a96;
   --studio-line: #dce1dd;
@@ -3938,6 +3939,7 @@
 
 .studioShell {
   --studio-ink: var(--codex-ink, #ffffff);
+  --studio-ink-soft: var(--codex-ink-soft, #d6d6d6);
   --studio-muted: var(--codex-muted, #a1a1a1);
   --studio-faint: var(--codex-faint, #737373);
   --studio-line: var(--codex-line, #303030);
