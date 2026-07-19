@@ -155,6 +155,8 @@ it("places each run activity before its assistant answer", () => {
   expect(agentThreadSource).toContain(
     "stream.runId,",
   );
+  expect(agentThreadSource).toContain("nativeResponseStarted ||");
+  expect(agentThreadSource).toContain("live.runId === runView?.runId");
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");
 });
 

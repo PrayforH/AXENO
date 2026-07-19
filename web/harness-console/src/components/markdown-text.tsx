@@ -9,10 +9,10 @@ import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import { SourceLink } from "./source-link";
 
 export const codexStreamSmoothing = {
-  drainMs: 140,
-  maxCharIntervalMs: 4,
-  maxCharsPerFrame: 48,
-  minCommitMs: 16,
+  drainMs: 320,
+  maxCharIntervalMs: 8,
+  maxCharsPerFrame: 12,
+  minCommitMs: 32,
 } as const;
 
 function CodeHeader({ language, code }: CodeHeaderProps) {

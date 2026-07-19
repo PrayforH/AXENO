@@ -225,6 +225,9 @@ describe("full-page agent workbench", () => {
     expect(markdown).toContain("table: ScrollableTable");
     expect(markdown).not.toContain("defer");
     expect(markdown).toContain("smooth={codexStreamSmoothing}");
+    expect(markdown).toContain("drainMs: 320");
+    expect(markdown).toContain("maxCharsPerFrame: 12");
+    expect(markdown).toContain("minCommitMs: 32");
     expect(styles).toMatch(
       /\.aui-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s,
     );

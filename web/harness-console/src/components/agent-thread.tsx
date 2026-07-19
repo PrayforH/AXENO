@@ -644,7 +644,13 @@ function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
   const stream = useRunStream();
-  const finalResponseStarted = useAssistantResponseStarted();
+  const live = useLiveResponse();
+  const nativeResponseStarted = useAssistantResponseStarted();
+  const finalResponseStarted =
+    nativeResponseStarted ||
+    (Boolean(live.text.trim()) &&
+      live.visible &&
+      live.runId === runView?.runId);
   if (
     !activity ||
     !runView ||
