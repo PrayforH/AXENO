@@ -2365,6 +2365,7 @@ body,
 }
 
 .composer-meta {
+  height: 32px;
   min-height: 22px;
   padding: 6px 10px 0;
   display: flex;

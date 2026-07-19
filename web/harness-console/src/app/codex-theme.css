@@ -1880,6 +1880,8 @@ body.codex-theme-v1 .aui-thread-root {
 
 body.codex-theme-v1 .aui-thread-root .aui-thread-viewport {
   padding-inline: clamp(20px, 4vw, 48px);
+  overflow-anchor: none;
+  scroll-behavior: auto;
   scrollbar-color: var(--codex-line-strong) transparent;
 }
 
@@ -1953,7 +1955,7 @@ body.codex-theme-v1 .aui-thread-scroll-to-bottom:hover {
 body.codex-theme-v1 .assistant-answer {
   min-width: 0;
   color: var(--codex-ink-soft);
-  overflow-anchor: auto;
+  overflow-anchor: none;
 }
 
 body.codex-theme-v1 .assistant-answer .aui-md {
