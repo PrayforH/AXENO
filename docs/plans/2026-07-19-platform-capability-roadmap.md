@@ -127,6 +127,8 @@ Detailed design: [Phase 3 — versioned tool directory and load-on-demand](./202
 
 ### Phase 5 — delegated credentials and policy control plane
 
+- Detailed design:
+  [Phase 5 — delegated credentials and policy control plane](./2026-07-19-delegated-credentials-policy-control-plane.md).
 - Personal, team and workload connection scopes.
 - Short-lived credential leases and revocation.
 - Separate tool-call and tool-result policy authoring.

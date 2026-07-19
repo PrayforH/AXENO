@@ -86,6 +86,7 @@ class ExecutionIdentity(FrozenModel):
 
     tenant_id: str
     user_id: str
+    team_ids: tuple[str, ...] = ()
     project_id: str
     session_id: str
     run_id: str

@@ -21,6 +21,7 @@ import {
   type StudioDeploymentSnapshot,
   type StudioDraftSummary,
   type StudioEnvironment,
+  type StudioGovernedPolicy,
   type StudioEvalDataset,
   type StudioEvalGate,
   type StudioEvalRun,
@@ -36,6 +37,7 @@ import {
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
+import { GovernanceControlPlane } from "./governance-control-plane";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -95,6 +97,7 @@ export function AgentStudioWorkbench() {
   const [drafts, setDrafts] = useState<StudioDraftSummary[]>([]);
   const [capabilities, setCapabilities] = useState<StudioCapabilities | null>(null);
   const [knowledgeBases, setKnowledgeBases] = useState<StudioKnowledgeBase[]>([]);
+  const [governedPolicies, setGovernedPolicies] = useState<StudioGovernedPolicy[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -137,12 +140,31 @@ export function AgentStudioWorkbench() {
     [draft, options],
   );
   const policyOptions = useMemo(
-    () => capabilities?.policies.filter((item) => item.enabled).map((item) => ({
-      id: item.policyId,
-      label: item.label,
-      description: item.description,
-    })) ?? [],
-    [capabilities],
+    () => {
+      const values = new Map(
+        (capabilities?.policies ?? [])
+          .filter((item) => item.enabled)
+          .map((item) => [
+            item.policyId,
+            {
+              id: item.policyId,
+              label: item.label,
+              description: item.description,
+            },
+          ]),
+      );
+      for (const policy of governedPolicies) {
+        values.set(policy.policyId, {
+          id: policy.policyId,
+          label: policy.displayName,
+          description: policy.publishedRevision
+            ? `租户发布 r${policy.publishedRevision}`
+            : `租户草稿 r${policy.revision} · 未发布`,
+        });
+      }
+      return [...values.values()];
+    },
+    [capabilities, governedPolicies],
   );
   const publishedSubagents = useMemo(
     () => drafts
@@ -181,6 +203,7 @@ export function AgentStudioWorkbench() {
           serverDatasets,
           serverEvalRuns,
           serverKnowledgeBases,
+          serverGovernedPolicies,
         ] = await Promise.all([
           studioClient.listDrafts(),
           studioClient.capabilities(),
@@ -188,6 +211,7 @@ export function AgentStudioWorkbench() {
           studioClient.listEvalDatasets(),
           studioClient.listEvalRuns(),
           studioClient.listKnowledgeBases(),
+          studioClient.listGovernedPolicies(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
@@ -196,6 +220,7 @@ export function AgentStudioWorkbench() {
         setEvalDatasets(serverDatasets);
         setEvalRuns(serverEvalRuns);
         setKnowledgeBases(serverKnowledgeBases);
+        setGovernedPolicies(serverGovernedPolicies);
         const migration = await migrateLegacyStudioDraft(
           window.localStorage,
           studioClient,
@@ -1906,6 +1931,14 @@ export function AgentStudioWorkbench() {
                     委派深度固定为 1；Sub 不启用 MCP 或 Python Tool。
                   </p>
                 </div>
+                <GovernanceControlPlane
+                  agentName={draft.name}
+                  policyId={draft.policy}
+                  mcpReferences={draft.mcpServers}
+                  canManage={canPublish}
+                  policies={governedPolicies}
+                  onPoliciesChanged={setGovernedPolicies}
+                />
               </section>
             )}
 

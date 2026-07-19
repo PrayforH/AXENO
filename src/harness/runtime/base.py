@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness.core.models import ExecutionIdentity, Run, Session
+from harness.policy.runtime import ResolvedPolicy
 from harness.runtime.artifact_tools import ArtifactPublisher
 from harness.sandbox.base import SandboxCommandResult, SandboxIsolation
 
@@ -60,6 +61,9 @@ class RuntimeContext(BaseModel):
         default=None, exclude=True, repr=False
     )
     artifact_publisher: ArtifactPublisher | None = Field(
+        default=None, exclude=True, repr=False
+    )
+    resolved_policy: ResolvedPolicy | None = Field(
         default=None, exclude=True, repr=False
     )
 

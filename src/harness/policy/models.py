@@ -54,3 +54,23 @@ class PolicyResult(BaseModel):
     decision: PolicyDecision
     rule_name: str
     reason: str
+
+
+class ToolResultPolicyRule(BaseModel):
+    """Deterministic trust classification applied after a successful tool call."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    trust: ContextTrust
+    tool: str = "*"
+    agent_name: str | None = None
+    priority: int = 0
+
+
+class ToolResultPolicyResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    trust: ContextTrust
+    rule_name: str
+    reason: str

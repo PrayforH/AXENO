@@ -14,6 +14,7 @@ from harness.core.models import ExecutionIdentity, Run, RunStatus
 from harness.observability.provider import Observability
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.profiles import PolicyProfileRegistry
+from harness.policy.runtime import ResolvedPolicy
 from harness.sandbox.base import SandboxHandle, SandboxProvider
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import CompiledAgentDraft, DraftCompilationError
@@ -39,6 +40,7 @@ from harness.studio.preview_repositories import PreviewRepository
 from harness.studio.service import AgentStudioService
 
 CancelCheck = Callable[[], Awaitable[bool]]
+PolicyRuntimeResolver = Callable[[str, str], Awaitable[ResolvedPolicy]]
 
 
 class _PreflightCancelledError(Exception):
@@ -56,6 +58,7 @@ class LivePreflightRunner:
         model_probe: ModelPreflightProbe,
         mcp_probe: McpPreflightProbe,
         policies: PolicyProfileRegistry,
+        policy_resolver: PolicyRuntimeResolver | None = None,
         observability: Observability | None = None,
         timeout_seconds: float = 180,
         clock: Callable[[], datetime] | None = None,
@@ -68,6 +71,7 @@ class LivePreflightRunner:
         self._model_probe = model_probe
         self._mcp_probe = mcp_probe
         self._policies = policies
+        self._policy_resolver = policy_resolver
         self._observability = observability
         self._timeout_seconds = timeout_seconds
         self._enforce_execution_profile_provider = enforce_execution_profile_provider
@@ -343,7 +347,16 @@ class LivePreflightRunner:
 
         async def approval_check() -> PreflightEvidence:
             assert draft is not None and manifest is not None and handle is not None
-            policy = self._policies.resolve(manifest.spec.permissions.policy)
+            policy = (
+                (
+                    await self._policy_resolver(
+                        preview.tenant_id,
+                        manifest.spec.permissions.policy,
+                    )
+                ).call_policy
+                if self._policy_resolver is not None
+                else self._policies.resolve(manifest.spec.permissions.policy)
+            )
             declared = {
                 tool.builtin for tool in manifest.spec.tools if tool.builtin is not None
             }

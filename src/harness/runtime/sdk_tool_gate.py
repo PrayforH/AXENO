@@ -31,6 +31,7 @@ from harness.policy.models import (
     PolicyResult,
 )
 from harness.policy.profiles import PolicyProfileRegistry
+from harness.policy.results import stricter_trust
 from harness.policy.rules import PolicyEngine
 from harness.quota.models import QuotaResource
 from harness.quota.repositories import QuotaExceededError
@@ -215,9 +216,17 @@ class SdkToolGate:
         subagent_policy_ids: Mapping[str, str] | None = None,
         result_trust_by_tool: Mapping[str, ContextTrust] | None = None,
     ) -> dict[HookEvent, list[HookMatcher]]:
-        active_policy_id = policy_id or "local-standard"
+        active_policy_id = (
+            context.resolved_policy.policy_id
+            if context.resolved_policy is not None
+            else policy_id or "local-standard"
+        )
         policy = (
-            self._profiles.resolve(active_policy_id) if self._profiles is not None else self._policy
+            context.resolved_policy.call_policy
+            if context.resolved_policy is not None
+            else self._profiles.resolve(active_policy_id)
+            if self._profiles is not None
+            else self._policy
         )
         assert policy is not None
         subagent_policies: dict[str, tuple[str, PolicyEngine]] = {}
@@ -235,7 +244,7 @@ class SdkToolGate:
         file_capabilities = _RunFileCapabilities(context)
         tool_traces: dict[str, tuple[int, str, dict[str, Any], str]] = {}
         current_context_trust = ContextTrust.SAFE
-        pending_result_trust: dict[str, tuple[str, ContextTrust]] = {}
+        pending_result_trust: dict[str, tuple[str, ContextTrust, str]] = {}
         declared_result_trust = dict(result_trust_by_tool or {})
 
         def finish_tool_trace(
@@ -296,14 +305,32 @@ class SdkToolGate:
                     selected_policy_id = "unknown-subagent"
                     selected_policy = implicit_deny
             canonical_name = canonical_tool_name(typed_input["tool_name"])
-            result_trust = declared_result_trust.get(
+            catalog_result_trust = declared_result_trust.get(
                 typed_input["tool_name"],
                 declared_result_trust.get(canonical_name, ContextTrust.SAFE),
             )
+            result_policy_rule = "tool-catalog"
+            result_trust = catalog_result_trust
+            if context.resolved_policy is not None:
+                result_policy = context.resolved_policy.result_policy.evaluate(
+                    canonical_name,
+                    agent_name=str(
+                        typed_input.get("agent_type")
+                        or typed_input.get("agent_id")
+                        or context.session.agent_name
+                    ),
+                )
+                result_trust = stricter_trust(
+                    catalog_result_trust,
+                    result_policy.trust,
+                )
+                if result_trust is result_policy.trust:
+                    result_policy_rule = result_policy.rule_name
             if result_trust is not ContextTrust.SAFE:
                 pending_result_trust[typed_input["tool_use_id"]] = (
                     canonical_name,
                     result_trust,
+                    result_policy_rule,
                 )
             tool_traces[typed_input["tool_use_id"]] = (
                 time.time_ns(),
@@ -375,20 +402,23 @@ class SdkToolGate:
                 and _TRUST_PRECEDENCE[pending[1]]
                 > _TRUST_PRECEDENCE[current_context_trust]
             ):
-                tool_name, next_trust = pending
+                tool_name, next_trust, result_policy_rule = pending
                 previous_trust = current_context_trust
                 current_context_trust = next_trust
+                trust_payload = {
+                    "tool_call_id": typed_input["tool_use_id"],
+                    "tool_name": tool_name,
+                    "previous": previous_trust.value,
+                    "current": current_context_trust.value,
+                }
+                if result_policy_rule != "tool-catalog":
+                    trust_payload["policy_rule"] = result_policy_rule
                 await self._events.append(
                     tenant_id=context.run.tenant_id,
                     run_id=context.run.run_id,
                     session_id=context.run.session_id,
                     event_type="context.trust.changed",
-                    payload={
-                        "tool_call_id": typed_input["tool_use_id"],
-                        "tool_name": tool_name,
-                        "previous": previous_trust.value,
-                        "current": current_context_trust.value,
-                    },
+                    payload=trust_payload,
                 )
             finish_tool_trace(
                 typed_input,

@@ -21,8 +21,11 @@ from harness.application.events import EventService
 from harness.config import Settings
 from harness.core.models import Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
+from harness.policy.models import ContextTrust, PolicyDecision, PolicyRule, ToolResultPolicyRule
 from harness.policy.profiles import default_policy_profiles
+from harness.policy.results import ResultPolicyEngine
 from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.policy.runtime import ResolvedPolicy
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 from harness.quota.repositories import InMemoryQuotaRepository
 from harness.quota.service import QuotaService
@@ -424,6 +427,64 @@ async def test_manifest_policy_resolver_overrides_generic_worker_policy(
         and event.payload.get("error", {}).get("code") == "policy_denied"
     ]
     assert denied
+
+
+@pytest.mark.asyncio
+async def test_governed_policy_snapshot_is_recorded_and_enforced(
+    tmp_path: Path,
+) -> None:
+    async def resolve_policy(
+        _tenant_id: str, _agent_name: str, _agent_version: str
+    ) -> ResolvedPolicy:
+        return ResolvedPolicy(
+            policy_id="governed-production",
+            revision=7,
+            content_hash="sha256:governed-policy",
+            call_policy=PolicyEngine(
+                [
+                    PolicyRule(
+                        name="deny-delegation",
+                        tool="Task",
+                        decision=PolicyDecision.DENY,
+                    )
+                ]
+            ),
+            result_policy=ResultPolicyEngine(
+                [
+                    ToolResultPolicyRule(
+                        name="external-results",
+                        tool="mcp__external__*",
+                        trust=ContextTrust.UNTRUSTED,
+                    )
+                ]
+            ),
+        )
+
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=ToolRuntime(),
+        policy=PolicyEngine(default_policy_rules()),
+        policy_resolver=resolve_policy,
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    policy_event = next(event for event in emitted if event.type == "policy.resolved")
+    denied = next(
+        event
+        for event in emitted
+        if event.type == "tool.result"
+        and event.payload.get("error", {}).get("code") == "policy_denied"
+    )
+    assert result.status is RunStatus.SUCCEEDED
+    assert policy_event.payload == {
+        "policy_id": "governed-production",
+        "revision": 7,
+        "content_hash": "sha256:governed-policy",
+    }
+    assert policy_event.sequence < denied.sequence
+    assert denied.payload["error"]["rule"] == "deny-delegation"
 
 
 @pytest.mark.asyncio

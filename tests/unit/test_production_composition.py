@@ -117,9 +117,14 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         provider = vars(resolver)["_credential_provider"]
 
         assert isinstance(provider, BrokerMcpCredentialProvider)
-        assert isinstance(vars(runtime)["_credential_broker"], InMemoryCredentialBroker)
+        broker = cast(InMemoryCredentialBroker, vars(runtime)["_credential_broker"])
+        assert isinstance(broker, InMemoryCredentialBroker)
+        assert vars(broker)["_connection_authorizer"] is container.governance
         assert vars(container.worker)["_credential_revoker"] is not None
 
+        # This construction-only unit test does not start the PostgreSQL fixture.
+        # Connection authorization is covered by governance repository integration tests.
+        vars(broker)["_connection_authorizer"] = None
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
         tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])

@@ -19,6 +19,7 @@ from harness.api.routes import agents, approvals, artifacts, auth, input_artifac
 from harness.config import Settings
 from harness.core.errors import HarnessDomainError, NotFoundError
 from harness.core.manifest import ManifestValidationError
+from harness.governance import api as governance_routes
 from harness.knowledge import api as knowledge_routes
 from harness.lifecycle import api as lifecycle_routes
 from harness.memory_bank import api as memory_bank_routes
@@ -276,6 +277,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         app.include_router(router, prefix="/v1")
     app.include_router(studio_routes.router)
     app.include_router(knowledge_routes.router)
+    app.include_router(governance_routes.router)
     app.include_router(trigger_routes.studio_router)
     app.include_router(trigger_routes.public_router)
     return app

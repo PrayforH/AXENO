@@ -1,12 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_STUDIO_DRAFT,
   evaluateStudioDraft,
 } from "./agent-studio";
 import {
   apiDraftToStudioDraft,
+  studioClient,
   studioDraftToSpec,
+  type StudioGovernedPolicy,
 } from "./studio-client";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Studio knowledge reference contract", () => {
   it("round-trips knowledge references through the API draft shape", () => {
@@ -63,5 +69,50 @@ describe("Studio knowledge reference contract", () => {
     }).toolCount;
 
     expect(withKnowledge).toBe(baseline + 1);
+  });
+});
+
+describe("Studio governance request contract", () => {
+  it("sends only an external secret reference when creating a connection", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ connectionId: "personal-search" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await studioClient.createConnection({
+      connectionId: "personal-search",
+      displayName: "个人搜索",
+      resourceKind: "mcp",
+      resourceReference: "search",
+      scope: "personal",
+      principalId: "user-a",
+      secretReference: "settings://mcp/search",
+      requiredKeys: ["api_key"],
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body.secretReference).toBe("settings://mcp/search");
+    expect(body).not.toHaveProperty("secretValue");
+  });
+
+  it("uses the current revision for policy publication", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ policyId: "local-standard" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const policy = {
+      policyId: "local-standard",
+      revision: 9,
+    } as StudioGovernedPolicy;
+
+    await studioClient.publishGovernedPolicy(policy);
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({ expectedRevision: 9 });
   });
 });

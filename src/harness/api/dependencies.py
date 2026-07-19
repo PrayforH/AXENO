@@ -69,6 +69,8 @@ from harness.evals.repositories import (
     InMemoryEvalRunRepository,
 )
 from harness.evals.service import EvalControlPlaneService
+from harness.governance.repositories import InMemoryGovernanceRepository
+from harness.governance.service import GovernanceService
 from harness.inputs.processors import DefaultInputProcessor
 from harness.knowledge.repositories import InMemoryKnowledgeRepository
 from harness.knowledge.service import KnowledgeService
@@ -91,7 +93,7 @@ from harness.memory_bank.workload import (
 )
 from harness.observability.provider import Observability, build_observability
 from harness.policy.profiles import default_policy_profiles
-from harness.policy.rules import PolicyEngine
+from harness.policy.runtime import ResolvedPolicy
 from harness.quality.controller import QualitySyncController
 from harness.quality.langfuse import DisabledQualityExporter
 from harness.quality.queue import QualityTaskQueue
@@ -200,6 +202,7 @@ class ApiContainer:
     memory_mcp_app: Starlette
     memory_workload_tokens: MemoryWorkloadTokenService
     knowledge: KnowledgeService
+    governance: GovernanceService
     knowledge_mcp_app: Starlette
     knowledge_workload_tokens: KnowledgeWorkloadTokenService
     events: EventRepository
@@ -229,6 +232,7 @@ def build_memory_container(
     memory_repository = InMemoryUserMemoryRepository()
     memory_bank_repository = InMemoryMemoryBankRepository()
     knowledge_repository = InMemoryKnowledgeRepository()
+    governance_repository = InMemoryGovernanceRepository()
     thread_file_repository = InMemoryThreadFileRepository()
     workspace_snapshot_repository = InMemoryWorkspaceSnapshotRepository()
     artifact_store = InMemoryArtifactStore()
@@ -257,6 +261,12 @@ def build_memory_container(
         ),
     )
     audit = AuditService(InMemoryAuditRepository())
+    policy_profiles = default_policy_profiles()
+    governance = GovernanceService(
+        governance_repository,
+        static_profiles=policy_profiles,
+        audit=audit,
+    )
     agent_drafts = InMemoryAgentDraftRepository()
     preview_repository = InMemoryPreviewRepository()
     preview_queue = PreviewTaskQueue.memory()
@@ -533,12 +543,14 @@ def build_memory_container(
             workspace=workspace,
         )
 
-    policy_profiles = default_policy_profiles()
-
-    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> PolicyEngine:
+    async def resolve_policy(
+        tenant_id: str, agent_name: str, agent_version: str
+    ) -> ResolvedPolicy:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
-        return policy_profiles.resolve(manifest.spec.permissions.policy)
+        return await governance.resolve_runtime(
+            tenant_id, manifest.spec.permissions.policy
+        )
 
     policy = policy_profiles.resolve("local-standard")
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
@@ -682,6 +694,7 @@ def build_memory_container(
         model_probe=model_probe,
         mcp_probe=mcp_probe,
         policies=policy_profiles,
+        policy_resolver=governance.resolve_runtime,
         observability=observability,
         timeout_seconds=resolved_settings.preflight_timeout_seconds,
         clock=clock,
@@ -815,6 +828,7 @@ def build_memory_container(
         memory_mcp_app=memory_mcp_app,
         memory_workload_tokens=memory_tokens,
         knowledge=knowledge,
+        governance=governance,
         knowledge_mcp_app=knowledge_mcp_app,
         knowledge_workload_tokens=knowledge_tokens,
         events=raw_events,

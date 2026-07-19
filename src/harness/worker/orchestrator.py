@@ -41,6 +41,7 @@ from harness.observability.provider import Observability
 from harness.observability.redaction import correlation_hash
 from harness.policy.models import PolicyContext, PolicyDecision
 from harness.policy.rules import PolicyEngine
+from harness.policy.runtime import ResolvedPolicy
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
 from harness.runtime.artifact_tools import ArtifactPublisher
@@ -66,7 +67,10 @@ from harness.sandbox.base import (
 )
 
 RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
-PolicyResolver = Callable[[str, str, str], Awaitable[PolicyEngine]]
+PolicyResolver = Callable[
+    [str, str, str],
+    Awaitable[PolicyEngine | ResolvedPolicy],
+]
 RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
 RunCredentialRevoker = Callable[[str, str], Awaitable[None]]
 SandboxResolver = Callable[[str, Session], Awaitable[SandboxProvider]]
@@ -594,10 +598,20 @@ class RunOrchestrator:
                     run_id,
                     active_sandbox.provision(run),
                 )
-            active_policy = (
+            policy_resolution = (
                 await self._policy_resolver(tenant_id, session.agent_name, session.agent_version)
                 if self._policy_resolver is not None
                 else self._policy
+            )
+            resolved_policy = (
+                policy_resolution
+                if isinstance(policy_resolution, ResolvedPolicy)
+                else None
+            )
+            active_policy = (
+                policy_resolution.call_policy
+                if isinstance(policy_resolution, ResolvedPolicy)
+                else policy_resolution
             )
             workspace_policy = (
                 await self._workspace_policy_resolver(
@@ -744,7 +758,20 @@ class RunOrchestrator:
                     else None
                 ),
                 artifact_publisher=artifact_publisher,
+                resolved_policy=resolved_policy,
             )
+            if resolved_policy is not None:
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run_id,
+                    session_id=run.session_id,
+                    event_type="policy.resolved",
+                    payload={
+                        "policy_id": resolved_policy.policy_id,
+                        "revision": resolved_policy.revision,
+                        "content_hash": resolved_policy.content_hash,
+                    },
+                )
             output_baseline = (
                 self._workspace_output_fingerprints(handle.path)
                 if handle.isolation_level is SandboxIsolation.CONTAINER
@@ -921,6 +948,7 @@ class RunOrchestrator:
                                 "error": {
                                     "code": "policy_denied",
                                     "message": result.reason,
+                                    "rule": result.rule_name,
                                 },
                             },
                         )
@@ -934,6 +962,15 @@ class RunOrchestrator:
                             tool_call_id=tool_call_id,
                             reason=result.reason,
                             message_id=active_message_id,
+                            tool_name=tool_name,
+                            argument_summary=cast(
+                                dict[str, Any],
+                                payload.get("arguments", {}),
+                            ),
+                            sandbox_provider=handle.provider,
+                            sandbox_isolation=handle.isolation_level.value,
+                            policy_rule=result.rule_name,
+                            risk=("high" if tool_name == "Bash" else "medium"),
                         )
                         if approval.status.value == "pending":
                             if active_message_id is not None:
@@ -951,7 +988,10 @@ class RunOrchestrator:
                         run_id=run_id,
                         session_id=run.session_id,
                         event_type="tool.allowed",
-                        payload={"tool_call_id": tool_call_id},
+                        payload={
+                            "tool_call_id": tool_call_id,
+                            "policy_rule": result.rule_name,
+                        },
                     )
                     continue
                 await self._events.append(

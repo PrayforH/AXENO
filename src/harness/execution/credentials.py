@@ -33,13 +33,16 @@ class CredentialLease(BaseModel):
     resource_kind: CredentialResourceKind
     resource_reference: str = Field(min_length=1)
     secret_reference: str = Field(min_length=1)
+    connection_id: str | None = Field(default=None, exclude=True)
+    connection_scope: str | None = Field(default=None, exclude=True)
+    connection_principal_id: str | None = Field(default=None, exclude=True)
     issued_at: datetime
     expires_at: datetime
     revoked_at: datetime | None = None
     values: Mapping[str, SecretStr] = Field(exclude=True, repr=False)
 
     def audit_record(self) -> dict[str, str]:
-        return {
+        record = {
             "lease_id": self.lease_id,
             "run_id": self.run_id,
             "resource_kind": self.resource_kind.value,
@@ -47,6 +50,13 @@ class CredentialLease(BaseModel):
             "secret_reference": self.secret_reference,
             "expires_at": self.expires_at.isoformat(),
         }
+        if self.connection_id is not None:
+            record["connection_id"] = self.connection_id
+        if self.connection_scope is not None:
+            record["connection_scope"] = self.connection_scope
+        if self.connection_principal_id is not None:
+            record["connection_principal_id"] = self.connection_principal_id
+        return record
 
 
 class CredentialBroker(Protocol):
@@ -78,6 +88,39 @@ class CredentialLeaseMaintenance(Protocol):
 type CredentialSourceKey = tuple[str, CredentialResourceKind, str]
 
 
+class CredentialConnectionGrant(BaseModel):
+    """Safe metadata returned by the governed connection authorizer."""
+
+    model_config = ConfigDict(frozen=True)
+
+    connection_id: str
+    scope: str
+    principal_id: str
+    secret_reference: str
+    required_keys: frozenset[str] = frozenset()
+
+
+class CredentialConnectionAuthorizer(Protocol):
+    async def authorize(
+        self,
+        identity: ExecutionIdentity,
+        resource_kind: CredentialResourceKind,
+        resource_reference: str,
+    ) -> CredentialConnectionGrant | None:
+        """Return an authorized grant, None for unmanaged, or raise when denied."""
+        ...
+
+    async def validate_connection(
+        self,
+        connection_id: str,
+        identity: ExecutionIdentity,
+        resource_kind: CredentialResourceKind,
+        resource_reference: str,
+    ) -> CredentialConnectionGrant:
+        """Revalidate the exact connection used by an existing lease."""
+        ...
+
+
 class InMemoryCredentialBroker:
     """Reference implementation; only lease metadata is safe to persist or audit."""
 
@@ -90,6 +133,7 @@ class InMemoryCredentialBroker:
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
         max_ttl_seconds: int = 900,
+        connection_authorizer: CredentialConnectionAuthorizer | None = None,
     ) -> None:
         self._sources = {
             key: (reference, MappingProxyType(dict(values)))
@@ -98,7 +142,17 @@ class InMemoryCredentialBroker:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ids = id_generator or (lambda: f"credential_lease_{uuid4().hex}")
         self._max_ttl_seconds = max_ttl_seconds
+        self._connection_authorizer = connection_authorizer
         self._leases: dict[str, CredentialLease] = {}
+
+    def set_connection_authorizer(
+        self, authorizer: CredentialConnectionAuthorizer
+    ) -> None:
+        if self._leases:
+            raise CredentialLeaseError(
+                "credential connection authorizer cannot change while leases exist"
+            )
+        self._connection_authorizer = authorizer
 
     async def issue(
         self,
@@ -111,6 +165,15 @@ class InMemoryCredentialBroker:
     ) -> CredentialLease:
         if ttl_seconds < 1 or ttl_seconds > self._max_ttl_seconds:
             raise CredentialLeaseError("credential lease TTL is outside platform bounds")
+        grant = (
+            await self._connection_authorizer.authorize(
+                identity,
+                resource_kind,
+                resource_reference,
+            )
+            if self._connection_authorizer is not None
+            else None
+        )
         source = self._sources.get(
             (identity.tenant_id, resource_kind, resource_reference)
         ) or self._sources.get(
@@ -119,6 +182,17 @@ class InMemoryCredentialBroker:
         if source is None:
             raise CredentialLeaseError("credential reference is unavailable")
         secret_reference, values = source
+        if grant is not None:
+            if grant.secret_reference != secret_reference:
+                raise CredentialLeaseError(
+                    "managed connection secret reference does not match the configured provider"
+                )
+            undeclared = sorted(required_keys.difference(grant.required_keys))
+            if undeclared:
+                raise CredentialLeaseError(
+                    "managed connection does not authorize required keys: "
+                    + ", ".join(undeclared)
+                )
         missing = sorted(required_keys.difference(values))
         if missing:
             raise CredentialLeaseError(
@@ -132,6 +206,9 @@ class InMemoryCredentialBroker:
             resource_kind=resource_kind,
             resource_reference=resource_reference,
             secret_reference=secret_reference,
+            connection_id=grant.connection_id if grant is not None else None,
+            connection_scope=grant.scope if grant is not None else None,
+            connection_principal_id=grant.principal_id if grant is not None else None,
             issued_at=now,
             expires_at=now + timedelta(seconds=ttl_seconds),
             values=MappingProxyType({key: values[key] for key in required_keys}),
@@ -151,6 +228,24 @@ class InMemoryCredentialBroker:
             raise CredentialLeaseError("credential lease is revoked")
         if self._clock() >= lease.expires_at:
             raise CredentialLeaseError("credential lease is expired")
+        if lease.connection_id is not None:
+            if self._connection_authorizer is None:
+                raise CredentialLeaseError("credential connection authorizer is unavailable")
+            try:
+                grant = await self._connection_authorizer.validate_connection(
+                    lease.connection_id,
+                    identity,
+                    lease.resource_kind,
+                    lease.resource_reference,
+                )
+            except CredentialLeaseError:
+                raise
+            except Exception as error:
+                raise CredentialLeaseError(
+                    "credential connection is no longer authorized"
+                ) from error
+            if grant.secret_reference != lease.secret_reference:
+                raise CredentialLeaseError("credential connection secret reference changed")
         return MappingProxyType(dict(lease.values))
 
     async def revoke_run(self, tenant_id: str, run_id: str) -> None:

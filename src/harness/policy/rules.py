@@ -28,7 +28,7 @@ def _matches(rule: PolicyRule, context: PolicyContext) -> bool:
         return False
     if rule.agent_name is not None and rule.agent_name != context.agent_name:
         return False
-    if rule.tool is not None and rule.tool != context.tool_name:
+    if rule.tool is not None and not fnmatch(context.tool_name, rule.tool):
         return False
     if (
         rule.sandbox_isolation is not None
@@ -90,6 +90,10 @@ class PolicyEngine:
             rule_name=selected.name,
             reason=f"matched policy rule {selected.name}",
         )
+
+    @property
+    def rules(self) -> tuple[PolicyRule, ...]:
+        return self._rules
 
 
 def default_policy_rules() -> list[PolicyRule]:

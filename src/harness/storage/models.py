@@ -581,6 +581,78 @@ class KnowledgeSyncRunRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class CredentialConnectionRow(Base):
+    __tablename__ = "credential_connections"
+    __table_args__ = (
+        CheckConstraint(
+            "revision >= 1",
+            name="ck_credential_connections_revision_positive",
+        ),
+        Index(
+            "ix_credential_connections_resource",
+            "tenant_id",
+            "resource_kind",
+            "resource_reference",
+        ),
+        Index(
+            "ix_credential_connections_principal",
+            "tenant_id",
+            "scope",
+            "principal_id",
+            "status",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    resource_kind: Mapped[str] = mapped_column(String(32))
+    resource_reference: Mapped[str] = mapped_column(String(256))
+    scope: Mapped[str] = mapped_column(String(32))
+    principal_id: Mapped[str] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32))
+    revision: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class GovernedPolicyRow(Base):
+    __tablename__ = "governed_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "revision >= 1",
+            name="ck_governed_policies_revision_positive",
+        ),
+        Index("ix_governed_policies_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    published_revision: Mapped[int | None] = mapped_column(Integer)
+    published_hash: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class GovernedPolicyPublicationRow(Base):
+    __tablename__ = "governed_policy_publications"
+    __table_args__ = (
+        Index(
+            "ix_governed_policy_publications_published",
+            "tenant_id",
+            "policy_id",
+            "published_at",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    policy_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SessionRow(Base):
     __tablename__ = "sessions"
 

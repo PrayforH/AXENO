@@ -44,6 +44,7 @@ from harness.execution.credentials import (
     CredentialSourceKey,
     InMemoryCredentialBroker,
 )
+from harness.governance.service import GovernanceService
 from harness.inputs.processors import DefaultInputProcessor
 from harness.knowledge.service import KnowledgeService
 from harness.knowledge.workload import (
@@ -63,7 +64,7 @@ from harness.memory_bank.workload import (
 )
 from harness.observability.provider import build_observability
 from harness.policy.profiles import default_policy_profiles
-from harness.policy.rules import PolicyEngine
+from harness.policy.runtime import ResolvedPolicy
 from harness.quality.controller import QualitySyncController
 from harness.quality.langfuse import DisabledQualityExporter, LangfuseQualityExporter
 from harness.quality.queue import QualityTaskQueue
@@ -103,6 +104,7 @@ from harness.storage.eval_repository import (
     PostgresEvalDatasetRepository,
     PostgresEvalRunRepository,
 )
+from harness.storage.governance_repository import PostgresGovernanceRepository
 from harness.storage.knowledge_repository import PostgresKnowledgeRepository
 from harness.storage.lifecycle_adapters import (
     LangfuseLifecycleAdapter,
@@ -402,6 +404,7 @@ def build_production_container(
     memory_repository = PostgresUserMemoryRepository(sessions)
     memory_bank_repository = PostgresMemoryBankRepository(sessions)
     knowledge_repository = PostgresKnowledgeRepository(sessions)
+    governance_repository = PostgresGovernanceRepository(sessions)
     file_repository = PostgresThreadFileRepository(sessions)
     snapshot_repository = PostgresWorkspaceSnapshotRepository(sessions)
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
@@ -432,6 +435,14 @@ def build_production_container(
         ),
     )
     audit = AuditService(PostgresAuditRepository(sessions))
+    policy_profiles = default_policy_profiles()
+    governance = GovernanceService(
+        governance_repository,
+        static_profiles=policy_profiles,
+        audit=audit,
+    )
+    if credential_broker is not None:
+        credential_broker.set_connection_authorizer(governance)
     if settings.worker_task_heartbeat_seconds >= settings.worker_task_visibility_timeout_seconds:
         raise ValueError("worker task heartbeat must be shorter than visibility timeout")
     queue: TaskQueue = RedisTaskQueue(
@@ -754,12 +765,14 @@ def build_production_container(
             workspace=workspace,
         )
 
-    policy_profiles = default_policy_profiles()
-
-    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> PolicyEngine:
+    async def resolve_policy(
+        tenant_id: str, agent_name: str, agent_version: str
+    ) -> ResolvedPolicy:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
-        return policy_profiles.resolve(manifest.spec.permissions.policy)
+        return await governance.resolve_runtime(
+            tenant_id, manifest.spec.permissions.policy
+        )
 
     policy = policy_profiles.resolve("local-standard")
     sandbox_resolver: SandboxResolver | None = None
@@ -847,6 +860,7 @@ def build_production_container(
         model_probe=model_probe,
         mcp_probe=mcp_probe,
         policies=policy_profiles,
+        policy_resolver=governance.resolve_runtime,
         observability=observability,
         timeout_seconds=settings.preflight_timeout_seconds,
         clock=clock,
@@ -1044,6 +1058,7 @@ def build_production_container(
         memory_mcp_app=memory_mcp_app,
         memory_workload_tokens=memory_tokens,
         knowledge=knowledge,
+        governance=governance,
         knowledge_mcp_app=knowledge_mcp_app,
         knowledge_workload_tokens=knowledge_tokens,
         events=raw_event_repository,

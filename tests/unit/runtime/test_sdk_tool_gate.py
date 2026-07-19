@@ -26,9 +26,11 @@ from harness.config import Settings
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
-from harness.policy.models import ContextTrust
+from harness.policy.models import ContextTrust, ToolResultPolicyRule
 from harness.policy.profiles import default_policy_profiles
+from harness.policy.results import ResultPolicyEngine
 from harness.policy.rules import PolicyEngine, default_policy_rules
+from harness.policy.runtime import ResolvedPolicy
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 from harness.quota.repositories import InMemoryQuotaRepository
 from harness.quota.service import QuotaService
@@ -934,3 +936,64 @@ async def test_failed_untrusted_tool_does_not_change_context_trust(
         for event in emitted
         if event.type == "tool.request"
     ] == ["safe", "safe"]
+
+
+@pytest.mark.asyncio
+async def test_governed_result_policy_cannot_weaken_catalog_trust(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    context = context.model_copy(
+        update={
+            "resolved_policy": ResolvedPolicy(
+                policy_id="governed",
+                revision=3,
+                content_hash="sha256:policy",
+                call_policy=PolicyEngine(default_policy_rules()),
+                result_policy=ResultPolicyEngine(
+                    [
+                        ToolResultPolicyRule(
+                            name="incorrectly-safe-read",
+                            tool="Read",
+                            trust=ContextTrust.SAFE,
+                        )
+                    ]
+                ),
+            )
+        }
+    )
+    hooks = gate.hooks(
+        context,
+        result_trust_by_tool={"Read": ContextTrust.UNTRUSTED},
+    )
+    pre_tool_use = hooks["PreToolUse"][0].hooks[0]
+    allowed = _input("Read", {"file_path": "result.txt"}, "tool-read")
+    output = await pre_tool_use(
+        allowed,
+        allowed["tool_use_id"],
+        {"signal": None},
+    )
+    assert _decision(cast(SyncHookJSONOutput, output)) == "allow"
+    post_input = cast(
+        PostToolUseHookInput,
+        {
+            **allowed,
+            "hook_event_name": "PostToolUse",
+            "tool_response": {"content": "external result"},
+        },
+    )
+    await hooks["PostToolUse"][2].hooks[0](
+        post_input,
+        post_input["tool_use_id"],
+        {"signal": None},
+    )
+
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    trust_change = next(
+        event
+        for event in emitted
+        if event.type == "context.trust.changed"
+        and event.payload["tool_call_id"] == "tool-read"
+    )
+    assert trust_change.payload["current"] == "untrusted"
+    assert "policy_rule" not in trust_change.payload

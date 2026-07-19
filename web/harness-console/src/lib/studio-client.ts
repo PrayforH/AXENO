@@ -289,6 +289,116 @@ export type StudioKnowledgeHit = {
   matchedTerms: string[];
 };
 
+export type StudioConnectionScope = "personal" | "team" | "workload";
+
+export type StudioCredentialConnection = {
+  tenantId: string;
+  connectionId: string;
+  displayName: string;
+  resourceKind: "model" | "mcp";
+  resourceReference: string;
+  scope: StudioConnectionScope;
+  principalId: string;
+  secretReference: string;
+  requiredKeys: string[];
+  status: "active" | "revoked";
+  revision: number;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt: string | null;
+};
+
+export type StudioContextTrust = "safe" | "sensitive" | "untrusted";
+
+export type StudioCallPolicyRule = {
+  name: string;
+  decision: "allow" | "ask" | "deny";
+  tenantId?: string | null;
+  agentName?: string | null;
+  tool?: string | null;
+  pathGlob?: string | null;
+  commandContains?: string | null;
+  sandboxIsolation?: "workspace" | "container" | null;
+  contextTrust?: StudioContextTrust | null;
+  priority: number;
+};
+
+export type StudioResultPolicyRule = {
+  name: string;
+  trust: StudioContextTrust;
+  tool: string;
+  agentName?: string | null;
+  priority: number;
+};
+
+export type StudioGovernedPolicy = {
+  tenantId: string;
+  policyId: string;
+  displayName: string;
+  description: string;
+  callRules: StudioCallPolicyRule[];
+  resultRules: StudioResultPolicyRule[];
+  revision: number;
+  publishedRevision: number | null;
+  publishedHash: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StudioPolicyScenario = {
+  scenarioId: string;
+  agentName: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  sandboxIsolation: "workspace" | "container";
+  contextTrust: StudioContextTrust;
+};
+
+export type StudioPolicySimulation = {
+  scenarioId: string;
+  call: {
+    decision: "allow" | "ask" | "deny";
+    rule_name: string;
+    reason: string;
+  };
+  result: {
+    trust: StudioContextTrust;
+    rule_name: string;
+    reason: string;
+  };
+};
+
+export type StudioPolicyImpact = {
+  policyId: string;
+  draftRevision: number;
+  publishedRevision: number | null;
+  scenarioCount: number;
+  changedCount: number;
+  items: Array<{
+    scenarioId: string;
+    before: StudioPolicySimulation;
+    after: StudioPolicySimulation;
+    changed: boolean;
+  }>;
+};
+
+export type StudioPolicyPublication = {
+  tenantId: string;
+  policyId: string;
+  revision: number;
+  contentHash: string;
+  displayName: string;
+  description: string;
+  callRules: StudioCallPolicyRule[];
+  resultRules: StudioResultPolicyRule[];
+  publishedBy: string;
+  publishedAt: string;
+};
+
 export type StudioValidation = {
   ready: boolean;
   issues: Array<{ code: string; message: string; severity: "error" | "warning"; path: string | null }>;
@@ -842,6 +952,105 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
 }
 
 export const studioClient = {
+  listConnections: () =>
+    request<StudioCredentialConnection[]>("governance/connections"),
+  createConnection: (values: {
+    connectionId: string;
+    displayName: string;
+    resourceKind: "model" | "mcp";
+    resourceReference: string;
+    scope: StudioConnectionScope;
+    principalId: string;
+    secretReference: string;
+    requiredKeys: string[];
+  }) => request<StudioCredentialConnection>("governance/connections", {
+    method: "POST",
+    body: JSON.stringify(values),
+  }),
+  replaceConnection: (
+    connection: StudioCredentialConnection,
+    values: Pick<
+      StudioCredentialConnection,
+      "displayName" | "secretReference" | "requiredKeys"
+    >,
+  ) => request<StudioCredentialConnection>(
+    `governance/connections/${encodeURIComponent(connection.connectionId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision: connection.revision,
+        ...values,
+      }),
+    },
+  ),
+  revokeConnection: (connection: StudioCredentialConnection) =>
+    request<StudioCredentialConnection>(
+      `governance/connections/${encodeURIComponent(connection.connectionId)}/revoke`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: connection.revision }),
+      },
+    ),
+  listGovernedPolicies: () =>
+    request<StudioGovernedPolicy[]>("governance/policies"),
+  createGovernedPolicy: (values: {
+    policyId: string;
+    displayName: string;
+    description: string;
+    callRules: StudioCallPolicyRule[];
+    resultRules: StudioResultPolicyRule[];
+  }) => request<StudioGovernedPolicy>("governance/policies", {
+    method: "POST",
+    body: JSON.stringify(values),
+  }),
+  replaceGovernedPolicy: (
+    policy: StudioGovernedPolicy,
+    values: Pick<
+      StudioGovernedPolicy,
+      "displayName" | "description" | "callRules" | "resultRules"
+    >,
+  ) => request<StudioGovernedPolicy>(
+    `governance/policies/${encodeURIComponent(policy.policyId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision: policy.revision,
+        ...values,
+      }),
+    },
+  ),
+  simulateGovernedPolicy: (
+    policyId: string,
+    scenario: StudioPolicyScenario,
+  ) => request<StudioPolicySimulation>(
+    `governance/policies/${encodeURIComponent(policyId)}/simulate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ scenario }),
+    },
+  ),
+  previewGovernedPolicyImpact: (
+    policyId: string,
+    scenarios: StudioPolicyScenario[],
+  ) => request<StudioPolicyImpact>(
+    `governance/policies/${encodeURIComponent(policyId)}/impact`,
+    {
+      method: "POST",
+      body: JSON.stringify({ scenarios }),
+    },
+  ),
+  publishGovernedPolicy: (policy: StudioGovernedPolicy) =>
+    request<StudioPolicyPublication>(
+      `governance/policies/${encodeURIComponent(policy.policyId)}/publish`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: policy.revision }),
+      },
+    ),
+  listPolicyPublications: (policyId: string) =>
+    request<StudioPolicyPublication[]>(
+      `governance/policies/${encodeURIComponent(policyId)}/publications`,
+    ),
   listKnowledgeBases: () =>
     request<StudioKnowledgeBase[]>("knowledge/bases"),
   createKnowledgeBase: (
