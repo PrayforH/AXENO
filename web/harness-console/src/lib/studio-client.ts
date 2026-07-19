@@ -155,6 +155,7 @@ type ApiDraftSpec = {
   }>;
   builtinTools: string[];
   mcpServers: string[];
+  toolExposureMode: StudioDraft["toolExposureMode"];
   subagents: StudioDraft["subagents"];
   permissionPolicy: string;
   executionProfile: string;
@@ -675,6 +676,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     skills: spec.skills,
     builtinTools: spec.builtinTools,
     mcpServers: spec.mcpServers,
+    toolExposureMode: spec.toolExposureMode,
     subagents: spec.subagents,
     policy: spec.permissionPolicy,
     executionProfile: spec.executionProfile,
@@ -717,6 +719,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     skills: draft.skills.map((skill) => ({ ...skill, files: skill.files ?? [] })),
     builtinTools: draft.builtinTools,
     mcpServers: draft.mcpServers,
+    toolExposureMode: draft.toolExposureMode,
     subagents: draft.subagents,
     permissionPolicy: draft.policy,
     executionProfile: draft.executionProfile,

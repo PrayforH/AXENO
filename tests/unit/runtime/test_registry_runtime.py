@@ -24,6 +24,10 @@ from harness.observability.provider import build_observability
 from harness.runtime.base import RuntimeContext
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
+from harness.studio.catalog import default_capability_catalog
+from harness.studio.compiler import AgentDraftCompiler
+from harness.studio.factory import create_draft_spec
+from harness.studio.models import AgentDraft, AgentTemplate
 
 
 @pytest.mark.asyncio
@@ -111,6 +115,234 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
     assert lease_event.payload["secret_reference"] == "vault://tenant-a/model/default"
     assert broker_secret not in repr(events)
     assert "static-secret-must-not-be-used" not in repr(captured[0].env)
+
+
+@pytest.mark.asyncio
+async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_directory_fact(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    base_spec = create_draft_spec(
+        name="directory-agent",
+        domain="operations",
+        display_name="目录 Agent",
+        description="验证运行时按需工具发现。",
+        template=AgentTemplate.ANALYST,
+    )
+    draft = AgentDraft(
+        draftId="draft-directory",
+        tenantId="tenant-a",
+        revision=1,
+        spec=base_spec.model_copy(
+            update={
+                "model": base_spec.model.model_copy(
+                    update={
+                        "route_id": "anthropic-official",
+                        "required_capabilities": (
+                            "streaming",
+                            "tool_use",
+                            "tool_search",
+                        ),
+                    }
+                ),
+                "tool_exposure_mode": "on_demand",
+            }
+        ),
+        createdBy="builder-a",
+        updatedBy="builder-a",
+        createdAt=now,
+        updatedAt=now,
+    )
+    compiled = AgentDraftCompiler(
+        default_capability_catalog(),
+        catalog_revision=4,
+    ).compile(draft)
+    snapshot = compiled.report.snapshot
+    registry = InMemoryAgentRegistry()
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="directory-agent",
+            version="0.1.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=snapshot.content_hash,
+            package_hash=compiled.report.package_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=now,
+        )
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str, options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            base_url="https://api.anthropic.com",
+            model="claude-sonnet-4-6",
+            provider="anthropic",
+            credential=SecretStr("directory-route-secret"),
+            capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
+        ),
+        query_factory=fake_query,
+    )
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-directory",
+            session_id="session-directory",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="directory",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "inspect the workspace"},
+        ),
+        session=Session(
+            session_id="session-directory",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="directory-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    events = [event async for event in runtime.execute(context)]
+
+    assert captured[0].env["ENABLE_TOOL_SEARCH"] == "true"
+    assert snapshot.tool_directory is not None
+    directory_event = next(
+        event for event in events if event.type == "tool.directory.loaded"
+    )
+    assert directory_event.payload == {
+        "exposure_mode": "on_demand",
+        "catalog_revision": 4,
+        "content_hash": snapshot.tool_directory.content_hash,
+        "entry_count": 3,
+    }
+    assert "directory-route-secret" not in repr(events)
+    assert "api.anthropic.com" not in repr(directory_event.payload)
+
+
+@pytest.mark.asyncio
+async def test_manifest_primary_route_selects_its_route_bound_gateway(
+    tmp_path: Path,
+) -> None:
+    now = datetime.now(UTC)
+    base_spec = create_draft_spec(
+        name="route-bound-agent",
+        domain="operations",
+        display_name="路由绑定 Agent",
+        description="验证逻辑路由不会被配置顺序覆盖。",
+        template=AgentTemplate.ANALYST,
+    )
+    draft = AgentDraft(
+        draftId="draft-route-bound",
+        tenantId="tenant-a",
+        revision=1,
+        spec=base_spec.model_copy(
+            update={
+                "model": base_spec.model.model_copy(
+                    update={"route_id": "anthropic-official"}
+                )
+            }
+        ),
+        createdBy="builder-a",
+        updatedBy="builder-a",
+        createdAt=now,
+        updatedAt=now,
+    )
+    compiled = AgentDraftCompiler(default_capability_catalog()).compile(draft)
+    snapshot = compiled.report.snapshot
+    registry = InMemoryAgentRegistry()
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            name="route-bound-agent",
+            version="0.1.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=snapshot.content_hash,
+            package_hash=compiled.report.package_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=now,
+        )
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str, options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="route-bound-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            route_id="new-api-default",
+            base_url="https://new-api.example",
+            model="gateway-model",
+            provider="new-api",
+            credential=SecretStr("new-api-secret"),
+        ),
+        fallback_config=CcSwitchClaudeConfig(
+            route_id="anthropic-official",
+            base_url="https://api.anthropic.com",
+            model="claude-sonnet-4-6",
+            provider="anthropic",
+            credential=SecretStr("anthropic-secret"),
+            capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
+        ),
+        query_factory=fake_query,
+    )
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-route-bound",
+            session_id="session-route-bound",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="route-bound",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "read a file"},
+        ),
+        session=Session(
+            session_id="session-route-bound",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="route-bound-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    events = [event async for event in runtime.execute(context)]
+
+    assert captured[0].env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
+    assert captured[0].env["ANTHROPIC_API_KEY"] == "anthropic-secret"
+    assert "ANTHROPIC_AUTH_TOKEN" not in captured[0].env
+    assert next(
+        event for event in events if event.type == "model.route.selected"
+    ).payload["route_id"] == "anthropic-official"
 
 
 @pytest.mark.asyncio

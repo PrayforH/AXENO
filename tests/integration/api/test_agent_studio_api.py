@@ -1,7 +1,9 @@
 import hashlib
 import json
 from dataclasses import replace
+from io import BytesIO
 from typing import Any, cast
+from zipfile import ZipFile
 
 import pytest
 from fastapi import FastAPI
@@ -14,6 +16,7 @@ from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.auth.models import Membership
 from harness.auth.repositories import InMemoryAuthRepository
 from harness.core.errors import NotFoundError
+from harness.core.manifest import ToolDirectorySnapshot
 from harness.evals.models import EvalRunStatus
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 
@@ -128,6 +131,68 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert published.json()["name"] == "policy-researcher"
     assert "snapshot" not in published.json()
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=app()),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("on-demand-agent"),
+        )
+        spec = created.json()["spec"]
+        spec["model"] = {
+            **spec["model"],
+            "routeId": "anthropic-official",
+            "requiredCapabilities": [
+                "streaming",
+                "tool_use",
+                "tool_search",
+            ],
+        }
+        spec["mcpServers"] = ["tavily-readonly"]
+        spec["toolExposureMode"] = "on_demand"
+        replaced = await client.put(
+            f"/v1/studio/drafts/{created.json()['draftId']}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": spec},
+        )
+        validation = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/validate",
+            headers=headers,
+        )
+        bundle = await client.get(
+            f"/v1/studio/drafts/{created.json()['draftId']}/bundle",
+            headers=headers,
+        )
+
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["spec"]["toolExposureMode"] == "on_demand"
+    assert validation.status_code == 200, validation.text
+    assert validation.json()["ready"] is True
+    assert validation.json()["contract"]["toolExposureMode"] == "on_demand"
+    assert validation.json()["contract"]["toolDirectoryEntries"] == 5
+    with ZipFile(BytesIO(bundle.content)) as archive:
+        directory = ToolDirectorySnapshot.model_validate_json(
+            archive.read("tool-directory.json")
+        )
+    assert directory.exposure_mode == "on_demand"
+    assert directory.content_hash == directory.digest()
+    assert {
+        entry.name for entry in directory.entries if entry.source == "mcp"
+    } == {
+        "mcp__tavily__tavily_search",
+        "mcp__tavily__tavily_extract",
+    }
 
 
 @pytest.mark.asyncio

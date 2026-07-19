@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from harness.core.manifest import ToolExposureMode
 from harness.evals.suite import EvalCase
 
 
@@ -118,6 +119,10 @@ class AgentDraftSpec(StudioModel):
     skills: tuple[DraftSkill, ...] = Field(min_length=1)
     builtin_tools: tuple[str, ...] = Field(default=(), alias="builtinTools")
     mcp_servers: tuple[str, ...] = Field(default=(), alias="mcpServers")
+    tool_exposure_mode: ToolExposureMode = Field(
+        default="eager",
+        alias="toolExposureMode",
+    )
     subagents: tuple[DraftSubagent, ...] = ()
     permission_policy: str = Field(alias="permissionPolicy", min_length=1)
     execution_profile: str = Field(
@@ -384,6 +389,8 @@ class EffectiveAgentContract(StudioModel):
     skills: int = Field(ge=0)
     builtin_tools: tuple[str, ...] = Field(alias="builtinTools")
     mcp_servers: tuple[str, ...] = Field(alias="mcpServers")
+    tool_exposure_mode: ToolExposureMode = Field(alias="toolExposureMode")
+    tool_directory_entries: int = Field(alias="toolDirectoryEntries", ge=0)
     network_access: NetworkAccess = Field(alias="networkAccess")
     network_summary: str = Field(alias="networkSummary")
     permission_policy: str = Field(alias="permissionPolicy")

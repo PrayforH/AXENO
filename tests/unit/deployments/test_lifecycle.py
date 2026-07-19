@@ -27,6 +27,7 @@ from harness.studio.models import (
     ExecutionProfileMetadata,
     NetworkAccess,
     ReplaceAgentDraftRequest,
+    ReplaceCapabilityCatalogRequest,
 )
 
 TENANT = "tenant-a"
@@ -306,6 +307,46 @@ async def test_environment_policy_denies_agent_resources_and_workload_scope() ->
             draft.spec.name,
             None,
             environment=EnvironmentName.PRODUCTION,
+        )
+
+
+@pytest.mark.asyncio
+async def test_promotion_rejects_agent_built_from_a_stale_tool_catalog() -> None:
+    container = build_memory_container()
+    draft, first_version, _ = await published_versions(
+        container,
+        "stale-tool-catalog-agent",
+    )
+    published_catalog = await container.capability_catalogs.get(TENANT)
+    updated_catalog = await container.capability_catalogs.replace(
+        tenant_id=TENANT,
+        user_id=USER,
+        request=ReplaceCapabilityCatalogRequest(
+            expectedRevision=published_catalog.revision,
+            catalog=published_catalog.catalog,
+        ),
+    )
+    environment = await container.deployments.environment(
+        TENANT,
+        draft.spec.name,
+        EnvironmentName.PRODUCTION,
+    )
+
+    assert updated_catalog.revision == published_catalog.revision + 1
+    assert (
+        environment.resource_policy.capability_catalog_revision
+        == updated_catalog.revision
+    )
+    with pytest.raises(ConflictError, match="tool directory catalog revision"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=promotion(
+                agent_name=draft.spec.name,
+                version=first_version,
+                revision=environment.revision,
+                key="stale-tool-catalog-release",
+            ),
         )
 
 

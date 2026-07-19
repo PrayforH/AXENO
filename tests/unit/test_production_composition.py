@@ -25,6 +25,7 @@ from harness.storage.catalog_repository import PostgresCapabilityCatalogReposito
 from harness.storage.redis import RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 
 
 def production_settings(**overrides: object) -> Settings:
@@ -174,8 +175,11 @@ async def test_production_container_can_defer_remote_sandbox_until_tool_use() ->
             vars(container.worker)["_sandbox"],
             DeferredToolSandboxProvider,
         )
-        preflight = vars(container.preview_controller)["_provisioner"]
-        runner = vars(preflight)["_runner"]
+        preflight = cast(
+            LivePreflightProvisioner,
+            vars(container.preview_controller)["_provisioner"],
+        )
+        runner = cast(LivePreflightRunner, vars(preflight)["_runner"])
         assert isinstance(vars(runner)["_sandbox"], E2BSandboxProvider)
     finally:
         assert container.close is not None
@@ -231,8 +235,10 @@ async def test_production_composition_configures_optional_anthropic_fallback() -
         runtime = cast(RegistryClaudeRuntime, container.runtime)
         fallback = vars(runtime)["_fallback_config"]
         assert fallback is not None
+        assert fallback.route_id == "anthropic-official"
         assert fallback.provider == "anthropic"
         assert fallback.model == "claude-fallback"
+        assert "tool_search" in fallback.capabilities
         assert "anthropic-secret" not in repr(fallback)
     finally:
         assert container.close is not None

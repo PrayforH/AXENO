@@ -178,6 +178,19 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 
+  it("offers governed eager and on-demand tool exposure without a new modal", () => {
+    expect(workbench).toContain('aria-label="工具加载方式"');
+    expect(workbench).toContain("启动时加载");
+    expect(workbench).toContain("按需发现");
+    expect(workbench).toContain("MCP Schema 在搜索命中后进入上下文");
+    expect(workbench).toContain("当前路由未审核 Tool Search，按需模式已锁定");
+    expect(workbench).toContain('disabled={!toolSearchCompatible}');
+    expect(studioConfig).toContain('toolExposureMode: "eager"');
+    expect(studioClient).toContain("toolExposureMode");
+    expect(styles).toContain(".toolExposureControl");
+    expect(styles).not.toContain(".toolExposureModal");
+  });
+
   it("keeps runtime and permission surfaces on shared light/dark theme tokens", () => {
     expect(styles).toMatch(
       /\.profileFacts span \{[\s\S]*?background: var\(--studio-panel-subtle\);/,

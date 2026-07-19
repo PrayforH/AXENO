@@ -63,7 +63,12 @@ from harness.runtime.sandbox_tools import (
 )
 from harness.runtime.sdk_tool_gate import ToolGate
 from harness.runtime.subagent_governance import SubagentRuntimeGovernor
-from harness.runtime.tools import ResolvedTools, ToolResolutionError, ToolResolver
+from harness.runtime.tools import (
+    ResolvedTools,
+    ToolResolutionError,
+    ToolResolver,
+    enforce_published_tool_directory,
+)
 
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
 _TEXT_DELTA_FLUSH_CHARS = 64
@@ -235,6 +240,12 @@ class ClaudeSdkRuntime:
             "ANTHROPIC_BASE_URL": route.base_url,
             "CLAUDE_AGENT_SDK_CLIENT_APP": "claude-agent-harness/0.1.0",
         }
+        if manifest.spec.tool_exposure_mode == "on_demand":
+            if "tool_search" not in route.capabilities:
+                raise ToolResolutionError(
+                    "selected model route does not support on-demand tool loading"
+                )
+            environment["ENABLE_TOOL_SEARCH"] = "true"
         auth_scheme = route.auth_scheme or (
             "bearer" if route.provider == "new-api" else "x-api-key"
         )
@@ -243,6 +254,7 @@ class ClaudeSdkRuntime:
         else:
             environment["ANTHROPIC_API_KEY"] = secret
         resolved_tools = await self._tool_resolver.resolve(manifest, context.identity)
+        enforce_published_tool_directory(self._snapshot, resolved_tools)
         mcp_servers = dict(resolved_tools.mcp_servers)
         allowed_tools = list(resolved_tools.allowed_tools)
         builtin_tools = list(resolved_tools.builtin_tools)
@@ -464,6 +476,9 @@ class ClaudeSdkRuntime:
                 "harness.declared_tool.count": len(
                     self._snapshot.manifest.spec.tools
                 ),
+                "harness.tool.exposure_mode": (
+                    self._snapshot.manifest.spec.tool_exposure_mode
+                ),
             },
         ):
             options, resolved_tools = await self._options(context, decision.route)
@@ -476,8 +491,27 @@ class ClaudeSdkRuntime:
                         "harness.resolved_mcp.count": len(
                             resolved_tools.mcp_servers
                         ),
+                        "harness.tool.directory_hash": (
+                            self._snapshot.tool_directory.content_hash
+                            if self._snapshot.tool_directory is not None
+                            else "legacy-eager"
+                        ),
                     }
                 )
+        if self._snapshot.tool_directory is not None:
+            yield RuntimeEvent(
+                type="tool.directory.loaded",
+                payload={
+                    "exposure_mode": (
+                        self._snapshot.tool_directory.exposure_mode
+                    ),
+                    "catalog_revision": (
+                        self._snapshot.tool_directory.catalog_revision
+                    ),
+                    "content_hash": self._snapshot.tool_directory.content_hash,
+                    "entry_count": len(self._snapshot.tool_directory.entries),
+                },
+            )
         subagent_governor = SubagentRuntimeGovernor(
             root=self._snapshot,
             subagent_versions=self._subagent_versions,

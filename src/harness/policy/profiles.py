@@ -33,6 +33,16 @@ def read_only_policy_rules() -> list[PolicyRule]:
     """Evidence tools plus controlled artifact publication, with implicit deny."""
 
     return [
+        PolicyRule(
+            name="tool-directory-search",
+            tool="ToolSearch",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="mcp-directory-search",
+            tool="MCPSearch",
+            decision=PolicyDecision.ALLOW,
+        ),
         PolicyRule(name="read", tool="Read", decision=PolicyDecision.ALLOW),
         PolicyRule(name="glob", tool="Glob", decision=PolicyDecision.ALLOW),
         PolicyRule(name="grep", tool="Grep", decision=PolicyDecision.ALLOW),

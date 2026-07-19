@@ -102,11 +102,19 @@ Acceptance:
 
 ### Phase 3 — load tools when needed
 
-- Publish a tool-directory snapshot with each Agent version.
-- Expose small `search_tools` and `run_tool` runtime tools.
-- Search only the pinned directory and environment-visible subset.
-- Load the full schema only at invocation time.
-- Apply the target tool's real policy, credential and audit identity.
+Detailed design: [Phase 3 — versioned tool directory and load-on-demand](./2026-07-19-versioned-tool-directory.md).
+
+- Publish a canonical, hash-bound tool-directory snapshot with each new Agent version.
+- Keep built-in workspace tools eager and defer reviewed MCP schemas with Claude CLI's
+  native Tool Search path.
+- Search only the immutable directory whose Catalog revision is accepted by the target
+  Environment.
+- Require the runtime MCP allowlist to exactly match the published directory before the
+  model request starts.
+- Invoke the selected tool by its real name so target policy, approval, credential,
+  quota, trust and audit controls remain authoritative.
+- Fail closed when the route lacks `tool_search`, the directory is missing or tampered,
+  or runtime registrations are wider or narrower than the published snapshot.
 
 ### Phase 4 — governed knowledge sources
 

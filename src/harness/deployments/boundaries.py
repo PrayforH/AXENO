@@ -32,6 +32,14 @@ def enforce_runtime_environment(
     if snapshot is None:
         return
     policy = snapshot.resource_policy
+    if (
+        agent.tool_directory is not None
+        and agent.tool_directory.catalog_revision
+        != policy.capability_catalog_revision
+    ):
+        raise ConflictError(
+            "Session Environment snapshot denies the Agent tool directory revision"
+        )
     model_routes = {
         agent.manifest.spec.model.route,
         *(

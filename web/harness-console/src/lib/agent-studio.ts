@@ -10,6 +10,7 @@ export type StudioSection =
 
 export type StudioRisk = "low" | "medium" | "high";
 export type NetworkAccess = "none" | "internal" | "external";
+export type ToolExposureMode = "eager" | "on_demand";
 
 export interface ModelRouteOption {
   id: string;
@@ -84,6 +85,7 @@ export interface StudioDraft {
   skills: StudioSkill[];
   builtinTools: string[];
   mcpServers: string[];
+  toolExposureMode: ToolExposureMode;
   subagents: StudioSubagent[];
   policy: string;
   executionProfile: string;
@@ -131,7 +133,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     label: "Anthropic 官方",
     provider: "anthropic",
     models: ["claude-sonnet-4-6"],
-    capabilities: ["streaming", "tool_use"],
+    capabilities: ["streaming", "tool_use", "tool_search"],
   },
 ];
 
@@ -350,6 +352,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   ],
   builtinTools: ["Read", "Glob", "Grep", "Write", "Edit", "Task"],
   mcpServers: ["tavily-readonly"],
+  toolExposureMode: "eager",
   subagents: [
     {
       alias: "fact-researcher",
@@ -474,6 +477,8 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
     ...raw,
     subagents,
     evalCases,
+    toolExposureMode:
+      raw.toolExposureMode === "on_demand" ? "on_demand" : "eager",
     restoreSession:
       typeof raw.restoreSession === "boolean"
         ? raw.restoreSession
@@ -499,6 +504,13 @@ export function evaluateStudioDraft(
   if (!route) issues.push("模型路由未注册");
   if (route && !route.models.includes(draft.model)) {
     issues.push("所选模型不属于当前路由");
+  }
+  if (
+    draft.toolExposureMode === "on_demand"
+    && route
+    && !route.capabilities.includes("tool_search")
+  ) {
+    issues.push("当前模型路由不支持按需工具加载");
   }
   if (promptSections !== REQUIRED_PROMPT_HEADINGS.length) {
     issues.push("System Prompt 缺少必需章节");

@@ -16,6 +16,7 @@ class CcSwitchConfigError(ValueError):
 class CcSwitchClaudeConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    route_id: str | None = None
     base_url: str
     model: str
     provider: Literal["new-api", "anthropic"]

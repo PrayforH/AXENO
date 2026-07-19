@@ -76,7 +76,11 @@ class AgentStudioService:
 
     async def _compiler_for(self, tenant_id: str) -> AgentDraftCompiler:
         if self._catalogs is not None:
-            return AgentDraftCompiler((await self._catalogs.get(tenant_id)).catalog)
+            record = await self._catalogs.get(tenant_id)
+            return AgentDraftCompiler(
+                record.catalog,
+                catalog_revision=record.revision,
+            )
         if self._compiler is None:
             raise RuntimeError("Agent Studio compiler is not configured")
         return self._compiler

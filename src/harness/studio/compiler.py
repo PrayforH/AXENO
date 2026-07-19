@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,7 +15,12 @@ from harness.agent_package import (
     check_agent_package,
     pack_agent_package,
 )
-from harness.core.manifest import AgentManifest
+from harness.core.manifest import (
+    TOOL_DIRECTORY_FILENAME,
+    AgentManifest,
+    ToolDirectoryEntry,
+    ToolDirectorySnapshot,
+)
 from harness.evals.suite import EvalSuite
 from harness.studio.models import (
     AgentDraft,
@@ -43,11 +49,23 @@ class CompiledAgentDraft:
 
 
 class AgentDraftCompiler:
-    def __init__(self, catalog: CapabilityCatalog) -> None:
+    def __init__(
+        self,
+        catalog: CapabilityCatalog,
+        *,
+        catalog_revision: int = 1,
+    ) -> None:
         self._catalog = catalog
+        self._catalog_revision = catalog_revision
 
     def render_manifest(self, draft: AgentDraft) -> str:
         spec = draft.spec
+        required_capabilities = list(spec.model.required_capabilities)
+        if (
+            spec.tool_exposure_mode == "on_demand"
+            and "tool_search" not in required_capabilities
+        ):
+            required_capabilities.append("tool_search")
         tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
         manifest = AgentManifest.model_validate(
@@ -70,11 +88,12 @@ class AgentDraftCompiler:
                         "model": spec.model.model,
                         "fallbackRoute": spec.model.fallback_route_id,
                         "fallbackModel": spec.model.fallback_model,
-                        "requiredCapabilities": list(spec.model.required_capabilities),
+                        "requiredCapabilities": required_capabilities,
                     },
                     "prompt": {"system": "prompts/system.md"},
                     "skills": [f"skills/{skill.name}" for skill in spec.skills],
                     "tools": tools,
+                    "toolExposureMode": spec.tool_exposure_mode,
                     "subagents": [
                         {
                             "ref": subagent.ref,
@@ -197,6 +216,8 @@ class AgentDraftCompiler:
             skills=len(spec.skills),
             builtinTools=spec.builtin_tools,
             mcpServers=spec.mcp_servers,
+            toolExposureMode=spec.tool_exposure_mode,
+            toolDirectoryEntries=len(self.tool_directory(draft).entries),
             networkAccess=network,
             networkSummary=network_summary,
             permissionPolicy=spec.permission_policy,
@@ -246,6 +267,20 @@ class AgentDraftCompiler:
                         message=f"模型路由缺少能力：{', '.join(sorted(missing))}",
                         severity=ValidationSeverity.ERROR,
                         path="model.requiredCapabilities",
+                    )
+                )
+            if (
+                spec.tool_exposure_mode == "on_demand"
+                and "tool_search" not in route.capabilities
+            ):
+                issues.append(
+                    ValidationIssue(
+                        code="tool_search_capability_missing",
+                        message=(
+                            f"模型路由不支持按需工具加载：{spec.model.route_id}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="toolExposureMode",
                     )
                 )
 
@@ -349,7 +384,7 @@ class AgentDraftCompiler:
 
     def _deployment_warnings(self, draft: AgentDraft) -> tuple[ValidationIssue, ...]:
         mcp_by_reference = {item.reference: item for item in self._catalog.mcp_servers}
-        return tuple(
+        warnings = [
             ValidationIssue(
                 code="mcp_deployment_preflight_required",
                 message=(
@@ -362,6 +397,71 @@ class AgentDraftCompiler:
             for reference in draft.spec.mcp_servers
             if (capability := mcp_by_reference.get(reference)) is not None
             and capability.preflight_required
+        ]
+        if (
+            draft.spec.tool_exposure_mode == "on_demand"
+            and not draft.spec.mcp_servers
+        ):
+            warnings.append(
+                ValidationIssue(
+                    code="tool_search_not_needed",
+                    message="当前没有 MCP 工具，按需加载不会减少工具上下文",
+                    severity=ValidationSeverity.WARNING,
+                    path="toolExposureMode",
+                )
+            )
+        return tuple(warnings)
+
+    def tool_directory(self, draft: AgentDraft) -> ToolDirectorySnapshot:
+        builtin_by_name = {
+            item.name: item for item in self._catalog.builtin_tools
+        }
+        mcp_by_reference = {
+            item.reference: item for item in self._catalog.mcp_servers
+        }
+        entries: list[ToolDirectoryEntry] = []
+        for name in draft.spec.builtin_tools:
+            capability = builtin_by_name.get(name)
+            if capability is None:
+                continue
+            entries.append(
+                ToolDirectoryEntry(
+                    name=name,
+                    source="builtin",
+                    logicalReference=name,
+                    description=capability.description,
+                    risk=capability.risk.value,
+                    resultTrust="safe",
+                )
+            )
+        for reference in draft.spec.mcp_servers:
+            capability = mcp_by_reference.get(reference)
+            if capability is None:
+                continue
+            result_trust = (
+                "untrusted"
+                if capability.network_access is NetworkAccess.EXTERNAL
+                or capability.sends_user_data
+                else "sensitive"
+            )
+            for name in capability.tools:
+                entries.append(
+                    ToolDirectoryEntry(
+                        name=name,
+                        source="mcp",
+                        logicalReference=reference,
+                        description=(
+                            f"{capability.description} Reviewed tool: "
+                            f"{name.rsplit('__', 1)[-1]}."
+                        ),
+                        risk=capability.risk.value,
+                        resultTrust=result_trust,
+                    )
+                )
+        return ToolDirectorySnapshot.create(
+            catalog_revision=self._catalog_revision,
+            exposure_mode=draft.spec.tool_exposure_mode,
+            entries=entries,
         )
 
     def _materialize(self, draft: AgentDraft, root: Path, manifest_yaml: str) -> Path:
@@ -405,6 +505,19 @@ class AgentDraftCompiler:
         )
         (root / "README.md").write_text(
             f"# {spec.display_name}\n\n{spec.description}\n",
+            encoding="utf-8",
+        )
+        (root / TOOL_DIRECTORY_FILENAME).write_text(
+            json.dumps(
+                self.tool_directory(draft).model_dump(
+                    mode="json",
+                    by_alias=True,
+                ),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         manifest = root / "agent.yaml"

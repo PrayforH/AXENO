@@ -64,6 +64,26 @@ describe("Agent Studio effective contract", () => {
     expect(contract.networkLabel).toBe("不联网");
   });
 
+  it("fails closed when on-demand discovery is selected on an unreviewed route", () => {
+    const unsupported = evaluateStudioDraft({
+      ...DEFAULT_STUDIO_DRAFT,
+      toolExposureMode: "on_demand",
+    });
+    const supported = evaluateStudioDraft({
+      ...DEFAULT_STUDIO_DRAFT,
+      modelRoute: "anthropic-official",
+      toolExposureMode: "on_demand",
+      requiredCapabilities: [
+        ...DEFAULT_STUDIO_DRAFT.requiredCapabilities,
+        "tool_search",
+      ],
+    });
+
+    expect(unsupported.ready).toBe(false);
+    expect(unsupported.issues).toContain("当前模型路由不支持按需工具加载");
+    expect(supported.issues).not.toContain("当前模型路由不支持按需工具加载");
+  });
+
   it("fails closed for duplicate roles and floating subagent references", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,
@@ -132,6 +152,7 @@ describe("Agent Studio effective contract", () => {
       ...DEFAULT_STUDIO_DRAFT,
       restoreSession: undefined,
       archiveOnComplete: undefined,
+      toolExposureMode: undefined,
       subagents: ["helper-agent@1.0.0"],
       evalCases: DEFAULT_STUDIO_DRAFT.evalCases.map(({ expect: _expect, ...testCase }) =>
         testCase,
@@ -143,6 +164,7 @@ describe("Agent Studio effective contract", () => {
     expect(restored).not.toBeNull();
     expect(restored?.restoreSession).toBe(true);
     expect(restored?.archiveOnComplete).toBe(true);
+    expect(restored?.toolExposureMode).toBe("eager");
     expect(restored?.subagents[0]).toMatchObject({
       ref: "helper-agent@1.0.0",
       alias: "fact-researcher",

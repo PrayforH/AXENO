@@ -15,7 +15,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 
-from harness.core.manifest import AgentManifest
+from harness.core.manifest import AgentManifest, AgentManifestSnapshot
 from harness.core.models import ExecutionIdentity
 from harness.policy.models import ContextTrust
 from harness.runtime.mcp_credentials import (
@@ -250,3 +250,46 @@ class ToolResolver:
                     f"duplicate python tool name: {sdk_tool.name}"
                 )
             names.add(sdk_tool.name)
+
+
+def enforce_published_tool_directory(
+    snapshot: AgentManifestSnapshot,
+    resolved: ResolvedTools,
+) -> None:
+    """Fail closed when runtime registrations drift from the published directory."""
+
+    directory = snapshot.tool_directory
+    mode = snapshot.manifest.spec.tool_exposure_mode
+    if directory is None:
+        if mode == "on_demand":
+            raise ToolResolutionError(
+                "on-demand tool exposure is missing its published directory"
+            )
+        return
+    if directory.exposure_mode != mode:
+        raise ToolResolutionError(
+            "published tool directory exposure mode does not match the Manifest"
+        )
+    expected_builtins = {
+        entry.name for entry in directory.entries if entry.source == "builtin"
+    }
+    expected_mcp = {
+        entry.name for entry in directory.entries if entry.source == "mcp"
+    }
+    actual_builtins = set(resolved.builtin_tools)
+    actual_mcp = set(resolved.allowed_tools)
+    if expected_builtins != actual_builtins:
+        raise ToolResolutionError(
+            "runtime builtin tools differ from the published tool directory"
+        )
+    if expected_mcp != actual_mcp:
+        raise ToolResolutionError(
+            "runtime MCP allowlist differs from the published tool directory"
+        )
+    if mode == "on_demand" and any(
+        tool.python_entry is not None
+        for tool in snapshot.manifest.spec.tools
+    ):
+        raise ToolResolutionError(
+            "on-demand loading does not support in-process Python tools"
+        )

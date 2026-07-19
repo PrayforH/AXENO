@@ -260,7 +260,16 @@ class DeploymentService:
             raise ConflictError(
                 "Deployment Execution Profile is outside the Environment policy"
             )
-        manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
+        published_snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+        if (
+            published_snapshot.tool_directory is not None
+            and published_snapshot.tool_directory.catalog_revision
+            != policy.capability_catalog_revision
+        ):
+            raise ConflictError(
+                "Agent tool directory catalog revision is outside the Environment policy"
+            )
+        manifest = published_snapshot.manifest
         model_routes = {
             manifest.spec.model.route,
             *(

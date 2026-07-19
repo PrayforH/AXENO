@@ -67,6 +67,7 @@ describe("Studio typed API mapping", () => {
       { path: "references/rules.md", content: "rules" },
     ]);
     expect(saved.model.requiredCapabilities).toEqual(["streaming", "tool_use"]);
+    expect(saved.toolExposureMode).toBe(DEFAULT_STUDIO_DRAFT.toolExposureMode);
     expect(saved.limits.maxModelTokens).toBe(200000);
   });
 

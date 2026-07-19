@@ -654,6 +654,11 @@ export function AgentStudioWorkbench() {
 
   const selectedRoute =
     options.routes.find((route) => route.id === draft.modelRoute) ?? options.routes[0];
+  const toolSearchCompatible =
+    selectedRoute?.capabilities.includes("tool_search") ?? false;
+  const toolDirectoryEntries = draft.builtinTools.length + options.mcp
+    .filter((item) => draft.mcpServers.includes(item.id))
+    .reduce((total, item) => total + item.tools.length, 0);
   const skill = draft.skills[0];
   const validationReady = serverValidation?.ready ?? contract.ready;
   const activePreview = previews.find(
@@ -1539,6 +1544,71 @@ export function AgentStudioWorkbench() {
                   title="只授予完成场景所需的能力"
                   description="能力是显式上限。没有选择的工具不会在运行时注入。"
                 />
+
+                <div className={styles.toolExposureControl}>
+                  <div className={styles.toolExposureSummary}>
+                    <span>工具加载</span>
+                    <strong>
+                      {draft.toolExposureMode === "on_demand"
+                        ? "按需发现"
+                        : "启动时加载"}
+                    </strong>
+                    <small>
+                      目录 {toolDirectoryEntries} 项 · {
+                        draft.toolExposureMode === "on_demand"
+                          ? "MCP Schema 在搜索命中后进入上下文"
+                          : "适合当前小型工具集"
+                      }
+                    </small>
+                  </div>
+                  <div
+                    className={styles.toolExposureChoices}
+                    role="group"
+                    aria-label="工具加载方式"
+                  >
+                    <button
+                      type="button"
+                      data-active={draft.toolExposureMode === "eager"}
+                      aria-pressed={draft.toolExposureMode === "eager"}
+                      onClick={() => updateDraft({
+                        toolExposureMode: "eager",
+                        requiredCapabilities: draft.requiredCapabilities.filter(
+                          (item) => item !== "tool_search",
+                        ),
+                      })}
+                    >
+                      <strong>启动时</strong>
+                      <small>直接可用</small>
+                    </button>
+                    <button
+                      type="button"
+                      data-active={draft.toolExposureMode === "on_demand"}
+                      aria-pressed={draft.toolExposureMode === "on_demand"}
+                      disabled={!toolSearchCompatible}
+                      onClick={() => updateDraft({
+                        toolExposureMode: "on_demand",
+                        requiredCapabilities: Array.from(new Set([
+                          ...draft.requiredCapabilities,
+                          "tool_search",
+                        ])),
+                      })}
+                    >
+                      <strong>按需</strong>
+                      <small>目录搜索</small>
+                    </button>
+                  </div>
+                  <div
+                    className={styles.toolExposureCompatibility}
+                    data-ready={toolSearchCompatible}
+                  >
+                    <i aria-hidden="true" />
+                    <span>
+                      {toolSearchCompatible
+                        ? `${selectedRoute?.label ?? "当前路由"} 已审核 Tool Search`
+                        : "当前路由未审核 Tool Search，按需模式已锁定"}
+                    </span>
+                  </div>
+                </div>
 
                 <div className={styles.groupHeading}>
                   <div>

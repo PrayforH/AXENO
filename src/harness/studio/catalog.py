@@ -32,7 +32,7 @@ def default_capability_catalog() -> CapabilityCatalog:
                 label="Anthropic official",
                 provider="anthropic",
                 models=("claude-sonnet-4-6",),
-                capabilities=("streaming", "tool_use"),
+                capabilities=("streaming", "tool_use", "tool_search"),
                 credentialReference="ANTHROPIC_API_KEY",
             ),
         ),

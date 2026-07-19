@@ -57,6 +57,27 @@ class RegistryClaudeRuntime:
         self._observability = observability
         self._credential_broker = credential_broker
 
+    def _config_for_route(
+        self,
+        route_id: str,
+        *,
+        legacy_fallback: bool = False,
+    ) -> CcSwitchClaudeConfig:
+        candidates = tuple(
+            config
+            for config in (self._config, self._fallback_config)
+            if config is not None
+        )
+        exact = next(
+            (config for config in candidates if config.route_id == route_id),
+            None,
+        )
+        if exact is not None:
+            return exact
+        if legacy_fallback and self._fallback_config is not None:
+            return self._fallback_config
+        return self._config
+
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
         agent_version, subagent_versions = await resolve_published_agent_versions(
@@ -68,19 +89,20 @@ class RegistryClaudeRuntime:
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         enforce_runtime_environment(session, snapshot)
         route_id = snapshot.manifest.spec.model.route
+        selected_config = self._config_for_route(route_id)
         route = ModelRoute(
             route_id=route_id,
-            provider=self._config.provider,
-            base_url=self._config.base_url,
-            model=self._config.model,
-            compatibility=self._config.compatibility,
-            capabilities=self._config.capabilities,
-            auth_scheme=self._config.resolved_auth_scheme,
+            provider=selected_config.provider,
+            base_url=selected_config.base_url,
+            model=selected_config.model,
+            compatibility=selected_config.compatibility,
+            capabilities=selected_config.capabilities,
+            auth_scheme=selected_config.resolved_auth_scheme,
         )
         routes = [route]
         issued_leases: list[CredentialLease] = []
         if self._credential_broker is None:
-            route_secret = self._config.credential.get_secret_value()
+            route_secret = selected_config.credential.get_secret_value()
         else:
             assert context.identity is not None
             lease = await self._credential_broker.issue(
@@ -97,18 +119,22 @@ class RegistryClaudeRuntime:
         route_secrets = {route_id: route_secret}
         fallback_route_id = snapshot.manifest.spec.model.fallback_route
         if fallback_route_id is not None and self._fallback_config is not None:
+            selected_fallback = self._config_for_route(
+                fallback_route_id,
+                legacy_fallback=True,
+            )
             fallback_route = ModelRoute(
                 route_id=fallback_route_id,
-                provider=self._fallback_config.provider,
-                base_url=self._fallback_config.base_url,
-                model=self._fallback_config.model,
-                compatibility=self._fallback_config.compatibility,
-                capabilities=self._fallback_config.capabilities,
-                auth_scheme=self._fallback_config.resolved_auth_scheme,
+                provider=selected_fallback.provider,
+                base_url=selected_fallback.base_url,
+                model=selected_fallback.model,
+                compatibility=selected_fallback.compatibility,
+                capabilities=selected_fallback.capabilities,
+                auth_scheme=selected_fallback.resolved_auth_scheme,
             )
             routes.append(fallback_route)
             if self._credential_broker is None:
-                fallback_secret = self._fallback_config.credential.get_secret_value()
+                fallback_secret = selected_fallback.credential.get_secret_value()
             else:
                 assert context.identity is not None
                 fallback_lease = await self._credential_broker.issue(

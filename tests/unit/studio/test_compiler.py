@@ -1,7 +1,9 @@
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 from zipfile import ZipFile
 
+from harness.core.manifest import ToolDirectorySnapshot
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import AgentDraftCompiler
 from harness.studio.factory import create_draft_spec
@@ -54,10 +56,21 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
             "prompts/system.md",
             "skills/invoice-reviewer-core/SKILL.md",
             "evals/suite.yaml",
+            "tool-directory.json",
         }.issubset(names)
         manifest = bundle.read("agent.yaml").decode()
+        directory = ToolDirectorySnapshot.model_validate_json(
+            bundle.read("tool-directory.json")
+        )
     assert "route: new-api-default" in manifest
     assert "mode: isolated" in manifest
+    assert directory.exposure_mode == "eager"
+    assert directory.catalog_revision == 1
+    assert {entry.name for entry in directory.entries} == {
+        "Read",
+        "Glob",
+        "Grep",
+    }
 
 
 def test_tavily_is_a_controlled_external_mcp_capability_not_general_network() -> None:
@@ -83,6 +96,80 @@ def test_tavily_is_a_controlled_external_mcp_capability_not_general_network() ->
         for issue in validation.issues
     )
     assert "mcp: tavily-readonly" in validation.manifest_yaml
+
+
+def test_on_demand_bundle_pins_reviewed_tool_directory_and_route_capability() -> None:
+    compiler = AgentDraftCompiler(
+        default_capability_catalog(),
+        catalog_revision=9,
+    )
+    current = draft()
+    on_demand = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={
+                    "model": current.spec.model.model_copy(
+                        update={
+                            "route_id": "anthropic-official",
+                            "required_capabilities": (
+                                "streaming",
+                                "tool_use",
+                                "tool_search",
+                            ),
+                        }
+                    ),
+                    "mcp_servers": ("tavily-readonly",),
+                    "tool_exposure_mode": "on_demand",
+                }
+            )
+        }
+    )
+
+    validation = compiler.validate(on_demand)
+    compiled = compiler.compile(on_demand)
+
+    assert validation.ready is True
+    assert validation.contract.tool_exposure_mode == "on_demand"
+    assert validation.contract.tool_directory_entries == 5
+    assert "toolExposureMode: on_demand" in validation.manifest_yaml
+    assert "tool_search" in validation.manifest_yaml
+    with ZipFile(BytesIO(compiled.bundle)) as bundle:
+        raw = json.loads(bundle.read("tool-directory.json"))
+        directory = ToolDirectorySnapshot.model_validate(raw)
+    assert directory.catalog_revision == 9
+    assert directory.exposure_mode == "on_demand"
+    assert directory.content_hash == directory.digest()
+    assert {
+        entry.name for entry in directory.entries if entry.source == "mcp"
+    } == {
+        "mcp__tavily__tavily_search",
+        "mcp__tavily__tavily_extract",
+    }
+    assert {
+        entry.logical_reference
+        for entry in directory.entries
+        if entry.source == "mcp"
+    } == {"tavily-readonly"}
+
+
+def test_on_demand_mode_fails_closed_on_route_without_tool_search() -> None:
+    current = draft()
+    unsupported = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={"tool_exposure_mode": "on_demand"}
+            )
+        }
+    )
+
+    validation = AgentDraftCompiler(default_capability_catalog()).validate(
+        unsupported
+    )
+
+    assert validation.ready is False
+    assert "tool_search_capability_missing" in {
+        issue.code for issue in validation.issues
+    }
 
 
 def test_unknown_model_tool_and_mcp_fail_closed_before_packaging() -> None:

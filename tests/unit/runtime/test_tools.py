@@ -1,11 +1,23 @@
+from types import MappingProxyType
 from typing import cast
 
 import pytest
 from claude_agent_sdk import McpSdkServerConfig, McpServerConfig
 
-from harness.core.manifest import AgentManifest
+from harness.core.manifest import (
+    AgentManifest,
+    AgentManifestSnapshot,
+    ToolDirectoryEntry,
+    ToolDirectorySnapshot,
+)
 from harness.policy.models import ContextTrust
-from harness.runtime.tools import McpServerRegistration, ToolResolutionError, ToolResolver
+from harness.runtime.tools import (
+    McpServerRegistration,
+    ResolvedTools,
+    ToolResolutionError,
+    ToolResolver,
+    enforce_published_tool_directory,
+)
 
 
 def manifest_fixture(*tools: dict[str, str]) -> AgentManifest:
@@ -119,3 +131,69 @@ async def test_rejects_inline_registry_secrets() -> None:
 
     assert str(captured.value) == "MCP registrations cannot contain inline headers or environment"
     assert secret not in repr(captured.value)
+
+
+def test_published_tool_directory_rejects_runtime_registration_drift() -> None:
+    manifest = manifest_fixture({"builtin": "Read"}, {"mcp": "crm"}).model_copy(
+        update={
+            "spec": manifest_fixture(
+                {"builtin": "Read"}, {"mcp": "crm"}
+            ).spec.model_copy(update={"tool_exposure_mode": "on_demand"})
+        }
+    )
+    directory = ToolDirectorySnapshot.create(
+        catalog_revision=3,
+        exposure_mode="on_demand",
+        entries=(
+            ToolDirectoryEntry(
+                name="Read",
+                source="builtin",
+                logicalReference="Read",
+                description="Read isolated workspace files.",
+                risk="low",
+                resultTrust="safe",
+            ),
+            ToolDirectoryEntry(
+                name="mcp__crm-prod__search",
+                source="mcp",
+                logicalReference="crm",
+                description="Search reviewed CRM records.",
+                risk="medium",
+                resultTrust="sensitive",
+            ),
+        ),
+    )
+    snapshot = AgentManifestSnapshot(
+        manifest=manifest,
+        system_prompt="Use only reviewed tools.",
+        tool_directory=directory,
+        content_hash="a" * 64,
+    )
+
+    def resolved(
+        *,
+        builtins: tuple[str, ...] = ("Read",),
+        allowed: tuple[str, ...] = ("mcp__crm-prod__search",),
+    ) -> ResolvedTools:
+        return ResolvedTools(
+            builtin_tools=builtins,
+            mcp_servers=MappingProxyType({}),
+            allowed_tools=allowed,
+            mcp_smokes=MappingProxyType({}),
+        )
+
+    enforce_published_tool_directory(snapshot, resolved())
+    with pytest.raises(ToolResolutionError, match="builtin tools differ"):
+        enforce_published_tool_directory(snapshot, resolved(builtins=("Read", "Bash")))
+    with pytest.raises(ToolResolutionError, match="MCP allowlist differs"):
+        enforce_published_tool_directory(snapshot, resolved(allowed=()))
+    with pytest.raises(ToolResolutionError, match="MCP allowlist differs"):
+        enforce_published_tool_directory(
+            snapshot,
+            resolved(
+                allowed=(
+                    "mcp__crm-prod__search",
+                    "mcp__crm-prod__delete",
+                )
+            ),
+        )

@@ -156,13 +156,14 @@ def _anthropic_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
     if not (settings.anthropic_base_url and settings.anthropic_model and anthropic_key):
         return None
     return CcSwitchClaudeConfig(
+        route_id="anthropic-official",
         base_url=settings.anthropic_base_url,
         model=settings.anthropic_model,
         provider="anthropic",
         credential=SecretStr(anthropic_key),
         auth_scheme="x-api-key",
         compatibility=ModelCompatibility.FULL,
-        capabilities=frozenset({"streaming", "tool_use"}),
+        capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
     )
 
 
@@ -173,6 +174,7 @@ def _gateways(
     if settings.new_api_base_url and settings.new_api_model and new_api_key:
         return (
             CcSwitchClaudeConfig(
+                route_id="new-api-default",
                 base_url=settings.new_api_base_url,
                 model=settings.new_api_model,
                 provider="new-api",

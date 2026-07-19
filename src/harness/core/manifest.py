@@ -56,6 +56,73 @@ class ToolSpec(ManifestModel):
         return self
 
 
+ToolExposureMode = Literal["eager", "on_demand"]
+
+
+class ToolDirectoryEntry(ManifestModel):
+    name: str = Field(min_length=1)
+    source: Literal["builtin", "mcp", "python"]
+    logical_reference: str = Field(alias="logicalReference", min_length=1)
+    description: str = Field(min_length=1, max_length=2_000)
+    risk: Literal["low", "medium", "high"]
+    result_trust: Literal["safe", "sensitive", "untrusted"] = Field(
+        alias="resultTrust"
+    )
+
+
+class ToolDirectorySnapshot(ManifestModel):
+    schema_version: Literal["harness.tool-directory/v1"] = Field(
+        alias="schemaVersion"
+    )
+    catalog_revision: int = Field(alias="catalogRevision", ge=1)
+    exposure_mode: ToolExposureMode = Field(alias="exposureMode")
+    entries: tuple[ToolDirectoryEntry, ...]
+    content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
+
+    def digest(self) -> str:
+        payload = self.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"content_hash"},
+        )
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        catalog_revision: int,
+        exposure_mode: ToolExposureMode,
+        entries: Sequence[ToolDirectoryEntry],
+    ) -> ToolDirectorySnapshot:
+        ordered = tuple(sorted(entries, key=lambda item: (item.source, item.name)))
+        payload = {
+            "schemaVersion": "harness.tool-directory/v1",
+            "catalogRevision": catalog_revision,
+            "exposureMode": exposure_mode,
+            "entries": [
+                item.model_dump(mode="json", by_alias=True) for item in ordered
+            ],
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return cls.model_validate(
+            {
+                **payload,
+                "contentHash": hashlib.sha256(canonical.encode()).hexdigest(),
+            }
+        )
+
+    @model_validator(mode="after")
+    def valid_directory(self) -> ToolDirectorySnapshot:
+        names = [item.name for item in self.entries]
+        if len(names) != len(set(names)):
+            raise ValueError("tool directory entries must have unique names")
+        if self.content_hash != self.digest():
+            raise ValueError("tool directory content hash does not match its entries")
+        return self
+
+
 class SubagentSpec(ManifestModel):
     ref: str = Field(min_length=1)
     alias: str | None = Field(
@@ -105,6 +172,10 @@ class AgentSpec(ManifestModel):
     prompt: PromptSpec
     skills: tuple[str, ...] = ()
     tools: tuple[ToolSpec, ...] = ()
+    tool_exposure_mode: ToolExposureMode = Field(
+        default="eager",
+        alias="toolExposureMode",
+    )
     subagents: tuple[SubagentSpec, ...] = ()
     hooks: tuple[HookSpec, ...] = ()
     permissions: PermissionSpec
@@ -148,6 +219,7 @@ class AgentManifestSnapshot(ManifestModel):
     manifest: AgentManifest
     system_prompt: str
     skill_snapshots: tuple[SkillSnapshot, ...] = ()
+    tool_directory: ToolDirectorySnapshot | None = None
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -155,6 +227,8 @@ _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|password|secret)", re.IGNORECASE
 _NON_SECRET_TOKEN_FIELDS = {"maxmodeltokens"}
 _MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024
 _MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
+TOOL_DIRECTORY_FILENAME = "tool-directory.json"
+_MAX_TOOL_DIRECTORY_BYTES = 2 * 1024 * 1024
 
 
 def _assert_no_inline_secrets(value: object, path: str = "manifest") -> None:
@@ -279,6 +353,68 @@ def _snapshot_skill(root: Path, relative: str) -> SkillSnapshot:
     )
 
 
+def _load_tool_directory(
+    root: Path,
+    manifest: AgentManifest,
+) -> ToolDirectorySnapshot | None:
+    path = root / TOOL_DIRECTORY_FILENAME
+    if not path.exists():
+        if manifest.spec.tool_exposure_mode == "on_demand":
+            raise ManifestValidationError(
+                "on-demand tool exposure requires tool-directory.json"
+            )
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ManifestValidationError("tool-directory.json must be a regular file")
+    if path.stat().st_size > _MAX_TOOL_DIRECTORY_BYTES:
+        raise ManifestValidationError(
+            f"tool-directory.json exceeds {_MAX_TOOL_DIRECTORY_BYTES} bytes"
+        )
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+        directory = ToolDirectorySnapshot.model_validate(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValidationError) as error:
+        raise ManifestValidationError(f"invalid tool-directory.json: {error}") from error
+    if directory.exposure_mode != manifest.spec.tool_exposure_mode:
+        raise ManifestValidationError(
+            "tool directory exposure mode does not match the Agent Manifest"
+        )
+
+    expected_builtins = {
+        tool.builtin for tool in manifest.spec.tools if tool.builtin is not None
+    }
+    actual_builtins = {
+        entry.logical_reference
+        for entry in directory.entries
+        if entry.source == "builtin"
+    }
+    expected_mcp = {tool.mcp for tool in manifest.spec.tools if tool.mcp is not None}
+    actual_mcp = {
+        entry.logical_reference
+        for entry in directory.entries
+        if entry.source == "mcp"
+    }
+    expected_python = {
+        tool.python_entry
+        for tool in manifest.spec.tools
+        if tool.python_entry is not None
+    }
+    actual_python = {
+        entry.logical_reference
+        for entry in directory.entries
+        if entry.source == "python"
+    }
+    if (
+        expected_builtins != actual_builtins
+        or expected_mcp != actual_mcp
+        or expected_python != actual_python
+    ):
+        raise ManifestValidationError(
+            "tool directory references do not exactly match the Agent Manifest"
+        )
+    return directory
+
+
 def materialize_skill_snapshots(
     snapshot: AgentManifestSnapshot, workspace: str | Path
 ) -> tuple[str, ...]:
@@ -364,6 +500,7 @@ def load_manifest(
     root = manifest_path.parent.resolve()
     prompt_path = _resolve_file(root, manifest.spec.prompt.system, "system prompt")
     system_prompt = prompt_path.read_text()
+    tool_directory = _load_tool_directory(root, manifest)
 
     digest = hashlib.sha256()
     canonical = json.dumps(
@@ -382,10 +519,14 @@ def load_manifest(
     for skill in skill_snapshots:
         digest.update(skill.source.encode())
         digest.update(skill.content_hash.encode())
+    if tool_directory is not None:
+        digest.update(TOOL_DIRECTORY_FILENAME.encode())
+        digest.update(tool_directory.content_hash.encode())
 
     return AgentManifestSnapshot(
         manifest=manifest,
         system_prompt=system_prompt,
         skill_snapshots=skill_snapshots,
+        tool_directory=tool_directory,
         content_hash=digest.hexdigest(),
     )

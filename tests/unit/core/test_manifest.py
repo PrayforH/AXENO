@@ -1,9 +1,15 @@
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 
-from harness.core.manifest import ManifestValidationError, load_manifest
+from harness.core.manifest import (
+    ManifestValidationError,
+    ToolDirectoryEntry,
+    ToolDirectorySnapshot,
+    load_manifest,
+)
 
 FIXTURE = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 VALIDATION_AGENT = Path("agents/echo-agent/agent.yaml")
@@ -164,4 +170,57 @@ def test_rejects_inline_secrets(tmp_path: Path) -> None:
     (tmp_path / "prompts/system.md").write_text("prompt")
 
     with pytest.raises(ManifestValidationError, match="secret-like field"):
+        load_manifest(path)
+
+
+def test_on_demand_manifest_requires_a_hash_validated_tool_directory(
+    tmp_path: Path,
+) -> None:
+    manifest = yaml.safe_load(FIXTURE.read_text())
+    manifest["spec"]["toolExposureMode"] = "on_demand"
+    manifest["spec"]["model"]["requiredCapabilities"].append("tool_search")
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts/system.md").write_text("prompt")
+
+    with pytest.raises(ManifestValidationError, match="tool-directory.json"):
+        load_manifest(path)
+
+    directory = ToolDirectorySnapshot.create(
+        catalog_revision=7,
+        exposure_mode="on_demand",
+        entries=(
+            ToolDirectoryEntry(
+                name="Read",
+                source="builtin",
+                logicalReference="Read",
+                description="Read a file in the isolated workspace.",
+                risk="low",
+                resultTrust="safe",
+            ),
+            ToolDirectoryEntry(
+                name="Task",
+                source="builtin",
+                logicalReference="Task",
+                description="Delegate to a pinned Sub Agent.",
+                risk="medium",
+                resultTrust="safe",
+            ),
+        ),
+    )
+    directory_path = tmp_path / "tool-directory.json"
+    directory_path.write_text(
+        json.dumps(directory.model_dump(mode="json", by_alias=True))
+    )
+
+    snapshot = load_manifest(path)
+
+    assert snapshot.tool_directory == directory
+    assert snapshot.manifest.spec.tool_exposure_mode == "on_demand"
+
+    tampered = directory.model_dump(mode="json", by_alias=True)
+    tampered["entries"][0]["description"] = "tampered"
+    directory_path.write_text(json.dumps(tampered))
+    with pytest.raises(ManifestValidationError, match="content hash"):
         load_manifest(path)
