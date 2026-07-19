@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -10,7 +12,10 @@ from tests.contracts.capability_catalog_repository import (
 )
 
 DatabaseFixture = tuple[AsyncEngine, SessionFactory]
-DATABASE_URL = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
+DATABASE_URL = os.getenv(
+    "HARNESS_TEST_DATABASE_URL",
+    "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+)
 
 
 @pytest.mark.asyncio

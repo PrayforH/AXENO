@@ -35,6 +35,7 @@ def test_execution_identity_is_immutable_and_contains_run_scope() -> None:
     assert identity.model_dump() == {
         "tenant_id": "tenant-a",
         "user_id": "user-a",
+        "team_ids": (),
         "project_id": "project-a",
         "session_id": "session-a",
         "run_id": "run-a",

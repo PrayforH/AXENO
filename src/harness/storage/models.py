@@ -477,7 +477,11 @@ class AgentTriggerRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), index=True)
     agent_name: Mapped[str] = mapped_column(String(128))
     environment: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="webhook")
     enabled: Mapped[bool] = mapped_column(Boolean, index=True)
+    next_fire_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     revision: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

@@ -40,6 +40,7 @@ async def policy(
     policy_id: str,
     limits: dict[QuotaResource, int],
     scope: QuotaScope | None = None,
+    alert_thresholds: dict[QuotaResource, int] | None = None,
 ) -> None:
     await quotas.replace_policy(
         tenant_id="tenant-a",
@@ -47,6 +48,7 @@ async def policy(
         policy_id=policy_id,
         request=ReplaceQuotaPolicyRequest(
             expectedRevision=0, scope=scope or QuotaScope(), limits=limits
+            , alertThresholds=alert_thresholds or {}
         ),
     )
 
@@ -121,6 +123,72 @@ async def test_hierarchical_constraints_apply_tenant_and_agent_limits() -> None:
         "agent=research|environment=*",
     }
     assert failure.value.limit == 1
+
+
+@pytest.mark.asyncio
+async def test_all_matching_organization_team_user_agent_environment_and_key_scopes_apply() -> None:
+    quotas, _, _ = service()
+    scopes = (
+        QuotaScope(organizationId="tenant-a"),
+        QuotaScope(teamId="risk"),
+        QuotaScope(userId="analyst"),
+        QuotaScope(agentName="research"),
+        QuotaScope(environment="production"),
+        QuotaScope(apiKeyId="trigger-nightly"),
+    )
+    for index, scope in enumerate(scopes):
+        await policy(
+            quotas,
+            policy_id=f"scope-{index}",
+            scope=scope,
+            limits={QuotaResource.CONCURRENT_RUNS: 10},
+        )
+
+    reservation = await quotas.reserve(
+        tenant_id="tenant-a",
+        resource=QuotaResource.CONCURRENT_RUNS,
+        amount=1,
+        subject_id="run-scoped",
+        idempotency_key="run-scoped",
+        organization_id="tenant-a",
+        team_ids=("risk",),
+        user_id="analyst",
+        agent_name="research",
+        environment="production",
+        api_key_id="trigger-nightly",
+    )
+
+    assert len(reservation.constraints) == 7
+    assert any("team=risk" in item.scope_key for item in reservation.constraints)
+    assert any("user=analyst" in item.scope_key for item in reservation.constraints)
+    assert any("key=trigger-nightly" in item.scope_key for item in reservation.constraints)
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_is_deterministic_for_scope_resource_window_threshold() -> None:
+    quotas, _, _ = service()
+    await policy(
+        quotas,
+        policy_id="tenant-default",
+        limits={QuotaResource.MODEL_TOKENS: 100},
+        alert_thresholds={QuotaResource.MODEL_TOKENS: 75},
+    )
+    reservation = await quotas.reserve(
+        tenant_id="tenant-a",
+        resource=QuotaResource.MODEL_TOKENS,
+        amount=80,
+        subject_id="run-alert",
+        idempotency_key="run-alert",
+    )
+    await quotas.commit(reservation, amount=80)
+
+    first = (await quotas.usage("tenant-a")).alerts
+    second = (await quotas.usage("tenant-a")).alerts
+
+    assert first == second
+    assert len(first) == 1
+    assert first[0].usage_percent == 80
+    assert first[0].threshold_percent == 75
 
 
 @pytest.mark.asyncio

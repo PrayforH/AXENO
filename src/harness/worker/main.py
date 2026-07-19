@@ -200,6 +200,9 @@ async def serve(settings: Settings) -> None:
         async def reliability_maintenance() -> None:
             await container.reliability_controller.process_once()
 
+        async def trigger_maintenance() -> None:
+            await container.triggers.dispatch_due()
+
         control_tasks = [
             asyncio.create_task(
                 maintenance_loop(
@@ -231,6 +234,14 @@ async def serve(settings: Settings) -> None:
                     stop=stop,
                     poll_interval=settings.reliability_reaper_interval_seconds,
                     label="reliability",
+                )
+            ),
+            asyncio.create_task(
+                maintenance_loop(
+                    trigger_maintenance,
+                    stop=stop,
+                    poll_interval=1.0,
+                    label="triggers",
                 )
             ),
         ]

@@ -1,15 +1,20 @@
+import os
+
 import pytest
 from claude_agent_sdk import SessionKey, SessionStoreEntry
 
 from harness.runtime.session_store import PostgresSessionStore
 from harness.storage.database import create_database, create_schema, drop_schema
 
+DATABASE_URL = os.getenv(
+    "HARNESS_TEST_DATABASE_URL",
+    "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+)
+
 
 @pytest.mark.asyncio
 async def test_session_and_subagent_transcripts_resume_after_store_recreation() -> None:
-    engine, sessions = create_database(
-        "postgresql+asyncpg://harness:harness@localhost:5432/harness"
-    )
+    engine, sessions = create_database(DATABASE_URL)
     await drop_schema(engine)
     await create_schema(engine)
     key: SessionKey = {"project_key": "project-a", "session_id": "resume-session"}
@@ -36,9 +41,7 @@ async def test_session_and_subagent_transcripts_resume_after_store_recreation() 
 
 @pytest.mark.asyncio
 async def test_session_store_uses_stable_project_across_run_workspaces() -> None:
-    engine, sessions = create_database(
-        "postgresql+asyncpg://harness:harness@localhost:5432/harness"
-    )
+    engine, sessions = create_database(DATABASE_URL)
     await drop_schema(engine)
     await create_schema(engine)
     first_key: SessionKey = {

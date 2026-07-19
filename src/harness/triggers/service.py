@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 
 from harness.application.runs import RunService
@@ -19,6 +19,7 @@ from harness.triggers.models import (
     CreatedAgentTrigger,
     StoredAgentTrigger,
     TriggerInvocation,
+    TriggerKind,
     UpdateAgentTriggerRequest,
 )
 from harness.triggers.repositories import AgentTriggerRepository
@@ -66,6 +67,7 @@ class AgentTriggerService:
             tenantId=tenant_id,
             triggerId=self._ids("trigger"),
             name=request.name.strip(),
+            kind=request.kind,
             agentName=agent_name,
             environment=request.environment,
             enabled=True,
@@ -73,6 +75,13 @@ class AgentTriggerService:
             createdBy=user_id,
             createdAt=now,
             updatedAt=now,
+            schedule=request.schedule,
+            chatops=request.chatops,
+            nextFireAt=(
+                now + timedelta(seconds=request.schedule.interval_seconds)
+                if request.schedule is not None
+                else None
+            ),
             secretDigest=self._digest(secret),
         )
         await self._repository.add(stored)
@@ -89,6 +98,12 @@ class AgentTriggerService:
             trigger.public()
             for trigger in await self._repository.list_for_agent(tenant_id, agent_name)
         ]
+
+    async def public_card(self, trigger_id: str) -> AgentTrigger:
+        trigger = await self._repository.get_public(trigger_id)
+        if not trigger.enabled:
+            raise NotFoundError(f"Agent Trigger not found: {trigger_id}")
+        return trigger.public()
 
     async def update(
         self,
@@ -150,6 +165,20 @@ class AgentTriggerService:
         prompt: str,
     ) -> tuple[TriggerInvocation, Run]:
         trigger = await self._authenticate(trigger_id, secret)
+        return await self._invoke_stored(
+            trigger,
+            idempotency_key=idempotency_key,
+            prompt=prompt,
+        )
+
+    async def _invoke_stored(
+        self,
+        trigger: StoredAgentTrigger,
+        *,
+        idempotency_key: str,
+        prompt: str,
+    ) -> tuple[TriggerInvocation, Run]:
+        trigger_id = trigger.trigger_id
         session_id = self._session_id(trigger_id, idempotency_key)
         workload_id = f"trigger:{trigger_id}"
         session = await self._existing_session(trigger, session_id, workload_id)
@@ -161,6 +190,7 @@ class AgentTriggerService:
                 None,
                 session_id=session_id,
                 environment=trigger.environment,
+                api_key_id=trigger.trigger_id,
             )
         run = await self._runs.create(
             trigger.tenant_id,
@@ -196,6 +226,62 @@ class AgentTriggerService:
             ),
             run,
         )
+
+    async def invoke_chatops(
+        self,
+        *,
+        trigger_id: str,
+        secret: str,
+        message_id: str,
+        channel_id: str,
+        prompt: str,
+    ) -> tuple[TriggerInvocation, Run]:
+        trigger = await self._authenticate(trigger_id, secret)
+        if trigger.kind is not TriggerKind.CHATOPS or trigger.chatops is None:
+            raise TriggerAuthenticationError
+        allowed = trigger.chatops.allowed_channel_ids
+        if allowed and channel_id not in allowed:
+            raise TriggerAuthenticationError
+        return await self._invoke_stored(
+            trigger,
+            idempotency_key=f"chatops:{message_id}",
+            prompt=prompt,
+        )
+
+    async def dispatch_due(self, *, limit: int = 50) -> int:
+        now = self._clock()
+        dispatched = 0
+        for trigger in await self._repository.list_due(now, limit=limit):
+            if trigger.schedule is None or trigger.next_fire_at is None:
+                continue
+            scheduled_at = trigger.next_fire_at
+            next_fire_at = scheduled_at + timedelta(
+                seconds=trigger.schedule.interval_seconds
+            )
+            advanced = await self._repository.advance_schedule(
+                trigger.trigger_id,
+                expected_next_fire_at=scheduled_at,
+                next_fire_at=next_fire_at,
+            )
+            if not advanced:
+                continue
+            try:
+                await self._invoke_stored(
+                    trigger,
+                    idempotency_key=f"schedule:{scheduled_at.isoformat()}",
+                    prompt=trigger.schedule.prompt,
+                )
+            except Exception:
+                # Make the deterministic slot eligible for retry when dispatch
+                # fails before a worker can own the resulting Run.
+                await self._repository.advance_schedule(
+                    trigger.trigger_id,
+                    expected_next_fire_at=next_fire_at,
+                    next_fire_at=scheduled_at,
+                )
+                raise
+            dispatched += 1
+        return dispatched
 
     async def run(
         self, *, trigger_id: str, secret: str, run_id: str

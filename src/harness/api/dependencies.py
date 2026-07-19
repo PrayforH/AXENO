@@ -92,6 +92,10 @@ from harness.memory_bank.workload import (
     build_memory_mcp_app,
 )
 from harness.observability.provider import Observability, build_observability
+from harness.platform_mcp.workload import (
+    PlatformMcpTokenService,
+    build_platform_mcp_app,
+)
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.runtime import ResolvedPolicy
 from harness.quality.controller import QualitySyncController
@@ -205,6 +209,8 @@ class ApiContainer:
     governance: GovernanceService
     knowledge_mcp_app: Starlette
     knowledge_workload_tokens: KnowledgeWorkloadTokenService
+    platform_mcp_app: Starlette
+    platform_mcp_tokens: PlatformMcpTokenService
     events: EventRepository
     observed_events: EventRepository
     task_queue: TaskQueue
@@ -489,6 +495,16 @@ def build_memory_container(
         deployments=deployment_repository,
         queue=deployment_queue,
         clock=clock,
+    )
+    platform_mcp_tokens = PlatformMcpTokenService(
+        resolved_settings.auth_jwt_secret
+    )
+    platform_mcp_app = build_platform_mcp_app(
+        agents=agent_service,
+        deployments=deployment_service,
+        quotas=quotas,
+        governance=governance,
+        tokens=platform_mcp_tokens,
     )
     memory_bank = MemoryBankService(
         memory_bank_repository,
@@ -831,6 +847,8 @@ def build_memory_container(
         governance=governance,
         knowledge_mcp_app=knowledge_mcp_app,
         knowledge_workload_tokens=knowledge_tokens,
+        platform_mcp_app=platform_mcp_app,
+        platform_mcp_tokens=platform_mcp_tokens,
         events=raw_events,
         observed_events=observed_events,
         task_queue=queue,

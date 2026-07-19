@@ -1,6 +1,8 @@
+import asyncio
 import hashlib
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from typing import Any, cast
 from zipfile import ZipFile
@@ -410,6 +412,165 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
     assert disabled.status_code == 200
     assert disabled.json()["enabled"] is False
     assert disabled_invoke.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "platform-admin",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("interop-agent"),
+        )
+        published = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/publish",
+            headers=headers,
+        )
+        promoted = await client.post(
+            "/v1/studio/deployments/promote",
+            headers=headers,
+            json={
+                "agentName": "interop-agent",
+                "agentVersion": published.json()["version"],
+                "environment": "production",
+                "expectedEnvironmentRevision": 0,
+                "canaryPercent": 100,
+                "imageDigest": "sha256:" + "c" * 64,
+                "executionProfile": "isolated-default",
+                "config": {},
+                "idempotencyKey": "interop-release",
+            },
+        )
+        a2a_created = await client.post(
+            "/v1/studio/agents/interop-agent/triggers",
+            headers=headers,
+            json={
+                "name": "A2A",
+                "environment": "production",
+                "kind": "a2a",
+            },
+        )
+        a2a = a2a_created.json()
+        trigger_id = a2a["trigger"]["triggerId"]
+        secret = a2a["secret"]
+        card = await client.get(
+            f"/a2a/agent-triggers/{trigger_id}/agent-card.json"
+        )
+        a2a_headers = {
+            "Authorization": f"Bearer {secret}",
+            "A2A-Version": "1.0",
+        }
+        sent = await client.post(
+            f"/a2a/agent-triggers/{trigger_id}/message:send",
+            headers=a2a_headers,
+            json={
+                "message": {
+                    "messageId": "a2a-message-1",
+                    "role": "ROLE_USER",
+                    "parts": [{"text": "执行互操作任务"}],
+                }
+            },
+        )
+        assert sent.status_code == 200, sent.text
+        task_id = sent.json()["task"]["id"]
+        task = await client.get(
+            f"/a2a/agent-triggers/{trigger_id}/tasks/{task_id}",
+            headers=a2a_headers,
+        )
+        cancelled = await client.post(
+            f"/a2a/agent-triggers/{trigger_id}/tasks/{task_id}:cancel",
+            headers=a2a_headers,
+        )
+        chatops_created = await client.post(
+            "/v1/studio/agents/interop-agent/triggers",
+            headers=headers,
+            json={
+                "name": "ChatOps",
+                "environment": "production",
+                "kind": "chatops",
+                "chatops": {
+                    "provider": "generic",
+                    "allowedChannelIds": ["ops"],
+                },
+            },
+        )
+        chatops_id = chatops_created.json()["trigger"]["triggerId"]
+        chatops = await client.post(
+            f"/chatops/agent-triggers/{chatops_id}",
+            headers={"Authorization": f"Bearer {chatops_created.json()['secret']}"},
+            json={
+                "messageId": "chat-message-1",
+                "channelId": "ops",
+                "actorId": "operator",
+                "text": "执行 ChatOps 任务",
+            },
+        )
+        schedule = await client.post(
+            "/v1/studio/agents/interop-agent/triggers",
+            headers=headers,
+            json={
+                "name": "Hourly",
+                "environment": "production",
+                "kind": "schedule",
+                "schedule": {
+                    "intervalSeconds": 3600,
+                    "timezone": "Asia/Shanghai",
+                    "prompt": "生成小时报告",
+                },
+            },
+        )
+        mcp_access = await client.post(
+            "/v1/studio/platform-mcp/access",
+            headers=headers,
+        )
+
+    schedule_id = schedule.json()["trigger"]["triggerId"]
+    trigger_repository = cast(Any, container.triggers)._repository
+    stored_schedule = await trigger_repository.get("tenant-a", schedule_id)
+    due_at = datetime.now(UTC) - timedelta(seconds=1)
+    assert await trigger_repository.advance_schedule(
+        schedule_id,
+        expected_next_fire_at=stored_schedule.next_fire_at,
+        next_fire_at=due_at,
+    )
+    dispatch_counts = await asyncio.gather(
+        container.triggers.dispatch_due(),
+        container.triggers.dispatch_due(),
+    )
+    schedule_key = f"schedule:{due_at.isoformat()}"
+    schedule_digest = hashlib.sha256(f"{schedule_id}:{schedule_key}".encode()).hexdigest()
+    schedule_session_id = f"trigger_session_{schedule_digest[:32]}"
+    schedule_runs = await container.runs.list_for_sessions(
+        "tenant-a", [schedule_session_id]
+    )
+
+    assert promoted.status_code == 202
+    assert card.status_code == 200
+    assert card.json()["supportedInterfaces"][0]["protocolVersion"] == "1.0"
+    assert card.json()["capabilities"]["streaming"] is True
+    assert sent.status_code == 200
+    assert task.json()["task"]["id"] == task_id
+    assert cancelled.json()["task"]["status"]["state"] in {
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED",
+    }
+    assert chatops.status_code == 202
+    assert chatops.json()["runId"]
+    assert schedule.status_code == 201
+    assert schedule.json()["trigger"]["nextFireAt"]
+    assert sorted(dispatch_counts) == [0, 1]
+    assert len(schedule_runs) == 1
+    assert mcp_access.status_code == 200
+    assert mcp_access.json()["mutations_enabled"] is False
+    assert mcp_access.json()["token"]
 
 
 @pytest.mark.asyncio

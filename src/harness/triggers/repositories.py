@@ -23,6 +23,14 @@ class AgentTriggerRepository(Protocol):
     async def touch_invoked(
         self, trigger_id: str, invoked_at: datetime
     ) -> StoredAgentTrigger: ...
+    async def list_due(self, now: datetime, *, limit: int) -> list[StoredAgentTrigger]: ...
+    async def advance_schedule(
+        self,
+        trigger_id: str,
+        *,
+        expected_next_fire_at: datetime,
+        next_fire_at: datetime,
+    ) -> bool: ...
 
 
 class InMemoryAgentTriggerRepository:
@@ -89,3 +97,31 @@ class InMemoryAgentTriggerRepository:
             )
             self._items[trigger_id] = updated
             return updated
+
+    async def list_due(self, now: datetime, *, limit: int) -> list[StoredAgentTrigger]:
+        return sorted(
+            (
+                item
+                for item in self._items.values()
+                if item.enabled
+                and item.next_fire_at is not None
+                and item.next_fire_at <= now
+            ),
+            key=lambda item: (item.next_fire_at, item.trigger_id),
+        )[:limit]
+
+    async def advance_schedule(
+        self,
+        trigger_id: str,
+        *,
+        expected_next_fire_at: datetime,
+        next_fire_at: datetime,
+    ) -> bool:
+        async with self._lock:
+            current = self._items.get(trigger_id)
+            if current is None or current.next_fire_at != expected_next_fire_at:
+                return False
+            self._items[trigger_id] = current.model_copy(
+                update={"next_fire_at": next_fire_at}
+            )
+            return True

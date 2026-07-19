@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import cast
 
 import pytest
@@ -12,10 +13,14 @@ from harness.storage.redis import AsyncRedisClient, RedisTaskQueue
 from harness.studio.preview_queue import PreviewTask, PreviewTaskQueue
 
 
+def redis_url(database: int) -> str:
+    return f"{os.getenv('HARNESS_TEST_REDIS_BASE_URL', 'redis://localhost:6379')}/{database}"
+
+
 @pytest.mark.asyncio
 async def test_redis_queue_deduplicates_delivery() -> None:
     client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
-        "redis://localhost:6379/15", decode_responses=True
+        redis_url(15), decode_responses=True
     )
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = RedisTaskQueue(
@@ -53,7 +58,7 @@ async def test_redis_queue_deduplicates_delivery() -> None:
 @pytest.mark.asyncio
 async def test_preview_queue_recovers_a_crashed_worker_lease() -> None:
     client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
-        "redis://localhost:6379/14", decode_responses=True
+        redis_url(14), decode_responses=True
     )
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = PreviewTaskQueue.redis(
@@ -92,7 +97,7 @@ async def test_preview_queue_recovers_a_crashed_worker_lease() -> None:
 @pytest.mark.asyncio
 async def test_eval_queue_recovers_a_crashed_controller_lease() -> None:
     client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
-        "redis://localhost:6379/13", decode_responses=True
+        redis_url(13), decode_responses=True
     )
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = EvalTaskQueue.redis(
@@ -128,7 +133,7 @@ async def test_eval_queue_recovers_a_crashed_controller_lease() -> None:
 @pytest.mark.asyncio
 async def test_deployment_queue_recovers_a_crashed_controller_lease() -> None:
     client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
-        "redis://localhost:6379/12", decode_responses=True
+        redis_url(12), decode_responses=True
     )
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = DeploymentTaskQueue.redis(
@@ -164,7 +169,7 @@ async def test_deployment_queue_recovers_a_crashed_controller_lease() -> None:
 @pytest.mark.asyncio
 async def test_quality_queue_recovers_a_crashed_sync_worker_lease() -> None:
     client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
-        "redis://localhost:6379/11", decode_responses=True
+        redis_url(11), decode_responses=True
     )
     await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
     queue = QualityTaskQueue.redis(

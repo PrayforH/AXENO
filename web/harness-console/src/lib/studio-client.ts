@@ -83,8 +83,16 @@ export type StudioQuotaPolicy = {
   tenantId: string;
   policyId: string;
   revision: number;
-  scope: { agentName: string | null; environment: string | null };
+  scope: {
+    organizationId: string | null;
+    teamId: string | null;
+    userId: string | null;
+    agentName: string | null;
+    environment: string | null;
+    apiKeyId: string | null;
+  };
   limits: Partial<Record<QuotaResource, number>>;
+  alertThresholds: Partial<Record<QuotaResource, number>>;
   updatedBy: string;
   updatedAt: string;
 };
@@ -110,6 +118,18 @@ export type StudioQuotaUsage = {
     expiresAt: string;
   }>;
   unknownCostEntries: number;
+  alerts: Array<{
+    alertId: string;
+    policyId: string;
+    scopeKey: string;
+    resource: QuotaResource;
+    windowKey: string;
+    thresholdPercent: number;
+    usagePercent: number;
+    used: number;
+    limit: number;
+    severity: "info" | "warning" | "critical";
+  }>;
 };
 
 export type StudioDraftSummary = {
@@ -596,7 +616,7 @@ export type StudioEnvironment = {
 export type StudioAgentTrigger = {
   tenantId: string;
   triggerId: string;
-  kind: "webhook";
+  kind: "webhook" | "a2a" | "schedule" | "chatops";
   name: string;
   agentName: string;
   environment: StudioEnvironmentName;
@@ -606,6 +626,16 @@ export type StudioAgentTrigger = {
   createdAt: string;
   updatedAt: string;
   lastInvokedAt: string | null;
+  nextFireAt: string | null;
+  schedule: {
+    intervalSeconds: number;
+    timezone: string;
+    prompt: string;
+  } | null;
+  chatops: {
+    provider: "slack" | "teams" | "email" | "generic";
+    allowedChannelIds: string[];
+  } | null;
 };
 
 export type StudioCreatedAgentTrigger = {
@@ -1250,13 +1280,23 @@ export const studioClient = {
     ),
   createTrigger: (
     agentName: string,
-    name: string,
-    environment: StudioEnvironmentName,
+    input: string | {
+      name: string;
+      environment: StudioEnvironmentName;
+      kind: StudioAgentTrigger["kind"];
+      schedule?: StudioAgentTrigger["schedule"];
+      chatops?: StudioAgentTrigger["chatops"];
+    },
+    legacyEnvironment?: StudioEnvironmentName,
   ) => request<StudioCreatedAgentTrigger>(
     `agents/${encodeURIComponent(agentName)}/triggers`,
     {
       method: "POST",
-      body: JSON.stringify({ name, environment }),
+      body: JSON.stringify(
+        typeof input === "string"
+          ? { name: input, environment: legacyEnvironment }
+          : input,
+      ),
     },
   ),
   updateTrigger: (

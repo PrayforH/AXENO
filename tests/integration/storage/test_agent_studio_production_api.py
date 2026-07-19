@@ -1,3 +1,4 @@
+import os
 from typing import cast
 
 import pytest
@@ -21,8 +22,11 @@ def production_settings() -> Settings:
         environment="production",
         runtime="claude-sdk",
         api_bearer_token=SecretStr(SERVICE_TOKEN),
-        database_url="postgresql+asyncpg://harness:harness@localhost:5432/harness",
-        redis_url="redis://localhost:6379/0",
+        database_url=os.getenv(
+            "HARNESS_TEST_DATABASE_URL",
+            "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+        ),
+        redis_url=f"{os.getenv('HARNESS_TEST_REDIS_BASE_URL', 'redis://localhost:6379')}/0",
         minio_access_key=SecretStr("test-minio-access"),
         minio_secret_key=SecretStr("test-minio-secret"),
     )

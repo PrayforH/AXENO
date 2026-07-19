@@ -275,6 +275,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             metadata=_metadata(
                 turns=payload.get("num_turns"),
                 cost_usd=payload.get("total_cost_usd"),
+                usage=payload.get("usage"),
                 stop_reason=payload.get("stop_reason"),
             ),
         )

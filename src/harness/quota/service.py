@@ -8,7 +8,9 @@ from uuid import uuid4
 from harness.auth.audit import AuditService
 from harness.quota.models import (
     CostState,
+    QuotaAlert,
     QuotaConstraint,
+    QuotaCounter,
     QuotaPolicy,
     QuotaResource,
     QuotaScope,
@@ -114,6 +116,7 @@ class QuotaService:
             revision=request.expected_revision + 1,
             scope=request.scope,
             limits=request.limits,
+            alertThresholds=request.alert_thresholds,
             updatedBy=user_id,
             updatedAt=now,
         )
@@ -141,8 +144,12 @@ class QuotaService:
         tenant_id: str,
         resource: QuotaResource,
         *,
+        organization_id: str | None,
+        team_ids: tuple[str, ...],
+        user_id: str | None,
         agent_name: str | None,
         environment: str | None,
+        api_key_id: str | None,
     ) -> tuple[QuotaConstraint, ...]:
         # The synthetic tenant default remains a fallback for resources omitted
         # by a managed partial policy. The management view still shows only one
@@ -154,9 +161,17 @@ class QuotaService:
         selected: dict[str, QuotaPolicy] = {}
         for policy in policies:
             scope = policy.scope
+            if scope.organization_id is not None and scope.organization_id != organization_id:
+                continue
+            if scope.team_id is not None and scope.team_id not in team_ids:
+                continue
+            if scope.user_id is not None and scope.user_id != user_id:
+                continue
             if scope.agent_name is not None and scope.agent_name != agent_name:
                 continue
             if scope.environment is not None and scope.environment != environment:
+                continue
+            if scope.api_key_id is not None and scope.api_key_id != api_key_id:
                 continue
             if resource not in policy.limits:
                 continue
@@ -176,8 +191,12 @@ class QuotaService:
         amount: int,
         subject_id: str,
         idempotency_key: str,
+        organization_id: str | None = None,
+        team_ids: tuple[str, ...] = (),
+        user_id: str | None = None,
         agent_name: str | None = None,
         environment: str | None = None,
+        api_key_id: str | None = None,
         ttl_seconds: int = 3600,
     ) -> ResourceReservation:
         if amount < 1:
@@ -186,8 +205,12 @@ class QuotaService:
         constraints = await self._constraints(
             tenant_id,
             resource,
+            organization_id=organization_id or tenant_id,
+            team_ids=team_ids,
+            user_id=user_id,
             agent_name=agent_name,
             environment=environment,
+            api_key_id=api_key_id,
         )
         reservation = ResourceReservation(
             tenantId=tenant_id,
@@ -196,8 +219,12 @@ class QuotaService:
             resource=resource,
             amount=amount,
             constraints=constraints,
+            organizationId=organization_id or tenant_id,
+            teamIds=team_ids,
+            userId=user_id,
             agentName=agent_name,
             environment=environment,
+            apiKeyId=api_key_id,
             subjectId=subject_id,
             state=ReservationState.ACTIVE,
             createdAt=now,
@@ -218,8 +245,12 @@ class QuotaService:
             reservationId=reservation.reservation_id,
             resource=reservation.resource,
             amount=committed_amount,
+            organizationId=reservation.organization_id,
+            teamIds=reservation.team_ids,
+            userId=reservation.user_id,
             agentName=reservation.agent_name,
             environment=reservation.environment,
+            apiKeyId=reservation.api_key_id,
             subjectId=reservation.subject_id,
             occurredAt=now,
         )
@@ -252,8 +283,12 @@ class QuotaService:
         amount: int,
         subject_id: str,
         idempotency_key: str,
+        organization_id: str | None = None,
+        team_ids: tuple[str, ...] = (),
+        user_id: str | None = None,
         agent_name: str | None = None,
         environment: str | None = None,
+        api_key_id: str | None = None,
     ) -> ResourceReservation:
         reservation = await self.reserve(
             tenant_id=tenant_id,
@@ -261,8 +296,12 @@ class QuotaService:
             amount=amount,
             subject_id=subject_id,
             idempotency_key=idempotency_key,
+            organization_id=organization_id,
+            team_ids=team_ids,
+            user_id=user_id,
             agent_name=agent_name,
             environment=environment,
+            api_key_id=api_key_id,
         )
         return await self.commit(reservation)
 
@@ -276,6 +315,9 @@ class QuotaService:
         max_budget_usd: float | None,
         max_model_tokens: int | None,
         ttl_seconds: int,
+        user_id: str | None = None,
+        team_ids: tuple[str, ...] = (),
+        api_key_id: str | None = None,
     ) -> tuple[ResourceReservation, ...]:
         admitted: list[ResourceReservation] = []
         try:
@@ -286,8 +328,12 @@ class QuotaService:
                     amount=1,
                     subject_id=run_id,
                     idempotency_key=f"run:{run_id}:concurrency",
+                    organization_id=tenant_id,
+                    team_ids=team_ids,
+                    user_id=user_id,
                     agent_name=agent_name,
                     environment=environment,
+                    api_key_id=api_key_id,
                     ttl_seconds=ttl_seconds,
                 )
             )
@@ -299,8 +345,12 @@ class QuotaService:
                         amount=self.micro_usd(max_budget_usd),
                         subject_id=run_id,
                         idempotency_key=f"run:{run_id}:cost",
+                        organization_id=tenant_id,
+                        team_ids=team_ids,
+                        user_id=user_id,
                         agent_name=agent_name,
                         environment=environment,
+                        api_key_id=api_key_id,
                         ttl_seconds=ttl_seconds,
                     )
                 )
@@ -312,8 +362,12 @@ class QuotaService:
                         amount=max_model_tokens,
                         subject_id=run_id,
                         idempotency_key=f"run:{run_id}:tokens",
+                        organization_id=tenant_id,
+                        team_ids=team_ids,
+                        user_id=user_id,
                         agent_name=agent_name,
                         environment=environment,
+                        api_key_id=api_key_id,
                         ttl_seconds=ttl_seconds,
                     )
                 )
@@ -333,6 +387,9 @@ class QuotaService:
         max_budget_usd: float | None = None,
         max_model_tokens: int | None = None,
         ttl_seconds: int,
+        user_id: str | None = None,
+        team_ids: tuple[str, ...] = (),
+        api_key_id: str | None = None,
     ) -> tuple[ResourceReservation, ...]:
         requested = [
             (QuotaResource.CONCURRENT_RUNS, 1, f"run:{run_id}:concurrency")
@@ -369,8 +426,12 @@ class QuotaService:
                     amount=amount,
                     subject_id=run_id,
                     idempotency_key=idempotency_key,
+                    organization_id=tenant_id,
+                    team_ids=team_ids,
+                    user_id=user_id,
                     agent_name=agent_name,
                     environment=environment,
+                    api_key_id=api_key_id,
                     ttl_seconds=ttl_seconds,
                 )
                 admitted.append(reservation)
@@ -390,6 +451,9 @@ class QuotaService:
         environment: str | None,
         usage: dict[str, object] | None,
         total_cost_usd: object,
+        user_id: str | None = None,
+        team_ids: tuple[str, ...] = (),
+        api_key_id: str | None = None,
     ) -> None:
         tokens = 0
         for key in (
@@ -413,8 +477,12 @@ class QuotaService:
                 amount=tokens,
                 subject_id=run_id,
                 idempotency_key=f"run:{run_id}:actual-tokens",
+                organization_id=tenant_id,
+                team_ids=team_ids,
+                user_id=user_id,
                 agent_name=agent_name,
                 environment=environment,
+                api_key_id=api_key_id,
             )
         cost_reservation = await self._repository.get_reservation(tenant_id, f"run:{run_id}:cost")
         if isinstance(total_cost_usd, (int, float)) and not isinstance(total_cost_usd, bool):
@@ -428,8 +496,12 @@ class QuotaService:
                     amount=amount,
                     subject_id=run_id,
                     idempotency_key=f"run:{run_id}:actual-cost",
+                    organization_id=tenant_id,
+                    team_ids=team_ids,
+                    user_id=user_id,
                     agent_name=agent_name,
                     environment=environment,
+                    api_key_id=api_key_id,
                 )
             return
         if cost_reservation is not None:
@@ -441,8 +513,12 @@ class QuotaService:
                 resource=QuotaResource.MODEL_COST_MICRO_USD,
                 amount=None,
                 costState=CostState.UNKNOWN,
+                organizationId=tenant_id,
+                teamIds=team_ids,
+                userId=user_id,
                 agentName=agent_name,
                 environment=environment,
+                apiKeyId=api_key_id,
                 subjectId=run_id,
                 occurredAt=self._clock(),
             )
@@ -489,13 +565,70 @@ class QuotaService:
 
     async def usage(self, tenant_id: str) -> QuotaUsageView:
         ledger = tuple(await self._repository.list_ledger(tenant_id))
+        policies = await self.list_policies(tenant_id)
+        counters = tuple(await self._repository.list_counters(tenant_id))
         return QuotaUsageView(
-            policies=await self.list_policies(tenant_id),
-            counters=tuple(await self._repository.list_counters(tenant_id)),
+            policies=policies,
+            counters=counters,
             activeReservations=tuple(await self._repository.list_active_reservations(tenant_id)),
             unknownCostEntries=sum(
                 entry.resource is QuotaResource.MODEL_COST_MICRO_USD
                 and entry.cost_state is CostState.UNKNOWN
                 for entry in ledger
             ),
+            alerts=self._alerts(policies, counters),
+        )
+
+    @staticmethod
+    def _alerts(
+        policies: tuple[QuotaPolicy, ...],
+        counters: tuple[QuotaCounter, ...],
+    ) -> tuple[QuotaAlert, ...]:
+        policy_by_scope = {policy.scope.key: policy for policy in policies}
+        alerts: list[QuotaAlert] = []
+        for value in counters:
+            policy = policy_by_scope.get(value.scope_key)
+            if policy is None:
+                continue
+            threshold = policy.alert_thresholds.get(value.resource)
+            if threshold is None or value.limit is None:
+                continue
+            used = value.reserved + value.committed
+            usage_percent = (used * 100 + value.limit - 1) // value.limit
+            if usage_percent < threshold:
+                continue
+            severity = (
+                "critical"
+                if usage_percent >= 100
+                else "warning"
+                if usage_percent >= 90
+                else "info"
+            )
+            alerts.append(
+                QuotaAlert(
+                    alertId=(
+                        f"{value.scope_key}:{value.resource.value}:"
+                        f"{value.window_key}:{threshold}"
+                    ),
+                    policyId=policy.policy_id,
+                    scopeKey=value.scope_key,
+                    resource=value.resource,
+                    windowKey=value.window_key,
+                    thresholdPercent=threshold,
+                    usagePercent=usage_percent,
+                    used=used,
+                    limit=value.limit,
+                    severity=severity,
+                )
+            )
+        return tuple(
+            sorted(
+                alerts,
+                key=lambda item: (
+                    item.severity != "critical",
+                    item.severity != "warning",
+                    item.scope_key,
+                    item.resource.value,
+                ),
+            )
         )

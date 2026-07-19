@@ -112,6 +112,8 @@ class Session(FrozenModel):
     agent_name: str
     agent_version: str
     created_at: datetime
+    team_ids: tuple[str, ...] = ()
+    api_key_id: str | None = None
     claude_session_id: str | None = None
     workspace_snapshot_id: str | None = None
     environment: str | None = None

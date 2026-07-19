@@ -1,3 +1,4 @@
+import os
 from typing import cast
 
 import pytest
@@ -9,12 +10,15 @@ from harness.runtime.session_store import PostgresSessionStore
 from harness.storage.database import create_database, create_schema, drop_schema
 from harness.storage.models import SdkSessionEntryRow
 
+DATABASE_URL = os.getenv(
+    "HARNESS_TEST_DATABASE_URL",
+    "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+)
+
 
 @pytest.mark.asyncio
 async def test_postgres_sdk_session_store_conformance() -> None:
-    engine, sessions = create_database(
-        "postgresql+asyncpg://harness:harness@localhost:5432/harness"
-    )
+    engine, sessions = create_database(DATABASE_URL)
     await drop_schema(engine)
     await create_schema(engine)
 

@@ -25,7 +25,9 @@ def _trigger(row: AgentTriggerRow) -> StoredAgentTrigger:
         value.tenant_id,
         value.agent_name,
         value.environment.value,
+        value.kind.value,
         value.enabled,
+        value.next_fire_at,
         value.revision,
         value.created_at,
         value.updated_at,
@@ -34,7 +36,9 @@ def _trigger(row: AgentTriggerRow) -> StoredAgentTrigger:
         row.tenant_id,
         row.agent_name,
         row.environment,
+        row.kind,
         row.enabled,
+        row.next_fire_at,
         row.revision,
         row.created_at,
         row.updated_at,
@@ -55,7 +59,9 @@ class PostgresAgentTriggerRepository:
                     tenant_id=trigger.tenant_id,
                     agent_name=trigger.agent_name,
                     environment=trigger.environment.value,
+                    kind=trigger.kind.value,
                     enabled=trigger.enabled,
+                    next_fire_at=trigger.next_fire_at,
                     revision=trigger.revision,
                     created_at=trigger.created_at,
                     updated_at=trigger.updated_at,
@@ -112,6 +118,8 @@ class PostgresAgentTriggerRepository:
             )
             .values(
                 enabled=trigger.enabled,
+                kind=trigger.kind.value,
+                next_fire_at=trigger.next_fire_at,
                 revision=trigger.revision,
                 updated_at=trigger.updated_at,
                 payload=_payload(trigger),
@@ -146,3 +154,49 @@ class PostgresAgentTriggerRepository:
             row.payload = _payload(updated)
             await session.commit()
             return updated
+
+    async def list_due(
+        self, now: datetime, *, limit: int
+    ) -> list[StoredAgentTrigger]:
+        statement = (
+            select(AgentTriggerRow)
+            .where(
+                AgentTriggerRow.enabled.is_(True),
+                AgentTriggerRow.kind == "schedule",
+                AgentTriggerRow.next_fire_at.is_not(None),
+                AgentTriggerRow.next_fire_at <= now,
+            )
+            .order_by(AgentTriggerRow.next_fire_at, AgentTriggerRow.trigger_id)
+            .limit(limit)
+        )
+        async with self._sessions() as session:
+            values = [
+                _trigger(row)
+                for row in (await session.scalars(statement)).all()
+            ]
+        return values
+
+    async def advance_schedule(
+        self,
+        trigger_id: str,
+        *,
+        expected_next_fire_at: datetime,
+        next_fire_at: datetime,
+    ) -> bool:
+        async with self._sessions() as session:
+            row = await session.scalar(
+                select(AgentTriggerRow)
+                .where(AgentTriggerRow.trigger_id == trigger_id)
+                .with_for_update()
+            )
+            if row is None:
+                return False
+            current = _trigger(row)
+            if current.next_fire_at != expected_next_fire_at:
+                await session.rollback()
+                return False
+            updated = current.model_copy(update={"next_fire_at": next_fire_at})
+            row.next_fire_at = next_fire_at
+            row.payload = _payload(updated)
+            await session.commit()
+            return True

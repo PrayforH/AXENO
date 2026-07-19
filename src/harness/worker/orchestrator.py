@@ -482,6 +482,9 @@ class RunOrchestrator:
         await self._quotas.ensure_run_admitted(
             tenant_id=tenant_id,
             run_id=run_id,
+            user_id=session.user_id,
+            team_ids=session.team_ids,
+            api_key_id=session.api_key_id,
             agent_name=session.agent_name,
             environment=session.environment,
             max_budget_usd=plan.max_budget_usd,
@@ -502,6 +505,9 @@ class RunOrchestrator:
         await self._quotas.record_run_result(
             tenant_id=tenant_id,
             run_id=run_id,
+            user_id=session.user_id,
+            team_ids=session.team_ids,
+            api_key_id=session.api_key_id,
             agent_name=session.agent_name,
             environment=session.environment,
             usage=(cast(dict[str, object], raw_usage) if isinstance(raw_usage, dict) else None),
@@ -638,6 +644,7 @@ class RunOrchestrator:
             identity = ExecutionIdentity(
                 tenant_id=session.tenant_id,
                 user_id=session.user_id,
+                team_ids=session.team_ids,
                 project_id=session.agent_name,
                 session_id=session.session_id,
                 run_id=run.run_id,

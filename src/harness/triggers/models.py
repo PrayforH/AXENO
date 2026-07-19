@@ -3,19 +3,40 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from harness.core.models import RunStatus
 from harness.deployments.models import EnvironmentName
 from harness.studio.models import StudioModel
 
 
+class TriggerKind(StrEnum):
+    WEBHOOK = "webhook"
+    A2A = "a2a"
+    SCHEDULE = "schedule"
+    CHATOPS = "chatops"
+
+
+class TriggerSchedule(StudioModel):
+    interval_seconds: int = Field(alias="intervalSeconds", ge=60, le=31_536_000)
+    timezone: str = Field(default="UTC", min_length=1, max_length=80)
+    prompt: str = Field(min_length=1, max_length=200_000)
+
+
+class TriggerChatOps(StudioModel):
+    provider: Literal["slack", "teams", "email", "generic"] = "generic"
+    allowed_channel_ids: tuple[str, ...] = Field(
+        default=(), alias="allowedChannelIds"
+    )
+
+
 class AgentTrigger(StudioModel):
     tenant_id: str = Field(alias="tenantId", min_length=1)
     trigger_id: str = Field(alias="triggerId", min_length=1)
-    kind: Literal["webhook"] = "webhook"
+    kind: TriggerKind = TriggerKind.WEBHOOK
     name: str = Field(min_length=1, max_length=120)
     agent_name: str = Field(alias="agentName", pattern=r"^[a-z][a-z0-9-]*$")
     environment: EnvironmentName
@@ -25,6 +46,17 @@ class AgentTrigger(StudioModel):
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
     last_invoked_at: datetime | None = Field(default=None, alias="lastInvokedAt")
+    schedule: TriggerSchedule | None = None
+    chatops: TriggerChatOps | None = None
+    next_fire_at: datetime | None = Field(default=None, alias="nextFireAt")
+
+    @model_validator(mode="after")
+    def kind_configuration(self) -> AgentTrigger:
+        if (self.kind is TriggerKind.SCHEDULE) != (self.schedule is not None):
+            raise ValueError("schedule triggers require exactly one schedule configuration")
+        if (self.kind is TriggerKind.CHATOPS) != (self.chatops is not None):
+            raise ValueError("chatops triggers require exactly one chatops configuration")
+        return self
 
 
 class StoredAgentTrigger(AgentTrigger):
@@ -39,6 +71,17 @@ class StoredAgentTrigger(AgentTrigger):
 class CreateAgentTriggerRequest(StudioModel):
     name: str = Field(min_length=1, max_length=120)
     environment: EnvironmentName
+    kind: TriggerKind = TriggerKind.WEBHOOK
+    schedule: TriggerSchedule | None = None
+    chatops: TriggerChatOps | None = None
+
+    @model_validator(mode="after")
+    def kind_configuration(self) -> CreateAgentTriggerRequest:
+        if (self.kind is TriggerKind.SCHEDULE) != (self.schedule is not None):
+            raise ValueError("schedule triggers require exactly one schedule configuration")
+        if (self.kind is TriggerKind.CHATOPS) != (self.chatops is not None):
+            raise ValueError("chatops triggers require exactly one chatops configuration")
+        return self
 
 
 class UpdateAgentTriggerRequest(StudioModel):
@@ -58,6 +101,14 @@ class CreatedAgentTrigger(StudioModel):
 
 class InvokeAgentTriggerRequest(StudioModel):
     prompt: str = Field(min_length=1, max_length=200_000)
+
+
+class InvokeChatOpsTriggerRequest(StudioModel):
+    message_id: str = Field(alias="messageId", min_length=1, max_length=256)
+    channel_id: str = Field(alias="channelId", min_length=1, max_length=256)
+    thread_id: str | None = Field(default=None, alias="threadId", max_length=256)
+    actor_id: str = Field(alias="actorId", min_length=1, max_length=256)
+    text: str = Field(min_length=1, max_length=200_000)
 
 
 class TriggerInvocation(StudioModel):

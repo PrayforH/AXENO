@@ -136,6 +136,8 @@ Detailed design: [Phase 3 — versioned tool directory and load-on-demand](./202
 
 ### Phase 6 — platform operations and interoperability
 
+- Detailed design:
+  [Phase 6 — platform operations and interoperability](./2026-07-19-platform-operations-interoperability.md).
 - In-product Lead/Sub execution graph with latency, token, cost and failure attribution.
 - Organization/team/user/Agent/environment/key budgets and alerts.
 - A2A Agent Cards and streaming task interoperability.

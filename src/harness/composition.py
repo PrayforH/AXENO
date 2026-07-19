@@ -63,6 +63,10 @@ from harness.memory_bank.workload import (
     build_memory_mcp_app,
 )
 from harness.observability.provider import build_observability
+from harness.platform_mcp.workload import (
+    PlatformMcpTokenService,
+    build_platform_mcp_app,
+)
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.runtime import ResolvedPolicy
 from harness.quality.controller import QualitySyncController
@@ -731,6 +735,14 @@ def build_production_container(
         settings.knowledge_mcp_public_url,
         knowledge_tokens,
     )
+    platform_mcp_tokens = PlatformMcpTokenService(settings.auth_jwt_secret)
+    platform_mcp_app = build_platform_mcp_app(
+        agents=agent_service,
+        deployments=deployment_service,
+        quotas=quotas,
+        governance=governance,
+        tokens=platform_mcp_tokens,
+    )
     memory_service = UserMemoryService(memory_repository, clock=clock, memory_bank=memory_bank)
     workspace_service = WorkspaceService(
         store,
@@ -1061,6 +1073,8 @@ def build_production_container(
         governance=governance,
         knowledge_mcp_app=knowledge_mcp_app,
         knowledge_workload_tokens=knowledge_tokens,
+        platform_mcp_app=platform_mcp_app,
+        platform_mcp_tokens=platform_mcp_tokens,
         events=raw_event_repository,
         observed_events=observed_event_repository,
         task_queue=queue,

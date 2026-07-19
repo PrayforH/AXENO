@@ -23,9 +23,11 @@ from harness.governance import api as governance_routes
 from harness.knowledge import api as knowledge_routes
 from harness.lifecycle import api as lifecycle_routes
 from harness.memory_bank import api as memory_bank_routes
+from harness.platform_mcp import api as platform_mcp_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
 from harness.studio import api as studio_routes
+from harness.triggers import a2a as a2a_routes
 from harness.triggers import api as trigger_routes
 
 
@@ -220,11 +222,14 @@ def create_app(container: ApiContainer) -> FastAPI:
             async with container.knowledge_mcp_app.router.lifespan_context(
                 container.knowledge_mcp_app
             ):
-                try:
-                    yield
-                finally:
-                    if container.close is not None:
-                        await container.close()
+                async with container.platform_mcp_app.router.lifespan_context(
+                    container.platform_mcp_app
+                ):
+                    try:
+                        yield
+                    finally:
+                        if container.close is not None:
+                            await container.close()
 
     app = FastAPI(
         title="Claude Agent Harness",
@@ -234,6 +239,7 @@ def create_app(container: ApiContainer) -> FastAPI:
     app.state.container = container
     app.mount("/mcp/memory", container.memory_mcp_app)
     app.mount("/mcp/knowledge", container.knowledge_mcp_app)
+    app.mount("/mcp/platform", container.platform_mcp_app)
     app.add_api_route("/healthz", _healthz, methods=["GET"], include_in_schema=False)
     app.add_api_route(
         "/metrics",
@@ -280,6 +286,9 @@ def create_app(container: ApiContainer) -> FastAPI:
     app.include_router(governance_routes.router)
     app.include_router(trigger_routes.studio_router)
     app.include_router(trigger_routes.public_router)
+    app.include_router(trigger_routes.chatops_router)
+    app.include_router(a2a_routes.router)
+    app.include_router(platform_mcp_routes.router)
     return app
 
 

@@ -44,9 +44,16 @@
 
 .creator {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 160px auto;
+  grid-template-columns: 130px minmax(180px, 1fr) 150px auto;
   gap: 10px;
   align-items: end;
+}
+
+.scheduleFields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 150px minmax(220px, 1fr);
+  gap: 10px;
 }
 
 .creator label {
@@ -201,6 +208,7 @@ article[data-enabled="false"] .state {
 
 @media (max-width: 820px) {
   .creator,
+  .scheduleFields,
   .triggerList article {
     grid-template-columns: 1fr;
   }

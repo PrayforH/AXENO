@@ -52,6 +52,8 @@ class SessionService:
         *,
         session_id: str | None = None,
         environment: EnvironmentName | None = None,
+        team_ids: tuple[str, ...] = (),
+        api_key_id: str | None = None,
     ) -> Session:
         if (agent_version is None) == (environment is None):
             raise ConflictError("provide exactly one of agent_version or environment")
@@ -107,6 +109,8 @@ class SessionService:
             session_id=resolved_session_id,
             tenant_id=tenant_id,
             user_id=user_id,
+            team_ids=team_ids,
+            api_key_id=api_key_id,
             agent_name=agent_name,
             agent_version=agent_version,
             created_at=self._clock(),
@@ -123,6 +127,8 @@ class SessionService:
             existing = await self._sessions.get(tenant_id, session_id)
             if (
                 existing.user_id != user_id
+                or existing.team_ids != team_ids
+                or existing.api_key_id != api_key_id
                 or existing.agent_name != agent_name
                 or existing.agent_version != agent_version
                 or existing.environment != (environment.value if environment is not None else None)

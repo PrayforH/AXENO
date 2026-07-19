@@ -60,7 +60,10 @@ function TaskRow({ task }: { task: RunTaskNode }) {
         <code>{task.agentVersion ? `${task.alias}@${task.agentVersion}` : task.id}</code>
         {task.parentId && <span>父任务 {task.parentId}</span>}
         {task.durationMs !== undefined && <span>{durationLabel(task.durationMs)}</span>}
+        {task.tokens !== undefined && <span>{task.tokens.toLocaleString("zh-CN")} tokens</span>}
+        {task.costUsd !== undefined && <span>${task.costUsd.toFixed(4)}</span>}
         {task.toolUses !== undefined && <span>{task.toolUses} 个工具</span>}
+        {task.errorCode && <span className="execution-error-code">{task.errorCode}</span>}
       </div>
     </details>
   );
@@ -143,6 +146,11 @@ function ribbonFacts(view: RunViewModel) {
   const facts: string[] = [];
   if (view.toolCount > 0) facts.push(`${view.toolCount} 个工具`);
   if (view.taskCount > 0) facts.push(`${view.taskCount} 个子任务`);
+  if (view.totalTokens !== undefined) {
+    facts.push(`${view.totalTokens.toLocaleString("zh-CN")} tokens`);
+  }
+  if (view.totalCostUsd !== undefined) facts.push(`$${view.totalCostUsd.toFixed(4)}`);
+  if (view.failureCode) facts.push(view.failureCode);
   facts.push(durationLabel(view.elapsedMs));
   return facts;
 }

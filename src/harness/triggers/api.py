@@ -21,6 +21,7 @@ from harness.triggers.models import (
     CreateAgentTriggerRequest,
     CreatedAgentTrigger,
     InvokeAgentTriggerRequest,
+    InvokeChatOpsTriggerRequest,
     RotateAgentTriggerSecretRequest,
     TriggerInvocation,
     UpdateAgentTriggerRequest,
@@ -51,6 +52,7 @@ def require_trigger_admin(
 
 studio_router = APIRouter(prefix="/v1/studio", tags=["agent-triggers"])
 public_router = APIRouter(prefix="/webhooks/agent-triggers", tags=["agent-trigger-invocation"])
+chatops_router = APIRouter(prefix="/chatops/agent-triggers", tags=["chatops-invocation"])
 
 
 @studio_router.get(
@@ -168,6 +170,35 @@ async def get_agent_trigger_run(
         raise _authentication_error() from error
 
 
+@chatops_router.post(
+    "/{trigger_id}",
+    response_model=TriggerInvocation,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def invoke_chatops_trigger(
+    trigger_id: str,
+    body: InvokeChatOpsTriggerRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    service: Annotated[AgentTriggerService, Depends(get_trigger_service)],
+    authorization: Annotated[str, Header(alias="Authorization")],
+) -> TriggerInvocation:
+    try:
+        invocation, run = await service.invoke_chatops(
+            trigger_id=trigger_id,
+            secret=_bearer_secret(authorization),
+            message_id=body.message_id,
+            channel_id=body.channel_id,
+            prompt=body.text,
+        )
+    except TriggerAuthenticationError as error:
+        raise _authentication_error() from error
+    container = request.app.state.container
+    if container.auto_execute:
+        background_tasks.add_task(container.worker.execute, run.tenant_id, run.run_id)
+    return invocation
+
+
 async def _invoke(
     service: AgentTriggerService,
     *,
@@ -187,14 +218,14 @@ async def _invoke(
         raise _authentication_error() from error
 
 
-def _bearer_secret(authorization: str) -> str:
+def bearer_secret(authorization: str) -> str:
     scheme, separator, credential = authorization.partition(" ")
     if not separator or scheme.lower() != "bearer" or not credential:
         raise _authentication_error()
     return credential
 
 
-def _authentication_error() -> HTTPException:
+def authentication_error() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={
@@ -203,3 +234,7 @@ def _authentication_error() -> HTTPException:
         },
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+_bearer_secret = bearer_secret
+_authentication_error = authentication_error

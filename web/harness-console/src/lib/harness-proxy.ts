@@ -314,6 +314,45 @@ export async function proxyAgentTriggerRequest(
   }
 }
 
+export async function proxyExternalAgentRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  prefix: "a2a/agent-triggers" | "chatops/agent-triggers",
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/${prefix}${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  const headers = new Headers();
+  for (const name of [
+    "accept",
+    "authorization",
+    "content-type",
+    "a2a-version",
+    "last-event-id",
+  ]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  try {
+    const upstream = await fetcher(url, {
+      method: request.method,
+      headers,
+      body: await requestBody(request),
+      cache: "no-store",
+      signal: request.signal,
+    });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders(upstream),
+    });
+  } catch {
+    return unavailableResponse();
+  }
+}
+
 export async function proxyDataLifecycleRequest(
   request: Request,
   config: HarnessServerConfig,

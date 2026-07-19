@@ -18,8 +18,12 @@ type AgentTriggerControlPlaneProps = {
   canManage: boolean;
 };
 
-function endpoint(triggerId: string) {
-  return `/webhooks/agent-triggers/${encodeURIComponent(triggerId)}`;
+function endpoint(trigger: Pick<StudioAgentTrigger, "triggerId" | "kind">) {
+  const id = encodeURIComponent(trigger.triggerId);
+  if (trigger.kind === "a2a") return `/a2a/agent-triggers/${id}/agent-card.json`;
+  if (trigger.kind === "chatops") return `/chatops/agent-triggers/${id}`;
+  if (trigger.kind === "schedule") return "由 Worker 按计划触发";
+  return `/webhooks/agent-triggers/${id}`;
 }
 
 export function AgentTriggerControlPlane({
@@ -30,6 +34,9 @@ export function AgentTriggerControlPlane({
 }: AgentTriggerControlPlaneProps) {
   const [triggers, setTriggers] = useState<StudioAgentTrigger[]>([]);
   const [name, setName] = useState("Webhook 入口");
+  const [kind, setKind] = useState<StudioAgentTrigger["kind"]>("webhook");
+  const [schedulePrompt, setSchedulePrompt] = useState("执行定时任务");
+  const [intervalMinutes, setIntervalMinutes] = useState(60);
   const [environment, setEnvironment] =
     useState<StudioEnvironmentName>("production");
   const [busy, setBusy] = useState("");
@@ -75,14 +82,24 @@ export function AgentTriggerControlPlane({
     setBusy("create");
     setError("");
     try {
-      const created = await studioClient.createTrigger(
-        agentName,
-        name.trim(),
+      const created = await studioClient.createTrigger(agentName, {
+        name: name.trim(),
         environment,
-      );
+        kind,
+        schedule: kind === "schedule"
+          ? {
+              intervalSeconds: intervalMinutes * 60,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+              prompt: schedulePrompt,
+            }
+          : undefined,
+        chatops: kind === "chatops"
+          ? { provider: "generic", allowedChannelIds: [] }
+          : undefined,
+      });
       setIssued(created);
       setTriggers((current) => [created.trigger, ...current]);
-      setName("Webhook 入口");
+      setName(`${kind === "a2a" ? "A2A" : kind === "schedule" ? "定时" : kind === "chatops" ? "ChatOps" : "Webhook"} 入口`);
     } catch (reason) {
       setError(message(reason));
     } finally {
@@ -135,9 +152,24 @@ export function AgentTriggerControlPlane({
   }
 
   async function copyCurl(created: StudioCreatedAgentTrigger) {
-    const url = `${window.location.origin}${endpoint(created.trigger.triggerId)}`;
+    const path = endpoint(created.trigger);
+    if (!path.startsWith("/")) return;
+    const url = `${window.location.origin}${path}`;
+    const isA2a = created.trigger.kind === "a2a";
+    const isChatOps = created.trigger.kind === "chatops";
     await copy(
-      [
+      isA2a ? [
+        `curl -X POST '${url.replace(/\/agent-card\.json$/, "/message:send")}' \\`,
+        `  -H 'Authorization: Bearer ${created.secret}' \\`,
+        "  -H 'A2A-Version: 1.0' \\",
+        "  -H 'Content-Type: application/a2a+json' \\",
+        `  -d '{"message":{"messageId":"your-event-id","role":"ROLE_USER","parts":[{"text":"描述要执行的任务"}]}}'`,
+      ].join("\n") : isChatOps ? [
+        `curl -X POST '${url}' \\`,
+        `  -H 'Authorization: Bearer ${created.secret}' \\`,
+        "  -H 'Content-Type: application/json' \\",
+        `  -d '{"messageId":"your-event-id","channelId":"ops","actorId":"user","text":"描述要执行的任务"}'`,
+      ].join("\n") : [
         `curl -X POST '${url}' \\`,
         `  -H 'Authorization: Bearer ${created.secret}' \\`,
         "  -H 'Idempotency-Key: your-event-id' \\",
@@ -171,6 +203,20 @@ export function AgentTriggerControlPlane({
           {canManage && (
             <div className={styles.creator}>
               <label>
+                <span>入口</span>
+                <select
+                  value={kind}
+                  onChange={(event) =>
+                    setKind(event.target.value as StudioAgentTrigger["kind"])
+                  }
+                >
+                  <option value="webhook">Webhook</option>
+                  <option value="a2a">A2A 1.0</option>
+                  <option value="schedule">定时</option>
+                  <option value="chatops">ChatOps</option>
+                </select>
+              </label>
+              <label>
                 <span>名称</span>
                 <input
                   value={name}
@@ -198,8 +244,28 @@ export function AgentTriggerControlPlane({
                 disabled={!name.trim() || busy === "create"}
                 onClick={() => void createTrigger()}
               >
-                {busy === "create" ? "创建中…" : "创建 Webhook"}
+                {busy === "create" ? "创建中…" : "创建入口"}
               </button>
+              {kind === "schedule" && (
+                <div className={styles.scheduleFields}>
+                  <label>
+                    <span>间隔（分钟）</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={intervalMinutes}
+                      onChange={(event) => setIntervalMinutes(Number(event.target.value))}
+                    />
+                  </label>
+                  <label>
+                    <span>任务内容</span>
+                    <input
+                      value={schedulePrompt}
+                      onChange={(event) => setSchedulePrompt(event.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
           )}
 
@@ -234,19 +300,23 @@ export function AgentTriggerControlPlane({
                 <div>
                   <strong>{trigger.name}</strong>
                   <small>
-                    {trigger.environment.toUpperCase()} · revision {trigger.revision}
+                    {trigger.kind.toUpperCase()} · {trigger.environment.toUpperCase()} · revision {trigger.revision}
                     {trigger.lastInvokedAt
                       ? ` · 最近调用 ${new Date(trigger.lastInvokedAt).toLocaleString("zh-CN")}`
                       : " · 尚未调用"}
                   </small>
-                  <code>{endpoint(trigger.triggerId)}</code>
+                  <code>{endpoint(trigger)}</code>
+                  {trigger.nextFireAt && (
+                    <small>下次执行 {new Date(trigger.nextFireAt).toLocaleString("zh-CN")}</small>
+                  )}
                 </div>
                 <div className={styles.actions}>
                   <button
                     type="button"
-                    onClick={() =>
-                      void copy(`${window.location.origin}${endpoint(trigger.triggerId)}`)
-                    }
+                    disabled={!endpoint(trigger).startsWith("/")}
+                    onClick={() => void copy(
+                      `${window.location.origin}${endpoint(trigger)}`,
+                    )}
                   >
                     复制地址
                   </button>

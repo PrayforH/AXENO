@@ -82,6 +82,7 @@ class RuntimeContext(BaseModel):
                 ExecutionIdentity(
                     tenant_id=self.session.tenant_id,
                     user_id=self.session.user_id,
+                    team_ids=self.session.team_ids,
                     project_id=self.session.agent_name,
                     session_id=self.session.session_id,
                     run_id=self.run.run_id,

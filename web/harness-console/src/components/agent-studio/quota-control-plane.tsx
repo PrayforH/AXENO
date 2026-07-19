@@ -105,6 +105,7 @@ export function QuotaControlPlane() {
         <header className={styles.header}>
           <div><p>Tenant capacity ledger</p><h1>使用量与资源准入</h1><span>查看预留、实际消耗和未知成本；修改限额不会篡改历史账本。</span></div>
           <div className={styles.unknown} data-active={usage.unknownCostEntries > 0}><small>未知成本记录</small><strong>{usage.unknownCostEntries}</strong><span>{usage.unknownCostEntries ? "需要核对模型网关回传" : "当前账本完整"}</span></div>
+          <div className={styles.unknown} data-active={usage.alerts.length > 0}><small>预算告警</small><strong>{usage.alerts.length}</strong><span>{usage.alerts.length ? "已有作用域越过阈值" : "全部作用域正常"}</span></div>
         </header>
 
         <section className={styles.ledger} aria-label="租户配额使用量">
@@ -138,6 +139,19 @@ export function QuotaControlPlane() {
           <summary><span>活动 Reservation</span><strong>{usage.activeReservations.length}</strong></summary>
           <div>{usage.activeReservations.length === 0 ? <p>当前没有未结算的资源预留。</p> : usage.activeReservations.map((item) => <article key={item.reservationId}><code>{item.resource}</code><span>{item.agentName ?? "租户级"} · {item.environment ?? "全部环境"}</span><strong>{item.amount.toLocaleString("zh-CN")}</strong><small>到期 {new Date(item.expiresAt).toLocaleString("zh-CN")}</small></article>)}</div>
         </details>
+        {usage.alerts.length > 0 && (
+          <details className={styles.reservations} open>
+            <summary><span>作用域预算告警</span><strong>{usage.alerts.length}</strong></summary>
+            <div>{usage.alerts.map((item) => (
+              <article key={item.alertId}>
+                <code>{item.severity.toUpperCase()} · {item.resource}</code>
+                <span>{item.scopeKey}</span>
+                <strong>{item.usagePercent}%</strong>
+                <small>阈值 {item.thresholdPercent}% · {item.windowKey}</small>
+              </article>
+            ))}</div>
+          </details>
+        )}
       </section>
     </main>
   );

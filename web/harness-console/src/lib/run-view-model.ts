@@ -20,7 +20,10 @@ export interface RunTaskNode {
   alias?: string;
   agentVersion?: string;
   durationMs?: number;
+  tokens?: number;
+  costUsd?: number;
   toolUses?: number;
+  errorCode?: string;
 }
 
 export interface RunToolNode {
@@ -44,6 +47,9 @@ export interface RunViewModel {
   tools: RunToolNode[];
   taskCount: number;
   toolCount: number;
+  totalTokens?: number;
+  totalCostUsd?: number;
+  failureCode?: string;
   pendingApprovalId?: string;
 }
 
@@ -157,11 +163,25 @@ function taskNodes(items: readonly ActivityItem[]): RunTaskNode[] {
         typeof item.metadata.duration_ms === "number"
           ? item.metadata.duration_ms
           : undefined,
+      tokens:
+        typeof item.metadata.usage === "object" &&
+        item.metadata.usage !== null &&
+        typeof (item.metadata.usage as { total_tokens?: unknown }).total_tokens === "number"
+          ? (item.metadata.usage as { total_tokens: number }).total_tokens
+          : undefined,
+      costUsd:
+        typeof item.metadata.cost_usd === "number"
+          ? item.metadata.cost_usd
+          : undefined,
       toolUses:
         typeof item.metadata.usage === "object" &&
         item.metadata.usage !== null &&
         typeof (item.metadata.usage as { tool_uses?: unknown }).tool_uses === "number"
           ? (item.metadata.usage as { tool_uses: number }).tool_uses
+          : undefined,
+      errorCode:
+        typeof item.metadata.error_code === "string"
+          ? item.metadata.error_code
           : undefined,
     });
   }
@@ -239,6 +259,19 @@ export function reduceRunViewModel(
           "model.route.selected",
         ].includes(item.event_type),
     );
+  const runtimeResult = [...items]
+    .reverse()
+    .find((item) => item.event_type === "runtime.result");
+  const runFailure = [...items]
+    .reverse()
+    .find((item) => item.status === "failed");
+  const usage = runtimeResult?.metadata.usage;
+  const totalTokens =
+    typeof usage === "object" &&
+    usage !== null &&
+    typeof (usage as { total_tokens?: unknown }).total_tokens === "number"
+      ? (usage as { total_tokens: number }).total_tokens
+      : undefined;
   return {
     runId: activity.run_id,
     phase: phaseFor(previous?.runId === activity.run_id ? previous : undefined, items),
@@ -254,6 +287,15 @@ export function reduceRunViewModel(
     tools,
     taskCount: tasks.length,
     toolCount: tools.length,
+    totalTokens,
+    totalCostUsd:
+      typeof runtimeResult?.metadata.cost_usd === "number"
+        ? runtimeResult.metadata.cost_usd
+        : undefined,
+    failureCode:
+      typeof runFailure?.metadata.error_code === "string"
+        ? runFailure.metadata.error_code
+        : undefined,
     pendingApprovalId: pendingApproval(items),
   };
 }
