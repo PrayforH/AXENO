@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { type ReactNode, useEffect, useState } from "react";
+import { AccountMenu } from "../account-menu";
 import { ThemeToggle } from "../theme-toggle";
 import {
   WorkspaceCollapseIcon,
@@ -17,11 +18,9 @@ type StudioWorkspace = Exclude<WorkspaceId, "tasks">;
 export function StudioSidebar({
   active,
   children,
-  footer,
 }: {
   active: StudioWorkspace;
   children?: ReactNode;
-  footer?: ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -78,18 +77,21 @@ export function StudioSidebar({
 
       <div className={styles.toolbar}>
         {!collapsed && <span>工作区</span>}
-        <button
-          className={styles.collapseButton}
-          type="button"
-          aria-expanded={!collapsed}
-          aria-label={
-            collapsed ? "展开 Agent Studio 侧栏" : "收起 Agent Studio 侧栏"
-          }
-          title={collapsed ? "展开侧栏" : "收起侧栏"}
-          onClick={toggleSidebar}
-        >
-          <WorkspaceCollapseIcon collapsed={collapsed} />
-        </button>
+        <div className={styles.toolbarActions}>
+          <ThemeToggle className={styles.themeToggle} />
+          <button
+            className={styles.collapseButton}
+            type="button"
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed ? "展开 Agent Studio 侧栏" : "收起 Agent Studio 侧栏"
+            }
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
+            onClick={toggleSidebar}
+          >
+            <WorkspaceCollapseIcon collapsed={collapsed} />
+          </button>
+        </div>
       </div>
 
       <WorkspaceNavigation active={active} collapsed={collapsed} />
@@ -99,10 +101,9 @@ export function StudioSidebar({
       )}
 
       <footer className={styles.sidebarFooter}>
-        {!collapsed && footer && (
-          <div className={styles.footerContent}>{footer}</div>
-        )}
-        <ThemeToggle className={styles.themeToggle} />
+        <div className={styles.accountSlot}>
+          <AccountMenu />
+        </div>
       </footer>
     </aside>
   );

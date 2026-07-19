@@ -826,15 +826,7 @@ export function AgentStudioWorkbench() {
 
   return (
     <main className={styles.studioShell} id="main-content" data-studio-integration="api">
-      <StudioSidebar
-        active="agents"
-        footer={
-          <div className={styles.railFooter}>
-            <strong>Agent Studio</strong>
-            <span>智能体、版本与发布状态由工作区统一管理。</span>
-          </div>
-        }
-      >
+      <StudioSidebar active="agents">
         <div className={styles.railHeading}>
           <span>智能体目录</span>
           <button
@@ -917,21 +909,20 @@ export function AgentStudioWorkbench() {
             )}
           </div>
           <div className={styles.headerActions}>
-            <button type="button" className={styles.secondaryButton} disabled={!canEdit || saving} onClick={() => void saveDraft()}>
-              {saving ? "保存中…" : "保存草稿"}
-            </button>
-            <button type="button" className={styles.checkButton} disabled={!canEdit || saving} onClick={() => void inspectDraft()}>
-              检查配置
-            </button>
-            <button
-              type="button"
-              className={styles.previewButton}
-              disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
-              title="创建绑定当前 Draft 双 Hash 的短时测试环境，并执行真实 Model、Sandbox 与 MCP Preflight"
-              onClick={() => void createPreview()}
-            >
-              {creatingPreview ? "创建中…" : "创建 Preview"}
-            </button>
+            <span className={styles.syncState} data-dirty={dirty}>
+              <i aria-hidden="true" />
+              {saving ? "正在保存" : dirty ? "有未保存更改" : `已同步 r${draft.revision}`}
+            </span>
+            <div className={styles.actionGroup}>
+              <button type="button" className={styles.secondaryButton} disabled={!canEdit || saving || !dirty} onClick={() => void saveDraft()}>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 3.5h8l2 2v11H5zM7.5 3.5v4h5v-4M7.5 13h5" /></svg>
+                <span>{saving ? "保存中…" : "保存"}</span>
+              </button>
+              <button type="button" className={styles.checkButton} disabled={!canEdit || saving} onClick={() => void inspectDraft()}>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 10 3 3 7-7" /></svg>
+                <span>检查</span>
+              </button>
+            </div>
             <button
               type="button"
               className={styles.publishButton}
@@ -949,9 +940,36 @@ export function AgentStudioWorkbench() {
             >
               {publishing ? "发布中…" : publishedCurrent ? "重新核验发布" : "发布"}
             </button>
-            <button type="button" className={styles.secondaryButton} disabled={!draft.id || saving} onClick={() => void downloadBundle()}>
-              下载 Bundle
-            </button>
+            <details className={styles.actionMenu}>
+              <summary aria-label="更多智能体操作" title="更多操作">
+                <span aria-hidden="true">•••</span>
+              </summary>
+              <div className={styles.actionMenuPopover}>
+                <button
+                  type="button"
+                  className={styles.previewButton}
+                  disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
+                  title="创建绑定当前 Draft 双 Hash 的短时测试环境，并执行真实 Model、Sandbox 与 MCP Preflight"
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void createPreview();
+                  }}
+                >
+                  <span><strong>{creatingPreview ? "正在创建 Preview" : "创建 Preview"}</strong><small>在隔离环境中完成真实预检</small></span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={!draft.id || saving}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void downloadBundle();
+                  }}
+                >
+                  <span><strong>下载 Bundle</strong><small>获取当前不可变配置包</small></span>
+                </button>
+              </div>
+            </details>
           </div>
         </header>
 
@@ -1028,24 +1046,28 @@ export function AgentStudioWorkbench() {
           </div>
         )}
 
-        <ol className={styles.lifecycleBar} aria-label="从草稿到部署的生命周期">
-          {lifecycleStages.map((stage, index) => {
-            const state = index < activeLifecycleIndex
-              ? "complete"
-              : index === activeLifecycleIndex
-                ? "active"
-                : "pending";
-            return (
-              <li key={stage.id} data-state={state}>
-                <span>{state === "complete" ? "✓" : index + 1}</span>
-                <div>
-                  <strong>{stage.label}</strong>
-                  <small>{stage.detail}</small>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+        <section className={styles.lifecycleBar} aria-label="从草稿到部署的生命周期">
+          <div className={styles.lifecycleSummary}>
+            <span>发布进度</span>
+            <strong>{lifecycleStages[activeLifecycleIndex]?.label}</strong>
+            <small>{lifecycleStages[activeLifecycleIndex]?.detail}</small>
+          </div>
+          <ol>
+            {lifecycleStages.map((stage, index) => {
+              const state = index < activeLifecycleIndex
+                ? "complete"
+                : index === activeLifecycleIndex
+                  ? "active"
+                  : "pending";
+              return (
+                <li key={stage.id} data-state={state}>
+                  <i aria-hidden="true" />
+                  <span>{stage.label}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
 
         <div className={styles.editorBody}>
           <nav className={styles.sectionNav} aria-label="Agent 配置章节">

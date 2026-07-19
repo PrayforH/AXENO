@@ -1,5 +1,5 @@
 x-python-image: &python-image
-  image: claude-agent-harness-api:${HARNESS_IMAGE_TAG:-local}
+  image: ${HARNESS_API_IMAGE_REPOSITORY:-claude-agent-harness-api}:${HARNESS_IMAGE_TAG:-local}
 
 x-python-build: &python-build
   context: ../..
@@ -305,7 +305,7 @@ services:
     restart: "no"
 
   web:
-    image: claude-agent-harness-web:${HARNESS_IMAGE_TAG:-local}
+    image: ${HARNESS_WEB_IMAGE_REPOSITORY:-claude-agent-harness-web}:${HARNESS_IMAGE_TAG:-local}
     build:
       context: ../..
       dockerfile: deploy/docker/web.Dockerfile

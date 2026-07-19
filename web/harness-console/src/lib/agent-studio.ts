@@ -207,7 +207,7 @@ export const POLICY_OPTIONS = [
   {
     id: "production-standard",
     label: "生产标准",
-    description: "沙箱文件写入受控，命令默认审批。",
+    description: "工作区文件写入自动允许，命令默认审批。",
   },
   {
     id: "production-orchestrator",

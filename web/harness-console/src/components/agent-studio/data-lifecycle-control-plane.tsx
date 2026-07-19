@@ -143,10 +143,7 @@ export function DataLifecycleControlPlane() {
   if (!overview && canAdmin && !error) return <main className={styles.state} id="main-content" aria-busy="true"><strong>正在读取数据边界</strong><span>核对保留策略、Legal Hold 与外部删除状态…</span></main>;
 
   return <main className={styles.shell} id="main-content">
-    <StudioSidebar
-      active="data"
-      footer={<div className={styles.boundary}><span>当前边界</span><code>{membership.tenant_id}</code><small>{canAdmin ? "租户治理视图" : "仅显示你的请求"}</small></div>}
-    >
+    <StudioSidebar active="data">
       <div className={styles.railCopy}><strong>数据生命周期</strong><p>导出与删除按外部系统顺序级联。任何失败都会留下可审计断点，不把“请求已受理”误报为“已删除”。</p></div>
     </StudioSidebar>
 

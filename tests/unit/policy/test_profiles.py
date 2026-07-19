@@ -37,7 +37,7 @@ def test_read_only_profile_allows_evidence_tools_and_denies_mutation() -> None:
 
 
 def test_standard_profile_uses_trusted_sandbox_facts() -> None:
-    assert _decision("production-standard", "Write") is PolicyDecision.ASK
+    assert _decision("production-standard", "Write") is PolicyDecision.ALLOW
     assert (
         _decision(
             "production-standard",

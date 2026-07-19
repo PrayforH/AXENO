@@ -97,10 +97,7 @@ export function QuotaControlPlane() {
 
   return (
     <main className={styles.shell} id="main-content">
-      <StudioSidebar
-        active="usage"
-        footer={<div className={styles.railFact}><span>策略版本</span><strong>r{globalPolicy.revision}</strong><small>{globalPolicy.updatedBy === "platform-default" ? "平台默认" : `由 ${globalPolicy.updatedBy} 更新`}</small></div>}
-      >
+      <StudioSidebar active="usage">
         <div className={styles.railCopy}><strong>容量与成本</strong><p>配额在 API 与 Worker 两条路径执行。页面展示的是控制面事实，不是估算值。</p></div>
       </StudioSidebar>
 

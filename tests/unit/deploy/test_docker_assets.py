@@ -30,6 +30,14 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert services["api"]["environment"]["HARNESS_ENVIRONMENT"] == "production"
     assert services["api"]["environment"]["HARNESS_RUNTIME"] == "claude-sdk"
     assert "build" in services["api"]
+    assert services["api"]["image"] == (
+        "${HARNESS_API_IMAGE_REPOSITORY:-claude-agent-harness-api}:"
+        "${HARNESS_IMAGE_TAG:-local}"
+    )
+    assert services["web"]["image"] == (
+        "${HARNESS_WEB_IMAGE_REPOSITORY:-claude-agent-harness-web}:"
+        "${HARNESS_IMAGE_TAG:-local}"
+    )
     for name in ("migrate", "worker", "seed"):
         assert "build" not in services[name]
         assert services[name]["image"] == services["api"]["image"]
@@ -110,6 +118,9 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "harness-worker" in worker_entrypoint.read_text()
     values = environment.read_text()
     assert "HARNESS_NEW_API_BASE_URL=" in values
+    assert "HARNESS_API_IMAGE_REPOSITORY=claude-agent-harness-api" in values
+    assert "HARNESS_WEB_IMAGE_REPOSITORY=claude-agent-harness-web" in values
+    assert "HARNESS_IMAGE_TAG=local" in values
     assert "HARNESS_API_BEARER_TOKEN=" in values
     assert "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=false" in values
     assert "HARNESS_SANDBOX_PROVIDER=daytona" in values

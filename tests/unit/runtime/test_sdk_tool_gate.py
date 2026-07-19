@@ -474,9 +474,9 @@ async def test_container_write_uses_trusted_context_without_approval(
 
 
 @pytest.mark.asyncio
-async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
-    gate, approvals, _, events, context = await _arrange(tmp_path)
-    task = asyncio.create_task(
+async def test_local_workspace_write_does_not_require_approval(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    output = await asyncio.wait_for(
         _invoke(
             gate,
             context,
@@ -485,40 +485,25 @@ async def test_local_write_waits_for_approval(tmp_path: Path) -> None:
                 {"file_path": "result.txt", "content": "done"},
                 "tool-local-write",
             ),
-        )
-    )
-    requested = []
-    for _ in range(20):
-        emitted = await events.list_after("tenant-a", "run-sdk", 0)
-        requested = [event for event in emitted if event.type == "approval.requested"]
-        if requested:
-            break
-        await asyncio.sleep(0)
-    assert requested
-    assert requested[0].payload["message_id"] == "assistant-sdk-message"
-    assert requested[0].payload["tool_name"] == "Write"
-    assert requested[0].payload["argument_summary"] == {"file_path": "result.txt"}
-    assert requested[0].payload["sandbox_provider"] == "local"
-    assert requested[0].payload["sandbox_isolation"] == "workspace"
-    assert requested[0].payload["policy_rule"] == "write-review"
-    assert requested[0].payload["risk"] == "medium"
-    assert "done" not in repr(requested[0].payload)
-    approval_id = str(requested[0].payload["approval_id"])
-
-    await approvals.decide(
-        tenant_id="tenant-a",
-        approval_id=approval_id,
-        decision=ApprovalStatus.APPROVED,
+        ),
+        timeout=0.1,
     )
 
-    assert _decision(await task) == "allow"
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+    assert emitted[0].payload["sandbox"] == {
+        "provider": "local",
+        "isolation": "workspace",
+    }
+    assert not any(event.type == "approval.requested" for event in emitted)
 
 
 @pytest.mark.asyncio
-async def test_successful_approved_write_grants_same_run_edit_capability(
+async def test_successful_workspace_write_and_edit_do_not_require_approval(
     tmp_path: Path,
 ) -> None:
-    gate, approvals, _, events, context = await _arrange(tmp_path)
+    gate, _, _, events, context = await _arrange(tmp_path)
     hooks = gate.hooks(context)
     pre_tool_use = hooks["PreToolUse"][0].hooks[0]
     report = tmp_path / "outputs" / "report.md"
@@ -527,23 +512,11 @@ async def test_successful_approved_write_grants_same_run_edit_capability(
         {"file_path": str(report), "content": "draft"},
         "tool-create-report",
     )
-    write_task = asyncio.ensure_future(
-        pre_tool_use(write_input, write_input["tool_use_id"], {"signal": None})
+    write_output = await asyncio.wait_for(
+        pre_tool_use(write_input, write_input["tool_use_id"], {"signal": None}),
+        timeout=0.1,
     )
-    requested = []
-    for _ in range(20):
-        emitted = await events.list_after("tenant-a", "run-sdk", 0)
-        requested = [event for event in emitted if event.type == "approval.requested"]
-        if requested:
-            break
-        await asyncio.sleep(0)
-    assert requested
-    await approvals.decide(
-        tenant_id="tenant-a",
-        approval_id=str(requested[0].payload["approval_id"]),
-        decision=ApprovalStatus.APPROVED,
-    )
-    assert _decision(cast(SyncHookJSONOutput, await write_task)) == "allow"
+    assert _decision(cast(SyncHookJSONOutput, write_output)) == "allow"
 
     post_input = cast(
         PostToolUseHookInput,
@@ -576,7 +549,7 @@ async def test_successful_approved_write_grants_same_run_edit_capability(
 
     assert _decision(cast(SyncHookJSONOutput, edit_output)) == "allow"
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
-    assert [event.type for event in emitted].count("approval.requested") == 1
+    assert not any(event.type == "approval.requested" for event in emitted)
     assert emitted[-1].type == "tool.allowed"
 
 

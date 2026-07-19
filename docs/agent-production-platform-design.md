@@ -713,7 +713,7 @@ Agent Builder 只能选择平台暴露的 Execution Profile，不能关闭隔离
 | Profile | 典型 Agent | 默认行为 |
 | --- | --- | --- |
 | production-read-only | 分析、检索、报告 | Read/Glob/Grep 与审核只读 MCP；其他拒绝 |
-| production-standard | 文件生成和有限执行 | Workspace Write/Edit 按隔离事实判断；Bash 默认 ask |
+| production-standard | 文件生成和有限执行 | Workspace Write/Edit 自动允许且禁止越界；Bash 默认 ask |
 | production-orchestrator | Lead + Sub | 在只读基础上允许固定版本 Task 委派 |
 
 ### 14.2 决策模型

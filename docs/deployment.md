@@ -204,7 +204,7 @@ HARNESS_MEMORY_WORKLOAD_TOKEN_SECRET=replace-with-an-independent-32-character-se
 HARNESS_MEMORY_MCP_PUBLIC_URL=https://harness.example.com/mcp/memory/mcp
 ```
 
-Daytona 容器是 Harness 的强隔离边界：Manifest 已声明的 `Write/Edit` 自动允许，`Bash` 仍需审批。本地 workspace 中 `Write/Edit/Bash` 均需审批。隔离级别来自实际 provision 结果；不得从用户请求或 Agent Manifest 接受该字段。
+Manifest 已声明的 `Write/Edit` 只能操作本次 Run 的 workspace，默认自动允许；越界路径由运行时直接拒绝。`Bash` 在本地 workspace 和 Daytona 中仍需审批，本地 workspace 中包含 `rm ` 的命令默认拒绝。隔离级别来自实际 provision 结果；不得从用户请求或 Agent Manifest 接受该字段。
 
 Daytona 隔离宿主机，但同一 Claude CLI 进程内的 `Bash` 仍可能读取该进程可见的环境变量。Harness 已通过关闭回显的 stdin 帧传入 CLI 参数与环境，避免把系统提示词、模型/MCP secret 写入 Daytona 命令行与 session metadata；但“需要审批”并不等于“凭据不可见”。面向不受信 Agent 时，应进一步使用 Daytona Secrets、域名级出口白名单或凭据注入型 egress proxy，让通用 shell 不直接持有模型网关和业务 MCP 的原始密钥。
 

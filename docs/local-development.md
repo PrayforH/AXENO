@@ -92,7 +92,7 @@ Manifest 决定 Agent 能看到哪些工具，实际 `SandboxHandle` 决定策�
 | 工具 | local workspace | Daytona container |
 |---|---|---|
 | `Read/Glob/Grep` | 自动允许 | 自动允许 |
-| `Write/Edit` | 网页审批 | 自动允许 |
+| `Write/Edit` | 工作区内自动允许 | 工作区内自动允许 |
 | `Bash` | 网页审批；`rm ` 默认拒绝 | 网页审批 |
 
 要让本地真实模型运行在 Daytona，在仓库根目录的忽略文件 `.env` 中配置：

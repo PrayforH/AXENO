@@ -74,6 +74,7 @@ describe("Agent Studio management page", () => {
     expect(sidebar).toContain("展开 Agent Studio 侧栏");
     expect(sidebar).toContain("aria-expanded={!collapsed}");
     expect(sidebar).toContain("<ThemeToggle");
+    expect(sidebar).toContain("<AccountMenu");
     expect(sidebarStyles).toContain(
       '.sidebar[data-studio-sidebar="collapsed"]',
     );
@@ -87,7 +88,7 @@ describe("Agent Studio management page", () => {
       /@media \(max-width: 900px\)[\s\S]*?\.studioShell:has\(> \[data-studio-sidebar="collapsed"\]\)[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\)/,
     );
     expect(styles).toMatch(
-      /@media \(max-width: 620px\)[\s\S]*?\.headerActions[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/,
+      /@media \(max-width: 620px\)[\s\S]*?\.headerActions[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto auto/,
     );
   });
 
@@ -224,8 +225,7 @@ describe("Agent Studio management page", () => {
   });
 
   it("renders only tenant API rows instead of invented live agents", () => {
-    expect(workbench).toContain("<strong>Agent Studio</strong>");
-    expect(workbench).toContain("智能体、版本与发布状态由工作区统一管理。");
+    expect(sidebar).toContain("<strong>Agent Studio</strong>");
     expect(workbench).toContain("studioClient.listDrafts");
     expect(workbench).toContain("studioClient.getDraft");
     expect(workbench).not.toContain("helper-agent-1.0.0");

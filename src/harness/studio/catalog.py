@@ -67,7 +67,7 @@ def default_capability_catalog() -> CapabilityCatalog:
                 description="在隔离工作区中生成文件和交付物。",
                 risk=CapabilityRisk.MEDIUM,
                 executionLocation="sandbox",
-                approvalBehavior="按 Sandbox 策略允许或审批",
+                approvalBehavior="工作区内自动允许，越界写入拒绝",
             ),
             BuiltinToolCapability(
                 name="Edit",
@@ -75,7 +75,7 @@ def default_capability_catalog() -> CapabilityCatalog:
                 description="修改隔离工作区中已有文件。",
                 risk=CapabilityRisk.MEDIUM,
                 executionLocation="sandbox",
-                approvalBehavior="按 Sandbox 策略允许或审批",
+                approvalBehavior="工作区内自动允许，越界写入拒绝",
             ),
             BuiltinToolCapability(
                 name="Bash",

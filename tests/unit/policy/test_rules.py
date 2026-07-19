@@ -36,7 +36,7 @@ from harness.sandbox.base import SandboxIsolation
             {"url": "https://example.test"},
             PolicyDecision.DENY,
         ),
-        ("Write", {"file_path": "/workspace/result.txt"}, PolicyDecision.ASK),
+        ("Write", {"file_path": "/workspace/result.txt"}, PolicyDecision.ALLOW),
         ("Bash", {"command": "rm -rf /workspace/data"}, PolicyDecision.DENY),
     ],
 )
@@ -63,8 +63,8 @@ def test_default_policy_classifies_builtin_tools(
         (SandboxIsolation.WORKSPACE, "Read", {}, PolicyDecision.ALLOW),
         (SandboxIsolation.WORKSPACE, "Glob", {}, PolicyDecision.ALLOW),
         (SandboxIsolation.WORKSPACE, "Grep", {}, PolicyDecision.ALLOW),
-        (SandboxIsolation.WORKSPACE, "Write", {}, PolicyDecision.ASK),
-        (SandboxIsolation.WORKSPACE, "Edit", {}, PolicyDecision.ASK),
+        (SandboxIsolation.WORKSPACE, "Write", {}, PolicyDecision.ALLOW),
+        (SandboxIsolation.WORKSPACE, "Edit", {}, PolicyDecision.ALLOW),
         (SandboxIsolation.WORKSPACE, "Bash", {"command": "pwd"}, PolicyDecision.ASK),
         (
             SandboxIsolation.WORKSPACE,

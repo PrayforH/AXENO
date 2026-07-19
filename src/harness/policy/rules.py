@@ -107,20 +107,8 @@ def default_policy_rules() -> list[PolicyRule]:
             tool="mcp__tavily__tavily_extract",
             decision=PolicyDecision.ALLOW,
         ),
-        PolicyRule(name="write-review", tool="Write", decision=PolicyDecision.ASK),
-        PolicyRule(name="edit-review", tool="Edit", decision=PolicyDecision.ASK),
-        PolicyRule(
-            name="container-write",
-            tool="Write",
-            sandbox_isolation=SandboxIsolation.CONTAINER,
-            decision=PolicyDecision.ALLOW,
-        ),
-        PolicyRule(
-            name="container-edit",
-            tool="Edit",
-            sandbox_isolation=SandboxIsolation.CONTAINER,
-            decision=PolicyDecision.ALLOW,
-        ),
+        PolicyRule(name="workspace-write", tool="Write", decision=PolicyDecision.ALLOW),
+        PolicyRule(name="workspace-edit", tool="Edit", decision=PolicyDecision.ALLOW),
         PolicyRule(
             name="destructive-rm",
             tool="Bash",

@@ -30,9 +30,9 @@ class FakeRuntime:
             yield RuntimeEvent(
                 type="tool.request",
                 payload={
-                    "tool_call_id": "fake-write-1",
-                    "name": "Write",
-                    "arguments": {"file_path": "output/result.txt"},
+                    "tool_call_id": "fake-bash-1",
+                    "name": "Bash",
+                    "arguments": {"command": "printf 'reviewed operation'"},
                 },
             )
         if "[artifact]" in prompt:

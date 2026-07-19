@@ -180,10 +180,10 @@ class AgentDraftCompiler:
 
         if "Bash" in spec.builtin_tools:
             risk = CapabilityRisk.HIGH
-            approval = "Bash 默认进入人工审批；文件写入受隔离策略约束"
+            approval = "工作区文件写入自动允许；Bash 默认进入人工审批"
         elif any(tool in spec.builtin_tools for tool in ("Write", "Edit", "Task")):
             risk = CapabilityRisk.MEDIUM
-            approval = "写入或委派按权限 Profile 和隔离事实判定"
+            approval = "工作区文件写入自动允许；委派受权限上限约束"
         elif network is not NetworkAccess.NONE:
             risk = CapabilityRisk.MEDIUM
             approval = "只读 MCP 自动允许，未声明能力隐式拒绝"

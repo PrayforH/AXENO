@@ -16,7 +16,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   border-right: 1px solid var(--sidebar-line);
   color: var(--sidebar-ink);
   background: var(--sidebar-panel);
@@ -113,6 +113,12 @@
   font-weight: 650;
 }
 
+.toolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .collapseButton {
   width: 32px;
   height: 32px;
@@ -158,23 +164,27 @@
 
 .sidebarFooter {
   margin-top: auto;
-  min-height: 58px;
-  padding: 9px 10px 9px 12px;
+  min-height: 60px;
+  padding: 8px 9px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
   border-top: 1px solid var(--sidebar-line);
 }
 
-.footerContent {
+.accountSlot {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.accountSlot :global(.account-trigger) {
+  min-height: 42px;
 }
 
 .sidebar .themeToggle {
   width: 32px;
   min-width: 32px;
+  min-height: 32px;
   padding: 3px;
 }
 
@@ -192,19 +202,36 @@
   padding-inline: 8px;
 }
 
+.sidebar[data-studio-sidebar="collapsed"] .toolbarActions {
+  display: contents;
+}
+
 .sidebar[data-studio-sidebar="collapsed"] .sidebarFooter {
-  justify-items: center;
   justify-content: center;
   padding-inline: 8px;
 }
 
-.sidebar[data-studio-sidebar="collapsed"] .themeToggle {
-  width: 32px;
-  min-width: 32px;
-  padding: 3px;
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot {
+  flex: 0 0 34px;
 }
 
-.sidebar[data-studio-sidebar="collapsed"] .themeToggle :global(.theme-toggle-label) {
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-trigger) {
+  width: 34px;
+  min-height: 34px;
+  height: 34px;
+  padding: 2px;
+  justify-content: center;
+  border-radius: 50%;
+}
+
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-trigger-avatar) {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+}
+
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-trigger-copy),
+.sidebar[data-studio-sidebar="collapsed"] .themeToggle {
   display: none;
 }
 

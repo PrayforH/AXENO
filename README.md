@@ -82,7 +82,7 @@ Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markd
 在当前工作区创建 outputs/hello.md，写入一段中文说明，然后读取文件确认内容。
 ```
 
-`echo-agent@0.4.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task`，只配置模型网关即可运行；需要联网检索的领域包（例如 `public-opinion-agent`）再显式声明 `mcp: tavily-readonly`。本地 workspace 不是真正安全隔离，因此 `Write/Edit/Bash` 会进入网页审批；Daytona 容器中 `Write/Edit` 自动允许，`Bash` 因模型网关凭据和网络出口风险仍需审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
+`echo-agent@0.4.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task`，只配置模型网关即可运行；需要联网检索的领域包（例如 `public-opinion-agent`）再显式声明 `mcp: tavily-readonly`。`Write/Edit` 仅能操作本次 Run 的 workspace，默认自动允许；`Bash` 因进程环境、模型网关凭据和网络出口风险仍需网页审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
 
 输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、同源 AG-UI BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 

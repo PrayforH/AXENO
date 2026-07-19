@@ -14,6 +14,10 @@ const taskSidebar = readFileSync(
   join(process.cwd(), "src/components/task-sidebar.tsx"),
   "utf8",
 );
+const studioSidebar = readFileSync(
+  join(process.cwd(), "src/components/agent-studio/studio-sidebar.tsx"),
+  "utf8",
+);
 const workbench = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
 
@@ -29,6 +33,7 @@ describe("account settings", () => {
     expect(taskSidebar).toContain('className="task-sidebar-account"');
     expect(taskSidebar).toContain('className="task-rail-account"');
     expect(taskSidebar.match(/<AccountMenu \/>/g)).toHaveLength(2);
+    expect(studioSidebar).toContain("<AccountMenu />");
     expect(workbench).not.toContain("<AccountMenu />");
     expect(styles).toMatch(/\.task-rail-account\s*\{[^}]*margin-top:\s*auto;/s);
     expect(styles).toMatch(/\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;/s);
