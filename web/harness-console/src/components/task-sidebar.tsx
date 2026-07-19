@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import {
   WorkspaceCollapseIcon,
+  WorkspaceModeSwitcher,
   WorkspaceNavigation,
 } from "./workspace-navigation";
 import { useRunViewModel } from "../lib/activity-store";
@@ -125,6 +127,13 @@ export function TaskSidebar({
     >
       {collapsed ? (
         <div className="task-sidebar-rail">
+          <Link
+            className="task-rail-brand"
+            href="/"
+            aria-label="Agent Studio 任务首页"
+          >
+            AS
+          </Link>
           <button
             className="task-rail-toggle"
             type="button"
@@ -150,19 +159,30 @@ export function TaskSidebar({
         </div>
       ) : (
         <>
-          <div className="task-sidebar-heading">
-            <span className="task-sidebar-heading-label">工作区</span>
-            <div className="task-sidebar-heading-actions">
-              <button type="button" onClick={onNewTask} aria-label="新建任务" title="新建任务">
-                <NewTaskIcon />
-              </button>
-              <button type="button" onClick={onToggle} aria-label="收起任务列表" title="收起任务列表">
-                <WorkspaceCollapseIcon collapsed={false} />
-              </button>
-            </div>
+          <div className="task-sidebar-brand">
+            <Link className="task-sidebar-brand-link" href="/" aria-label="Agent Studio 任务首页">
+              <span className="task-sidebar-brand-mark" aria-hidden="true">AS</span>
+              <span className="task-sidebar-brand-copy">
+                <strong>Agent Studio</strong>
+                <small>智能任务工作台</small>
+              </span>
+            </Link>
+            <button type="button" onClick={onToggle} aria-label="收起任务列表" title="收起任务列表">
+              <WorkspaceCollapseIcon collapsed={false} />
+            </button>
           </div>
-          <div className="task-sidebar-workspaces">
-            <WorkspaceNavigation active="tasks" />
+          <div className="task-sidebar-mode">
+            <WorkspaceModeSwitcher mode="tasks" />
+          </div>
+          <div className="task-sidebar-primary">
+            <button type="button" onClick={onNewTask}>
+              <NewTaskIcon />
+              <span>新建任务</span>
+            </button>
+          </div>
+          <div className="task-list-heading">
+            <span>最近任务</span>
+            <small>{tasks.length}</small>
           </div>
           <div className="task-list" role="list">
             {tasks.map((task) => (

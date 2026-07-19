@@ -33,6 +33,7 @@ import {
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
+import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -1048,25 +1049,31 @@ export function AgentStudioWorkbench() {
 
         <section className={styles.lifecycleBar} aria-label="从草稿到部署的生命周期">
           <div className={styles.lifecycleSummary}>
-            <span>发布进度</span>
+            <span>发布状态</span>
             <strong>{lifecycleStages[activeLifecycleIndex]?.label}</strong>
             <small>{lifecycleStages[activeLifecycleIndex]?.detail}</small>
           </div>
-          <ol>
-            {lifecycleStages.map((stage, index) => {
-              const state = index < activeLifecycleIndex
-                ? "complete"
-                : index === activeLifecycleIndex
-                  ? "active"
-                  : "pending";
-              return (
-                <li key={stage.id} data-state={state}>
-                  <i aria-hidden="true" />
-                  <span>{stage.label}</span>
-                </li>
-              );
-            })}
-          </ol>
+          <details className={styles.lifecycleDetails}>
+            <summary>
+              <span>查看完整发布链</span>
+              <small>{activeLifecycleIndex + 1}/{lifecycleStages.length}</small>
+            </summary>
+            <ol>
+              {lifecycleStages.map((stage, index) => {
+                const state = index < activeLifecycleIndex
+                  ? "complete"
+                  : index === activeLifecycleIndex
+                    ? "active"
+                    : "pending";
+                return (
+                  <li key={stage.id} data-state={state}>
+                    <i aria-hidden="true" />
+                    <span>{stage.label}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </details>
         </section>
 
         <div className={styles.editorBody}>
@@ -2114,6 +2121,12 @@ export function AgentStudioWorkbench() {
                     </div>
                   </details>
                 </section>
+                <AgentTriggerControlPlane
+                  agentName={draft.name}
+                  publishedVersion={draft.publishedVersion}
+                  environments={environments}
+                  canManage={canPublish}
+                />
               </section>
             )}
           </fieldset>

@@ -1679,6 +1679,77 @@ body.codex-theme-v1 .task-sidebar.is-collapsed {
   background: var(--codex-surface-sidebar);
 }
 
+body.codex-theme-v1 .task-sidebar-brand {
+  border-color: var(--codex-line);
+}
+
+body.codex-theme-v1 .task-sidebar-brand-mark {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--codex-line);
+  color: var(--codex-ink);
+  background: var(--codex-surface-raised);
+}
+
+body.codex-theme-v1 .task-sidebar-brand-mark::after {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 2px;
+  content: "";
+  background: var(--codex-accent);
+  box-shadow: 0 0 10px rgb(51 156 255 / 48%);
+}
+
+body.codex-theme-v1 .task-sidebar-brand-copy strong {
+  color: var(--codex-ink);
+}
+
+body.codex-theme-v1 .task-sidebar-brand-copy small,
+body.codex-theme-v1 .task-list-heading {
+  color: var(--codex-faint);
+}
+
+body.codex-theme-v1 .task-sidebar-brand > button {
+  color: var(--codex-muted);
+}
+
+body.codex-theme-v1 .task-sidebar-brand > button:hover {
+  border-color: var(--codex-line);
+  color: var(--codex-ink);
+  background: var(--codex-surface-hover);
+}
+
+body.codex-theme-v1 .task-sidebar-primary {
+  border-color: var(--codex-line);
+}
+
+body.codex-theme-v1 .task-sidebar-primary button {
+  border-color: var(--codex-line);
+  color: var(--codex-ink);
+  background: var(--codex-surface-raised);
+  transition: border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+body.codex-theme-v1 .task-sidebar-primary button:hover {
+  border-color: var(--codex-line-strong);
+  background: var(--codex-surface-hover);
+}
+
+body.codex-theme-v1 .task-sidebar-primary button:active {
+  transform: scale(0.98);
+}
+
+body.codex-theme-v1 .task-sidebar-primary button svg {
+  color: var(--codex-accent);
+}
+
+body.codex-theme-v1 .task-list-heading small {
+  color: var(--codex-faint);
+}
+
 body.codex-theme-v1 .task-sidebar-heading {
   min-height: 48px;
   border-color: var(--codex-line);
@@ -1687,6 +1758,10 @@ body.codex-theme-v1 .task-sidebar-heading {
 
 body.codex-theme-v1 .task-list {
   padding: 9px 7px 12px;
+}
+
+body.codex-theme-v1 .task-agent-switcher {
+  margin-left: 0;
 }
 
 body.codex-theme-v1 .task-list-item {

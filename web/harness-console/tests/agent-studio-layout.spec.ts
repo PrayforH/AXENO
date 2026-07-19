@@ -44,6 +44,20 @@ const studioClient = readFileSync(
   join(process.cwd(), "src/lib/studio-client.ts"),
   "utf8",
 );
+const triggerControlPlane = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-trigger-control-plane.tsx",
+  ),
+  "utf8",
+);
+const triggerStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-trigger-control-plane.module.css",
+  ),
+  "utf8",
+);
 const errorBoundary = readFileSync(
   join(process.cwd(), "src/app/studio/agents/error.tsx"),
   "utf8",
@@ -178,6 +192,12 @@ describe("Agent Studio management page", () => {
 
   it("makes the draft-to-deployment lifecycle explicit without hiding failures", () => {
     expect(workbench).toContain('aria-label="从草稿到部署的生命周期"');
+    expect(workbench).toContain("查看完整发布链");
+    expect(workbench).toContain("lifecycleDetails");
+    expect(styles).toContain(".lifecycleDetails");
+    expect(styles).toMatch(
+      /\.lifecycleDetails ol \{[\s\S]*?position: absolute;/,
+    );
     for (const label of ["隔离试跑", "不可变 Bundle", "按环境晋级"]) {
       expect(workbench).toContain(label);
     }
@@ -204,6 +224,19 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".deploymentControlPlane");
     expect(styles).toContain(".environmentGrid");
     expect(styles).toContain(".qualityControlPlane");
+  });
+
+  it("turns a deployed Agent into a governed external service", () => {
+    expect(workbench).toContain("<AgentTriggerControlPlane");
+    expect(triggerControlPlane).toContain("外部触发器");
+    expect(triggerControlPlane).toContain("studioClient.createTrigger");
+    expect(triggerControlPlane).toContain("studioClient.updateTrigger");
+    expect(triggerControlPlane).toContain("studioClient.rotateTriggerSecret");
+    expect(triggerControlPlane).toContain("Idempotency-Key");
+    expect(triggerControlPlane).toContain("只显示一次");
+    expect(triggerControlPlane).toContain("/webhooks/agent-triggers/");
+    expect(triggerStyles).not.toContain("linear-gradient");
+    expect(triggerStyles).toContain("var(--codex-accent");
   });
 
   it("creates a hash-bound Preview and renders real Preflight facts", () => {

@@ -4,6 +4,70 @@
   gap: 3px;
 }
 
+.modeSwitcher {
+  margin: 4px 8px 10px;
+  padding: 3px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  border: 1px solid var(--codex-line, #303030);
+  border-radius: 9px;
+  background: var(--codex-surface-subtle, #1e1e1e);
+}
+
+.modeLink,
+.modeActive {
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--codex-muted, #a1a1a1);
+  font-size: 10px;
+  font-weight: 620;
+  text-decoration: none;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease,
+    background-color 150ms ease,
+    transform 150ms ease;
+}
+
+.modeLink:hover {
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface-hover, #2a2a2a);
+}
+
+.modeLink:active,
+.modeActive:active {
+  transform: scale(0.98);
+}
+
+.modeActive {
+  border-color: var(--codex-line, #303030);
+  color: var(--codex-ink, #ffffff);
+  background: var(--codex-surface-raised, #242424);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+
+.modeActive svg {
+  color: var(--codex-accent, #339cff);
+}
+
+.modeSwitcher svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .navigationLink,
 .navigationActive {
   min-height: 38px;

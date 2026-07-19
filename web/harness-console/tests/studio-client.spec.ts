@@ -242,4 +242,53 @@ describe("Studio typed API mapping", () => {
       },
     });
   });
+
+  it("creates and rotates a revision-fenced external trigger", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json({
+        trigger: {
+          triggerId: "trigger-one",
+          revision: calls.length,
+          name: "Webhook",
+          enabled: true,
+        },
+        secret: "one-time-secret",
+      });
+    });
+
+    const created = await studioClient.createTrigger(
+      "policy-researcher",
+      "Webhook",
+      "production",
+    );
+    await studioClient.rotateTriggerSecret({
+      ...created.trigger,
+      tenantId: "tenant-a",
+      kind: "webhook",
+      agentName: "policy-researcher",
+      environment: "production",
+      enabled: true,
+      revision: 1,
+      createdBy: "admin-a",
+      createdAt: "2026-07-19T00:00:00Z",
+      updatedAt: "2026-07-19T00:00:00Z",
+      lastInvokedAt: null,
+    });
+
+    expect(calls).toEqual([
+      {
+        url: "/api/studio/agents/policy-researcher/triggers",
+        body: { name: "Webhook", environment: "production" },
+      },
+      {
+        url: "/api/studio/triggers/trigger-one/rotate-secret",
+        body: { expectedRevision: 1 },
+      },
+    ]);
+  });
 });

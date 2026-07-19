@@ -185,6 +185,140 @@ async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -
 
 
 @pytest.mark.asyncio
+async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> None:
+    application, _container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "release-manager",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("webhook-agent"),
+        )
+        draft_id = created.json()["draftId"]
+        published = await client.post(
+            f"/v1/studio/drafts/{draft_id}/publish",
+            headers=headers,
+        )
+        promoted = await client.post(
+            "/v1/studio/deployments/promote",
+            headers=headers,
+            json={
+                "agentName": "webhook-agent",
+                "agentVersion": published.json()["version"],
+                "environment": "production",
+                "expectedEnvironmentRevision": 0,
+                "canaryPercent": 100,
+                "imageDigest": "sha256:" + "b" * 64,
+                "executionProfile": "isolated-default",
+                "config": {},
+                "idempotencyKey": "webhook-agent-release",
+            },
+        )
+        trigger_created = await client.post(
+            "/v1/studio/agents/webhook-agent/triggers",
+            headers=headers,
+            json={"name": "外部工单入口", "environment": "production"},
+        )
+        trigger = trigger_created.json()["trigger"]
+        secret = trigger_created.json()["secret"]
+        trigger_id = trigger["triggerId"]
+        invocation_headers = {
+            "Authorization": f"Bearer {secret}",
+            "Idempotency-Key": "external-ticket-42",
+        }
+        first = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers=invocation_headers,
+            json={"prompt": "分析工单 42"},
+        )
+        retry = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers=invocation_headers,
+            json={"prompt": "分析工单 42"},
+        )
+        conflict = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers=invocation_headers,
+            json={"prompt": "这是另一个请求"},
+        )
+        status_response = await client.get(
+            f"/webhooks/agent-triggers/{trigger_id}/runs/{first.json()['runId']}",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        invalid = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers={
+                "Authorization": "Bearer invalid-secret",
+                "Idempotency-Key": "external-ticket-43",
+            },
+            json={"prompt": "不应运行"},
+        )
+        listed = await client.get(
+            "/v1/studio/agents/webhook-agent/triggers",
+            headers=headers,
+        )
+        rotated = await client.post(
+            f"/v1/studio/triggers/{trigger_id}/rotate-secret",
+            headers=headers,
+            json={"expectedRevision": listed.json()[0]["revision"]},
+        )
+        rotated_secret = rotated.json()["secret"]
+        old_secret = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers={
+                "Authorization": f"Bearer {secret}",
+                "Idempotency-Key": "external-ticket-44",
+            },
+            json={"prompt": "旧密钥不应运行"},
+        )
+        disabled = await client.put(
+            f"/v1/studio/triggers/{trigger_id}",
+            headers=headers,
+            json={
+                "expectedRevision": rotated.json()["trigger"]["revision"],
+                "name": "外部工单入口",
+                "enabled": False,
+            },
+        )
+        disabled_invoke = await client.post(
+            f"/webhooks/agent-triggers/{trigger_id}",
+            headers={
+                "Authorization": f"Bearer {rotated_secret}",
+                "Idempotency-Key": "external-ticket-45",
+            },
+            json={"prompt": "禁用后不应运行"},
+        )
+
+    assert promoted.status_code == 202, promoted.text
+    assert trigger_created.status_code == 201, trigger_created.text
+    assert len(secret) >= 32
+    assert "secretDigest" not in trigger
+    assert first.status_code == 202, first.text
+    assert first.json()["runId"] == retry.json()["runId"]
+    assert first.json()["sessionId"] == retry.json()["sessionId"]
+    assert first.json()["deploymentSnapshotId"] == promoted.json()["target"]["snapshotId"]
+    assert conflict.status_code == 409
+    assert status_response.status_code == 200
+    assert status_response.json()["input"]["trigger_id"] == trigger_id
+    assert invalid.status_code == 401
+    assert len(listed.json()) == 1
+    assert "secret" not in listed.json()[0]
+    assert "secretDigest" not in listed.json()[0]
+    assert rotated.status_code == 200
+    assert rotated_secret != secret
+    assert old_secret.status_code == 401
+    assert disabled.status_code == 200
+    assert disabled.json()["enabled"] is False
+    assert disabled_invoke.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_eval_control_plane_runs_cases_persists_reports_and_exposes_gate() -> None:
     application, container = app_and_container()
     headers = {

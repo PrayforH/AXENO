@@ -282,6 +282,38 @@ export async function proxyStudioRequest(
   return forward(request, url.toString(), config, fetcher, "harness.web.studio");
 }
 
+export async function proxyAgentTriggerRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/webhooks/agent-triggers${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  const headers = new Headers();
+  for (const name of ["accept", "authorization", "content-type", "idempotency-key"]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  try {
+    const upstream = await fetcher(url, {
+      method: request.method,
+      headers,
+      body: await requestBody(request),
+      cache: "no-store",
+      signal: request.signal,
+    });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders(upstream),
+    });
+  } catch {
+    return unavailableResponse();
+  }
+}
+
 export async function proxyDataLifecycleRequest(
   request: Request,
   config: HarnessServerConfig,

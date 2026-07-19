@@ -358,6 +358,26 @@ export type StudioEnvironment = {
   updatedAt: string;
 };
 
+export type StudioAgentTrigger = {
+  tenantId: string;
+  triggerId: string;
+  kind: "webhook";
+  name: string;
+  agentName: string;
+  environment: StudioEnvironmentName;
+  enabled: boolean;
+  revision: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  lastInvokedAt: string | null;
+};
+
+export type StudioCreatedAgentTrigger = {
+  trigger: StudioAgentTrigger;
+  secret: string;
+};
+
 export type StudioDeploymentSnapshot = {
   tenantId: string;
   snapshotId: string;
@@ -795,6 +815,43 @@ export const studioClient = {
   listEnvironments: (agentName: string) =>
     request<StudioEnvironment[]>(
       `agents/${encodeURIComponent(agentName)}/environments`,
+    ),
+  listTriggers: (agentName: string) =>
+    request<StudioAgentTrigger[]>(
+      `agents/${encodeURIComponent(agentName)}/triggers`,
+    ),
+  createTrigger: (
+    agentName: string,
+    name: string,
+    environment: StudioEnvironmentName,
+  ) => request<StudioCreatedAgentTrigger>(
+    `agents/${encodeURIComponent(agentName)}/triggers`,
+    {
+      method: "POST",
+      body: JSON.stringify({ name, environment }),
+    },
+  ),
+  updateTrigger: (
+    trigger: StudioAgentTrigger,
+    update: Pick<StudioAgentTrigger, "name" | "enabled">,
+  ) => request<StudioAgentTrigger>(
+    `triggers/${encodeURIComponent(trigger.triggerId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        expectedRevision: trigger.revision,
+        name: update.name,
+        enabled: update.enabled,
+      }),
+    },
+  ),
+  rotateTriggerSecret: (trigger: StudioAgentTrigger) =>
+    request<StudioCreatedAgentTrigger>(
+      `triggers/${encodeURIComponent(trigger.triggerId)}/rotate-secret`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expectedRevision: trigger.revision }),
+      },
     ),
   listDeployments: (agentName: string) =>
     request<StudioDeployment[]>(

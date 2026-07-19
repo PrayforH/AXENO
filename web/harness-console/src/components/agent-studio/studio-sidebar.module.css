@@ -34,11 +34,14 @@
   padding: 10px 11px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid var(--sidebar-line);
 }
 
 .brandLink {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -184,6 +187,10 @@
 .sidebar[data-studio-sidebar="collapsed"] .brand {
   justify-content: center;
   padding-inline: 8px;
+}
+
+.sidebar[data-studio-sidebar="collapsed"] .brandLink {
+  flex: 0 0 auto;
 }
 
 .sidebar[data-studio-sidebar="collapsed"] .toolbar {

@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { AccountMenu } from "../account-menu";
 import {
   WorkspaceCollapseIcon,
+  WorkspaceModeSwitcher,
   WorkspaceNavigation,
   type WorkspaceId,
 } from "../workspace-navigation";
@@ -72,27 +73,46 @@ export function StudioSidebar({
             </span>
           )}
         </Link>
-      </header>
-
-      <div className={styles.toolbar}>
-        {!collapsed && <span>工作区</span>}
-        <div className={styles.toolbarActions}>
+        {!collapsed && (
           <button
             className={styles.collapseButton}
             type="button"
             aria-expanded={!collapsed}
-            aria-label={
-              collapsed ? "展开 Agent Studio 侧栏" : "收起 Agent Studio 侧栏"
-            }
-            title={collapsed ? "展开侧栏" : "收起侧栏"}
+            aria-label="收起 Agent Studio 侧栏"
+            title="收起侧栏"
             onClick={toggleSidebar}
           >
-            <WorkspaceCollapseIcon collapsed={collapsed} />
+            <WorkspaceCollapseIcon collapsed={false} />
           </button>
-        </div>
-      </div>
+        )}
+      </header>
 
-      <WorkspaceNavigation active={active} collapsed={collapsed} />
+      {collapsed && (
+        <div className={styles.toolbar}>
+          <div className={styles.toolbarActions}>
+            <button
+              className={styles.collapseButton}
+              type="button"
+              aria-expanded={!collapsed}
+              aria-label={
+                collapsed ? "展开 Agent Studio 侧栏" : "收起 Agent Studio 侧栏"
+              }
+              title={collapsed ? "展开侧栏" : "收起侧栏"}
+              onClick={toggleSidebar}
+            >
+              <WorkspaceCollapseIcon collapsed={collapsed} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!collapsed && <WorkspaceModeSwitcher mode="studio" />}
+
+      <WorkspaceNavigation
+        active={active}
+        collapsed={collapsed}
+        visible={collapsed ? undefined : ["agents", "data"]}
+      />
 
       {!collapsed && children && (
         <div className={styles.sidebarBody}>{children}</div>

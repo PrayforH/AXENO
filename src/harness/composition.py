@@ -126,6 +126,7 @@ from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueu
 from harness.storage.reliability_repository import PostgresReliabilityRepository
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.storage.trigger_repository import PostgresAgentTriggerRepository
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
@@ -139,6 +140,7 @@ from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_service import PreviewService
 from harness.studio.service import AgentStudioService
+from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator, SandboxResolver
 
 
@@ -400,6 +402,7 @@ def build_production_container(
     eval_run_repository = PostgresEvalRunRepository(sessions)
     environment_repository = PostgresEnvironmentRepository(sessions)
     deployment_repository = PostgresDeploymentRepository(sessions)
+    trigger_repository = PostgresAgentTriggerRepository(sessions)
     quality_repository = PostgresQualityRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
     auth = AuthService(
@@ -577,6 +580,14 @@ def build_production_container(
         observability=observability,
         admission=quotas,
         quota_plan_resolver=run_quota_plan,
+    )
+    trigger_service = AgentTriggerService(
+        trigger_repository,
+        sessions=session_service,
+        runs=run_service,
+        audit=audit,
+        clock=clock,
+        id_generator=ids,
     )
     approval_service = ApprovalService(
         runs=runs,
@@ -995,6 +1006,7 @@ def build_production_container(
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
+        triggers=trigger_service,
         approvals=approval_service,
         artifacts=artifact_service,
         input_artifacts=input_service,

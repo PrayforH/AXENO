@@ -19,7 +19,7 @@ async def database() -> AsyncIterator[DatabaseFixture]:
     engine, sessions = create_database(
         os.getenv(
             "HARNESS_TEST_DATABASE_URL",
-            "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+            "postgresql+asyncpg://harness:harness@localhost:5432/harness_test",
         )
     )
     await drop_schema(engine)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   proxyAgentCatalogRequest,
+  proxyAgentTriggerRequest,
   proxyAguiRequest,
   proxyDataLifecycleRequest,
   proxyInputArtifactRequest,
@@ -291,6 +292,39 @@ describe("Harness same-origin proxies", () => {
     expect(response.headers.get("Content-Disposition")).toContain("agent-0.1.0.zip");
     expect(response.headers.get("ETag")).toBe('"archive-hash"');
     expect(response.headers.get("X-Agent-Package-SHA256")).toBe("package-hash");
+  });
+
+  it("forwards only the external trigger secret and idempotency key", async () => {
+    let upstreamUrl = "";
+    let upstreamHeaders = new Headers();
+    const response = await proxyAgentTriggerRequest(
+      new Request("http://console.test/webhooks/agent-triggers/trigger-1", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer trigger-secret",
+          "Idempotency-Key": "event-42",
+          "Content-Type": "application/json",
+          Cookie: "harness_access_token=user-jwt",
+        },
+        body: JSON.stringify({ prompt: "处理事件" }),
+      }),
+      config,
+      async (input, init) => {
+        upstreamUrl = String(input);
+        upstreamHeaders = new Headers(init?.headers);
+        return Response.json({ runId: "run-1" }, { status: 202 });
+      },
+      "trigger-1",
+    );
+
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/webhooks/agent-triggers/trigger-1",
+    );
+    expect(upstreamHeaders.get("Authorization")).toBe("Bearer trigger-secret");
+    expect(upstreamHeaders.get("Idempotency-Key")).toBe("event-42");
+    expect(upstreamHeaders.get("X-Harness-Service-Token")).toBeNull();
+    expect(upstreamHeaders.get("Cookie")).toBeNull();
+    expect(response.status).toBe(202);
   });
 
   it("preserves lifecycle export filenames through the authenticated BFF", async () => {

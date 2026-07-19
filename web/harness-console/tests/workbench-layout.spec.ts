@@ -8,6 +8,13 @@ const taskSidebar = readFileSync(
   join(process.cwd(), "src/components/task-sidebar.tsx"),
   "utf8",
 );
+const studioSidebar = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/studio-sidebar.tsx",
+  ),
+  "utf8",
+);
 const workspaceNavigation = readFileSync(
   join(process.cwd(), "src/components/workspace-navigation.tsx"),
   "utf8",
@@ -19,7 +26,13 @@ const workspaceNavigationStyles = readFileSync(
 
 describe("full-page agent workbench", () => {
   it("presents a user task workspace instead of an internal validation console", () => {
-    expect(page).toContain("Agent Studio");
+    expect(taskSidebar).toContain("Agent Studio");
+    expect(page).toContain("<TaskAgentSwitcher");
+    expect(page).not.toContain('className="brand-lockup"');
+    expect(page).toContain('className="task-content-shell"');
+    expect(styles).toMatch(
+      /\.task-content-shell\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\);/s,
+    );
     expect(page).not.toContain("Agent Harness");
     expect(page).not.toContain('<span>新任务</span>');
     expect(page).toContain("运行详情");
@@ -41,9 +54,13 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("uses the same focused workspace destinations in both sidebars", () => {
-    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" />');
+  it("uses an Archestra-style task and Studio mode split on the shared rail", () => {
+    expect(taskSidebar).toContain('<WorkspaceModeSwitcher mode="tasks" />');
+    expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
+    expect(studioSidebar).toContain('visible={collapsed ? undefined : ["agents", "data"]}');
+    expect(workspaceNavigation).toContain('aria-label="工作模式"');
+    expect(workspaceNavigation).toContain("<span>Studio</span>");
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
@@ -55,9 +72,21 @@ describe("full-page agent workbench", () => {
     expect(workspaceNavigation).not.toContain('href: "/studio/usage"');
     expect(workspaceNavigation).not.toContain('label: "用量"');
     expect(workspaceNavigationStyles).toContain(".navigationActive");
+    expect(workspaceNavigationStyles).toContain(".modeSwitcher");
+    expect(workspaceNavigationStyles).toContain(".modeActive");
     expect(workspaceNavigationStyles).toContain(
       '[data-workspace-navigation="collapsed"]',
     );
+  });
+
+  it("keeps task creation and recent tasks in the task-mode context", () => {
+    expect(taskSidebar).toContain('className="task-sidebar-primary"');
+    expect(taskSidebar).toContain("<span>新建任务</span>");
+    expect(taskSidebar).toContain('className="task-list-heading"');
+    expect(taskSidebar).toContain("<span>最近任务</span>");
+    expect(taskSidebar).toContain('className="task-sidebar-brand"');
+    expect(styles).toContain(".task-sidebar-primary");
+    expect(styles).toContain(".task-list-heading");
   });
 
   it("projects task approvals into the composer surface", () => {

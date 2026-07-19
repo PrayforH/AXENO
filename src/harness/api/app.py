@@ -24,6 +24,7 @@ from harness.memory_bank import api as memory_bank_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
 from harness.studio import api as studio_routes
+from harness.triggers import api as trigger_routes
 
 
 async def _http_error(_request: Request, error: Exception) -> JSONResponse:
@@ -271,6 +272,8 @@ def create_app(container: ApiContainer) -> FastAPI:
     ):
         app.include_router(router, prefix="/v1")
     app.include_router(studio_routes.router)
+    app.include_router(trigger_routes.studio_router)
+    app.include_router(trigger_routes.public_router)
     return app
 
 

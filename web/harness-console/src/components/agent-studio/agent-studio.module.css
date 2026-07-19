@@ -599,13 +599,13 @@
 }
 
 .lifecycleBar {
-  min-height: 58px;
-  display: grid;
-  grid-template-columns: minmax(150px, auto) minmax(420px, 1fr);
+  min-height: 48px;
+  display: flex;
   align-items: center;
-  gap: clamp(24px, 4vw, 64px);
+  justify-content: space-between;
+  gap: 18px;
   margin: 0;
-  padding: 8px 30px 10px;
+  padding: 7px 30px;
   background: #fafbfa;
   border-bottom: 1px solid var(--studio-line);
 }
@@ -633,13 +633,63 @@
   font-size: 9px;
 }
 
-.lifecycleBar ol {
-  min-width: 0;
+.lifecycleDetails {
+  position: relative;
+}
+
+.lifecycleDetails > summary {
+  min-height: 30px;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 7px;
+  color: var(--studio-muted);
+  background: var(--studio-panel);
+  cursor: pointer;
+  font-size: 10px;
+  list-style: none;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+
+.lifecycleDetails > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lifecycleDetails > summary::after {
+  content: "⌄";
+  color: var(--studio-faint);
+  font: 600 11px/1 var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.lifecycleDetails > summary:hover,
+.lifecycleDetails[open] > summary {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+  background: var(--studio-panel-subtle);
+}
+
+.lifecycleDetails > summary small {
+  color: var(--studio-faint);
+  font: 600 9px/1 var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.lifecycleDetails ol {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 7px);
+  right: 0;
+  width: min(430px, calc(100vw - 80px));
   display: grid;
   grid-template-columns: repeat(5, minmax(58px, 1fr));
-  gap: 5px;
+  gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 12px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 10px;
+  background: var(--studio-panel);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 24%);
   list-style: none;
 }
 
@@ -3501,7 +3551,6 @@
   }
 
   .lifecycleBar {
-    grid-template-columns: minmax(140px, auto) minmax(360px, 1fr);
     padding-inline: 18px;
   }
 
@@ -3643,16 +3692,16 @@
   }
 
   .lifecycleBar {
-    display: block;
-    padding-block: 9px 11px;
+    padding: 8px 12px;
   }
 
-  .lifecycleSummary {
-    margin-bottom: 8px;
+  .lifecycleSummary small {
+    display: none;
   }
 
-  .lifecycleBar ol {
-    grid-template-columns: repeat(5, minmax(46px, 1fr));
+  .lifecycleDetails ol {
+    width: min(330px, calc(100vw - 76px));
+    grid-template-columns: 1fr;
   }
 
   .titleLine {

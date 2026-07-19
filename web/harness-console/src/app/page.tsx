@@ -148,42 +148,6 @@ export default function Home() {
   return (
     <AuthProvider>
     <main className="console-shell" id="main-content">
-      <header className="console-header">
-        <div className="brand-lockup" aria-label="Agent Studio">
-          <span className="brand-mark" aria-hidden="true">
-            AS
-          </span>
-          <div>
-            <h1>Agent Studio</h1>
-            <p className="workspace-caption">智能任务工作台</p>
-          </div>
-        </div>
-
-        <TaskAgentSwitcher
-          agents={taskAgents}
-          selected={selectedAgent}
-          loading={agentsLoading}
-          onChange={switchAgent}
-        />
-
-        <div className="header-actions">
-          <button
-            className="icon-button"
-            type="button"
-            aria-pressed={runDetailsOpen}
-            aria-label="切换本次运行详情"
-            onClick={() => setRunDetailsOpen((current) => !current)}
-          >
-            <span className="details-glyph" aria-hidden="true">
-              <i />
-              <i />
-              <i />
-            </span>
-            <span>{runDetailsOpen ? "收起详情" : "运行详情"}</span>
-          </button>
-        </div>
-      </header>
-
       <div
         className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""} ${runDetailsOpen ? "inspector-open" : ""}`}
       >
@@ -196,34 +160,61 @@ export default function Home() {
           refreshToken={refreshToken}
           onCurrentTaskStatusChange={refreshCurrentTask}
         />
-        <section className="chat-stage" aria-label="Agent 任务对话">
-          <div className="chat-surface">
-            {threadId && selectedAgent ? (
-              <AssistantRuntimeShell
-                key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}:${refreshToken}`}
-                threadId={threadId}
-                agentName={selectedAgent.name}
-                agentVersion={selectedAgent.version}
+        <div className="task-content-shell">
+          <header className="console-header">
+            <TaskAgentSwitcher
+              agents={taskAgents}
+              selected={selectedAgent}
+              loading={agentsLoading}
+              onChange={switchAgent}
+            />
+
+            <div className="header-actions">
+              <button
+                className="icon-button"
+                type="button"
+                aria-pressed={runDetailsOpen}
+                aria-label="切换本次运行详情"
+                onClick={() => setRunDetailsOpen((current) => !current)}
               >
-                <AgentThread />
-              </AssistantRuntimeShell>
-            ) : (
-              <div className="chat-loading" role="status" aria-busy="true">
-                <div className="chat-loading-skeleton" aria-hidden="true">
-                  <span className="chat-loading-avatar" />
-                  <span className="chat-loading-line" />
-                  <span className="chat-loading-line" />
-                  <span className="chat-loading-card" />
-                </div>
-                <span>
-                  {agentsError
-                    ? `智能体目录不可用：${agentsError}`
-                    : "正在恢复任务与智能体版本…"}
+                <span className="details-glyph" aria-hidden="true">
+                  <i />
+                  <i />
+                  <i />
                 </span>
-              </div>
-            )}
-          </div>
-        </section>
+                <span>{runDetailsOpen ? "收起详情" : "运行详情"}</span>
+              </button>
+            </div>
+          </header>
+          <section className="chat-stage" aria-label="Agent 任务对话">
+            <div className="chat-surface">
+              {threadId && selectedAgent ? (
+                <AssistantRuntimeShell
+                  key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}:${refreshToken}`}
+                  threadId={threadId}
+                  agentName={selectedAgent.name}
+                  agentVersion={selectedAgent.version}
+                >
+                  <AgentThread />
+                </AssistantRuntimeShell>
+              ) : (
+                <div className="chat-loading" role="status" aria-busy="true">
+                  <div className="chat-loading-skeleton" aria-hidden="true">
+                    <span className="chat-loading-avatar" />
+                    <span className="chat-loading-line" />
+                    <span className="chat-loading-line" />
+                    <span className="chat-loading-card" />
+                  </div>
+                  <span>
+                    {agentsError
+                      ? `智能体目录不可用：${agentsError}`
+                      : "正在恢复任务与智能体版本…"}
+                  </span>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
         {runDetailsOpen && (
           <DeveloperDrawer threadId={threadId} onClose={() => setRunDetailsOpen(false)} />
         )}

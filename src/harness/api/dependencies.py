@@ -136,6 +136,8 @@ from harness.studio.repositories import (
     InMemoryAgentDraftRepository,
 )
 from harness.studio.service import AgentStudioService
+from harness.triggers.repositories import InMemoryAgentTriggerRepository
+from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator
 
 
@@ -181,6 +183,7 @@ class ApiContainer:
     agents: AgentService
     sessions: SessionService
     runs: RunService
+    triggers: AgentTriggerService
     approvals: ApprovalService
     artifacts: ArtifactService
     input_artifacts: InputArtifactService
@@ -354,6 +357,14 @@ def build_memory_container(
         quota_plan_resolver=run_quota_plan,
     )
     session_service = SessionService(registry, sessions, clock=clock, id_generator=id_generator)
+    trigger_service = AgentTriggerService(
+        InMemoryAgentTriggerRepository(),
+        sessions=session_service,
+        runs=run_service,
+        audit=audit,
+        clock=clock,
+        id_generator=id_generator,
+    )
     approval_service = ApprovalService(
         runs=runs,
         approvals=approvals,
@@ -758,6 +769,7 @@ def build_memory_container(
         agents=agent_service,
         sessions=session_service,
         runs=run_service,
+        triggers=trigger_service,
         approvals=approval_service,
         artifacts=artifact_service,
         input_artifacts=input_artifact_service,
@@ -839,6 +851,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:preview",
             "studio:publish",
             "studio:deploy",
+            "studio:triggers:write",
             "studio:catalog:write",
             "studio:quota:write",
             "data:lifecycle:admin",
