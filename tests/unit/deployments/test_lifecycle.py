@@ -8,10 +8,13 @@ from pydantic import ValidationError
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.core.errors import ConflictError
 from harness.deployments.models import (
+    CredentialScope,
     DeploymentSnapshot,
     DeploymentStatus,
     EnvironmentName,
+    EnvironmentQuotaBoundary,
     PromoteRequest,
+    ReplaceEnvironmentPolicyRequest,
     RollbackRequest,
 )
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
@@ -168,6 +171,142 @@ async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() 
         (first.snapshot_id, 100)
     ]
     assert old_session.agent_version == first_version
+
+
+@pytest.mark.asyncio
+async def test_environment_policy_snapshot_is_immutable_per_session() -> None:
+    container = build_memory_container()
+    draft, first_version, _ = await published_versions(
+        container,
+        "environment-boundary-agent",
+    )
+    await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=0,
+            key="environment-policy-release",
+        ),
+    )
+    old_session = await container.sessions.create(
+        TENANT,
+        "user-a",
+        draft.spec.name,
+        None,
+        environment=EnvironmentName.PRODUCTION,
+    )
+    current = await container.deployments.environment(
+        TENANT,
+        draft.spec.name,
+        EnvironmentName.PRODUCTION,
+    )
+    tightened = current.resource_policy.model_copy(
+        update={
+            "quota": EnvironmentQuotaBoundary(
+                maxRunBudgetUsd=0.5,
+                maxModelTokens=100_000,
+                maxArtifactBytes=1_024,
+            )
+        }
+    )
+    updated = await container.deployments.replace_environment_policy(
+        tenant_id=TENANT,
+        user_id=USER,
+        agent_name=draft.spec.name,
+        environment_name=EnvironmentName.PRODUCTION,
+        request=ReplaceEnvironmentPolicyRequest(
+            expectedEnvironmentRevision=current.revision,
+            policy=tightened,
+        ),
+    )
+    new_session = await container.sessions.create(
+        TENANT,
+        "user-b",
+        draft.spec.name,
+        None,
+        environment=EnvironmentName.PRODUCTION,
+    )
+
+    assert updated.revision == current.revision + 1
+    assert updated.policy_revision == current.policy_revision + 1
+    assert updated.routes == current.routes
+    assert old_session.environment_snapshot is not None
+    assert new_session.environment_snapshot is not None
+    assert old_session.environment_snapshot["policyRevision"] == current.policy_revision
+    assert new_session.environment_snapshot["policyRevision"] == updated.policy_revision
+    assert (
+        old_session.environment_snapshot["policyHash"]
+        != new_session.environment_snapshot["policyHash"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_environment_policy_denies_agent_resources_and_workload_scope() -> None:
+    container = build_memory_container()
+    draft, first_version, _ = await published_versions(
+        container,
+        "environment-deny-agent",
+    )
+    current = await container.deployments.environment(
+        TENANT,
+        draft.spec.name,
+        EnvironmentName.PRODUCTION,
+    )
+    denied_route_policy = current.resource_policy.model_copy(
+        update={"allowed_model_routes": ("anthropic-official",)}
+    )
+    denied = await container.deployments.replace_environment_policy(
+        tenant_id=TENANT,
+        user_id=USER,
+        agent_name=draft.spec.name,
+        environment_name=EnvironmentName.PRODUCTION,
+        request=ReplaceEnvironmentPolicyRequest(
+            expectedEnvironmentRevision=current.revision,
+            policy=denied_route_policy,
+        ),
+    )
+    with pytest.raises(ConflictError, match="model routes"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=promotion(
+                agent_name=draft.spec.name,
+                version=first_version,
+                revision=denied.revision,
+                key="environment-route-denied",
+            ),
+        )
+
+    restored = await container.deployments.replace_environment_policy(
+        tenant_id=TENANT,
+        user_id=USER,
+        agent_name=draft.spec.name,
+        environment_name=EnvironmentName.PRODUCTION,
+        request=ReplaceEnvironmentPolicyRequest(
+            expectedEnvironmentRevision=denied.revision,
+            policy=current.resource_policy.model_copy(
+                update={"credential_scopes": (CredentialScope.USER,)}
+            ),
+        ),
+    )
+    await promote_and_drain(
+        container,
+        promotion(
+            agent_name=draft.spec.name,
+            version=first_version,
+            revision=restored.revision,
+            key="environment-user-only",
+        ),
+    )
+    with pytest.raises(ConflictError, match="workload credentials"):
+        await container.sessions.create(
+            TENANT,
+            "trigger:external",
+            draft.spec.name,
+            None,
+            environment=EnvironmentName.PRODUCTION,
+        )
 
 
 @pytest.mark.asyncio
@@ -345,7 +484,7 @@ async def test_deployment_promotion_quota_rejects_before_snapshot_is_created() -
 
 
 @pytest.mark.asyncio
-async def test_profile_version_is_pinned_and_local_is_rejected_for_production() -> None:
+async def test_profile_revision_requires_environment_approval_and_local_is_rejected() -> None:
     container = build_memory_container()
     draft, first_version, second_version = await published_versions(
         container, "profile-deployment-agent"
@@ -360,9 +499,15 @@ async def test_profile_version_is_pinned_and_local_is_rejected_for_production() 
             label="Managed profile",
             description="Platform-owned execution boundary.",
             sandboxProvider=("local" if profile_id == "local-dev" else "daytona"),
-            networkAccess=(NetworkAccess.NONE,),
+            networkAccess=(
+                NetworkAccess.NONE,
+                NetworkAccess.INTERNAL,
+                NetworkAccess.EXTERNAL,
+            ),
             risk=CapabilityRisk.LOW,
             version=current_version,
+            networkPolicyId="registered-mcp-only",
+            allowedMcpReferences=("tavily-readonly",),
             productionAllowed=profile_id != "local-dev",
         )
 
@@ -377,20 +522,18 @@ async def test_profile_version_is_pinned_and_local_is_rejected_for_production() 
         ),
     )
     current_version = 2
-    second = await container.deployments.promote(
-        tenant_id=TENANT,
-        user_id=USER,
-        request=promotion(
-            agent_name=draft.spec.name,
-            version=second_version,
-            revision=1,
-            key="profile-v2",
-        ),
-    )
+    with pytest.raises(ConflictError, match="outside the Environment policy"):
+        await container.deployments.promote(
+            tenant_id=TENANT,
+            user_id=USER,
+            request=promotion(
+                agent_name=draft.spec.name,
+                version=second_version,
+                revision=1,
+                key="profile-v2",
+            ),
+        )
 
-    assert first.execution_profile_version == 1
-    assert second.target.execution_profile_version == 2
-    assert first.execution_profile_hash != second.target.execution_profile_hash
     assert first.execution_profile_version == 1
 
     unsafe = promotion(

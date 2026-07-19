@@ -25,6 +25,7 @@ from harness.deployments.models import (
     Environment,
     EnvironmentName,
     PromoteRequest,
+    ReplaceEnvironmentPolicyRequest,
     RollbackRequest,
 )
 from harness.deployments.service import DeploymentService
@@ -402,6 +403,29 @@ async def list_deployment_environments(
     service: Annotated[DeploymentService, Depends(get_deployment_service)],
 ) -> list[Environment]:
     return await service.list_environments(actor.tenant_id, agent_name)
+
+
+@router.put(
+    "/agents/{agent_name}/environments/{environment}/policy",
+    response_model=Environment,
+)
+async def replace_environment_policy(
+    agent_name: str,
+    environment: EnvironmentName,
+    body: ReplaceEnvironmentPolicyRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    service: Annotated[DeploymentService, Depends(get_deployment_service)],
+) -> Environment:
+    try:
+        return await service.replace_environment_policy(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            agent_name=agent_name,
+            environment_name=environment,
+            request=body,
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
 
 
 @router.get(

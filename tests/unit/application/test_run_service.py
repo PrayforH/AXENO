@@ -13,9 +13,15 @@ from harness.adapters.memory import (
     InMemoryTaskQueue,
 )
 from harness.application.events import EventService
-from harness.application.runs import RunService
+from harness.application.runs import RunQuotaPlan, RunService, apply_environment_quota
 from harness.config import Settings
 from harness.core.models import RunStatus, Session
+from harness.deployments.models import (
+    EnvironmentName,
+    EnvironmentPolicySnapshot,
+    EnvironmentQuotaBoundary,
+    EnvironmentResourcePolicy,
+)
 from harness.observability.provider import build_observability
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
@@ -29,6 +35,50 @@ def id_generator() -> Callable[[str], str]:
         return f"{prefix}-{counters[prefix]}"
 
     return generate
+
+
+def test_environment_snapshot_clamps_agent_run_budget() -> None:
+    policy = EnvironmentResourcePolicy(
+        quota=EnvironmentQuotaBoundary(
+            maxRunBudgetUsd=0.4,
+            maxModelTokens=80_000,
+            maxArtifactBytes=4_096,
+        )
+    )
+    snapshot = EnvironmentPolicySnapshot(
+        environment=EnvironmentName.PRODUCTION,
+        environmentRevision=3,
+        policyRevision=2,
+        policyHash=policy.digest(),
+        resourcePolicy=policy,
+        capturedAt=NOW,
+    )
+    session = Session(
+        session_id="session-policy",
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="1.0.0",
+        created_at=NOW,
+        environment="production",
+        deployment_snapshot_id="snapshot-1",
+        environment_snapshot=snapshot.model_dump(mode="json", by_alias=True),
+    )
+
+    result = apply_environment_quota(
+        RunQuotaPlan(
+            max_budget_usd=1.0,
+            max_model_tokens=200_000,
+            ttl_seconds=1_200,
+        ),
+        session,
+    )
+
+    assert result == RunQuotaPlan(
+        max_budget_usd=0.4,
+        max_model_tokens=80_000,
+        ttl_seconds=1_200,
+    )
 
 
 @pytest.mark.asyncio

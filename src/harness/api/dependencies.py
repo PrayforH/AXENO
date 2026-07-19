@@ -445,6 +445,7 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
         quality_gate=quality_service.require_promotion_allowed,
+        capability_catalog_resolver=capability_catalogs.get,
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)

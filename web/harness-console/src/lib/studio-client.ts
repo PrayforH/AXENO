@@ -348,11 +348,43 @@ export type StudioEvalGate = {
 
 export type StudioEnvironmentName = "test" | "canary" | "production";
 
+export type StudioCredentialScope = "user" | "team" | "workload";
+
+export type StudioEnvironmentResourcePolicy = {
+  executionProfileId: string;
+  executionProfileVersion: number;
+  networkProfileId: string;
+  networkProfileVersion: number;
+  networkAccess: Array<"none" | "internal" | "external">;
+  allowedModelRoutes: string[];
+  capabilityCatalogRevision: number;
+  allowedMcpReferences: string[];
+  allowedKnowledgeReferences: string[];
+  credentialScopes: StudioCredentialScope[];
+  quota: {
+    maxRunBudgetUsd: number | null;
+    maxModelTokens: number | null;
+    maxArtifactBytes: number | null;
+  };
+};
+
+export type StudioEnvironmentPolicySnapshot = {
+  environment: StudioEnvironmentName;
+  environmentRevision: number;
+  policyRevision: number;
+  policyHash: string;
+  resourcePolicy: StudioEnvironmentResourcePolicy;
+  capturedAt: string;
+};
+
 export type StudioEnvironment = {
   tenantId: string;
   agentName: string;
   name: StudioEnvironmentName;
   revision: number;
+  policyRevision: number;
+  policyHash: string;
+  resourcePolicy: StudioEnvironmentResourcePolicy;
   routes: Array<{ snapshotId: string; weight: number }>;
   healthySnapshotId: string | null;
   updatedAt: string;
@@ -390,6 +422,7 @@ export type StudioDeploymentSnapshot = {
   executionProfile: string;
   executionProfileVersion: number;
   executionProfileHash: string;
+  environmentPolicySnapshot: StudioEnvironmentPolicySnapshot | null;
   config: Record<string, string | number | boolean>;
   evalGatePassed: boolean;
   evalRequiredDatasets: number;
@@ -503,7 +536,7 @@ export type StudioCapabilities = {
     profileId: string;
     label: string;
     description: string;
-    sandboxProvider: "local" | "daytona" | "gvisor";
+    sandboxProvider: "local" | "daytona" | "e2b" | "gvisor";
     networkAccess: Array<"none" | "internal" | "external">;
     cpuMillis: number;
     memoryMiB: number;
@@ -516,6 +549,14 @@ export type StudioCapabilities = {
     version: number;
     enabled: boolean;
   }>;
+};
+
+export type StudioCapabilityCatalogRecord = {
+  tenantId: string;
+  revision: number;
+  catalog: StudioCapabilities;
+  updatedBy: string;
+  updatedAt: string;
 };
 
 export class StudioApiError extends Error {
@@ -721,6 +762,7 @@ export const studioClient = {
   getDraft: (draftId: string) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draftId)}`),
   capabilities: () => request<StudioCapabilities>("capabilities"),
+  catalog: () => request<StudioCapabilityCatalogRecord>("catalog"),
   createDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>("drafts", {
       method: "POST",
@@ -816,6 +858,26 @@ export const studioClient = {
     request<StudioEnvironment[]>(
       `agents/${encodeURIComponent(agentName)}/environments`,
     ),
+  replaceEnvironmentPolicy: async (
+    agentName: string,
+    environment: StudioEnvironment,
+    policy: StudioEnvironmentResourcePolicy,
+  ) => {
+    const catalog = await request<StudioCapabilityCatalogRecord>("catalog");
+    return request<StudioEnvironment>(
+      `agents/${encodeURIComponent(agentName)}/environments/${environment.name}/policy`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedEnvironmentRevision: environment.revision,
+          policy: {
+            ...policy,
+            capabilityCatalogRevision: catalog.revision,
+          },
+        }),
+      },
+    );
+  },
   listTriggers: (agentName: string) =>
     request<StudioAgentTrigger[]>(
       `agents/${encodeURIComponent(agentName)}/triggers`,

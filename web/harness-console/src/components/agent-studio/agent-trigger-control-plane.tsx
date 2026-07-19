@@ -36,7 +36,10 @@ export function AgentTriggerControlPlane({
   const [error, setError] = useState("");
   const [issued, setIssued] = useState<StudioCreatedAgentTrigger | null>(null);
   const deployedEnvironments = useMemo(
-    () => environments.filter((item) => item.healthySnapshotId),
+    () => environments.filter(
+      (item) => item.healthySnapshotId
+        && item.resourcePolicy.credentialScopes.includes("workload"),
+    ),
     [environments],
   );
 
@@ -160,7 +163,9 @@ export function AgentTriggerControlPlane({
       {!publishedVersion ? (
         <p className={styles.empty}>发布不可变版本后才能创建外部入口。</p>
       ) : deployedEnvironments.length === 0 ? (
-        <p className={styles.empty}>至少需要一个已经健康部署的环境。</p>
+        <p className={styles.empty}>
+          至少需要一个健康部署、且允许“工作负载”凭据的环境。
+        </p>
       ) : (
         <>
           {canManage && (

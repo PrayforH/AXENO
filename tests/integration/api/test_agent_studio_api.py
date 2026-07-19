@@ -168,20 +168,49 @@ async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -
         environments = await client.get(
             "/v1/studio/agents/deployed-agent/environments", headers=headers
         )
+        production = next(
+            item for item in environments.json() if item["name"] == "production"
+        )
+        policy = {
+            **production["resourcePolicy"],
+            "quota": {
+                "maxRunBudgetUsd": 0.75,
+                "maxModelTokens": 120_000,
+                "maxArtifactBytes": 2_048,
+            },
+        }
+        policy_updated = await client.put(
+            "/v1/studio/agents/deployed-agent/environments/production/policy",
+            headers=headers,
+            json={
+                "expectedEnvironmentRevision": production["revision"],
+                "policy": policy,
+            },
+        )
         session = await client.post(
             "/v1/sessions",
             headers=headers,
             json={"agent_name": "deployed-agent", "environment": "production"},
         )
 
-    production = next(item for item in environments.json() if item["name"] == "production")
     assert promoted.status_code == 202
     assert deployment.json()["deployment"]["status"] == "succeeded"
     assert production["revision"] == 1
     assert production["routes"][0]["weight"] == 100
+    assert policy_updated.status_code == 200
+    assert policy_updated.json()["revision"] == 2
+    assert policy_updated.json()["policyRevision"] == 2
+    assert policy_updated.json()["policyHash"] != production["policyHash"]
     assert session.status_code == 201
     assert session.json()["agent_version"] == published.json()["version"]
     assert session.json()["deployment_snapshot_id"] == production["healthySnapshotId"]
+    assert session.json()["environment_snapshot"]["policyRevision"] == 2
+    assert (
+        session.json()["environment_snapshot"]["resourcePolicy"]["quota"][
+            "maxRunBudgetUsd"
+        ]
+        == 0.75
+    )
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ import {
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
+import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -2036,6 +2037,9 @@ export function AgentStudioWorkbench() {
                       const alreadyCurrent = currentRoutes.some(
                         (route) => route.snapshot?.agentVersion === draft.publishedVersion,
                       );
+                      const profileCompatible =
+                        environment.resourcePolicy.executionProfileId
+                        === draft.executionProfile;
                       return (
                         <article key={environment.name} data-environment={environment.name}>
                           <div className={styles.environmentHeading}>
@@ -2060,6 +2064,7 @@ export function AgentStudioWorkbench() {
                               || !draft.publishedPackageHash
                               || !evalGate?.passed
                               || alreadyCurrent
+                              || !profileCompatible
                               || Boolean(deploymentAction)
                             }
                             onClick={() => void promoteTo(environment)}
@@ -2068,6 +2073,8 @@ export function AgentStudioWorkbench() {
                               ? "提交中…"
                               : alreadyCurrent
                                 ? "当前版本"
+                                : !profileCompatible
+                                  ? "执行 Profile 不匹配"
                                 : environment.name === "canary" && environment.healthySnapshotId
                                   ? "灰度 10% 新会话"
                                   : `发布 ${draft.publishedVersion ?? "版本"}`}
@@ -2076,6 +2083,22 @@ export function AgentStudioWorkbench() {
                       );
                     })}
                   </div>
+                  {capabilities && (
+                    <EnvironmentPolicyControlPlane
+                      agentName={draft.name}
+                      environments={environments}
+                      capabilities={capabilities}
+                      canManage={canPublish}
+                      onUpdated={(updated) => {
+                        setEnvironments((current) => current.map((item) =>
+                          item.name === updated.name ? updated : item
+                        ));
+                        setNotice(
+                          `${updated.name} 环境策略已更新到 r${updated.policyRevision}`,
+                        );
+                      }}
+                    />
+                  )}
                   <details className={styles.deploymentHistory} open={deployments.some((item) => item.deployment.status === "failed")}>
                     <summary>部署记录与版本差异 · {deployments.length} 次</summary>
                     <div>

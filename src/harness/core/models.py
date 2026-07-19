@@ -115,6 +115,7 @@ class Session(FrozenModel):
     workspace_snapshot_id: str | None = None
     environment: str | None = None
     deployment_snapshot_id: str | None = None
+    environment_snapshot: dict[str, Any] | None = None
 
 
 class Run(FrozenModel):

@@ -10,6 +10,7 @@ from harness.deployments.models import (
     DeploymentStatus,
     Environment,
     EnvironmentName,
+    EnvironmentQuotaBoundary,
 )
 from harness.storage.database import SessionFactory
 from harness.storage.deployment_repository import (
@@ -84,6 +85,22 @@ async def test_postgres_deployment_state_is_durable_and_fenced(
     )
     assert await environments.compare_and_set(0, active)
     assert not await environments.compare_and_set(0, active)
+    governed = active.model_copy(
+        update={
+            "revision": 2,
+            "policy_revision": 2,
+            "resource_policy": active.resource_policy.model_copy(
+                update={
+                    "quota": EnvironmentQuotaBoundary(
+                        maxRunBudgetUsd=0.5,
+                        maxModelTokens=90_000,
+                        maxArtifactBytes=4_096,
+                    )
+                }
+            ),
+        }
+    )
+    assert await environments.compare_and_set(1, governed)
 
     restarted_environments = PostgresEnvironmentRepository(sessions)
     restarted_deployments = PostgresDeploymentRepository(sessions)
@@ -91,7 +108,7 @@ async def test_postgres_deployment_state_is_durable_and_fenced(
         await restarted_environments.get(
             "tenant-a", "durable-agent", EnvironmentName.PRODUCTION
         )
-        == active
+        == governed
     )
     assert await restarted_deployments.get_snapshot("tenant-a", "snapshot-a") == snapshot
     assert await restarted_deployments.get("tenant-a", "deployment-a") == reconciling

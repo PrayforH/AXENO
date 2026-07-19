@@ -6,6 +6,7 @@ import {
   studioClient,
   studioDraftToSpec,
   type ApiAgentDraft,
+  type StudioEnvironmentResourcePolicy,
 } from "../src/lib/studio-client";
 
 function apiDraft(): ApiAgentDraft {
@@ -26,6 +27,26 @@ function apiDraft(): ApiAgentDraft {
     publishedVersion: null,
     publishedHash: null,
     publishedPackageHash: null,
+  };
+}
+
+function environmentPolicy(): StudioEnvironmentResourcePolicy {
+  return {
+    executionProfileId: "isolated-default",
+    executionProfileVersion: 1,
+    networkProfileId: "registered-mcp-only",
+    networkProfileVersion: 1,
+    networkAccess: ["none", "internal", "external"],
+    allowedModelRoutes: ["new-api-default"],
+    capabilityCatalogRevision: 1,
+    allowedMcpReferences: ["tavily-readonly"],
+    allowedKnowledgeReferences: [],
+    credentialScopes: ["user", "team", "workload"],
+    quota: {
+      maxRunBudgetUsd: 1,
+      maxModelTokens: 200_000,
+      maxArtifactBytes: 26_214_400,
+    },
   };
 }
 
@@ -204,6 +225,9 @@ describe("Studio typed API mapping", () => {
       agentName: "policy-researcher",
       name: "production" as const,
       revision: 4,
+      policyRevision: 2,
+      policyHash: "f".repeat(64),
+      resourcePolicy: environmentPolicy(),
       routes: [],
       healthySnapshotId: "snapshot-current",
       updatedAt: "2026-07-16T00:00:00Z",
@@ -241,6 +265,55 @@ describe("Studio typed API mapping", () => {
         expectedEnvironmentRevision: 4,
       },
     });
+  });
+
+  it("rebases an Environment policy on the current catalog revision", async () => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      if (!init?.method) {
+        return Response.json({ revision: 7, catalog: {} });
+      }
+      return Response.json({ revision: 5, policyRevision: 3 });
+    });
+    const policy = environmentPolicy();
+    const environment = {
+      tenantId: "tenant-a",
+      agentName: "policy-researcher",
+      name: "production" as const,
+      revision: 4,
+      policyRevision: 2,
+      policyHash: "f".repeat(64),
+      resourcePolicy: policy,
+      routes: [],
+      healthySnapshotId: "snapshot-current",
+      updatedAt: "2026-07-16T00:00:00Z",
+    };
+
+    await studioClient.replaceEnvironmentPolicy(
+      "policy-researcher",
+      environment,
+      policy,
+    );
+
+    expect(calls).toEqual([
+      { url: "/api/studio/catalog", method: "GET", body: null },
+      {
+        url: "/api/studio/agents/policy-researcher/environments/production/policy",
+        method: "PUT",
+        body: {
+          expectedEnvironmentRevision: 4,
+          policy: {
+            ...policy,
+            capabilityCatalogRevision: 7,
+          },
+        },
+      },
+    ]);
   });
 
   it("creates and rotates a revision-fenced external trigger", async () => {

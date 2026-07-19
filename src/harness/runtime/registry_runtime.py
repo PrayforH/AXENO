@@ -7,6 +7,7 @@ from harness.application.memory import UserMemoryService
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelRoute, Session
 from harness.core.ports import AgentRegistry
+from harness.deployments.boundaries import enforce_runtime_environment
 from harness.execution.credentials import (
     CredentialBroker,
     CredentialLease,
@@ -65,6 +66,7 @@ class RegistryClaudeRuntime:
             agent_version=session.agent_version,
         )
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
+        enforce_runtime_environment(session, snapshot)
         route_id = snapshot.manifest.spec.model.route
         route = ModelRoute(
             route_id=route_id,

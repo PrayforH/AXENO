@@ -58,6 +58,20 @@ const triggerStyles = readFileSync(
   ),
   "utf8",
 );
+const environmentPolicyControlPlane = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/environment-policy-control-plane.tsx",
+  ),
+  "utf8",
+);
+const environmentPolicyStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/environment-policy-control-plane.module.css",
+  ),
+  "utf8",
+);
 const errorBoundary = readFileSync(
   join(process.cwd(), "src/app/studio/agents/error.tsx"),
   "utf8",
@@ -237,6 +251,21 @@ describe("Agent Studio management page", () => {
     expect(triggerControlPlane).toContain("/webhooks/agent-triggers/");
     expect(triggerStyles).not.toContain("linear-gradient");
     expect(triggerStyles).toContain("var(--codex-accent");
+  });
+
+  it("makes Environment a versioned runtime boundary instead of a route label", () => {
+    expect(workbench).toContain("<EnvironmentPolicyControlPlane");
+    expect(workbench).toContain("environment.resourcePolicy.executionProfileId");
+    expect(environmentPolicyControlPlane).toContain("每个新会话固定一份不可变策略快照");
+    expect(environmentPolicyControlPlane).toContain("studioClient.replaceEnvironmentPolicy");
+    expect(environmentPolicyControlPlane).toContain("allowedModelRoutes");
+    expect(environmentPolicyControlPlane).toContain("allowedMcpReferences");
+    expect(environmentPolicyControlPlane).toContain("credentialScopes");
+    expect(environmentPolicyControlPlane).toContain("maxRunBudgetUsd");
+    expect(environmentPolicyControlPlane).toContain("maxArtifactBytes");
+    expect(environmentPolicyStyles).toContain("grid-template-columns: 0.72fr 1.35fr");
+    expect(environmentPolicyStyles).not.toContain("linear-gradient");
+    expect(environmentPolicyStyles).toContain(":focus-visible");
   });
 
   it("creates a hash-bound Preview and renders real Preflight facts", () => {

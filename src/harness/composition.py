@@ -676,6 +676,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         quality_gate=quality_service.require_promotion_allowed,
+        capability_catalog_resolver=capability_catalogs.get,
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)

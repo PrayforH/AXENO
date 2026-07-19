@@ -9,6 +9,7 @@ from harness.core.ports import (
     RunRepository,
     SessionRepository,
 )
+from harness.deployments.boundaries import environment_quota_boundary
 from harness.quota.models import QuotaResource, ResourceReservation
 from harness.quota.service import QuotaService
 
@@ -45,14 +46,28 @@ class ArtifactService:
         if len(content) > self.max_file_bytes:
             raise ConflictError(f"artifact exceeds maximum size of {self.max_file_bytes} bytes")
         run = await self._runs.get(tenant_id, run_id)
+        session = (
+            await self._sessions.get(tenant_id, run.session_id)
+            if self._sessions is not None
+            else None
+        )
+        boundary = (
+            environment_quota_boundary(session)
+            if session is not None
+            else None
+        )
+        if (
+            boundary is not None
+            and boundary.max_artifact_bytes is not None
+            and len(content) > boundary.max_artifact_bytes
+        ):
+            raise ConflictError(
+                "artifact exceeds Environment maximum size of "
+                f"{boundary.max_artifact_bytes} bytes"
+            )
         artifact_id = self._id_generator("artifact")
         reservation: ResourceReservation | None = None
         if self._quotas is not None:
-            session = (
-                await self._sessions.get(tenant_id, run.session_id)
-                if self._sessions is not None
-                else None
-            )
             reservation = await self._quotas.reserve(
                 tenant_id=tenant_id,
                 resource=QuotaResource.ARTIFACT_BYTES,

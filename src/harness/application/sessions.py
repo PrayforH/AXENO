@@ -49,6 +49,7 @@ class SessionService:
             raise ConflictError("provide exactly one of agent_version or environment")
         resolved_session_id = session_id or self._id_generator("session")
         deployment_snapshot_id: str | None = None
+        environment_snapshot: dict[str, object] | None = None
         if environment is not None:
             if self._deployment_resolver is None:
                 raise ConflictError("environment deployment resolution is unavailable")
@@ -57,6 +58,21 @@ class SessionService:
             )
             agent_version = resolution.agent_version
             deployment_snapshot_id = resolution.snapshot_id
+            environment_snapshot = resolution.environment_policy_snapshot.model_dump(
+                mode="json",
+                by_alias=True,
+            )
+            required_credential_scope = (
+                "workload" if user_id.startswith("trigger:") else "user"
+            )
+            allowed_credential_scopes = {
+                item.value
+                for item in resolution.environment_policy_snapshot.resource_policy.credential_scopes
+            }
+            if required_credential_scope not in allowed_credential_scopes:
+                raise ConflictError(
+                    f"Environment does not allow {required_credential_scope} credentials"
+                )
         assert agent_version is not None
         version = await self._registry.get(tenant_id, agent_name, agent_version)
         if version.status is not AgentVersionStatus.PUBLISHED:
@@ -77,6 +93,7 @@ class SessionService:
             created_at=self._clock(),
             environment=environment.value if environment is not None else None,
             deployment_snapshot_id=deployment_snapshot_id,
+            environment_snapshot=environment_snapshot,
         )
         try:
             await self._sessions.add(session)
@@ -90,6 +107,7 @@ class SessionService:
                 or existing.agent_version != agent_version
                 or existing.environment != (environment.value if environment is not None else None)
                 or existing.deployment_snapshot_id != deployment_snapshot_id
+                or existing.environment_snapshot != environment_snapshot
             ):
                 raise ConflictError(
                     "deterministic Session ID was reused for another Eval Case"

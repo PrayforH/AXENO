@@ -18,7 +18,11 @@ from harness.storage.models import DeploymentRow, DeploymentSnapshotRow, Environ
 
 
 def _payload(value: Environment | DeploymentSnapshot | Deployment) -> dict[str, Any]:
-    return value.model_dump(mode="json", by_alias=True)
+    return value.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_computed_fields=True,
+    )
 
 
 def _environment(row: EnvironmentRow) -> Environment:

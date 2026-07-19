@@ -21,7 +21,11 @@ from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.memory import UserMemoryService
-from harness.application.runs import RunQuotaPlan, RunQuotaPlanResolver
+from harness.application.runs import (
+    RunQuotaPlan,
+    RunQuotaPlanResolver,
+    apply_environment_quota,
+)
 from harness.application.types import Clock
 from harness.application.workspaces import (
     WorkspacePolicy,
@@ -32,6 +36,7 @@ from harness.core.errors import ConflictError
 from harness.core.models import ExecutionIdentity, Run, RunStatus, Session
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
+from harness.deployments.boundaries import session_environment_policy
 from harness.observability.provider import Observability
 from harness.observability.redaction import correlation_hash
 from harness.policy.models import PolicyContext, PolicyDecision
@@ -469,6 +474,7 @@ class RunOrchestrator:
             if self._quota_plan_resolver is not None
             else RunQuotaPlan(None, None, 3600)
         )
+        plan = apply_environment_quota(plan, session)
         await self._quotas.ensure_run_admitted(
             tenant_id=tenant_id,
             run_id=run_id,
@@ -520,6 +526,14 @@ class RunOrchestrator:
             correlation_attributes["deployment.snapshot.id"] = session.deployment_snapshot_id
         if session.environment:
             correlation_attributes["deployment.environment"] = session.environment
+        environment_policy = session_environment_policy(session)
+        if environment_policy is not None:
+            correlation_attributes["environment.policy.hash"] = (
+                environment_policy.policy_hash
+            )
+            correlation_attributes["environment.policy.revision"] = str(
+                environment_policy.policy_revision
+            )
         eval_run_id = run.input.get("eval_run_id")
         if isinstance(eval_run_id, str) and eval_run_id:
             correlation_attributes["eval.run.id"] = eval_run_id

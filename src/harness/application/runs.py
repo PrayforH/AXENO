@@ -7,9 +7,10 @@ from typing import Protocol
 from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
-from harness.core.models import Run, RunStatus
+from harness.core.models import Run, RunStatus, Session
 from harness.core.ports import RunRepository, RunTask, SessionRepository, TaskQueue
 from harness.core.state_machine import transition
+from harness.deployments.boundaries import environment_quota_boundary
 from harness.observability.provider import Observability
 
 
@@ -37,6 +38,33 @@ class RunAdmission(Protocol):
 
 
 RunQuotaPlanResolver = Callable[[str, str, str], Awaitable[RunQuotaPlan]]
+
+
+def apply_environment_quota(plan: RunQuotaPlan, session: Session) -> RunQuotaPlan:
+    boundary = environment_quota_boundary(session)
+    if boundary is None:
+        return plan
+
+    budget = plan.max_budget_usd
+    if boundary.max_run_budget_usd is not None:
+        budget = (
+            boundary.max_run_budget_usd
+            if budget is None
+            else min(budget, boundary.max_run_budget_usd)
+        )
+    tokens = plan.max_model_tokens
+    if boundary.max_model_tokens is not None:
+        tokens = (
+            boundary.max_model_tokens
+            if tokens is None
+            else min(tokens, boundary.max_model_tokens)
+        )
+
+    return RunQuotaPlan(
+        max_budget_usd=budget,
+        max_model_tokens=tokens,
+        ttl_seconds=plan.ttl_seconds,
+    )
 
 
 class RunService:
@@ -104,6 +132,7 @@ class RunService:
                 if self._quota_plan_resolver is not None
                 else RunQuotaPlan(None, None, 3600)
             )
+            plan = apply_environment_quota(plan, session)
             await self._admission.admit_run(
                 tenant_id=tenant_id,
                 run_id=run_id,

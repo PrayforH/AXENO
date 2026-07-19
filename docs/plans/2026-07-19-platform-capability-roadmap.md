@@ -83,6 +83,23 @@ Promote Environment from a deployment route into a platform boundary:
 - quota/cost policy;
 - immutable environment snapshot attached to each Session.
 
+Acceptance:
+
+- Environment policy updates use Environment revision CAS and increment a separate
+  `policyRevision`;
+- a policy is rejected when its capability catalog revision, Execution Profile version,
+  network profile, model routes or MCP references are not currently reviewed;
+- promotion is rejected when the published Agent requires resources outside the target
+  Environment policy;
+- policy changes cannot make an active deployment invalid; operators first deploy a
+  compatible version, then narrow the policy;
+- every environment-bound Session stores the complete policy, hash, policy revision and
+  Environment revision that were effective at creation;
+- later Environment changes do not alter an existing Session snapshot;
+- runtime model and MCP resolution is checked again against the Session snapshot;
+- user and workload Sessions fail closed when their credential scope is not allowed;
+- run budget, model tokens and Artifact bytes use the stricter Environment ceiling.
+
 ### Phase 3 — load tools when needed
 
 - Publish a tool-directory snapshot with each Agent version.
@@ -127,4 +144,9 @@ Promote Environment from a deployment route into a platform boundary:
 
 Phase 1 adds `agent_triggers`. It contains public metadata and a one-way secret digest.
 Rollback disables the public route first, then drops the table through the Alembic downgrade.
-Existing Sessions, Runs, deployments and Agent packages are unchanged.
+
+Phase 2 is an additive JSON-envelope migration: existing Environment and Session rows remain
+readable through model defaults, while newly created Environment records and Sessions include
+resource policies and immutable snapshots. No table rewrite is required. Rolling back Phase 2
+stops writing the new fields; older binaries ignore the additional JSON keys only after an
+explicit compatibility downgrade that strips them from active records.
