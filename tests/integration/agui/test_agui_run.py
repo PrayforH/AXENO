@@ -7,13 +7,11 @@ from ag_ui.core import RunAgentInput
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_memory_app
-from harness.core.errors import NotFoundError
+from harness.core.errors import ConflictError, NotFoundError
 
 FIXTURE_MANIFEST = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 HEADERS = {"X-Tenant-ID": "tenant-a", "X-User-ID": "user-1"}
-PPTX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-)
+PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 def _request(*, thread_id: str, run_id: str, prompt: str) -> dict[str, object]:
@@ -28,9 +26,7 @@ def _request(*, thread_id: str, run_id: str, prompt: str) -> dict[str, object]:
     }
 
 
-def _request_with_prompts(
-    *, thread_id: str, run_id: str, prompts: list[str]
-) -> dict[str, object]:
+def _request_with_prompts(*, thread_id: str, run_id: str, prompts: list[str]) -> dict[str, object]:
     request = _request(thread_id=thread_id, run_id=run_id, prompt=prompts[-1])
     request["messages"] = [
         {"id": f"message-{run_id}-{index}", "role": "user", "content": prompt}
@@ -71,8 +67,7 @@ async def test_post_agui_runs_agent_and_streams_standard_events() -> None:
         "runId": "client-run-1",
     }
     assert any(
-        event.get("type") == "TEXT_MESSAGE_CONTENT"
-        and event.get("delta") == "Echo: hello"
+        event.get("type") == "TEXT_MESSAGE_CONTENT" and event.get("delta") == "Echo: hello"
         for event in events
     )
     assert sum(event.get("type") == "ACTIVITY_SNAPSHOT" for event in events) == 1
@@ -100,9 +95,7 @@ async def test_post_agui_waits_for_terminal_event_after_run_status_changes(
 
     monkeypatch.setattr(event_service, "append", delayed_append)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await client.post(
-            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
-        )
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
         response = await client.post(
             "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
             json=_request(thread_id="thread-race", run_id="client-race", prompt="hello"),
@@ -140,9 +133,7 @@ async def test_post_agui_reuses_harness_session_for_same_thread() -> None:
 async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await client.post(
-            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
-        )
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
         for thread_id, prompt in (
             ("thread-history-a", "first task"),
             ("thread-history-b", "second task"),
@@ -168,9 +159,7 @@ async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
             media_type="text/html",
             content=b"<h1>report</h1>",
         )
-        history = await client.get(
-            "/v1/agui/threads/thread-history-a/history", headers=HEADERS
-        )
+        history = await client.get("/v1/agui/threads/thread-history-a/history", headers=HEADERS)
         hidden = await client.get(
             "/v1/agui/threads/thread-history-a/history",
             headers={"X-Tenant-ID": "tenant-a", "X-User-ID": "user-2"},
@@ -207,9 +196,7 @@ async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
 async def test_agui_history_restores_user_input_attachments() -> None:
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await client.post(
-            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
-        )
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
         upload = await client.post(
             "/v1/input-artifacts",
             files={
@@ -250,9 +237,7 @@ async def test_agui_history_restores_user_input_attachments() -> None:
             json=request,
             headers=HEADERS,
         )
-        history = await client.get(
-            "/v1/agui/threads/thread-with-ppt/history", headers=HEADERS
-        )
+        history = await client.get("/v1/agui/threads/thread-with-ppt/history", headers=HEADERS)
 
     assert upload.status_code == 201
     assert response.status_code == 200
@@ -276,9 +261,7 @@ async def test_agui_history_restores_user_input_attachments() -> None:
 async def test_edited_multiturn_branch_updates_title_and_hides_superseded_turn() -> None:
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        await client.post(
-            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
-        )
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
         first = await client.post(
             "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
             json=_request(thread_id="thread-edit", run_id="run-greeting", prompt="你好"),
@@ -303,22 +286,16 @@ async def test_edited_multiturn_branch_updates_title_and_hides_superseded_turn()
             headers=HEADERS,
         )
         listed = await client.get("/v1/agui/threads", headers=HEADERS)
-        history = await client.get(
-            "/v1/agui/threads/thread-edit/history", headers=HEADERS
-        )
+        history = await client.get("/v1/agui/threads/thread-edit/history", headers=HEADERS)
 
     assert first.status_code == original.status_code == edited.status_code == 200
     task = next(item for item in listed.json() if item["thread_id"] == "thread-edit")
     assert task["title"] == "生成可下载报告"
     messages = history.json()["messages"]
     user_messages = [item["content"] for item in messages if item["role"] == "user"]
-    assistant_messages = [
-        item["content"] for item in messages if item["role"] == "assistant"
-    ]
+    assistant_messages = [item["content"] for item in messages if item["role"] == "assistant"]
     assistant_activity_runs = [
-        json.loads(item["toolCalls"][0]["function"]["arguments"])["activity"][
-            "run_id"
-        ]
+        json.loads(item["toolCalls"][0]["function"]["arguments"])["activity"]["run_id"]
         for item in messages
         if item["role"] == "assistant"
     ]
@@ -355,6 +332,50 @@ async def test_cancel_agui_run_resolves_protocol_ids_to_harness_run() -> None:
     assert response.status_code == 200
     assert response.json()["run_id"] == run.run_id
     assert response.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_agui_run_persists_a_task_scoped_model_route_override() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        body = _request(
+            thread_id="thread-model-override",
+            run_id="client-model-override",
+            prompt="hello",
+        )
+        body["forwardedProps"] = {"modelRoute": "minimax-m3"}
+        run = await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=RunAgentInput.model_validate(body),
+        )
+
+    assert run.input["model_route_override"] == "minimax-m3"
+
+
+@pytest.mark.asyncio
+async def test_agui_run_rejects_an_invalid_model_route_override() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        body = _request(
+            thread_id="thread-model-invalid",
+            run_id="client-model-invalid",
+            prompt="hello",
+        )
+        body["forwardedProps"] = {"modelRoute": "../../secret"}
+
+        with pytest.raises(ConflictError, match="model route override is invalid"):
+            await app.state.container.agui.create_run(
+                tenant_id="tenant-a",
+                user_id="user-1",
+                agent_name="echo-agent",
+                agent_version="0.1.0",
+                request=RunAgentInput.model_validate(body),
+            )
 
 
 @pytest.mark.asyncio
@@ -510,3 +531,47 @@ async def test_agui_run_accepts_assistant_ui_document_transport_envelope() -> No
     )
 
     assert run.input["input_artifact_ids"] == [input_artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_agui_run_accepts_assistant_ui_image_transport_envelope() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        uploaded = await client.post(
+            "/v1/input-artifacts",
+            files={"file": ("scan.jpg", b"fake image", "image/jpeg")},
+            headers=HEADERS,
+        )
+        input_artifact_id = uploaded.json()["input_artifact_id"]
+
+    body = _request(thread_id="thread-image", run_id="image", prompt="Inspect")
+    body["messages"] = [
+        {
+            "id": "message-image",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "data",
+                        "value": input_artifact_id,
+                        "mimeType": "image/jpeg",
+                    },
+                    "metadata": {"filename": "scan.jpg"},
+                },
+            ],
+        }
+    ]
+
+    run = await app.state.container.agui.create_run(
+        tenant_id="tenant-a",
+        user_id="user-1",
+        agent_name="echo-agent",
+        agent_version="0.1.0",
+        request=RunAgentInput.model_validate(body),
+    )
+
+    assert run.input["input_artifact_ids"] == [input_artifact_id]
+    assert run.input["required_model_capabilities"] == ["vision"]

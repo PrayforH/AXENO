@@ -67,6 +67,16 @@ async def test_slo_reconciliation_does_not_resolve_reaper_incidents() -> None:
         0.8,
         labels={"operation": "run.create"},
     )
+    metrics.observe(
+        "harness_api_request_duration_seconds",
+        0.1,
+        labels={"operation": "run.cancel"},
+    )
+    metrics.observe(
+        "harness_workflow_convergence_seconds",
+        4,
+        labels={"workflow": "run.cancel"},
+    )
     counters: dict[str, int] = {}
 
     def ids(prefix: str) -> str:
@@ -85,12 +95,15 @@ async def test_slo_reconciliation_does_not_resolve_reaper_incidents() -> None:
 
     objectives = {item.metric: item for item in overview.objectives}
     assert objectives["run_create_p95"].health is SloHealth.BREACHED
+    assert objectives["cancel_convergence_p95"].observed == 4
+    assert objectives["cancel_convergence_p95"].health is SloHealth.BREACHED
     incidents = await repository.list_incidents(
         "tenant-a", status=IncidentStatus.OPEN, limit=10
     )
     assert {item.fingerprint for item in incidents} == {
         "reaper-finalize:run-1",
         "slo:run_create_p95",
+        "slo:cancel_convergence_p95",
     }
     assert (await repository.latest_capacity("tenant-a")) == overview.capacity
     assert await repository.latest_capacity("tenant-b") is None

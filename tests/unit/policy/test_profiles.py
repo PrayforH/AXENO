@@ -28,6 +28,30 @@ def _decision(
 def test_read_only_profile_allows_evidence_tools_and_denies_mutation() -> None:
     assert _decision("production-read-only", "Read") is PolicyDecision.ALLOW
     assert _decision("production-read-only", "mcp__tavily__tavily_search") is PolicyDecision.ALLOW
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_search")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_explain_search")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_get_event")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_get_document")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_list_chunks")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__novel-search__sag_ingest_document")
+        is PolicyDecision.DENY
+    )
     assert _decision("production-read-only", "Write") is PolicyDecision.DENY
     assert _decision("production-read-only", "Bash") is PolicyDecision.DENY
     assert (
@@ -47,6 +71,14 @@ def test_standard_profile_uses_trusted_sandbox_facts() -> None:
         is PolicyDecision.ALLOW
     )
     assert _decision("production-standard", "Bash") is PolicyDecision.ASK
+    assert (
+        _decision("production-standard", "mcp__novel-search__sag_get_document")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-standard", "mcp__novel-search__sag_list_chunks")
+        is PolicyDecision.ALLOW
+    )
 
 
 def test_orchestrator_profile_allows_explicit_delegation() -> None:

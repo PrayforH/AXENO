@@ -25,6 +25,11 @@ def test_prometheus_registry_exports_bounded_summaries_and_counters() -> None:
         0.5,
         labels={"operation": "/v1/tenant-a/private-path"},
     )
+    metrics.observe(
+        "harness_workflow_convergence_seconds",
+        1.25,
+        labels={"workflow": "run.cancel", "run_id": "must-not-export"},
+    )
 
     rendered = metrics.render_prometheus()
 
@@ -34,9 +39,14 @@ def test_prometheus_registry_exports_bounded_summaries_and_counters() -> None:
         in rendered
     )
     assert 'harness_artifact_download_total{outcome="success"} 1' in rendered
+    assert (
+        'harness_workflow_convergence_seconds{workflow="run.cancel",quantile="0.95"} 1.25'
+        in rendered
+    )
     assert 'operation="unknown"' in rendered
     assert "/v1/tenant-a/private-path" not in rendered
     assert "tenant_id" not in rendered
+    assert "run_id" not in rendered
     assert rendered.endswith("\n")
 
 

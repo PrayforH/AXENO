@@ -1,7 +1,13 @@
 import Link from "next/link";
 import styles from "./workspace-navigation.module.css";
 
-export type WorkspaceId = "tasks" | "agents" | "usage" | "data";
+export type WorkspaceId =
+  | "tasks"
+  | "agents"
+  | "capabilities"
+  | "knowledge"
+  | "usage"
+  | "data";
 export type WorkspaceMode = "tasks" | "studio";
 
 export const workspaceItems: ReadonlyArray<{
@@ -11,7 +17,10 @@ export const workspaceItems: ReadonlyArray<{
 }> = [
   { id: "tasks", href: "/", label: "任务" },
   { id: "agents", href: "/studio/agents", label: "智能体" },
+  { id: "capabilities", href: "/studio/capabilities", label: "能力" },
+  { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
   { id: "data", href: "/studio/data", label: "数据" },
+  { id: "usage", href: "/studio/usage", label: "用量" },
 ];
 
 export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
@@ -36,6 +45,22 @@ export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
     return (
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="M4.5 15.5V11h3v4.5m2-8v8h3v-8m2-3v11h3v-11" />
+      </svg>
+    );
+  }
+  if (workspace === "capabilities") {
+    return (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <rect x="7" y="7" width="6" height="6" rx="1.5" />
+        <path d="M9 3v4m2-4v4M9 13v4m2-4v4M3 9h4m-4 2h4m6-2h4m-4 2h4" />
+      </svg>
+    );
+  }
+  if (workspace === "knowledge") {
+    return (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M4.5 4.5h7a3 3 0 0 1 3 3v8h-7a3 3 0 0 1-3-3z" />
+        <path d="M7.5 7.5h4m-4 3h4" />
       </svg>
     );
   }

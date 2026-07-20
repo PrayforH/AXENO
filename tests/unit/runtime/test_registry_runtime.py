@@ -59,9 +59,7 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",
@@ -138,6 +136,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
                 "model": base_spec.model.model_copy(
                     update={
                         "route_id": "anthropic-official",
+                        "model": "claude-sonnet-4-6",
                         "required_capabilities": (
                             "streaming",
                             "tool_use",
@@ -173,9 +172,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",
@@ -223,9 +220,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
 
     assert captured[0].env["ENABLE_TOOL_SEARCH"] == "true"
     assert snapshot.tool_directory is not None
-    directory_event = next(
-        event for event in events if event.type == "tool.directory.loaded"
-    )
+    directory_event = next(event for event in events if event.type == "tool.directory.loaded")
     assert directory_event.payload == {
         "exposure_mode": "on_demand",
         "catalog_revision": 4,
@@ -255,7 +250,10 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
         spec=base_spec.model_copy(
             update={
                 "model": base_spec.model.model_copy(
-                    update={"route_id": "anthropic-official"}
+                    update={
+                        "route_id": "anthropic-official",
+                        "model": "claude-sonnet-4-6",
+                    }
                 )
             }
         ),
@@ -281,9 +279,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",
@@ -340,9 +336,43 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     assert captured[0].env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
     assert captured[0].env["ANTHROPIC_API_KEY"] == "anthropic-secret"
     assert "ANTHROPIC_AUTH_TOKEN" not in captured[0].env
-    assert next(
-        event for event in events if event.type == "model.route.selected"
-    ).payload["route_id"] == "anthropic-official"
+    assert (
+        next(event for event in events if event.type == "model.route.selected").payload["route_id"]
+        == "anthropic-official"
+    )
+
+    override_context = RuntimeContext(
+        run=Run(
+            run_id="run-route-override",
+            session_id="session-route-override",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="route-override",
+            created_at=now,
+            updated_at=now,
+            input={
+                "prompt": "use the task model",
+                "model_route_override": "new-api-default",
+            },
+        ),
+        session=Session(
+            session_id="session-route-override",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="route-bound-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    override_events = [event async for event in runtime.execute(override_context)]
+
+    assert captured[1].env["ANTHROPIC_BASE_URL"] == "https://new-api.example"
+    selected = next(event for event in override_events if event.type == "model.route.selected")
+    assert selected.payload["route_id"] == "new-api-default"
+    assert selected.payload["selection_source"] == "task_override"
+    assert selected.payload["agent_default_route"] == "anthropic-official"
 
 
 @pytest.mark.asyncio
@@ -379,9 +409,7 @@ async def test_runtime_materializes_immutable_skills_and_enables_them_by_name(
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",
@@ -457,9 +485,7 @@ async def test_model_span_has_safe_agent_route_and_policy_dimensions(
         processor_factory=SimpleSpanProcessor,
     )
 
-    async def fake_query(
-        _prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         yield ResultMessage(
             subtype="success",
             duration_ms=120,
@@ -631,9 +657,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert helper.tools == ["Read", "Glob", "Grep"]
     assert helper.skills == ["delegated-investigation"]
     assert helper.model == "inherit"
-    assert (
-        tmp_path / ".claude/skills/delegated-investigation/SKILL.md"
-    ).is_file()
+    assert (tmp_path / ".claude/skills/delegated-investigation/SKILL.md").is_file()
     assert isinstance(captured[0][1].tools, list)
     assert "Task" in captured[0][1].tools
     assert isinstance(captured[0][1].mcp_servers, dict)
@@ -701,9 +725,7 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",
@@ -775,9 +797,7 @@ async def test_declared_gateway_capabilities_fail_closed_before_query(
     )
     query_called = False
 
-    async def unexpected_query(
-        _prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def unexpected_query(_prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         nonlocal query_called
         query_called = True
         if False:
@@ -817,7 +837,7 @@ async def test_declared_gateway_capabilities_fail_closed_before_query(
         workspace=tmp_path,
     )
 
-    with pytest.raises(ConflictError, match="fallback route is not configured"):
+    with pytest.raises(ConflictError, match="does not satisfy required capabilities"):
         _events = [event async for event in runtime.execute(context)]
 
     assert query_called is False
@@ -827,7 +847,25 @@ async def test_declared_gateway_capabilities_fail_closed_before_query(
 async def test_incompatible_direct_gateway_uses_configured_anthropic_fallback(
     tmp_path: Path,
 ) -> None:
-    snapshot = load_manifest("agents/helper-agent/agent.yaml")
+    base_snapshot = load_manifest("agents/helper-agent/agent.yaml")
+    snapshot = base_snapshot.model_copy(
+        update={
+            "manifest": base_snapshot.manifest.model_copy(
+                update={
+                    "spec": base_snapshot.manifest.spec.model_copy(
+                        update={
+                            "model": base_snapshot.manifest.spec.model.model_copy(
+                                update={
+                                    "fallback_route": "anthropic-official",
+                                    "fallback_model": "claude-fallback",
+                                }
+                            )
+                        }
+                    )
+                }
+            )
+        }
+    )
     registry = InMemoryAgentRegistry()
     await registry.add(
         AgentVersion(
@@ -842,9 +880,7 @@ async def test_incompatible_direct_gateway_uses_configured_anthropic_fallback(
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",

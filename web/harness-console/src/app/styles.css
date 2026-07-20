@@ -4032,6 +4032,28 @@ textarea:not(.aui-composer-input):focus-visible,
   color: #53665a;
 }
 
+.message-attachment-preview {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  overflow: hidden;
+  border: 1px solid #d9ddd9;
+  border-radius: 9px;
+  background: #e7ece8;
+}
+
+.message-attachment-preview img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.message-attachment-card[data-kind="image"] > a,
+.message-attachment-card[data-kind="image"] .message-attachment-static {
+  min-height: 68px;
+}
+
 .message-attachment-icon svg {
   width: 21px;
   height: 21px;

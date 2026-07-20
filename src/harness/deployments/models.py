@@ -87,7 +87,7 @@ class EnvironmentResourcePolicy(StudioModel):
         alias="networkAccess",
     )
     allowed_model_routes: tuple[str, ...] = Field(
-        default=("new-api-default", "anthropic-official"),
+        default=("new-api-default", "minimax-m3", "anthropic-official"),
         alias="allowedModelRoutes",
     )
     capability_catalog_revision: int = Field(
@@ -206,9 +206,7 @@ class DeploymentSnapshot(StudioModel):
     package_hash: str = Field(alias="packageHash", pattern=r"^[a-f0-9]{64}$")
     image_digest: str = Field(alias="imageDigest", pattern=r"^sha256:[a-f0-9]{64}$")
     execution_profile: str = Field(alias="executionProfile", min_length=1)
-    execution_profile_version: int = Field(
-        default=1, alias="executionProfileVersion", ge=1
-    )
+    execution_profile_version: int = Field(default=1, alias="executionProfileVersion", ge=1)
     execution_profile_hash: str = Field(
         default="0" * 64,
         alias="executionProfileHash",
@@ -280,9 +278,7 @@ class PromoteRequest(StudioModel):
             key for key in self.config if any(word in key.lower() for word in forbidden)
         )
         if unsafe:
-            raise ValueError(
-                "deployment config contains secret-like or platform-managed keys"
-            )
+            raise ValueError("deployment config contains secret-like or platform-managed keys")
         return self
 
 

@@ -6,6 +6,7 @@ import {
 } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import { memo, useState, type ComponentPropsWithoutRef } from "react";
+import { MermaidCodeHeader, MermaidDiagram } from "./mermaid-diagram";
 import { SourceLink } from "./source-link";
 
 export const codexStreamSmoothing = {
@@ -54,6 +55,12 @@ function MarkdownTextImpl() {
       remarkPlugins={[remarkGfm]}
       smooth={codexStreamSmoothing}
       components={{ CodeHeader, a: SourceLink, table: ScrollableTable }}
+      componentsByLanguage={{
+        mermaid: {
+          CodeHeader: MermaidCodeHeader,
+          SyntaxHighlighter: MermaidDiagram,
+        },
+      }}
     />
   );
 }

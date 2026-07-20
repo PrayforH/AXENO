@@ -1,9 +1,54 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { authenticatedAuthMutation } from "../src/lib/auth-route";
+import {
+  authenticatedAuthMutation,
+  authenticatedAuthProxy,
+} from "../src/lib/auth-route";
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+});
+
+describe("authenticated workspace member requests", () => {
+  it("forwards member listing and role updates through the user session", async () => {
+    vi.stubEnv("HARNESS_API_URL", "http://harness.internal:8000");
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: String(init?.method),
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+      return Response.json([]);
+    });
+
+    await authenticatedAuthProxy(
+      new Request("http://console.test/api/auth/members", {
+        headers: { Cookie: "harness_access_token=user-jwt" },
+      }),
+      "members",
+    );
+    await authenticatedAuthProxy(
+      new Request("http://console.test/api/auth/members/user-2", {
+        method: "PATCH",
+        headers: { Cookie: "harness_access_token=user-jwt" },
+        body: JSON.stringify({ role: "admin" }),
+      }),
+      "members/user-2",
+    );
+
+    expect(calls).toEqual([
+      {
+        url: "http://harness.internal:8000/v1/auth/members",
+        method: "GET",
+      },
+      {
+        url: "http://harness.internal:8000/v1/auth/members/user-2",
+        method: "PATCH",
+        body: '{"role":"admin"}',
+      },
+    ]);
+  });
 });
 
 describe("authenticated account mutations", () => {

@@ -10,6 +10,10 @@ const panel = readFileSync(
   "utf8",
 );
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
+const codexTheme = readFileSync(
+  join(process.cwd(), "src/app/codex-theme.css"),
+  "utf8",
+);
 
 describe("developer drawer", () => {
   it("shows protocol coordinates without leaking server identity", () => {
@@ -25,15 +29,31 @@ describe("developer drawer", () => {
   });
 
   it("keeps the local panel concise and delegates deep diagnosis to Langfuse", () => {
+    expect(panel).toContain("运行详情");
     expect(panel).toContain("本次运行");
-    expect(panel).toContain("状态摘要与外部观测");
-    expect(panel).toContain("在 Langfuse 中查看");
-    expect(panel).toContain("Trace、Span、模型指标与错误诊断");
+    expect(panel).toContain("打开 Trace");
+    expect(panel).toContain("Trace 尚未生成");
     expect(panel).toContain("还没有运行记录");
+    expect(panel).not.toContain("inspector-title-mark");
+    expect(panel).not.toContain("observability-mark");
+    expect(panel).not.toContain("empty-orbit");
     expect(panel).not.toContain("高级诊断");
     expect(panel).not.toContain("Harness activity");
     expect(panel).not.toContain("Run inspector");
     expect(panel).not.toContain("协议与原始事件");
+  });
+
+  it("uses a compact metric grid and quiet observability row", () => {
+    expect(panel).toContain('className="run-metric-wide"');
+    expect(codexTheme).toMatch(
+      /body\.codex-theme-v1 \.developer-drawer \.run-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);/s,
+    );
+    expect(codexTheme).toMatch(
+      /body\.codex-theme-v1 \.observability-link\s*\{[^}]*min-height:\s*52px;/s,
+    );
+    expect(codexTheme).toMatch(
+      /body\.codex-theme-v1 \.developer-drawer \.run-counts span\s*\{[^}]*background:\s*transparent;/s,
+    );
   });
 
   it("keeps identifiers collapsed and links the current run to observability", () => {

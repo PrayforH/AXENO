@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PendingAttachment } from "@assistant-ui/react";
-import { createInputAttachmentAdapter } from "../src/lib/input-attachment-adapter";
+import {
+  createInputAttachmentAdapter,
+  inputAttachmentType,
+} from "../src/lib/input-attachment-adapter";
 import { uploadFeedbackStore, uploadKey } from "../src/lib/upload-feedback-store";
 
 describe("Harness input attachment adapter", () => {
@@ -99,5 +102,32 @@ describe("Harness input attachment adapter", () => {
         message: "too large",
       },
     ]);
+  });
+
+  it("keeps browser images typed as images for thumbnail and preview rendering", async () => {
+    expect(inputAttachmentType("image/jpeg", "01.jpg")).toBe("image");
+    expect(inputAttachmentType("application/octet-stream", "scan.PNG")).toBe("image");
+    expect(inputAttachmentType("application/pdf", "report.pdf")).toBe("document");
+
+    const adapter = createInputAttachmentAdapter(async () =>
+      Response.json(
+        {
+          input_artifact_id: "input_artifact_image",
+          name: "01.jpg",
+          media_type: "image/jpeg",
+          status: "ready",
+          size_bytes: 4,
+        },
+        { status: 201 },
+      ),
+    );
+    const file = new File(["jpeg"], "01.jpg", { type: "image/jpeg" });
+    const states: PendingAttachment[] = [];
+    for await (const state of adapter.add({ file }) as AsyncGenerator<PendingAttachment>) {
+      states.push(state);
+    }
+
+    expect(states.map((state) => state.type)).toEqual(["image", "image"]);
+    expect((await adapter.send(states[1]!)).type).toBe("image");
   });
 });

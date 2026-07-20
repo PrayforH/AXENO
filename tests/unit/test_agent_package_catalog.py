@@ -12,7 +12,8 @@ def test_repository_agent_catalog_is_production_ready(tmp_path: Path) -> None:
         "echo-agent",
         "govdoc-writer-agent",
         "helper-agent",
+        "networked-knowledge-research-agent",
         "public-opinion-agent",
         "similar-case-analysis-agent",
     }
-    assert len(list(tmp_path.glob("*.zip"))) == 7
+    assert len(list(tmp_path.glob("*.zip"))) == 8

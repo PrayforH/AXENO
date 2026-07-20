@@ -17,7 +17,7 @@ from harness.studio.preview_models import (
     PreviewStatus,
     transition_preview,
 )
-from harness.studio.preview_queue import PreviewTaskQueue
+from harness.studio.preview_queue import PreviewTask, PreviewTaskQueue
 from harness.studio.preview_repositories import InMemoryPreviewRepository
 from harness.studio.preview_service import PreviewService
 from harness.studio.repositories import InMemoryAgentDraftRepository
@@ -187,6 +187,17 @@ async def test_new_controller_recovers_a_provisioning_preview_after_crash() -> N
 
     assert recovered.status is PreviewStatus.READY
     assert recovered.fencing_token == 2
+
+
+@pytest.mark.asyncio
+async def test_controller_discards_stale_queue_task_after_database_restore() -> None:
+    _studio, _service, controller, _repository, queue, _times = services()
+    await queue.enqueue(
+        PreviewTask(tenant_id="tenant-a", preview_id="preview_missing")
+    )
+
+    assert await controller.process_once() is None
+    assert await queue.dequeue() is None
 
 
 @pytest.mark.asyncio

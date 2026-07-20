@@ -82,6 +82,9 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
             "version": "0.1.2",
             "display_name": "public-opinion-agent",
             "domain": "public-opinion",
+            "model_route": "new-api-default",
+            "model": "deepseek-v4-flash",
+            "model_capabilities": [],
         }
     ]
 

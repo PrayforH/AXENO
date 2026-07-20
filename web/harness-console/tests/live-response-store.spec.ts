@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { liveResponseStore } from "../src/lib/live-response-store";
+import {
+  RESPONSE_CANDIDATE_HOLD_MS,
+  liveResponseStore,
+} from "../src/lib/live-response-store";
 
 describe("liveResponseStore", () => {
-  beforeEach(() => liveResponseStore.clear());
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    liveResponseStore.clear();
+  });
+  afterEach(() => {
+    liveResponseStore.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
-  it("keeps one direct stream while moving tool commentary out of the answer", () => {
+  it("keeps tool commentary out of the answer before its first paint", () => {
     liveResponseStore.startRun("run-1");
     liveResponseStore.startMessage("commentary");
     liveResponseStore.append("commentary", "先检索资料");
@@ -13,7 +23,7 @@ describe("liveResponseStore", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "先检索资料",
       status: "streaming",
-      visible: true,
+      visible: false,
     });
 
     liveResponseStore.hideForTool();
@@ -28,6 +38,13 @@ describe("liveResponseStore", () => {
     liveResponseStore.completeMessage("final");
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "最终回答",
+      status: "complete",
+      visible: false,
+    });
+
+    liveResponseStore.completeRun();
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
       runId: "run-1",
       messageId: "final",
       text: "最终回答",
@@ -36,7 +53,34 @@ describe("liveResponseStore", () => {
     });
   });
 
-  it("coalesces browser deltas into one paint without delaying completion", () => {
+  it("does not publish a pending tool preface as visible during hand-off", () => {
+    let paint: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      paint = callback;
+      return 9;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const visibleSnapshots: string[] = [];
+
+    liveResponseStore.startRun("run-preface");
+    liveResponseStore.startMessage("message-preface");
+    const unsubscribe = liveResponseStore.subscribe(() => {
+      const current = liveResponseStore.getSnapshot();
+      if (current.visible && current.text) visibleSnapshots.push(current.text);
+    });
+    liveResponseStore.append("message-preface", "让我换一种方式定位章节。");
+    liveResponseStore.hideForTool();
+    paint?.(16);
+
+    expect(visibleSnapshots).toEqual([]);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "让我换一种方式定位章节。",
+      visible: false,
+    });
+    unsubscribe();
+  });
+
+  it("promotes a stable candidate and then coalesces browser deltas", () => {
     let paint: FrameRequestCallback | undefined;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
       paint = callback;
@@ -58,6 +102,14 @@ describe("liveResponseStore", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "平滑",
       status: "streaming",
+      visible: false,
+    });
+
+    vi.advanceTimersByTime(RESPONSE_CANDIDATE_HOLD_MS);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "平滑",
+      status: "streaming",
+      visible: true,
     });
 
     liveResponseStore.append("message-smooth", "完成");
@@ -72,5 +124,17 @@ describe("liveResponseStore", () => {
     liveResponseStore.completeRun();
     expect(notification).not.toHaveBeenCalled();
     unsubscribe();
+  });
+
+  it("releases a substantial answer early without waiting for the hold timer", () => {
+    liveResponseStore.startRun("run-long-answer");
+    liveResponseStore.startMessage("answer");
+    liveResponseStore.append("answer", "正文".repeat(120));
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      messageId: "answer",
+      visible: true,
+      status: "streaming",
+    });
   });
 });

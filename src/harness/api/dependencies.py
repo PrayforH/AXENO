@@ -130,6 +130,10 @@ from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandbo
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.mcp_discovery import (
+    AutoDetectMcpConnector,
+    McpDiscoveryService,
+)
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
     AnthropicSandboxModelProbe,
@@ -172,6 +176,7 @@ class ApiContainer:
     audit: AuditService
     agent_drafts: AgentDraftRepository
     capability_catalogs: CapabilityCatalogService
+    mcp_discovery: McpDiscoveryService
     studio: AgentStudioService
     preview_repository: PreviewRepository
     previews: PreviewService
@@ -343,6 +348,16 @@ def build_memory_container(
         agent_drafts,
         clock=clock,
     )
+    mcp_credentials = server_secret_credential_provider(
+        references_json=resolved_settings.mcp_secret_references_json,
+        secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
+    )
+    mcp_discovery = McpDiscoveryService(
+        credentials=mcp_credentials,
+        connector=AutoDetectMcpConnector(
+            proxy_url=resolved_settings.mcp_discovery_proxy_url.get_secret_value()
+        ),
+    )
     studio_service = AgentStudioService(
         agent_drafts,
         catalogs=capability_catalogs,
@@ -387,6 +402,7 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
         observability=observability,
+        metrics=reliability_metrics,
         admission=quotas,
         quota_plan_resolver=run_quota_plan,
     )
@@ -496,9 +512,7 @@ def build_memory_container(
         queue=deployment_queue,
         clock=clock,
     )
-    platform_mcp_tokens = PlatformMcpTokenService(
-        resolved_settings.auth_jwt_secret
-    )
+    platform_mcp_tokens = PlatformMcpTokenService(resolved_settings.auth_jwt_secret)
     platform_mcp_app = build_platform_mcp_app(
         agents=agent_service,
         deployments=deployment_service,
@@ -559,14 +573,10 @@ def build_memory_container(
             workspace=workspace,
         )
 
-    async def resolve_policy(
-        tenant_id: str, agent_name: str, agent_version: str
-    ) -> ResolvedPolicy:
+    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> ResolvedPolicy:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
-        return await governance.resolve_runtime(
-            tenant_id, manifest.spec.permissions.policy
-        )
+        return await governance.resolve_runtime(tenant_id, manifest.spec.permissions.policy)
 
     policy = policy_profiles.resolve("local-standard")
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
@@ -678,12 +688,12 @@ def build_memory_container(
         model_probe = FakeModelPreflightProbe()
         mcp_probe = FakeMcpPreflightProbe()
     else:
-        credential_provider = server_secret_credential_provider(
-            references_json=resolved_settings.mcp_secret_references_json,
-            secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
-        )
+        credential_provider = mcp_credentials
         gateway = load_cc_switch_claude_config(resolved_settings.cc_switch_settings_path)
-        tool_resolver = default_tool_resolver(credential_provider)
+        tool_resolver = default_tool_resolver(
+            credential_provider,
+            catalogs=capability_catalogs,
+        )
         runtime = RegistryClaudeRuntime(
             registry=registry,
             config=gateway,
@@ -750,6 +760,7 @@ def build_memory_container(
         quality_hook=quality_service.record_terminal_run,
         quotas=quotas,
         quota_plan_resolver=run_quota_plan,
+        metrics=reliability_metrics,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -810,6 +821,7 @@ def build_memory_container(
         audit=audit,
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
+        mcp_discovery=mcp_discovery,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,
@@ -929,6 +941,8 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "data:lifecycle:self",
             "operations:read",
             "operations:admin",
+            "members:read",
+            "members:write",
         }
     ),
     "member": frozenset(

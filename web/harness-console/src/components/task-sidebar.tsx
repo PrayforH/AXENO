@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import {
   WorkspaceCollapseIcon,
@@ -50,21 +50,16 @@ export function TaskSidebar({
   onToggle,
   onSelect,
   onNewTask,
-  refreshToken,
-  onCurrentTaskStatusChange,
 }: {
   currentThreadId: string;
   collapsed: boolean;
   onToggle: () => void;
   onSelect: (task: TaskSummary) => void;
   onNewTask: () => void;
-  refreshToken: number;
-  onCurrentTaskStatusChange: (status: string) => void;
 }) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [error, setError] = useState("");
   const runView = useRunViewModel();
-  const currentStatusRef = useRef<{ threadId: string; status: string } | null>(null);
 
   useEffect(() => {
     approvalStore.reset();
@@ -89,7 +84,7 @@ export function TaskSidebar({
       active = false;
       window.clearInterval(timer);
     };
-  }, [refreshToken, runView?.phase]);
+  }, [runView?.phase]);
 
   const selected = useMemo(
     () => tasks.find((task) => task.thread_id === currentThreadId),
@@ -104,21 +99,6 @@ export function TaskSidebar({
       approvalStore.clear();
     }
   }, [runView?.phase, selected]);
-
-  useEffect(() => {
-    if (!selected) return;
-    const previous = currentStatusRef.current;
-    currentStatusRef.current = {
-      threadId: selected.thread_id,
-      status: selected.status,
-    };
-    if (
-      previous?.threadId === selected.thread_id &&
-      previous.status !== selected.status
-    ) {
-      onCurrentTaskStatusChange(selected.status);
-    }
-  }, [onCurrentTaskStatusChange, selected]);
 
   return (
     <aside

@@ -76,6 +76,7 @@ class AgentDraftCompiler:
                         "domain": spec.domain,
                         "template": spec.template.value,
                         "display-name": spec.display_name,
+                        "evaluation-enabled": str(spec.evaluation_enabled).lower(),
                     },
                 },
                 "spec": {
@@ -138,14 +139,27 @@ class AgentDraftCompiler:
                 try:
                     report = check_agent_package(manifest, environment="production")
                 except AgentPackageCheckError as error:
-                    issues.extend(
-                        ValidationIssue(
-                            code="package_check_failed",
-                            message=message,
-                            severity=ValidationSeverity.ERROR,
-                        )
-                        for message in error.issues
-                    )
+                    for message in error.issues:
+                        prefix = "evaluation suite is missing "
+                        suffix = " coverage"
+                        if message.startswith(prefix) and message.endswith(suffix):
+                            tag = message[len(prefix) : -len(suffix)]
+                            issues.append(
+                                ValidationIssue(
+                                    code=f"evaluation_coverage_{tag}_missing",
+                                    message=message,
+                                    severity=ValidationSeverity.ERROR,
+                                    path="evaluationCases",
+                                )
+                            )
+                        else:
+                            issues.append(
+                                ValidationIssue(
+                                    code="package_check_failed",
+                                    message=message,
+                                    severity=ValidationSeverity.ERROR,
+                                )
+                            )
         issues.extend(self._deployment_warnings(draft))
         return DraftValidationResult(
             ready=not any(issue.severity is ValidationSeverity.ERROR for issue in issues),

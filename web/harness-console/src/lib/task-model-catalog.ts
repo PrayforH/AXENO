@@ -1,0 +1,59 @@
+import { requireAuthenticatedResponse } from "./client-auth";
+
+export interface TaskModelRoute {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  capabilities: string[];
+}
+
+interface CapabilityResponse {
+  modelRoutes: Array<{
+    routeId: string;
+    label: string;
+    provider: string;
+    models: string[];
+    capabilities: string[];
+    enabled: boolean;
+  }>;
+}
+
+export async function loadTaskModelRoutes(): Promise<TaskModelRoute[]> {
+  const response = requireAuthenticatedResponse(
+    await fetch("/api/studio/capabilities", { cache: "no-store" }),
+  );
+  if (!response.ok) {
+    throw new Error((await response.text()) || `HTTP ${response.status}`);
+  }
+  const catalog = (await response.json()) as CapabilityResponse;
+  return catalog.modelRoutes
+    .filter((route) => route.enabled && route.models.length > 0)
+    .map((route) => ({
+      id: route.routeId,
+      label: route.label,
+      provider: route.provider,
+      model: route.models[0],
+      capabilities: route.capabilities,
+    }));
+}
+
+const storagePrefix = "agent-studio.task-model:";
+
+export function loadTaskModelOverride(
+  storage: Pick<Storage, "getItem">,
+  threadId: string,
+): string | null {
+  const value = storage.getItem(`${storagePrefix}${threadId}`);
+  return value && /^[a-z][a-z0-9-]{0,63}$/.test(value) ? value : null;
+}
+
+export function saveTaskModelOverride(
+  storage: Pick<Storage, "setItem" | "removeItem">,
+  threadId: string,
+  routeId: string | null,
+) {
+  const key = `${storagePrefix}${threadId}`;
+  if (routeId) storage.setItem(key, routeId);
+  else storage.removeItem(key);
+}

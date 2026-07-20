@@ -3,7 +3,6 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth-provider";
 import { StudioSidebar } from "./studio-sidebar";
-import { KnowledgeControlPlane } from "./knowledge-control-plane";
 import {
   lifecycleClient,
   type DataLifecycleJob,
@@ -152,8 +151,6 @@ export function DataLifecycleControlPlane() {
       <header className={styles.header}><div><p>Data lifecycle ledger</p><h1>控制数据留下多久，以及如何离开</h1><span>覆盖 PostgreSQL、对象存储、SDK 会话、长期记忆与 Langfuse；审计和部署证据不会随业务数据一起消失。</span></div><div className={styles.headerActions}><button disabled={busy} onClick={() => void run("export", { kind: "user", subjectId: user.user_id })}>导出我的数据</button><button className={styles.danger} disabled={busy} onClick={() => void run("delete", { kind: "user", subjectId: user.user_id })}>删除我的数据</button></div></header>
       {notice && <p className={styles.notice} role="status">{notice}</p>}
       {error && <p className={styles.error} role="alert">{error}<button onClick={() => void load()}>重试</button></p>}
-
-      <KnowledgeControlPlane />
 
       {canAdmin && policyDraft && <section className={styles.policy}>
         <div className={styles.sectionCopy}><p>Retention policy · r{policyDraft.revision}</p><h2>保留周期</h2><span>每天由 Worker 幂等触发一次；Legal Hold 优先级始终更高。</span><button disabled={busy} onClick={() => void run("retention", { kind: "tenant", subjectId: membership.tenant_id })}>立即执行一次</button></div>

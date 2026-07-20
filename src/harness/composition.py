@@ -83,6 +83,7 @@ from harness.reliability.service import ReliabilityService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     default_tool_resolver,
+    server_secret_credential_provider,
 )
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.mcp_credentials import DynamicMcpCredentialProvider
@@ -142,6 +143,10 @@ from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.storage.trigger_repository import PostgresAgentTriggerRepository
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.mcp_discovery import (
+    AutoDetectMcpConnector,
+    McpDiscoveryService,
+)
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
     AnthropicSandboxModelProbe,
@@ -157,10 +162,10 @@ from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator, SandboxResolver
 
 
-def _gateway_capabilities(value: str) -> frozenset[str]:
+def _gateway_capabilities(value: str, *, setting_name: str) -> frozenset[str]:
     capabilities = frozenset(part.strip() for part in value.split(",") if part.strip())
     if not capabilities:
-        raise ValueError("HARNESS_NEW_API_CAPABILITIES must not be empty")
+        raise ValueError(f"{setting_name} must not be empty")
     return capabilities
 
 
@@ -180,10 +185,31 @@ def _anthropic_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
     )
 
 
+def _minimax_m3_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
+    minimax_key = settings.minimax_m3_api_key.get_secret_value()
+    if not (settings.minimax_m3_base_url and settings.minimax_m3_model and minimax_key):
+        return None
+    return CcSwitchClaudeConfig(
+        route_id="minimax-m3",
+        base_url=settings.minimax_m3_base_url,
+        model=settings.minimax_m3_model,
+        # MiniMax exposes the Anthropic wire protocol at this endpoint.
+        provider="anthropic",
+        credential=SecretStr(minimax_key),
+        auth_scheme=settings.minimax_m3_auth_scheme,
+        compatibility=ModelCompatibility(settings.minimax_m3_compatibility),
+        capabilities=_gateway_capabilities(
+            settings.minimax_m3_capabilities,
+            setting_name="HARNESS_MINIMAX_M3_CAPABILITIES",
+        ),
+    )
+
+
 def _gateways(
     settings: Settings,
 ) -> tuple[CcSwitchClaudeConfig, CcSwitchClaudeConfig | None]:
     new_api_key = settings.new_api_key.get_secret_value()
+    minimax = _minimax_m3_gateway(settings)
     if settings.new_api_base_url and settings.new_api_model and new_api_key:
         return (
             CcSwitchClaudeConfig(
@@ -194,10 +220,15 @@ def _gateways(
                 credential=SecretStr(new_api_key),
                 auth_scheme=settings.new_api_auth_scheme,
                 compatibility=ModelCompatibility(settings.new_api_compatibility),
-                capabilities=_gateway_capabilities(settings.new_api_capabilities),
+                capabilities=_gateway_capabilities(
+                    settings.new_api_capabilities,
+                    setting_name="HARNESS_NEW_API_CAPABILITIES",
+                ),
             ),
-            _anthropic_gateway(settings),
+            minimax or _anthropic_gateway(settings),
         )
+    if minimax is not None:
+        return minimax, None
     anthropic = _anthropic_gateway(settings)
     if anthropic is not None:
         return anthropic, None
@@ -361,15 +392,22 @@ def build_production_container(
             raise ValueError("MCP credential settings must be JSON objects")
         typed_secrets = cast(dict[object, object], secrets_raw)
         sources: dict[CredentialSourceKey, tuple[str, dict[str, SecretStr]]] = {
-            ("*", CredentialResourceKind.MODEL, "new-api-default"): (
+            ("*", CredentialResourceKind.MODEL, primary_gateway.route_id or "new-api-default"): (
                 f"settings://{primary_gateway.provider}/primary",
                 {"api_key": primary_gateway.credential},
             ),
-            ("*", CredentialResourceKind.MODEL, "anthropic-official"): (
-                f"settings://{(fallback_gateway or primary_gateway).provider}/fallback",
-                {"api_key": (fallback_gateway or primary_gateway).credential},
-            ),
         }
+        if fallback_gateway is not None:
+            sources[
+                (
+                    "*",
+                    CredentialResourceKind.MODEL,
+                    fallback_gateway.route_id or "anthropic-official",
+                )
+            ] = (
+                f"settings://{fallback_gateway.provider}/fallback",
+                {"api_key": fallback_gateway.credential},
+            )
         for server, raw_references in cast(dict[object, object], references_raw).items():
             if not isinstance(raw_references, dict):
                 continue
@@ -539,6 +577,16 @@ def build_production_container(
         agent_drafts,
         clock=clock,
     )
+    discovery_credentials = server_secret_credential_provider(
+        references_json=settings.mcp_secret_references_json,
+        secrets_json=settings.mcp_server_secrets_json.get_secret_value(),
+    )
+    mcp_discovery = McpDiscoveryService(
+        credentials=discovery_credentials,
+        connector=AutoDetectMcpConnector(
+            proxy_url=settings.mcp_discovery_proxy_url.get_secret_value()
+        ),
+    )
     studio_service = AgentStudioService(
         agent_drafts,
         catalogs=capability_catalogs,
@@ -611,6 +659,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
         observability=observability,
+        metrics=reliability_metrics,
         admission=quotas,
         quota_plan_resolver=run_quota_plan,
     )
@@ -777,14 +826,10 @@ def build_production_container(
             workspace=workspace,
         )
 
-    async def resolve_policy(
-        tenant_id: str, agent_name: str, agent_version: str
-    ) -> ResolvedPolicy:
+    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> ResolvedPolicy:
         version = await registry.get(tenant_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
-        return await governance.resolve_runtime(
-            tenant_id, manifest.spec.permissions.policy
-        )
+        return await governance.resolve_runtime(tenant_id, manifest.spec.permissions.policy)
 
     policy = policy_profiles.resolve("local-standard")
     sandbox_resolver: SandboxResolver | None = None
@@ -798,7 +843,10 @@ def build_production_container(
             credential_provider,
             credential_broker,
         ) = execution_config
-        tool_resolver = default_tool_resolver(credential_provider)
+        tool_resolver = default_tool_resolver(
+            credential_provider,
+            catalogs=capability_catalogs,
+        )
         runtime = RegistryClaudeRuntime(
             registry=registry,
             config=primary_gateway,
@@ -915,6 +963,7 @@ def build_production_container(
         sandbox_resolver=sandbox_resolver,
         quotas=quotas,
         quota_plan_resolver=run_quota_plan,
+        metrics=reliability_metrics,
     )
     agui = AguiRunService(
         sessions=session_service,
@@ -1036,6 +1085,7 @@ def build_production_container(
         audit=audit,
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
+        mcp_discovery=mcp_discovery,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,

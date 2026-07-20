@@ -122,6 +122,37 @@ def test_content_rejection_projects_an_actionable_failure() -> None:
     assert item["metadata"] == {"error_code": "provider_content_rejected"}
 
 
+def test_stale_mcp_directory_projects_an_actionable_agent_upgrade() -> None:
+    projected = activity_projection(
+        event(
+            "run.failed",
+            {
+                "error_code": "runtime_error",
+                "error_type": "ToolResolutionError",
+                "message": (
+                    "published MCP tools are no longer available; "
+                    "recheck and publish the Agent: mcp__knowledge__removed"
+                ),
+            },
+        )
+    )[0].model_dump(by_alias=True)
+
+    item = projected["patch"][0]["value"]
+    assert item["title"] == "Agent 工具配置需要更新"
+    assert item["summary"] == (
+        "当前版本绑定的 MCP 工具已变化，请切换到最新版本，"
+        "或在 Studio 中重新检查并发布。"
+    )
+    assert item["metadata"] == {
+        "error_code": "runtime_error",
+        "error_type": "ToolResolutionError",
+        "diagnostic": (
+            "published MCP tools are no longer available; "
+            "recheck and publish the Agent: mcp__knowledge__removed"
+        ),
+    }
+
+
 def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -> None:
     commentary = activity_projection(
         event(
@@ -201,6 +232,37 @@ def test_tool_activity_keeps_redacted_arguments_and_compact_result_facts() -> No
     }
     assert "never-show" not in repr(request)
     assert "first match" not in repr(result)
+
+
+def test_policy_denied_tool_result_explains_the_permission_mismatch() -> None:
+    structured = activity_projection(
+        event(
+            "tool.result",
+            {
+                "tool_call_id": "tool-policy",
+                "is_error": True,
+                "error": {
+                    "code": "policy_denied",
+                    "message": "no policy rule matched",
+                },
+            },
+        )
+    )[0].model_dump(by_alias=True)
+    sdk_result = activity_projection(
+        event(
+            "tool.result",
+            {
+                "tool_call_id": "tool-policy",
+                "is_error": True,
+                "content": "no policy rule matched",
+            },
+        )
+    )[0].model_dump(by_alias=True)
+
+    for projected in (structured, sdk_result):
+        assert projected["patch"][0]["value"]["metadata"]["result_summary"] == (
+            "权限 Profile 未放行此工具"
+        )
 
 
 def test_subagent_activity_keeps_parent_and_summary() -> None:

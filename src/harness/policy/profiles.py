@@ -61,6 +61,31 @@ def read_only_policy_rules() -> list[PolicyRule]:
             tool="mcp__tavily__tavily_extract",
             decision=PolicyDecision.ALLOW,
         ),
+        PolicyRule(
+            name="novel-knowledge-search",
+            tool="mcp__novel-search__sag_search",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="novel-knowledge-explain-search",
+            tool="mcp__novel-search__sag_explain_search",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="novel-knowledge-get-event",
+            tool="mcp__novel-search__sag_get_event",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="novel-knowledge-get-document",
+            tool="mcp__novel-search__sag_get_document",
+            decision=PolicyDecision.ALLOW,
+        ),
+        PolicyRule(
+            name="novel-knowledge-list-chunks",
+            tool="mcp__novel-search__sag_list_chunks",
+            decision=PolicyDecision.ALLOW,
+        ),
     ]
 
 

@@ -15,7 +15,15 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from pydantic import SecretStr
 
-from harness.auth.models import AccessClaims, AuthSession, AuthUser, Membership, RefreshToken
+from harness.auth.models import (
+    AccessClaims,
+    AuthSession,
+    AuthUser,
+    Membership,
+    RefreshToken,
+    Role,
+    TenantMember,
+)
 from harness.auth.repositories import AuthRepository
 from harness.core.errors import ConflictError
 
@@ -29,6 +37,10 @@ class AuthenticationError(ValueError):
 
 class RegistrationDisabledError(ValueError):
     """Raised when public email registration is disabled."""
+
+
+class MembershipPermissionError(ValueError):
+    """Raised when a tenant member role transition is not permitted."""
 
 
 @dataclass(frozen=True)
@@ -90,9 +102,7 @@ class AuthService:
     def provider_status(self) -> dict[str, bool]:
         return {name: config.enabled for name, config in self._providers.items()}
 
-    async def register(
-        self, *, email: str, password: str, display_name: str
-    ) -> AuthSession:
+    async def register(self, *, email: str, password: str, display_name: str) -> AuthSession:
         if not self._allow_registration:
             raise RegistrationDisabledError("email registration is disabled")
         normalized_email = _normalize_email(email)
@@ -130,9 +140,7 @@ class AuthService:
             normalized_email = email.strip().lower()
         user = await self._repository.get_user_by_email(normalized_email)
         encoded_hash = (
-            self._dummy_hash
-            if user is None or user.password_hash is None
-            else user.password_hash
+            self._dummy_hash if user is None or user.password_hash is None else user.password_hash
         )
         try:
             valid = self._passwords.verify(encoded_hash, password)
@@ -140,9 +148,7 @@ class AuthService:
             valid = False
         if user is None or user.password_hash is None or not valid or user.disabled:
             raise AuthenticationError("email or password is incorrect")
-        membership = await self._repository.get_membership(
-            self._default_tenant_id, user.user_id
-        )
+        membership = await self._repository.get_membership(self._default_tenant_id, user.user_id)
         return await self._issue_session(user, membership)
 
     async def exchange_oauth_code(
@@ -207,9 +213,7 @@ class AuthService:
             )
         if user.disabled:
             raise AuthenticationError("this account is disabled")
-        membership = await self._repository.get_membership(
-            self._default_tenant_id, user.user_id
-        )
+        membership = await self._repository.get_membership(self._default_tenant_id, user.user_id)
         return await self._issue_session(user, membership)
 
     async def refresh(self, raw_token: str) -> AuthSession:
@@ -225,15 +229,11 @@ class AuthService:
             await self._repository.revoke_token_family(current.family_id, now)
             raise AuthenticationError("refresh token has expired")
         user = await self._repository.get_user(current.user_id)
-        membership = await self._repository.get_membership(
-            current.tenant_id, current.user_id
-        )
+        membership = await self._repository.get_membership(current.tenant_id, current.user_id)
         replacement_raw, replacement = self._new_refresh_token(
             user, membership, family_id=current.family_id
         )
-        rotated = await self._repository.rotate_refresh_token(
-            token_hash, replacement, now
-        )
+        rotated = await self._repository.rotate_refresh_token(token_hash, replacement, now)
         if not rotated:
             await self._repository.revoke_token_family(current.family_id, now)
             raise AuthenticationError("refresh token reuse detected")
@@ -246,9 +246,7 @@ class AuthService:
     async def logout(self, raw_token: str) -> None:
         current = await self._repository.get_refresh_token(_hash_token(raw_token))
         if current is not None:
-            await self._repository.revoke_token_family(
-                current.family_id, datetime.now(UTC)
-            )
+            await self._repository.revoke_token_family(current.family_id, datetime.now(UTC))
 
     def authenticate_access_token(self, token: str) -> AccessClaims:
         try:
@@ -269,9 +267,7 @@ class AuthService:
         user = await self._repository.get_user(claims.sub)
         if user.disabled:
             raise AuthenticationError("this account is disabled")
-        membership = await self._repository.get_membership(
-            claims.tenant_id, claims.sub
-        )
+        membership = await self._repository.get_membership(claims.tenant_id, claims.sub)
         if membership.role not in claims.roles:
             raise AuthenticationError("tenant membership has changed")
         return user, membership
@@ -281,18 +277,49 @@ class AuthService:
         membership = await self._repository.get_membership(tenant_id, user_id)
         return user, membership
 
-    async def update_profile(
-        self, *, tenant_id: str, user_id: str, display_name: str
-    ) -> AuthUser:
+    async def list_members(self, tenant_id: str) -> list[TenantMember]:
+        return [
+            TenantMember(user=user, membership=membership)
+            for user, membership in await self._repository.list_members(tenant_id)
+        ]
+
+    async def update_member_role(
+        self,
+        *,
+        tenant_id: str,
+        actor_user_id: str,
+        target_user_id: str,
+        role: Role,
+    ) -> TenantMember:
+        actor = await self._repository.get_membership(tenant_id, actor_user_id)
+        target = await self._repository.get_membership(tenant_id, target_user_id)
+        if actor.role not in {"owner", "admin"}:
+            raise MembershipPermissionError("only owners and admins can manage members")
+        if actor.role != "owner" and (
+            target.role in {"owner", "admin"} or role in {"owner", "admin"}
+        ):
+            raise MembershipPermissionError("admins can only manage member and viewer roles")
+        if (
+            target.role == "owner"
+            and role != "owner"
+            and await self._repository.count_members_with_role(tenant_id, "owner") <= 1
+        ):
+            raise MembershipPermissionError("the workspace must keep at least one owner")
+        updated = target.model_copy(update={"role": role})
+        await self._repository.save_membership(updated)
+        return TenantMember(
+            user=await self._repository.get_user(target_user_id),
+            membership=updated,
+        )
+
+    async def update_profile(self, *, tenant_id: str, user_id: str, display_name: str) -> AuthUser:
         await self._repository.get_membership(tenant_id, user_id)
         name = display_name.strip()
         if not name:
             raise ValueError("display name is required")
         user = await self._repository.get_user(user_id)
         return await self._repository.save_user(
-            user.model_copy(
-                update={"display_name": name[:160], "updated_at": datetime.now(UTC)}
-            )
+            user.model_copy(update={"display_name": name[:160], "updated_at": datetime.now(UTC)})
         )
 
     async def change_password(
@@ -327,14 +354,10 @@ class AuthService:
         )
         await self._repository.revoke_user_tokens(user_id, now)
 
-    async def _issue_session(
-        self, user: AuthUser, membership: Membership
-    ) -> AuthSession:
+    async def _issue_session(self, user: AuthUser, membership: Membership) -> AuthSession:
         raw_refresh, stored_refresh = self._new_refresh_token(user, membership)
         await self._repository.add_refresh_token(stored_refresh)
-        return self._session_response(
-            user=user, membership=membership, refresh_token=raw_refresh
-        )
+        return self._session_response(user=user, membership=membership, refresh_token=raw_refresh)
 
     def _session_response(
         self, *, user: AuthUser, membership: Membership, refresh_token: str
@@ -353,9 +376,7 @@ class AuthService:
             "exp": int((now + timedelta(seconds=self._access_token_seconds)).timestamp()),
             "jti": f"access_{uuid4().hex}",
         }
-        access_token = jwt.encode(
-            payload, self._jwt_secret.get_secret_value(), algorithm="HS256"
-        )
+        access_token = jwt.encode(payload, self._jwt_secret.get_secret_value(), algorithm="HS256")
         return AuthSession(
             access_token=access_token,
             refresh_token=refresh_token,

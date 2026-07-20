@@ -250,6 +250,30 @@ async def test_production_composition_configures_optional_anthropic_fallback() -
         await container.close()
 
 
+@pytest.mark.asyncio
+async def test_production_composition_registers_minimax_m3_as_selectable_route() -> None:
+    container = build_production_container(
+        production_settings(
+            minimax_m3_base_url="https://api.minimaxi.com/anthropic",
+            minimax_m3_api_key=SecretStr("minimax-secret"),
+        )
+    )
+    try:
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        primary = vars(runtime)["_config"]
+        selectable = vars(runtime)["_fallback_config"]
+        assert primary.route_id == "new-api-default"
+        assert selectable is not None
+        assert selectable.route_id == "minimax-m3"
+        assert selectable.provider == "anthropic"
+        assert selectable.model == "MiniMax-M3"
+        assert "vision" in selectable.capabilities
+        assert "minimax-secret" not in repr(selectable)
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
 def test_configured_app_selects_production_composition() -> None:
     app = create_configured_app(production_settings())
 

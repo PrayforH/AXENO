@@ -12,6 +12,7 @@ from harness.core.ports import RunRepository, RunTask, SessionRepository, TaskQu
 from harness.core.state_machine import transition
 from harness.deployments.boundaries import environment_quota_boundary
 from harness.observability.provider import Observability
+from harness.reliability.metrics import ReliabilityMetrics
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class RunService:
         clock: Clock,
         id_generator: IdGenerator,
         observability: Observability | None = None,
+        metrics: ReliabilityMetrics | None = None,
         admission: RunAdmission | None = None,
         quota_plan_resolver: RunQuotaPlanResolver | None = None,
     ) -> None:
@@ -91,6 +93,7 @@ class RunService:
         self._clock = clock
         self._id_generator = id_generator
         self._observability = observability
+        self._metrics = metrics
         self._admission = admission
         self._quota_plan_resolver = quota_plan_resolver
 
@@ -199,28 +202,37 @@ class RunService:
             if self._admission is not None:
                 await self._admission.release_subject(tenant_id, run_id)
             return current
-        if current.status is not RunStatus.CANCELLING:
-            cancelling = current.model_copy(
-                update={
-                    "status": transition(current.status, RunStatus.CANCELLING),
-                    "updated_at": self._clock(),
-                    "fencing_token": current.fencing_token + 1,
-                }
-            )
-            if not await self._runs.compare_and_set(current.status, cancelling):
-                current = await self._runs.get(tenant_id, run_id)
-                if current.status.is_terminal:
-                    return current
-                if current.status is not RunStatus.CANCELLING:
-                    raise ConflictError(f"run changed while cancellation was requested: {run_id}")
-            else:
-                current = cancelling
-                await self._events.append(
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    session_id=current.session_id,
-                    event_type="run.cancelling",
+        if current.status is RunStatus.CANCELLING:
+            return current
+        requested_from = current.status
+        cancelling = current.model_copy(
+            update={
+                "status": transition(current.status, RunStatus.CANCELLING),
+                "updated_at": self._clock(),
+                "fencing_token": current.fencing_token + 1,
+            }
+        )
+        if not await self._runs.compare_and_set(current.status, cancelling):
+            current = await self._runs.get(tenant_id, run_id)
+            if current.status.is_terminal:
+                return current
+            if current.status is not RunStatus.CANCELLING:
+                raise ConflictError(
+                    f"run changed while cancellation was requested: {run_id}"
                 )
+        else:
+            current = cancelling
+            await self._events.append(
+                tenant_id=tenant_id,
+                run_id=run_id,
+                session_id=current.session_id,
+                event_type="run.cancelling",
+            )
+
+        if requested_from in {RunStatus.PROVISIONING, RunStatus.RUNNING}:
+            # The Worker owns active external execution. Only it may publish
+            # the durable terminal after closing Runtime and child execution.
+            return current
 
         cancelled = current.model_copy(
             update={
@@ -242,4 +254,10 @@ class RunService:
         )
         if self._admission is not None:
             await self._admission.release_subject(tenant_id, run_id)
+        if self._metrics is not None:
+            self._metrics.observe(
+                "harness_workflow_convergence_seconds",
+                max(0, (cancelled.updated_at - current.updated_at).total_seconds()),
+                labels={"workflow": "run.cancel"},
+            )
         return cancelled

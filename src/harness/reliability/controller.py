@@ -150,6 +150,12 @@ class ReliabilityController:
                 details={"errorCode": type(error).__name__},
             )
             return ReaperOutcome.FAILED
+        if current.status is RunStatus.CANCELLING:
+            self._metrics.observe(
+                "harness_workflow_convergence_seconds",
+                max(0, (updated.updated_at - current.updated_at).total_seconds()),
+                labels={"workflow": "run.cancel"},
+            )
         await self._record_action(
             current,
             expected=current.status.value,

@@ -49,11 +49,15 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
         "${HARNESS_PREFLIGHT_TIMEOUT_SECONDS:-180}"
     )
     # The control plane uses the compatible model route for semantic task titles.
-    # Sandbox and business MCP credentials remain worker-only.
+    # Sandbox and business MCP credentials remain worker-only. The control plane
+    # receives only an optional outbound proxy URL for manual MCP discovery.
     assert "HARNESS_NEW_API_KEY" in services["api"]["environment"]
     assert "HARNESS_NEW_API_KEY" not in services["web"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" not in services["api"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" not in services["api"]["environment"]
+    assert services["api"]["environment"]["HARNESS_MCP_DISCOVERY_PROXY_URL"] == (
+        "${HARNESS_MCP_DISCOVERY_PROXY_URL:-}"
+    )
     assert set(services["migrate"]["environment"]) == {"HARNESS_DATABASE_URL"}
     assert services["migrate"]["depends_on"]["postgres"]["condition"] == "service_healthy"
     assert services["api"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
@@ -69,10 +73,16 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
         "similar-case-analysis-agent/agent.yaml",
         "govdoc-writer-agent/agent.yaml",
         "archive-assistant-agent/agent.yaml",
+        "networked-knowledge-research-agent/agent.yaml",
     ):
         assert manifest in studio_manifests
     assert services["otel-collector"]["profiles"] == ["observability"]
+    assert services["postgres"]["image"] == "postgres:18.4-bookworm"
+    assert services["postgres"]["volumes"] == [
+        "postgres18-cluster-data:/var/lib/postgresql"
+    ]
     assert "postgres-data" in compose()["volumes"]
+    assert "postgres18-cluster-data" in compose()["volumes"]
     assert "redis-data" in compose()["volumes"]
     assert "minio-data" in compose()["volumes"]
 
@@ -125,8 +135,11 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=false" in values
     assert "HARNESS_SANDBOX_PROVIDER=daytona" in values
     assert "HARNESS_PREFLIGHT_TIMEOUT_SECONDS=180" in values
+    assert "HARNESS_MCP_DISCOVERY_PROXY_URL=" in values
     assert "MINIO_ROOT_PASSWORD=" in values
     assert "LANGFUSE_OTLP_ENDPOINT=" in values
+    assert "LANGFUSE_EXPORT_PROXY_URL=" in values
+    assert "LANGFUSE_EXPORT_NO_PROXY=" in values
     assert "LANGFUSE_PUBLIC_KEY=" in values
     assert "LANGFUSE_SECRET_KEY=" in values
     assert "LANGFUSE_ENVIRONMENT=" in values
@@ -165,6 +178,11 @@ def test_observability_profile_scopes_external_langfuse_secrets() -> None:
         "LANGFUSE_OTLP_ENDPOINT": "${LANGFUSE_OTLP_ENDPOINT:-}",
         "LANGFUSE_PUBLIC_KEY": "${LANGFUSE_PUBLIC_KEY:-}",
         "LANGFUSE_SECRET_KEY": "${LANGFUSE_SECRET_KEY:-}",
+        "HTTP_PROXY": "${LANGFUSE_EXPORT_PROXY_URL:-}",
+        "HTTPS_PROXY": "${LANGFUSE_EXPORT_PROXY_URL:-}",
+        "NO_PROXY": (
+            "${LANGFUSE_EXPORT_NO_PROXY:-localhost,127.0.0.1,otel-collector}"
+        ),
     }
     assert collector["ports"] == [
         "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317",

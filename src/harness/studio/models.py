@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -134,6 +135,7 @@ class AgentDraftSpec(StudioModel):
     )
     workspace: DraftWorkspace = DraftWorkspace()
     limits: DraftLimits = DraftLimits()
+    evaluation_enabled: bool = Field(default=True, alias="evaluationEnabled")
     evaluation_cases: tuple[EvalCase, ...] = Field(min_length=1, alias="evaluationCases")
 
     @model_validator(mode="after")
@@ -255,8 +257,16 @@ class BuiltinToolCapability(StudioModel):
 
 class McpCapability(StudioModel):
     reference: str
+    category: Literal["tool", "knowledge"] = "tool"
+    server_name: str | None = Field(
+        default=None,
+        alias="serverName",
+        pattern=r"^[a-z][a-z0-9-]*$",
+    )
     label: str
     description: str
+    endpoint_url: str | None = Field(default=None, alias="endpointUrl", max_length=2048)
+    transport: Literal["http", "sse"] = "http"
     tools: tuple[str, ...]
     risk: CapabilityRisk
     network_access: NetworkAccess = Field(alias="networkAccess")
@@ -269,8 +279,75 @@ class McpCapability(StudioModel):
         alias="credentialReference",
         pattern=r"^[A-Z][A-Z0-9_]*$",
     )
+    auth_mode: Literal["none", "bearer", "header", "query"] = Field(
+        default="none",
+        alias="authMode",
+    )
+    auth_name: str | None = Field(default=None, alias="authName", max_length=128)
+    auth_key: str = Field(
+        default="authorization",
+        alias="authKey",
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
     version: int = Field(default=1, ge=1)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def valid_endpoint_and_auth(self) -> McpCapability:
+        if self.endpoint_url is not None:
+            parsed = urlsplit(self.endpoint_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "MCP endpoint must be HTTP(S) without credentials, query, or fragment"
+                )
+        if self.auth_mode in {"header", "query"} and not self.auth_name:
+            raise ValueError("MCP header/query authentication requires authName")
+        if self.auth_mode != "none" and self.credential_reference is None:
+            raise ValueError("authenticated MCP requires credentialReference")
+        if len(self.tools) != len(set(self.tools)):
+            raise ValueError("duplicate MCP tool")
+        return self
+
+
+class McpDiscoveryRequest(StudioModel):
+    reference: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
+    server_name: str = Field(alias="serverName", pattern=r"^[a-z][a-z0-9-]*$")
+    endpoint_url: str = Field(alias="endpointUrl", min_length=1, max_length=2048)
+    network_access: Literal["internal", "external"] = Field(alias="networkAccess")
+    auth_mode: Literal["none", "bearer", "header", "query"] = Field(
+        default="none",
+        alias="authMode",
+    )
+    auth_name: str | None = Field(default=None, alias="authName", max_length=128)
+    auth_key: str = Field(
+        default="authorization",
+        alias="authKey",
+        pattern=r"^[a-z][a-z0-9_]*$",
+    )
+
+
+class McpDiscoveredTool(StudioModel):
+    name: str
+    canonical_name: str = Field(alias="canonicalName")
+    title: str | None = None
+    description: str = ""
+
+
+class McpDiscoveryResult(StudioModel):
+    endpoint_url: str = Field(alias="endpointUrl")
+    transport: Literal["http", "sse"]
+    server_name: str = Field(alias="serverName")
+    server_title: str | None = Field(default=None, alias="serverTitle")
+    server_version: str | None = Field(default=None, alias="serverVersion")
+    latency_ms: int = Field(alias="latencyMs", ge=0)
+    tools: tuple[McpDiscoveredTool, ...]
 
 
 class PolicyCapability(StudioModel):

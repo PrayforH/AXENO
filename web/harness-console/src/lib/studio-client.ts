@@ -191,6 +191,7 @@ type ApiDraftSpec = {
     maxConcurrentSubagents: number;
     maxSubagentUsageUnits: number;
   };
+  evaluationEnabled: boolean;
   evaluationCases: ApiEvalCase[];
 };
 
@@ -756,12 +757,24 @@ export type StudioCapabilities = {
   }>;
   mcpServers: Array<{
     reference: string;
+    category: "tool" | "knowledge";
+    serverName: string | null;
     label: string;
     description: string;
+    endpointUrl: string | null;
+    transport: "http" | "sse";
     tools: string[];
     risk: StudioRisk;
     networkAccess: McpOption["network"];
     sendsUserData: boolean;
+    credentialManaged: boolean;
+    executionLocation: string;
+    preflightRequired: boolean;
+    credentialReference: string | null;
+    authMode: "none" | "bearer" | "header" | "query";
+    authName: string | null;
+    authKey: string;
+    version: number;
     enabled: boolean;
   }>;
   policies: Array<{ policyId: string; label: string; description: string; enabled: boolean }>;
@@ -792,6 +805,32 @@ export type StudioCapabilityCatalogRecord = {
   updatedAt: string;
 };
 
+export type StudioCatalogImpact = {
+  resourceType: "modelRoute" | "mcp" | "policy" | "executionProfile";
+  resourceId: string;
+  draftIds: string[];
+};
+
+export type StudioCatalogMutationResult = {
+  record: StudioCapabilityCatalogRecord;
+  impact: StudioCatalogImpact;
+};
+
+export type StudioMcpDiscoveryResult = {
+  endpointUrl: string;
+  transport: "http" | "sse";
+  serverName: string;
+  serverTitle: string | null;
+  serverVersion: string | null;
+  latencyMs: number;
+  tools: Array<{
+    name: string;
+    canonicalName: string;
+    title: string | null;
+    description: string;
+  }>;
+};
+
 export class StudioApiError extends Error {
   constructor(
     readonly status: number,
@@ -809,9 +848,14 @@ async function errorFrom(response: Response): Promise<StudioApiError> {
   try {
     const payload = (await response.json()) as {
       error?: { code?: string; message?: string };
+      detail?: { code?: string; message?: string } | string;
     };
-    code = payload.error?.code ?? code;
-    message = payload.error?.message ?? message;
+    const detail = typeof payload.detail === "object" ? payload.detail : undefined;
+    code = payload.error?.code ?? detail?.code ?? code;
+    message =
+      payload.error?.message
+      ?? detail?.message
+      ?? (typeof payload.detail === "string" ? payload.detail : message);
   } catch {}
   return new StudioApiError(response.status, code, message);
 }
@@ -923,6 +967,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     maxSubagentTasks: spec.limits.maxSubagentTasks,
     maxConcurrentSubagents: spec.limits.maxConcurrentSubagents,
     maxSubagentUsageUnits: spec.limits.maxSubagentUsageUnits,
+    evaluationEnabled: spec.evaluationEnabled ?? true,
     evalCases: spec.evaluationCases.map((item) => ({
       id: item.id,
       label: item.id,
@@ -971,6 +1016,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
       maxConcurrentSubagents: draft.maxConcurrentSubagents,
       maxSubagentUsageUnits: draft.maxSubagentUsageUnits,
     },
+    evaluationEnabled: draft.evaluationEnabled,
     evaluationCases: draft.evalCases.map((item) => ({
       id: item.id,
       tags: [item.tag, draft.domain],
@@ -1159,6 +1205,40 @@ export const studioClient = {
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draftId)}`),
   capabilities: () => request<StudioCapabilities>("capabilities"),
   catalog: () => request<StudioCapabilityCatalogRecord>("catalog"),
+  catalogImpact: (resourceType: StudioCatalogImpact["resourceType"], resourceId: string) =>
+    request<StudioCatalogImpact>(
+      `catalog/${resourceType}/${encodeURIComponent(resourceId)}/impact`,
+    ),
+  discoverMcp: (body: {
+    reference: string;
+    serverName: string;
+    endpointUrl: string;
+    networkAccess: "internal" | "external";
+    authMode: "none" | "bearer" | "header" | "query";
+    authName: string | null;
+    authKey: string;
+  }) =>
+    request<StudioMcpDiscoveryResult>("mcp/discover", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  upsertMcp: (
+    reference: string,
+    expectedRevision: number,
+    resource: StudioCapabilities["mcpServers"][number],
+  ) =>
+    request<StudioCatalogMutationResult>(
+      `catalog/mcp/${encodeURIComponent(reference)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ expectedRevision, resource }),
+      },
+    ),
+  disableMcp: (reference: string, expectedRevision: number) =>
+    request<StudioCatalogMutationResult>(
+      `catalog/mcp/${encodeURIComponent(reference)}?expected_revision=${expectedRevision}`,
+      { method: "DELETE" },
+    ),
   createDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>("drafts", {
       method: "POST",
@@ -1439,6 +1519,7 @@ export function capabilityOptions(catalog: StudioCapabilities): {
     })),
     mcp: catalog.mcpServers.filter((item) => item.enabled).map((item) => ({
       id: item.reference,
+      category: item.category,
       label: item.label,
       description: item.description,
       tools: item.tools,

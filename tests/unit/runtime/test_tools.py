@@ -10,7 +10,9 @@ from harness.core.manifest import (
     ToolDirectoryEntry,
     ToolDirectorySnapshot,
 )
+from harness.core.models import ExecutionIdentity
 from harness.policy.models import ContextTrust
+from harness.runtime.mcp_credentials import CredentialValues
 from harness.runtime.tools import (
     McpServerRegistration,
     ResolvedTools,
@@ -18,6 +20,17 @@ from harness.runtime.tools import (
     ToolResolver,
     enforce_published_tool_directory,
 )
+
+
+class UnexpectedCredentialProvider:
+    async def resolve(
+        self,
+        server_reference: str,
+        identity: ExecutionIdentity,
+        required_keys: frozenset[str],
+    ) -> CredentialValues:
+        del server_reference, identity, required_keys
+        raise AssertionError("credential provider must not run for an unauthenticated MCP")
 
 
 def manifest_fixture(*tools: dict[str, str]) -> AgentManifest:
@@ -85,6 +98,28 @@ async def test_resolves_external_mcp_from_server_owned_registry() -> None:
     }
 
 
+@pytest.mark.asyncio
+async def test_unauthenticated_mcp_does_not_request_a_credential_lease() -> None:
+    config = cast(
+        McpServerConfig,
+        {"type": "http", "url": "https://mcp.example.test"},
+    )
+    resolver = ToolResolver(
+        mcp_registry={
+            "public-docs": McpServerRegistration(
+                server_name="public-docs",
+                config=config,
+                allowed_tools=("mcp__public-docs__search",),
+            )
+        },
+        credential_provider=UnexpectedCredentialProvider(),
+    )
+
+    resolved = await resolver.resolve(manifest_fixture({"mcp": "public-docs"}))
+
+    assert resolved.mcp_servers == {"public-docs": config}
+
+
 @pytest.mark.parametrize(
     ("reference", "message"),
     [
@@ -133,7 +168,7 @@ async def test_rejects_inline_registry_secrets() -> None:
     assert secret not in repr(captured.value)
 
 
-def test_published_tool_directory_rejects_runtime_registration_drift() -> None:
+def test_published_tool_directory_filters_additions_and_rejects_missing_tools() -> None:
     manifest = manifest_fixture({"builtin": "Read"}, {"mcp": "crm"}).model_copy(
         update={
             "spec": manifest_fixture(
@@ -180,20 +215,30 @@ def test_published_tool_directory_rejects_runtime_registration_drift() -> None:
             mcp_servers=MappingProxyType({}),
             allowed_tools=allowed,
             mcp_smokes=MappingProxyType({}),
-        )
-
-    enforce_published_tool_directory(snapshot, resolved())
-    with pytest.raises(ToolResolutionError, match="builtin tools differ"):
-        enforce_published_tool_directory(snapshot, resolved(builtins=("Read", "Bash")))
-    with pytest.raises(ToolResolutionError, match="MCP allowlist differs"):
-        enforce_published_tool_directory(snapshot, resolved(allowed=()))
-    with pytest.raises(ToolResolutionError, match="MCP allowlist differs"):
-        enforce_published_tool_directory(
-            snapshot,
-            resolved(
-                allowed=(
-                    "mcp__crm-prod__search",
-                    "mcp__crm-prod__delete",
-                )
+            result_trust=MappingProxyType(
+                {tool: ContextTrust.SENSITIVE for tool in allowed}
             ),
         )
+
+    unchanged = enforce_published_tool_directory(snapshot, resolved())
+    assert unchanged.allowed_tools == ("mcp__crm-prod__search",)
+    with pytest.raises(ToolResolutionError, match="builtin tools differ"):
+        enforce_published_tool_directory(snapshot, resolved(builtins=("Read", "Bash")))
+    with pytest.raises(
+        ToolResolutionError,
+        match="published MCP tools are no longer available.*mcp__crm-prod__search",
+    ):
+        enforce_published_tool_directory(snapshot, resolved(allowed=()))
+    filtered = enforce_published_tool_directory(
+        snapshot,
+        resolved(
+            allowed=(
+                "mcp__crm-prod__search",
+                "mcp__crm-prod__delete",
+            )
+        ),
+    )
+    assert filtered.allowed_tools == ("mcp__crm-prod__search",)
+    assert filtered.result_trust == {
+        "mcp__crm-prod__search": ContextTrust.SENSITIVE
+    }

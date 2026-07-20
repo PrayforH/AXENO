@@ -30,6 +30,13 @@ class Membership(BaseModel):
     created_at: datetime
 
 
+class TenantMember(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user: AuthUser
+    membership: Membership
+
+
 class RefreshToken(BaseModel):
     model_config = ConfigDict(frozen=True)
 

@@ -82,9 +82,9 @@ class ReliabilityService:
             "harness_event_visibility_delay_seconds", 0.95
         )
         cancel, cancel_count = self.metrics.quantile(
-            "harness_api_request_duration_seconds",
+            "harness_workflow_convergence_seconds",
             0.95,
-            labels={"operation": "run.cancel"},
+            labels={"workflow": "run.cancel"},
         )
         approval, approval_count = self.metrics.quantile(
             "harness_api_request_duration_seconds",
@@ -129,8 +129,8 @@ class ReliabilityService:
                 "取消收敛 P95",
                 cancel,
                 cancel_count,
-                10,
-                "cancel API",
+                3,
+                "durable run lifecycle",
             ),
             self._latency(
                 "approval_convergence_p95",

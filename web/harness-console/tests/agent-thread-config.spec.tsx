@@ -60,6 +60,7 @@ import {
   AgentThread,
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
+  shouldShowComposerStop,
 } from "../src/components/agent-thread";
 
 const agentThreadSource = readFileSync(
@@ -101,6 +102,19 @@ it("keeps sandbox and keyboard guidance adjacent to the composer", () => {
   expect(agentThreadSource).toContain("处理审批后，Agent 会从当前步骤继续");
   expect(agentThreadSource).not.toContain('className="composer-stop-button"');
   expect(agentThreadSource).toContain('cancel: { tooltip: "停止运行" }');
+});
+
+it("switches the single composer action to stop for either active run signal", () => {
+  expect(shouldShowComposerStop(true, "idle")).toBe(true);
+  expect(shouldShowComposerStop(false, "running")).toBe(true);
+  expect(shouldShowComposerStop(false, "complete")).toBe(false);
+  expect(shouldShowComposerStop(false, "error")).toBe(false);
+  expect(agentThreadSource).toContain(
+    'className="aui-button aui-button-primary aui-button-icon aui-composer-cancel"',
+  );
+  expect(agentThreadSource).toContain("aui.thread().cancelRun()");
+  expect(agentThreadSource).toContain("<Composer.Send />");
+  expect(agentThreadSource).not.toContain("<Composer.Action");
 });
 
 it("keeps assistant output avatar-free so activity rows cannot overlap it", () => {
@@ -151,11 +165,12 @@ it("places each run activity before its assistant answer", () => {
   expect(agentThreadSource).toContain(
     'data-activity-source="current-run"',
   );
-  expect(agentThreadSource).toContain(
-    "stream.runId,",
-  );
+  expect(agentThreadSource).not.toContain("stream.runId,");
   expect(agentThreadSource).toContain("nativeResponseStarted ||");
-  expect(agentThreadSource).toContain("live.runId === runView?.runId");
+  expect(agentThreadSource).toContain(
+    "(Boolean(live.text.trim()) && live.visible)",
+  );
+  expect(agentThreadSource).not.toContain("live.runId === runView?.runId");
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");
 });
 
@@ -165,6 +180,9 @@ it("renders uploaded message files with a same-origin download link", () => {
   ).toBe("/api/input-artifacts/input_artifact_123/content");
   expect(agentThreadSource).toContain("HarnessMessageAttachment");
   expect(agentThreadSource).toContain("点击下载");
+  expect(agentThreadSource).toContain('data-kind={isImage ? "image" : "file"}');
+  expect(agentThreadSource).toContain("message-attachment-preview");
+  expect(agentThreadSource).toContain("点击查看");
 });
 
 it("keeps final assistant text mounted while tool-bearing responses stream", () => {

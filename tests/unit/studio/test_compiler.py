@@ -3,6 +3,8 @@ from datetime import UTC, datetime
 from io import BytesIO
 from zipfile import ZipFile
 
+import yaml
+
 from harness.core.manifest import ToolDirectorySnapshot
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import AgentDraftCompiler
@@ -71,6 +73,57 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
     }
 
 
+def test_missing_eval_coverage_has_a_stable_actionable_issue() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    current = draft()
+    without_ambiguous = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={
+                    "evaluation_cases": tuple(
+                        case
+                        for case in current.spec.evaluation_cases
+                        if "ambiguous" not in case.tags
+                    )
+                }
+            )
+        }
+    )
+
+    validation = compiler.validate(without_ambiguous)
+
+    issue = next(
+        item
+        for item in validation.issues
+        if item.code == "evaluation_coverage_ambiguous_missing"
+    )
+    assert validation.ready is False
+    assert issue.path == "evaluationCases"
+    assert issue.message == "evaluation suite is missing ambiguous coverage"
+
+
+def test_disabled_eval_does_not_block_bundle_coverage() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    current = draft()
+    disabled = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={
+                    "evaluation_enabled": False,
+                    "evaluation_cases": (current.spec.evaluation_cases[0],),
+                }
+            )
+        }
+    )
+
+    validation = compiler.validate(disabled)
+    compiled = compiler.compile(disabled)
+
+    assert validation.ready is True
+    manifest = yaml.safe_load(compiled.manifest_yaml)
+    assert manifest["metadata"]["labels"]["evaluation-enabled"] == "false"
+
+
 def test_knowledge_references_are_pinned_in_manifest_and_effective_contract() -> None:
     compiler = AgentDraftCompiler(default_capability_catalog())
     current = draft()
@@ -127,6 +180,7 @@ def test_on_demand_bundle_pins_reviewed_tool_directory_and_route_capability() ->
                     "model": current.spec.model.model_copy(
                         update={
                             "route_id": "anthropic-official",
+                            "model": "claude-sonnet-4-6",
                             "required_capabilities": (
                                 "streaming",
                                 "tool_use",

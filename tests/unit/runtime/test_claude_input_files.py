@@ -82,6 +82,7 @@ async def test_runtime_adds_staged_input_inventory_to_prompt(tmp_path: Path) -> 
         ),
         workspace=tmp_path,
         input_files=("inputs/abc-facts.txt", "inputs/def-table.csv"),
+        processed_input_paths=("inputs/def-table.csv",),
     )
 
     _events = [event async for event in runtime.execute(context)]
@@ -89,7 +90,13 @@ async def test_runtime_adds_staged_input_inventory_to_prompt(tmp_path: Path) -> 
     assert prompts == [
         "Find the unique fact.\n\n"
         "Browser-uploaded input files are available in this run workspace:\n"
-        "- inputs/abc-facts.txt\n"
+        "Preferred model-readable representations:\n"
         "- inputs/def-table.csv\n"
+        "Read these exact relative paths first. When a processed representation "
+        "is listed, do not call Read on its source PDF or Office binary.\n\n"
+        "Original uploads:\n"
+        "- inputs/abc-facts.txt\n"
+        "Read an original directly only when no processed representation exists, "
+        "such as for an image.\n"
         "Use the available file tools to inspect them when relevant."
     ]

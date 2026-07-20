@@ -13,8 +13,19 @@ from harness.api.dependencies import (
     get_container,
     require_identity,
 )
-from harness.auth.models import AuditEntry, AuthSession, AuthUser, Membership
-from harness.auth.service import AuthenticationError, RegistrationDisabledError
+from harness.auth.models import (
+    AuditEntry,
+    AuthSession,
+    AuthUser,
+    Membership,
+    Role,
+    TenantMember,
+)
+from harness.auth.service import (
+    AuthenticationError,
+    MembershipPermissionError,
+    RegistrationDisabledError,
+)
 from harness.core.errors import ConflictError
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -48,6 +59,10 @@ class UpdateProfileRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=10, max_length=256)
+
+
+class UpdateMemberRoleRequest(BaseModel):
+    role: Role
 
 
 class AuthProfile(BaseModel):
@@ -213,9 +228,7 @@ async def me(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> AuthProfile:
-    user, membership = await container.auth.profile(
-        identity.tenant_id, identity.user_id
-    )
+    user, membership = await container.auth.profile(identity.tenant_id, identity.user_id)
     return AuthProfile(
         user=user,
         membership=membership,
@@ -302,6 +315,46 @@ async def audit_logs(
     limit: int = 100,
 ) -> list[AuditEntry]:
     ensure_permission(identity, "audit:read")
-    return await container.audit.list_for_tenant(
-        identity.tenant_id, limit=max(1, min(limit, 500))
+    return await container.audit.list_for_tenant(identity.tenant_id, limit=max(1, min(limit, 500)))
+
+
+@router.get("/members", response_model=list[TenantMember])
+async def list_members(
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[TenantMember]:
+    ensure_permission(identity, "members:read")
+    return await container.auth.list_members(identity.tenant_id)
+
+
+@router.patch("/members/{target_user_id}", response_model=TenantMember)
+async def update_member_role(
+    target_user_id: str,
+    body: UpdateMemberRoleRequest,
+    request: Request,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> TenantMember:
+    ensure_permission(identity, "members:write")
+    try:
+        member = await container.auth.update_member_role(
+            tenant_id=identity.tenant_id,
+            actor_user_id=identity.user_id,
+            target_user_id=target_user_id,
+            role=body.role,
+        )
+    except MembershipPermissionError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "membership_transition_denied", "message": str(error)},
+        ) from error
+    await container.audit.record(
+        tenant_id=identity.tenant_id,
+        user_id=identity.user_id,
+        action="auth.membership.role.update",
+        resource_type="tenant_membership",
+        resource_id=target_user_id,
+        details={"role": body.role},
+        **_request_context(request),
     )
+    return member

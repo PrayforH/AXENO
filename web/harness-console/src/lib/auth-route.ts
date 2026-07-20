@@ -116,6 +116,55 @@ export async function authenticatedAuthMutation(
   return new Response(responseBody, { status: upstream.status, headers });
 }
 
+export async function authenticatedAuthProxy(
+  request: Request,
+  path: string,
+): Promise<Response> {
+  const config = getHarnessServerConfig();
+  const hasBody = request.method !== "GET" && request.method !== "HEAD";
+  const body = hasBody ? await request.text() : undefined;
+  let accessToken = readCookie(request, ACCESS_COOKIE);
+  let refreshed: AuthSessionPayload | undefined;
+  if (!accessToken) {
+    refreshed = await refreshSession(request, config);
+    accessToken = refreshed?.access_token;
+  }
+  const headers = new Headers();
+  if (!accessToken) {
+    appendClearedSessionCookies(headers, config);
+    return Response.json(
+      { error: { code: "auth_required", message: "登录状态已失效，请重新登录。" } },
+      { status: 401, headers },
+    );
+  }
+  const forward = (token: string) =>
+    fetch(`${config.apiUrl}/v1/auth/${path}`, {
+      method: request.method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
+      },
+      body,
+      cache: "no-store",
+    });
+  let upstream = await forward(accessToken);
+  if (upstream.status === 401 && !refreshed) {
+    refreshed = await refreshSession(request, config);
+    if (refreshed) upstream = await forward(refreshed.access_token);
+  }
+  const contentType = upstream.headers.get("content-type");
+  if (contentType) headers.set("Content-Type", contentType);
+  if (refreshed) {
+    appendSessionCookies(headers, refreshed, config);
+  } else if (upstream.status === 401) {
+    appendClearedSessionCookies(headers, config);
+  }
+  return new Response(await upstream.text(), {
+    status: upstream.status,
+    headers,
+  });
+}
+
 export async function logoutSession(request: Request): Promise<Response> {
   const config = getHarnessServerConfig();
   const refreshToken = readCookie(request, "harness_refresh_token");

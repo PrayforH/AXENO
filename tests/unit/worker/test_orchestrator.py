@@ -15,9 +15,11 @@ from harness.adapters.memory import (
     InMemoryEventRepository,
     InMemoryRunRepository,
     InMemorySessionRepository,
+    InMemoryTaskQueue,
 )
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
+from harness.application.runs import RunService
 from harness.config import Settings
 from harness.core.models import Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
@@ -29,6 +31,7 @@ from harness.policy.runtime import ResolvedPolicy
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 from harness.quota.repositories import InMemoryQuotaRepository
 from harness.quota.service import QuotaService
+from harness.reliability.metrics import ReliabilityMetrics
 from harness.runtime.base import (
     RuntimeContext,
     RuntimeEvent,
@@ -36,6 +39,7 @@ from harness.runtime.base import (
     RuntimeResultError,
 )
 from harness.runtime.fake import FakeRuntime
+from harness.runtime.tools import ToolResolutionError
 from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
 from harness.worker.orchestrator import (
@@ -188,6 +192,16 @@ class WorkspaceOutputRuntime(FakeRuntime):
         output.parent.mkdir(parents=True)
         output.write_text("verified output")
         yield RuntimeEvent(type="message.completed")
+
+
+class ToolResolutionFailureRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        raise ToolResolutionError(
+            "published MCP tools are no longer available; "
+            "recheck and publish the Agent: mcp__knowledge__search"
+        )
+        yield
 
 
 class ContainerSandboxProvider(LocalSandboxProvider):
@@ -695,6 +709,29 @@ async def test_runtime_failure_marks_run_failed_and_cleans_sandbox(tmp_path: Pat
     assert events[-1].type == "run.failed"
 
 
+@pytest.mark.asyncio
+async def test_tool_resolution_failure_explains_required_agent_sync(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, event_repository = await arrange(
+        tmp_path,
+        runtime_override=ToolResolutionFailureRuntime(),
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    events = await event_repository.list_after("tenant-a", "run-1", 0)
+    assert events[-1].payload == {
+        "error_code": "runtime_error",
+        "error_type": "ToolResolutionError",
+        "message": (
+            "published MCP tools are no longer available; "
+            "recheck and publish the Agent: mcp__knowledge__search"
+        ),
+    }
+
+
 class PausableRuntime:
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -874,28 +911,34 @@ async def test_cancellation_interrupts_background_sub_and_emits_child_terminal(
     )
     await sessions.add(session)
     await runs.add(run)
+    metrics = ReliabilityMetrics()
+    event_service = EventService(
+        events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
+    )
     orchestrator = RunOrchestrator(
         sessions=sessions,
         runs=runs,
-        events=EventService(
-            events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
-        ),
+        events=event_service,
         runtime=runtime,
         sandbox=LocalSandboxProvider(root=tmp_path),
         clock=lambda: NOW,
         cancellation_poll_interval_seconds=0.01,
+        metrics=metrics,
+    )
+    run_service = RunService(
+        sessions,
+        runs,
+        InMemoryTaskQueue(),
+        event_service,
+        clock=lambda: NOW,
+        id_generator=ids(),
+        metrics=metrics,
     )
 
     execution = asyncio.create_task(orchestrator.execute("tenant-a", "run-1"))
     await runtime.started.wait()
-    current = await runs.get("tenant-a", "run-1")
-    cancelling = current.model_copy(
-        update={
-            "status": RunStatus.CANCELLING,
-            "fencing_token": current.fencing_token + 1,
-        }
-    )
-    assert await runs.compare_and_set(RunStatus.RUNNING, cancelling)
+    cancelling = await run_service.cancel("tenant-a", "run-1")
+    assert cancelling.status is RunStatus.CANCELLING
 
     result = await asyncio.wait_for(execution, timeout=1)
     emitted = await events.list_after("tenant-a", "run-1", 0)
@@ -908,6 +951,13 @@ async def test_cancellation_interrupts_background_sub_and_emits_child_terminal(
     assert child_terminal.payload["task_id"] == "background-one"
     assert child_terminal.payload["error_code"] == "parent_cancelled"
     assert emitted[-1].type == "run.cancelled"
+    convergence, count = metrics.quantile(
+        "harness_workflow_convergence_seconds",
+        0.95,
+        labels={"workflow": "run.cancel"},
+    )
+    assert convergence == 0
+    assert count == 1
 
 
 @pytest.mark.asyncio

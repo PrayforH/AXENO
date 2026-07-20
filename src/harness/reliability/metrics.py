@@ -28,6 +28,12 @@ DEFINITIONS = (
         "summary",
     ),
     MetricDefinition(
+        "harness_workflow_convergence_seconds",
+        "End-to-end convergence time for bounded control workflows.",
+        "summary",
+        ("workflow",),
+    ),
+    MetricDefinition(
         "harness_artifact_download_total",
         "Artifact download attempts by outcome.",
         "counter",
@@ -71,6 +77,9 @@ LABEL_VALUE_ALLOWLISTS: dict[tuple[str, str], frozenset[str]] = {
     ),
     ("harness_artifact_download_total", "outcome"): frozenset(
         {"success", "failure"}
+    ),
+    ("harness_workflow_convergence_seconds", "workflow"): frozenset(
+        {"run.cancel"}
     ),
     ("harness_trace_terminal_total", "completeness"): frozenset(
         {"complete", "missing"}

@@ -281,7 +281,7 @@ export function reduceRunViewModel(
       Number.isFinite(started) && Number.isFinite(updated)
         ? Math.max(0, updated - started)
         : 0,
-    summary: latestActive?.title ?? "准备执行",
+    summary: latestActive?.summary?.trim() || latestActive?.title || "准备执行",
     items,
     tasks,
     tools,

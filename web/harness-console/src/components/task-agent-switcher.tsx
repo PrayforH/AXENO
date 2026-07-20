@@ -1,9 +1,56 @@
 "use client";
 
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   agentCoordinate,
   type TaskAgent,
 } from "../lib/task-agent-catalog";
+
+export interface TaskAgentGroup {
+  name: string;
+  displayName: string;
+  domain: string;
+  agents: TaskAgent[];
+}
+
+export function groupTaskAgents(
+  agents: readonly TaskAgent[],
+  query = "",
+): TaskAgentGroup[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const matching = normalizedQuery
+    ? agents.filter((agent) =>
+        [agent.displayName, agent.name, agent.version, agent.domain]
+          .join(" ")
+          .toLocaleLowerCase()
+          .includes(normalizedQuery),
+      )
+    : agents;
+  const groups = new Map<string, TaskAgentGroup>();
+  for (const agent of matching) {
+    const group = groups.get(agent.name);
+    if (group) {
+      group.agents.push(agent);
+    } else {
+      groups.set(agent.name, {
+        name: agent.name,
+        displayName: agent.displayName,
+        domain: agent.domain,
+        agents: [agent],
+      });
+    }
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      agents: group.agents.toSorted((left, right) =>
+        right.version.localeCompare(left.version, undefined, { numeric: true }),
+      ),
+    }))
+    .toSorted((left, right) =>
+      left.displayName.localeCompare(right.displayName, "zh-CN"),
+    );
+}
 
 export function TaskAgentSwitcher({
   agents,
@@ -16,37 +63,133 @@ export function TaskAgentSwitcher({
   loading: boolean;
   onChange: (agent: TaskAgent) => void;
 }) {
-  const coordinate = selected ? agentCoordinate(selected) : "";
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listboxId = useId();
+  const groups = useMemo(() => groupTaskAgents(agents, query), [agents, query]);
+  const disabled = loading || agents.length === 0;
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const close = (event: MouseEvent) => {
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+
+  const choose = (agent: TaskAgent) => {
+    setOpen(false);
+    setQuery("");
+    if (agentCoordinate(agent) !== (selected ? agentCoordinate(selected) : "")) {
+      onChange(agent);
+    }
+  };
+
   return (
-    <label className="task-agent-switcher" htmlFor="task-agent-select">
-      <span className="task-agent-switcher-mark" aria-hidden="true">
-        <i />
-        <i />
-      </span>
-      <span className="task-agent-switcher-copy">
-        <small>当前智能体</small>
-        <strong>{selected?.displayName ?? (loading ? "正在读取…" : "暂无可用版本")}</strong>
-      </span>
-      <select
-        id="task-agent-select"
-        value={coordinate}
-        disabled={loading || agents.length === 0}
+    <div className="task-agent-switcher" ref={rootRef} data-open={open || undefined}>
+      <button
+        className="task-agent-switcher-trigger"
+        type="button"
+        disabled={disabled}
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-haspopup="listbox"
         aria-label="切换任务智能体；切换后创建新任务"
         title="切换智能体会创建一个新任务，历史任务仍使用原版本"
-        onChange={(event) => {
-          const next = agents.find(
-            (agent) => agentCoordinate(agent) === event.target.value,
-          );
-          if (next) onChange(next);
+        onClick={() => {
+          setQuery("");
+          setOpen((current) => !current);
         }}
       >
-        {agents.map((agent) => (
-          <option key={agentCoordinate(agent)} value={agentCoordinate(agent)}>
-            {agent.displayName} · {agent.version}
-          </option>
-        ))}
-      </select>
-      <span className="task-agent-switcher-chevron" aria-hidden="true" />
-    </label>
+        <span className="task-agent-switcher-mark" aria-hidden="true">
+          <i />
+          <i />
+        </span>
+        <span className="task-agent-switcher-copy">
+          <small>当前智能体</small>
+          <strong>
+            {selected?.displayName ?? (loading ? "正在读取…" : "暂无可用版本")}
+          </strong>
+          {selected && <span>{selected.version}</span>}
+        </span>
+        <span className="task-agent-switcher-chevron" aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div className="task-agent-menu">
+          <header>
+            <div>
+              <strong>选择智能体</strong>
+              <small>{agents.length} 个已发布版本</small>
+            </div>
+            <span>切换后新建任务</span>
+          </header>
+          <label className="task-agent-search">
+            <span aria-hidden="true" />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              placeholder="搜索名称、标识或版本"
+              aria-label="搜索智能体"
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <div className="task-agent-options" id={listboxId} role="listbox">
+            {groups.length === 0 ? (
+              <p className="task-agent-empty">没有匹配的智能体</p>
+            ) : (
+              groups.map((group) => (
+                <section className="task-agent-group" key={group.name}>
+                  <div className="task-agent-group-copy">
+                    <strong>{group.displayName}</strong>
+                    <span>{group.name}</span>
+                  </div>
+                  <div className="task-agent-versions">
+                    {group.agents.map((agent) => {
+                      const coordinate = agentCoordinate(agent);
+                      const active =
+                        coordinate ===
+                        (selected ? agentCoordinate(selected) : "");
+                      return (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={active ? "is-active" : undefined}
+                          key={coordinate}
+                          onClick={() => choose(agent)}
+                        >
+                          <span>{agent.version}</span>
+                          {active && <small>当前</small>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

@@ -346,7 +346,12 @@ class LivePreflightRunner:
             )
 
         async def approval_check() -> PreflightEvidence:
-            assert draft is not None and manifest is not None and handle is not None
+            assert (
+                draft is not None
+                and compiled is not None
+                and manifest is not None
+                and handle is not None
+            )
             policy = (
                 (
                     await self._policy_resolver(
@@ -357,11 +362,18 @@ class LivePreflightRunner:
                 if self._policy_resolver is not None
                 else self._policies.resolve(manifest.spec.permissions.policy)
             )
-            declared = {
-                tool.builtin for tool in manifest.spec.tools if tool.builtin is not None
-            }
+            directory = compiled.report.snapshot.tool_directory
+            declared = (
+                {entry.name for entry in directory.entries}
+                if directory is not None
+                else {
+                    tool.builtin
+                    for tool in manifest.spec.tools
+                    if tool.builtin is not None
+                }
+            )
             decisions: dict[str, str | int | bool] = {}
-            for tool_name in ("Write", "Edit", "Bash"):
+            for tool_name in sorted(declared):
                 result = policy.evaluate(
                     PolicyContext(
                         tenant_id=preview.tenant_id,
@@ -370,20 +382,23 @@ class LivePreflightRunner:
                         arguments=(
                             {"command": "printf preflight"}
                             if tool_name == "Bash"
-                            else {"file_path": "output/preflight.txt"}
+                            else (
+                                {"file_path": "output/preflight.txt"}
+                                if tool_name in {"Read", "Write", "Edit"}
+                                else {}
+                            )
                         ),
                         sandbox_isolation=handle.isolation_level,
                     )
                 )
                 decisions[tool_name] = result.decision.value
-                if tool_name in declared and result.decision is PolicyDecision.DENY:
+                if result.decision is PolicyDecision.DENY:
                     raise PreflightCheckError(
                         "approval_policy_mismatch",
-                        "A declared write capability is denied by its policy",
+                        f"Declared tool {tool_name} is denied by its permission profile",
                     )
                 if (
                     tool_name == "Bash"
-                    and tool_name in declared
                     and result.decision is not PolicyDecision.ASK
                 ):
                     raise PreflightCheckError(
@@ -391,7 +406,7 @@ class LivePreflightRunner:
                         "Declared Bash must enter human approval",
                     )
             return PreflightEvidence(
-                summary="Write, Edit and Bash policy boundary passed",
+                summary="Declared tool permission coverage passed",
                 details=decisions,
             )
 

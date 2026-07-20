@@ -33,6 +33,19 @@ def _default_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
+def _published_evaluation_enabled(snapshot: dict[str, object]) -> bool:
+    manifest = snapshot.get("manifest")
+    if not isinstance(manifest, dict):
+        return True
+    metadata = manifest.get("metadata")
+    if not isinstance(metadata, dict):
+        return True
+    labels = metadata.get("labels")
+    if not isinstance(labels, dict):
+        return True
+    return str(labels.get("evaluation-enabled", "true")).lower() != "false"
+
+
 class EvalControlPlaneService:
     def __init__(
         self,
@@ -72,6 +85,8 @@ class EvalControlPlaneService:
                 "Agent draft revision changed before Eval Dataset creation: "
                 f"expected={request.expected_revision} actual={draft.revision}"
             )
+        if not draft.spec.evaluation_enabled:
+            raise ConflictError("Agent Eval is disabled for this draft")
         compiled = await self._studio.bundle(tenant_id, request.draft_id)
         dataset_id = request.dataset_id or self._id_generator("dataset")
         version = await self._datasets.next_version(tenant_id, dataset_id)
@@ -165,6 +180,8 @@ class EvalControlPlaneService:
         )
         if version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("Eval Runs require a published Agent version")
+        if not _published_evaluation_enabled(version.snapshot):
+            raise ConflictError("Agent Eval is disabled for this version")
         if request.preview_id is not None:
             if self._previews is None:
                 raise ConflictError("Preview association is not configured")
@@ -260,6 +277,16 @@ class EvalControlPlaneService:
     async def gate(
         self, tenant_id: str, agent_name: str, agent_version: str
     ) -> EvalGateResult:
+        version = await self._registry.get(tenant_id, agent_name, agent_version)
+        if not _published_evaluation_enabled(version.snapshot):
+            return EvalGateResult(
+                agentName=agent_name,
+                agentVersion=agent_version,
+                passed=True,
+                requiredDatasets=0,
+                passedDatasets=0,
+                missingDatasetIds=(),
+            )
         versions = await self._datasets.list_for_tenant(tenant_id)
         latest: dict[str, EvalDatasetVersion] = {}
         for dataset in versions:

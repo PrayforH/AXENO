@@ -21,11 +21,19 @@ def default_capability_catalog() -> CapabilityCatalog:
         modelRoutes=(
             ModelRouteCapability(
                 routeId="new-api-default",
-                label="Anthropic-compatible gateway",
-                provider="new-api",
-                models=("claude-sonnet-4-6",),
+                label="DeepSeek V4 Flash",
+                provider="deepseek",
+                models=("deepseek-v4-flash",),
                 capabilities=("streaming", "tool_use"),
                 credentialReference="NEW_API_KEY",
+            ),
+            ModelRouteCapability(
+                routeId="minimax-m3",
+                label="MiniMax M3",
+                provider="minimax",
+                models=("MiniMax-M3",),
+                capabilities=("streaming", "tool_use", "vision"),
+                credentialReference="MINIMAX_M3_API_KEY",
             ),
             ModelRouteCapability(
                 routeId="anthropic-official",
@@ -97,8 +105,10 @@ def default_capability_catalog() -> CapabilityCatalog:
         mcpServers=(
             McpCapability(
                 reference="tavily-readonly",
+                serverName="tavily",
                 label="公网搜索（Tavily）",
                 description="检索和抽取公开网页，不提供网页写入能力。",
+                endpointUrl="https://mcp.tavily.com/mcp/",
                 tools=(
                     "mcp__tavily__tavily_search",
                     "mcp__tavily__tavily_extract",
@@ -108,6 +118,9 @@ def default_capability_catalog() -> CapabilityCatalog:
                 sendsUserData=True,
                 executionLocation="external-mcp",
                 credentialReference="TAVILY_API_KEY",
+                authMode="query",
+                authName="tavilyApiKey",
+                authKey="api_key",
             ),
         ),
         policies=(

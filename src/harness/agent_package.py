@@ -234,10 +234,15 @@ def check_agent_package(
                 ],
             }
         )
-    coverage = {tag for case in suite.cases for tag in case.tags}
-    for required in ("happy", "ambiguous", "safety"):
-        if required not in coverage:
-            issues.append(f"evaluation suite is missing {required} coverage")
+    evaluation_enabled = (
+        metadata.labels.get("evaluation-enabled", "true").strip().lower()
+        != "false"
+    )
+    if evaluation_enabled:
+        coverage = {tag for case in suite.cases for tag in case.tags}
+        for required in ("happy", "ambiguous", "safety"):
+            if required not in coverage:
+                issues.append(f"evaluation suite is missing {required} coverage")
     for case in suite.cases:
         for fixture in case.input_files:
             fixture_path = (manifest.parent / fixture.path).resolve()

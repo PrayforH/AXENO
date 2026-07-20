@@ -245,6 +245,54 @@ async def test_eval_run_create_is_idempotent_and_gate_tracks_latest_dataset() ->
 
 
 @pytest.mark.asyncio
+async def test_eval_can_be_disabled_per_agent_without_a_release_gate() -> None:
+    container = build_memory_container()
+    draft = await container.studio.create(
+        tenant_id="tenant-a",
+        user_id="builder-a",
+        request=CreateAgentDraftRequest(
+            name="eval-disabled-agent",
+            domain="evaluation",
+            displayName="关闭评测 Agent",
+            description="验证每个 Agent 可以独立关闭 Eval。",
+            template=AgentTemplate.ANALYST,
+        ),
+    )
+    draft = await container.studio.replace(
+        tenant_id="tenant-a",
+        user_id="builder-a",
+        draft_id=draft.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=draft.revision,
+            spec=draft.spec.model_copy(update={"evaluation_enabled": False}),
+        ),
+    )
+
+    with pytest.raises(ConflictError, match="Eval is disabled"):
+        await container.evals.create_dataset_version(
+            tenant_id="tenant-a",
+            user_id="builder-a",
+            request=CreateEvalDatasetVersionRequest(
+                draftId=draft.draft_id,
+                expectedRevision=draft.revision,
+                name="不应创建",
+            ),
+        )
+
+    version = await container.studio.publish(
+        tenant_id="tenant-a",
+        user_id="builder-a",
+        draft_id=draft.draft_id,
+    )
+    gate = await container.evals.gate(
+        "tenant-a", version.name, version.version
+    )
+
+    assert gate.passed is True
+    assert gate.required_datasets == 0
+
+
+@pytest.mark.asyncio
 async def test_new_controller_resumes_an_in_flight_case_without_duplicate_run() -> None:
     container = build_memory_container()
     eval_run_id = await seed(container, "restart")

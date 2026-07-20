@@ -130,12 +130,8 @@ def test_refresh_tokens_rotate_and_reuse_revokes_the_family() -> None:
     with _client() as client:
         session = _register(client)
         first_refresh = session["refresh_token"]
-        rotated = client.post(
-            "/v1/auth/refresh", json={"refresh_token": first_refresh}
-        )
-        replay = client.post(
-            "/v1/auth/refresh", json={"refresh_token": first_refresh}
-        )
+        rotated = client.post("/v1/auth/refresh", json={"refresh_token": first_refresh})
+        replay = client.post("/v1/auth/refresh", json={"refresh_token": first_refresh})
         replacement = client.post(
             "/v1/auth/refresh",
             json={"refresh_token": rotated.json()["refresh_token"]},
@@ -201,6 +197,84 @@ def test_members_cannot_publish_agent_bundles() -> None:
     assert member["membership"]["role"] == "member"
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "permission_denied"
+
+
+def test_owner_can_list_members_and_update_roles() -> None:
+    with _client() as client:
+        owner = _register(client)
+        member = _register(client, "member@example.com")
+        owner_headers = {"Authorization": f"Bearer {owner['access_token']}"}
+        member_headers = {"Authorization": f"Bearer {member['access_token']}"}
+
+        listed = client.get("/v1/auth/members", headers=owner_headers)
+        denied = client.get("/v1/auth/members", headers=member_headers)
+        updated = client.patch(
+            f"/v1/auth/members/{member['user']['user_id']}",
+            headers=owner_headers,
+            json={"role": "admin"},
+        )
+        stale_access = client.get("/v1/auth/me", headers=member_headers)
+        refreshed = client.post(
+            "/v1/auth/refresh",
+            json={"refresh_token": member["refresh_token"]},
+        )
+
+    assert listed.status_code == 200
+    assert [item["user"]["email"] for item in listed.json()] == [
+        "owner@example.com",
+        "member@example.com",
+    ]
+    assert denied.status_code == 403
+    assert updated.status_code == 200
+    assert updated.json()["membership"]["role"] == "admin"
+    assert stale_access.status_code == 401
+    assert refreshed.status_code == 200
+    assert refreshed.json()["membership"]["role"] == "admin"
+
+
+def test_workspace_cannot_demote_its_last_owner() -> None:
+    with _client() as client:
+        owner = _register(client)
+        response = client.patch(
+            f"/v1/auth/members/{owner['user']['user_id']}",
+            headers={"Authorization": f"Bearer {owner['access_token']}"},
+            json={"role": "member"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "membership_transition_denied"
+
+
+def test_admin_cannot_assign_owner_or_manage_another_admin() -> None:
+    with _client() as client:
+        owner = _register(client)
+        first = _register(client, "first@example.com")
+        second = _register(client, "second@example.com")
+        owner_headers = {"Authorization": f"Bearer {owner['access_token']}"}
+        promoted = client.patch(
+            f"/v1/auth/members/{first['user']['user_id']}",
+            headers=owner_headers,
+            json={"role": "admin"},
+        )
+        admin_session = client.post(
+            "/v1/auth/refresh",
+            json={"refresh_token": first["refresh_token"]},
+        ).json()
+        admin_headers = {"Authorization": f"Bearer {admin_session['access_token']}"}
+        assign_owner = client.patch(
+            f"/v1/auth/members/{second['user']['user_id']}",
+            headers=admin_headers,
+            json={"role": "owner"},
+        )
+        demote_self = client.patch(
+            f"/v1/auth/members/{first['user']['user_id']}",
+            headers=admin_headers,
+            json={"role": "member"},
+        )
+
+    assert promoted.status_code == 200
+    assert assign_owner.status_code == 409
+    assert demote_self.status_code == 409
 
 
 @pytest.mark.asyncio

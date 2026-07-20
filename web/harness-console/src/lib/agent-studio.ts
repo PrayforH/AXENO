@@ -30,6 +30,7 @@ export interface BuiltinToolOption {
 
 export interface McpOption {
   id: string;
+  category?: "tool" | "knowledge";
   label: string;
   description: string;
   tools: string[];
@@ -100,6 +101,7 @@ export interface StudioDraft {
   maxSubagentTasks: number;
   maxConcurrentSubagents: number;
   maxSubagentUsageUnits: number;
+  evaluationEnabled: boolean;
   evalCases: StudioEvalCase[];
 }
 
@@ -124,10 +126,17 @@ export interface StudioContract {
 export const MODEL_ROUTES: ModelRouteOption[] = [
   {
     id: "new-api-default",
-    label: "Anthropic-compatible 网关",
-    provider: "new-api",
-    models: ["claude-sonnet-4-6"],
+    label: "DeepSeek V4 Flash",
+    provider: "deepseek",
+    models: ["deepseek-v4-flash"],
     capabilities: ["streaming", "tool_use"],
+  },
+  {
+    id: "minimax-m3",
+    label: "MiniMax M3",
+    provider: "minimax",
+    models: ["MiniMax-M3"],
+    capabilities: ["streaming", "tool_use", "vision"],
   },
   {
     id: "anthropic-official",
@@ -331,7 +340,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   version: "0.2.1",
   template: "orchestrator",
   modelRoute: "new-api-default",
-  model: "claude-sonnet-4-6",
+  model: "deepseek-v4-flash",
   requiredCapabilities: ["streaming", "tool_use"],
   systemPrompt: PUBLIC_OPINION_SYSTEM_PROMPT,
   skills: [
@@ -387,6 +396,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   maxSubagentTasks: 16,
   maxConcurrentSubagents: 4,
   maxSubagentUsageUnits: 200000,
+  evaluationEnabled: true,
   evalCases: [
     {
       id: "evidence-backed-brief",
@@ -489,6 +499,10 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
       typeof raw.archiveOnComplete === "boolean"
         ? raw.archiveOnComplete
         : DEFAULT_STUDIO_DRAFT.archiveOnComplete,
+    evaluationEnabled:
+      typeof raw.evaluationEnabled === "boolean"
+        ? raw.evaluationEnabled
+        : DEFAULT_STUDIO_DRAFT.evaluationEnabled,
   };
 }
 
@@ -552,9 +566,11 @@ export function evaluateStudioDraft(
   ) {
     issues.push("只读权限不能包含写入或命令工具");
   }
-  const tags = new Set(draft.evalCases.map((item) => item.tag));
-  for (const required of ["happy", "ambiguous", "safety"] as const) {
-    if (!tags.has(required)) issues.push(`评测集缺少 ${required} 场景`);
+  if (draft.evaluationEnabled) {
+    const tags = new Set(draft.evalCases.map((item) => item.tag));
+    for (const required of ["happy", "ambiguous", "safety"] as const) {
+      if (!tags.has(required)) issues.push(`评测集缺少 ${required} 场景`);
+    }
   }
   for (const testCase of draft.evalCases) {
     const overlap = testCase.expect.requiredTools.filter((tool) =>

@@ -3,6 +3,7 @@
 import { type FormEvent, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
 import { ThemeSelector } from "../../components/theme-toggle";
+import { WorkspaceMembers } from "../../components/workspace-members";
 
 const ROLE_LABELS = {
   owner: "所有者",
@@ -110,6 +111,7 @@ function SettingsContent() {
         <aside className="settings-index" aria-label="设置目录">
           <p>设置</p>
           <a href="#profile">个人资料</a>
+          <a href="#members">工作区成员</a>
           <a href="#appearance">外观</a>
           <a href="#security">账户安全</a>
           <a href="#data">我的数据</a>
@@ -120,8 +122,8 @@ function SettingsContent() {
         <div className="settings-content">
           <header className="settings-title">
             <p>账户设置</p>
-            <h1>管理你的身份与登录安全</h1>
-            <span>这些设置只影响当前用户，不会改变 Agent 或工作区运行配置。</span>
+            <h1>管理账户、工作区成员与登录安全</h1>
+            <span>个人设置只影响当前用户；工作区角色管理仅对 Owner / Admin 开放。</span>
           </header>
 
           <section className="settings-section" id="profile">
@@ -148,6 +150,17 @@ function SettingsContent() {
                 <button type="submit" disabled={profilePending}>{profilePending ? "正在保存…" : "保存资料"}</button>
               </div>
             </form>
+          </section>
+
+          <section className="settings-section" id="members">
+            <div className="settings-section-copy">
+              <h2>工作区成员</h2>
+              <p>Owner 管理全部角色；Admin 可管理普通成员和只读成员。至少保留一位 Owner。</p>
+            </div>
+            <WorkspaceMembers
+              currentUserId={user.user_id}
+              currentRole={membership.role}
+            />
           </section>
 
           <section className="settings-section" id="appearance">

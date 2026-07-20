@@ -108,6 +108,15 @@ def _required_int(value: dict[str, object], key: str) -> int:
     return item
 
 
+def _numeric_version(value: object) -> tuple[int, ...] | None:
+    if not isinstance(value, str):
+        return None
+    parts = value.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
 def _skill_payload(path: Path) -> dict[str, object]:
     skill_md = path / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
@@ -193,7 +202,9 @@ def studio_spec_from_manifest(manifest_path: Path) -> dict[str, object]:
             for subagent in manifest.spec.subagents
         ],
         "permissionPolicy": manifest.spec.permissions.policy,
-        "executionProfile": "isolated-default",
+        "executionProfile": labels.get("execution-profile", "isolated-default"),
+        "evaluationEnabled": labels.get("evaluation-enabled", "true").lower()
+        != "false",
         "workspace": {
             "restoreSession": manifest.spec.workspace.restore_session,
             "archiveOnComplete": manifest.spec.workspace.archive_on_complete,
@@ -264,7 +275,14 @@ def _sync_studio_agent(
     if not isinstance(draft, dict):
         raise ValueError("Studio draft response is invalid")
     draft_object = cast(dict[str, object], draft)
-    if draft_object.get("publishedVersion") == spec["version"]:
+    published_version = draft_object.get("publishedVersion")
+    if published_version == spec["version"]:
+        return
+    published_key = _numeric_version(published_version)
+    seed_key = _numeric_version(spec["version"])
+    if published_key is not None and seed_key is not None and published_key > seed_key:
+        # Seed manifests establish a baseline. Never roll a user-managed draft back
+        # over a newer immutable release during a repeated Compose startup.
         return
     draft_id = _required_str(draft_object, "draftId")
     revision = _required_int(draft_object, "revision")

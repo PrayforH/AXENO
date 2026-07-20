@@ -1,0 +1,920 @@
+"use client";
+
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "../auth-provider";
+import {
+  studioClient,
+  type StudioCapabilities,
+  type StudioCapabilityCatalogRecord,
+  type StudioCatalogImpact,
+  type StudioDraftSummary,
+  type StudioMcpDiscoveryResult,
+} from "../../lib/studio-client";
+import { StudioSidebar } from "./studio-sidebar";
+import styles from "./mcp-catalog-control-plane.module.css";
+
+type McpCapability = StudioCapabilities["mcpServers"][number];
+
+const EMPTY_MCP: McpCapability = {
+  reference: "",
+  category: "tool",
+  serverName: "",
+  label: "",
+  description: "",
+  endpointUrl: "",
+  transport: "http",
+  tools: [],
+  risk: "medium",
+  networkAccess: "external",
+  sendsUserData: true,
+  credentialManaged: true,
+  executionLocation: "external-mcp",
+  preflightRequired: true,
+  credentialReference: null,
+  authMode: "none",
+  authName: null,
+  authKey: "authorization",
+  version: 1,
+  enabled: true,
+};
+
+const RISK_LABELS = {
+  low: "低风险",
+  medium: "中风险",
+  high: "高风险",
+} as const;
+
+const NETWORK_LABELS = {
+  none: "无网络",
+  internal: "内部网络",
+  external: "外部网络",
+} as const;
+
+const TRANSPORT_LABELS = {
+  http: "Streamable HTTP",
+  sse: "SSE",
+} as const;
+
+type CatalogSyncImpact = {
+  label: string;
+  addedTools: string[];
+  removedTools: string[];
+  agents: Array<Pick<StudioDraftSummary, "draftId" | "displayName" | "publishedVersion">>;
+};
+
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+export function McpCatalogControlPlane({
+  mode = "mcp",
+}: {
+  mode?: "mcp" | "knowledge";
+}) {
+  const knowledgeMode = mode === "knowledge";
+  const category = knowledgeMode ? "knowledge" : "tool";
+  const { membership } = useAuth();
+  const canManage =
+    membership.role === "owner" || membership.role === "admin";
+  const [record, setRecord] = useState<StudioCapabilityCatalogRecord | null>(
+    null,
+  );
+  const [draft, setDraft] = useState<McpCapability>(EMPTY_MCP);
+  const [discovery, setDiscovery] =
+    useState<StudioMcpDiscoveryResult | null>(null);
+  const [toolQuery, setToolQuery] = useState("");
+  const [editingReference, setEditingReference] = useState<string | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [pendingDisable, setPendingDisable] =
+    useState<StudioCatalogImpact | null>(null);
+  const [pendingSync, setPendingSync] = useState<CatalogSyncImpact | null>(null);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const next = await studioClient.catalog();
+      setRecord(next);
+      setError("");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "能力目录暂时不可用。",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const entries = useMemo(
+    () =>
+      record?.catalog.mcpServers.filter((item) => item.category === category)
+      ?? [],
+    [category, record],
+  );
+  const activeCount = useMemo(
+    () => entries.filter((item) => item.enabled).length,
+    [entries],
+  );
+
+  function startCreate() {
+    setDraft({ ...EMPTY_MCP, category });
+    setDiscovery(null);
+    setToolQuery("");
+    setEditingReference(null);
+    setPendingDisable(null);
+    setPendingSync(null);
+    setNotice("");
+    setError("");
+    setShowForm(true);
+  }
+
+  function startEdit(item: McpCapability) {
+    setDraft({ ...item });
+    setDiscovery({
+      endpointUrl: item.endpointUrl ?? "",
+      transport: item.transport,
+      serverName: item.serverName ?? item.reference,
+      serverTitle: item.label,
+      serverVersion: null,
+      latencyMs: 0,
+      tools: item.tools.map((canonicalName) => ({
+        name: canonicalName.split("__").at(-1) ?? canonicalName,
+        canonicalName,
+        title: null,
+        description: "目录中已审核的工具；重新检测可刷新服务端说明。",
+      })),
+    });
+    setToolQuery("");
+    setEditingReference(item.reference);
+    setPendingDisable(null);
+    setPendingSync(null);
+    setNotice("");
+    setError("");
+    setShowForm(true);
+  }
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!record || !canManage) return;
+    const reference = draft.reference.trim();
+    if (!/^[a-z][a-z0-9-]*$/.test(reference)) {
+      setError("引用标识只能使用小写字母、数字和连字符，并以字母开头。");
+      return;
+    }
+    if (
+      !draft.label.trim() ||
+      !draft.description.trim() ||
+      !draft.endpointUrl?.trim() ||
+      draft.tools.length === 0
+    ) {
+      setError("名称、说明、MCP 地址和至少一个已检测工具不能为空。");
+      return;
+    }
+    setBusy("save");
+    setError("");
+    setNotice("");
+    try {
+      const previous = record.catalog.mcpServers.find(
+        (item) => item.reference === reference,
+      );
+      const result = await studioClient.upsertMcp(reference, record.revision, {
+        ...draft,
+        reference,
+        serverName: draft.serverName?.trim() || reference,
+        label: draft.label.trim(),
+        description: draft.description.trim(),
+        endpointUrl: draft.endpointUrl.trim(),
+        tools: draft.tools,
+        credentialReference:
+          draft.credentialReference?.trim().toUpperCase() || null,
+        version: editingReference ? draft.version + 1 : draft.version,
+        enabled: true,
+      });
+      setRecord(result.record);
+      setShowForm(false);
+      setEditingReference(null);
+      const previousTools = new Set(previous?.tools ?? []);
+      const nextTools = new Set(draft.tools);
+      const addedTools = draft.tools.filter((tool) => !previousTools.has(tool));
+      const removedTools = [...previousTools].filter((tool) => !nextTools.has(tool));
+      if (
+        previous
+        && (addedTools.length > 0 || removedTools.length > 0)
+        && result.impact.draftIds.length > 0
+      ) {
+        let summaries: StudioDraftSummary[] = [];
+        try {
+          summaries = await studioClient.listDrafts();
+        } catch {
+          // The catalog update already succeeded. Fall back to stable Draft IDs.
+        }
+        const byId = new Map(summaries.map((item) => [item.draftId, item]));
+        setPendingSync({
+          label: draft.label.trim(),
+          addedTools,
+          removedTools,
+          agents: result.impact.draftIds.map((draftId) => {
+            const summary = byId.get(draftId);
+            return {
+              draftId,
+              displayName: summary?.displayName ?? draftId,
+              publishedVersion: summary?.publishedVersion ?? null,
+            };
+          }),
+        });
+      }
+      setNotice(
+        `${draft.label.trim()} 已${editingReference ? "更新" : "注册"}，目录 revision 为 ${result.record.revision}。`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "MCP 未能保存。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function updateConnection(patch: Partial<McpCapability>) {
+    setDraft((current) => ({ ...current, ...patch, tools: [] }));
+    setDiscovery(null);
+    setToolQuery("");
+  }
+
+  async function discover() {
+    const reference = draft.reference.trim();
+    const serverName = draft.serverName?.trim() || reference;
+    if (
+      !/^[a-z][a-z0-9-]*$/.test(reference) ||
+      !/^[a-z][a-z0-9-]*$/.test(serverName) ||
+      !draft.endpointUrl?.trim()
+    ) {
+      setError("先填写有效的引用标识、服务名和 MCP 地址。");
+      return;
+    }
+    if (draft.networkAccess === "none") {
+      setError("HTTP MCP 必须选择内部网络或外部网络。");
+      return;
+    }
+    if (draft.authMode !== "none" && !draft.credentialReference) {
+      setError("启用鉴权时必须填写服务端凭据引用。");
+      return;
+    }
+    setBusy("discover");
+    setError("");
+    setNotice("");
+    try {
+      const result = await studioClient.discoverMcp({
+        reference,
+        serverName,
+        endpointUrl: draft.endpointUrl.trim(),
+        networkAccess: draft.networkAccess,
+        authMode: draft.authMode,
+        authName: draft.authName?.trim() || null,
+        authKey: draft.authKey,
+      });
+      setDiscovery(result);
+      setDraft((current) => ({
+        ...current,
+        reference,
+        serverName,
+        endpointUrl: result.endpointUrl,
+        transport: result.transport,
+        tools: result.tools.map((tool) => tool.canonicalName),
+      }));
+      setNotice(
+        `连接成功：已识别 ${TRANSPORT_LABELS[result.transport]}，${result.serverTitle ?? serverName} 返回 ${result.tools.length} 个工具，耗时 ${result.latencyMs}ms。`,
+      );
+    } catch (caught) {
+      setDiscovery(null);
+      setDraft((current) => ({ ...current, tools: [] }));
+      setError(
+        caught instanceof Error ? caught.message : "MCP 地址检测失败。",
+      );
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function toggleTool(canonicalName: string) {
+    setDraft((current) => ({
+      ...current,
+      tools: current.tools.includes(canonicalName)
+        ? current.tools.filter((item) => item !== canonicalName)
+        : [...current.tools, canonicalName],
+    }));
+  }
+
+  async function inspectDisable(reference: string) {
+    setBusy(reference);
+    setError("");
+    setNotice("");
+    try {
+      setPendingDisable(await studioClient.catalogImpact("mcp", reference));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "影响范围读取失败。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function disable(reference: string) {
+    if (!record || !canManage) return;
+    setBusy(reference);
+    setError("");
+    try {
+      const result = await studioClient.disableMcp(reference, record.revision);
+      setRecord(result.record);
+      setPendingDisable(null);
+      setNotice(
+        `${reference} 已停用；${result.impact.draftIds.length} 个草稿仍保留引用，发布前会被校验拦截。`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "MCP 未能停用。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function enable(item: McpCapability) {
+    if (!record || !canManage) return;
+    setBusy(item.reference);
+    setError("");
+    try {
+      const result = await studioClient.upsertMcp(
+        item.reference,
+        record.revision,
+        { ...item, enabled: true, version: item.version + 1 },
+      );
+      setRecord(result.record);
+      setNotice(`${item.label} 已重新启用。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "MCP 未能启用。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <main className={styles.shell} id="main-content">
+      <StudioSidebar active={knowledgeMode ? "knowledge" : "capabilities"}>
+        <div className={styles.railCopy}>
+          <strong>{knowledgeMode ? "外部知识" : "能力治理"}</strong>
+          <p>
+            {knowledgeMode
+              ? "平台只登记外部知识服务与检索工具，不上传资料、不切片，也不保存向量。"
+              : "MCP 目录、凭据引用与智能体绑定相互分离。浏览器不会保存连接密钥。"}
+          </p>
+        </div>
+      </StudioSidebar>
+
+      <section className={styles.content}>
+        <header className={styles.hero}>
+          <div>
+            <p>{knowledgeMode ? "External knowledge connections" : "Governed capability catalog"}</p>
+            <h1>{knowledgeMode ? "接入外部知识库" : "MCP 能力目录"}</h1>
+            <span>
+              {knowledgeMode
+                ? "通过 MCP 地址连接已有知识平台，手动检测并选择检索工具，再由智能体按引用绑定。文档、切片、Embedding 与向量索引均留在外部系统。"
+                : "先登记可调用工具和数据边界，再由智能体按引用绑定；目录变更采用 revision 校验，避免覆盖并发修改。"}
+            </span>
+          </div>
+          <dl>
+            <div>
+              <dt>已登记</dt>
+              <dd>{record ? entries.length : "—"}</dd>
+            </div>
+            <div>
+              <dt>启用中</dt>
+              <dd>{record ? activeCount : "—"}</dd>
+            </div>
+            <div>
+              <dt>目录版本</dt>
+              <dd>{record ? `r${record.revision}` : "—"}</dd>
+            </div>
+          </dl>
+          {canManage && (
+            <button className={styles.primary} type="button" onClick={startCreate}>
+              {knowledgeMode ? "连接知识库" : "注册 MCP"}
+            </button>
+          )}
+        </header>
+
+        <div className={styles.scopeNote}>
+          <strong>工作区共享目录</strong>
+          <span>
+            {knowledgeMode
+              ? "连接信息对当前工作区成员可见，但不会自动加入任何智能体；需要在智能体草稿中显式绑定。外部资料、检索权限和凭据仍由知识服务控制。"
+              : "MCP 定义和已审核工具对当前工作区成员共享，但不会自动授权给所有智能体；每个智能体都要显式绑定，凭据按个人、团队或工作负载作用域注入。"}
+          </span>
+        </div>
+
+        {!canManage && (
+          <div className={styles.permissionNote}>
+            <strong>当前为只读目录</strong>
+            <span>Owner / Admin 可以注册、更新和停用连接；成员可查看并在智能体中绑定已启用能力。</span>
+          </div>
+        )}
+        {notice && <p className={styles.notice} role="status">{notice}</p>}
+        {error && <p className={styles.error} role="alert">{error}</p>}
+        {pendingSync && (
+          <div className={styles.dialogBackdrop}>
+            <section
+              aria-labelledby="catalog-sync-title"
+              aria-modal="true"
+              className={styles.syncDialog}
+              role="dialog"
+            >
+              <header>
+                <span className={styles.syncMark} aria-hidden="true">↻</span>
+                <div>
+                  <p>Agent authorization changed</p>
+                  <h2 id="catalog-sync-title">这些智能体需要同步</h2>
+                </div>
+              </header>
+              <p>
+                「{pendingSync.label}」的工具列表已更新。现有发布版本仍按原授权运行，
+                不会自动获得新增工具。
+              </p>
+              <div className={styles.syncChanges}>
+                {pendingSync.addedTools.length > 0 && (
+                  <div>
+                    <strong>新增 {pendingSync.addedTools.length}</strong>
+                    <span>重新预检并发布后才可调用</span>
+                    {pendingSync.addedTools.map((tool) => <code key={tool}>{tool}</code>)}
+                  </div>
+                )}
+                {pendingSync.removedTools.length > 0 && (
+                  <div data-removed="true">
+                    <strong>移除 {pendingSync.removedTools.length}</strong>
+                    <span>原发布版本缺少这些工具时会被明确拦截</span>
+                    {pendingSync.removedTools.map((tool) => <code key={tool}>{tool}</code>)}
+                  </div>
+                )}
+              </div>
+              <div className={styles.affectedAgents}>
+                <strong>受影响的智能体</strong>
+                <ul>
+                  {pendingSync.agents.map((agent) => (
+                    <li key={agent.draftId}>
+                      <span>{agent.displayName}</span>
+                      <small>{agent.publishedVersion ? `已发布 ${agent.publishedVersion}` : "草稿"}</small>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <footer>
+                <button type="button" onClick={() => setPendingSync(null)}>
+                  稍后处理
+                </button>
+                <a
+                  href={`/studio/agents?draft=${encodeURIComponent(
+                    pendingSync.agents[0]?.draftId ?? "",
+                  )}&section=capabilities&source=knowledge-sync`}
+                >
+                  去智能体更新
+                </a>
+              </footer>
+            </section>
+          </div>
+        )}
+
+        <section className={styles.catalog} aria-label={knowledgeMode ? "外部知识库连接列表" : "MCP 能力列表"}>
+          <header>
+            <div>
+              <p>Registry</p>
+              <h2>{knowledgeMode ? "已连接的知识服务" : "已登记能力"}</h2>
+            </div>
+            {record && (
+              <span>
+                更新于 {formatDate(record.updatedAt)} · {record.updatedBy}
+              </span>
+            )}
+          </header>
+          {!record ? (
+            <div className={styles.empty}>正在读取能力目录…</div>
+          ) : entries.length === 0 ? (
+            <button className={styles.emptyAction} type="button" onClick={startCreate}>
+              <strong>{knowledgeMode ? "还没有外部知识库" : "还没有 MCP 能力"}</strong>
+              <span>{canManage ? (knowledgeMode ? "连接已有知识服务并检测检索工具" : "登记第一个服务及其工具边界") : "请联系工作区管理员完成登记"}</span>
+            </button>
+          ) : (
+            <div className={styles.cards}>
+              {entries.map((item) => (
+                <article key={item.reference} data-enabled={item.enabled}>
+                  <div className={styles.cardHead}>
+                    <span className={styles.capabilityMark} aria-hidden="true">
+                      {knowledgeMode ? "KB" : "MCP"}
+                    </span>
+                    <div>
+                      <strong>{item.label}</strong>
+                      <code>{item.reference}</code>
+                    </div>
+                    <span className={styles.status}>
+                      {item.enabled ? "已启用" : "已停用"}
+                    </span>
+                  </div>
+                  <p>{item.description}</p>
+                  {item.endpointUrl && <code className={styles.endpoint}>{item.endpointUrl}</code>}
+                  <div className={styles.badges}>
+                    <span>{TRANSPORT_LABELS[item.transport]}</span>
+                    <span data-risk={item.risk}>{RISK_LABELS[item.risk]}</span>
+                    <span>{NETWORK_LABELS[item.networkAccess]}</span>
+                    <span>{item.sendsUserData ? "发送用户数据" : "不发送用户数据"}</span>
+                    <span>v{item.version}</span>
+                  </div>
+                  <details>
+                    <summary>{item.tools.length} 个工具</summary>
+                    <div className={styles.tools}>
+                      {item.tools.map((tool) => <code key={tool}>{tool}</code>)}
+                    </div>
+                  </details>
+                  <footer>
+                    <span>
+                      凭据引用：<code>{item.credentialReference ?? "无"}</code>
+                    </span>
+                    {canManage && (
+                      <div>
+                        <button type="button" onClick={() => startEdit(item)}>
+                          编辑
+                        </button>
+                        {item.enabled ? (
+                          <button
+                            type="button"
+                            disabled={busy === item.reference}
+                            onClick={() => void inspectDisable(item.reference)}
+                          >
+                            停用
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busy === item.reference}
+                            onClick={() => void enable(item)}
+                          >
+                            重新启用
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </footer>
+                  {pendingDisable?.resourceId === item.reference && (
+                    <div className={styles.impact}>
+                      <div>
+                        <strong>确认停用？</strong>
+                        <span>
+                          {pendingDisable.draftIds.length === 0
+                            ? "没有草稿引用此能力。"
+                            : `${pendingDisable.draftIds.length} 个草稿仍在引用：${pendingDisable.draftIds.join("、")}`}
+                        </span>
+                      </div>
+                      <button type="button" onClick={() => setPendingDisable(null)}>
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy === item.reference}
+                        onClick={() => void disable(item.reference)}
+                      >
+                        确认停用
+                      </button>
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {showForm && canManage && (
+          <section className={styles.editor}>
+            <header>
+              <div>
+                <p>Catalog entry</p>
+                <h2>{editingReference ? (knowledgeMode ? "编辑知识库连接" : "编辑 MCP") : (knowledgeMode ? "连接外部知识库" : "注册 MCP")}</h2>
+              </div>
+              <button type="button" onClick={() => setShowForm(false)}>关闭</button>
+            </header>
+            <form onSubmit={save}>
+              <label>
+                <span>引用标识</span>
+                <input
+                  required
+                  pattern="[a-z][a-z0-9-]*"
+                  disabled={Boolean(editingReference)}
+                  placeholder="company-search"
+                  value={draft.reference}
+                  onChange={(event) =>
+                    updateConnection({
+                      reference: event.target.value,
+                      serverName:
+                        draft.serverName === draft.reference || !draft.serverName
+                          ? event.target.value
+                          : draft.serverName,
+                    })
+                  }
+                />
+                <small>智能体通过这个稳定标识绑定能力，创建后不可修改。</small>
+              </label>
+              <label>
+                <span>MCP 服务名</span>
+                <input
+                  required
+                  pattern="[a-z][a-z0-9-]*"
+                  placeholder="company"
+                  value={draft.serverName ?? ""}
+                  onChange={(event) =>
+                    updateConnection({ serverName: event.target.value })
+                  }
+                />
+                <small>用于生成工具名：mcp__服务名__工具名。</small>
+              </label>
+              <label>
+                <span>显示名称</span>
+                <input
+                  required
+                  placeholder="企业搜索"
+                  value={draft.label}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, label: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.wide}>
+                <span>能力说明</span>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="说明它能访问什么，以及适合在哪些任务中使用。"
+                  value={draft.description}
+                  onChange={(event) =>
+                    setDraft((current) => ({ ...current, description: event.target.value }))
+                  }
+                />
+              </label>
+              <label className={styles.endpointField}>
+                <span>{knowledgeMode ? "知识服务 MCP 地址" : "MCP 地址"}</span>
+                <input
+                  required
+                  type="url"
+                  placeholder="https://mcp.example.com/mcp"
+                  value={draft.endpointUrl ?? ""}
+                  onChange={(event) =>
+                    updateConnection({ endpointUrl: event.target.value })
+                  }
+                />
+                <small>不能包含密钥、查询参数或 URL 内嵌账号。</small>
+                {discovery && (
+                  <small>已自动识别：{TRANSPORT_LABELS[discovery.transport]}</small>
+                )}
+              </label>
+              <label>
+                <span>风险级别</span>
+                <select
+                  value={draft.risk}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      risk: event.target.value as McpCapability["risk"],
+                    }))
+                  }
+                >
+                  <option value="low">低风险</option>
+                  <option value="medium">中风险</option>
+                  <option value="high">高风险</option>
+                </select>
+              </label>
+              <label>
+                <span>网络范围</span>
+                <select
+                  value={draft.networkAccess}
+                  onChange={(event) =>
+                    updateConnection({
+                      networkAccess: event.target.value as McpCapability["networkAccess"],
+                    })
+                  }
+                >
+                  <option value="internal">内部网络</option>
+                  <option value="external">外部网络</option>
+                </select>
+              </label>
+              <label>
+                <span>执行位置</span>
+                <input
+                  required
+                  value={draft.executionLocation}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      executionLocation: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label>
+                <span>鉴权方式</span>
+                <select
+                  value={draft.authMode}
+                  onChange={(event) => {
+                    const authMode = event.target.value as McpCapability["authMode"];
+                    updateConnection({
+                      authMode,
+                      authName:
+                        authMode === "header"
+                          ? "X-API-Key"
+                          : authMode === "query"
+                            ? "apiKey"
+                            : null,
+                    });
+                  }}
+                >
+                  <option value="none">无需鉴权</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="header">自定义 Header</option>
+                  <option value="query">Query 参数</option>
+                </select>
+              </label>
+              {draft.authMode !== "none" && (
+                <label>
+                  <span>凭据引用</span>
+                  <input
+                    required
+                    pattern="[A-Z][A-Z0-9_]*"
+                    placeholder="COMPANY_MCP_TOKEN"
+                    value={draft.credentialReference ?? ""}
+                    onChange={(event) =>
+                      updateConnection({
+                        credentialReference:
+                          event.target.value.toUpperCase() || null,
+                      })
+                    }
+                  />
+                  <small>只登记环境变量名，不填写密钥值。</small>
+                </label>
+              )}
+              {(draft.authMode === "header" || draft.authMode === "query") && (
+                <label>
+                  <span>{draft.authMode === "header" ? "Header 名称" : "参数名称"}</span>
+                  <input
+                    required
+                    placeholder={draft.authMode === "header" ? "X-API-Key" : "apiKey"}
+                    value={draft.authName ?? ""}
+                    onChange={(event) =>
+                      updateConnection({ authName: event.target.value })
+                    }
+                  />
+                </label>
+              )}
+              {draft.authMode !== "none" && (
+                <label>
+                  <span>凭据映射键</span>
+                  <input
+                    required
+                    pattern="[a-z][a-z0-9_]*"
+                    value={draft.authKey}
+                    onChange={(event) =>
+                      updateConnection({ authKey: event.target.value })
+                    }
+                  />
+                  <small>对应服务端引用 JSON 中的键。</small>
+                </label>
+              )}
+              <div className={styles.discoveryAction}>
+                <div>
+                  <strong>检测连接并识别工具</strong>
+                  <span>服务端执行 initialize 和 tools/list，不会调用任何业务工具。</span>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy === "discover"}
+                  onClick={() => void discover()}
+                >
+                  {busy === "discover" ? "正在检测…" : discovery ? "重新检测" : "检测地址"}
+                </button>
+              </div>
+              {discovery && (
+                <section className={styles.toolPicker}>
+                  <header>
+                    <div>
+                      <strong>{discovery.tools.length} 个工具可用</strong>
+                      <span>已选择 {draft.tools.length} 个，保存后只有所选工具可被智能体调用。</span>
+                    </div>
+                    <input
+                      type="search"
+                      placeholder="搜索工具"
+                      value={toolQuery}
+                      onChange={(event) => setToolQuery(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          tools: discovery.tools.map((tool) => tool.canonicalName),
+                        }))
+                      }
+                    >
+                      全选
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraft((current) => ({ ...current, tools: [] }))
+                      }
+                    >
+                      清空
+                    </button>
+                  </header>
+                  <div>
+                    {discovery.tools
+                      .filter((tool) =>
+                        `${tool.name} ${tool.title ?? ""} ${tool.description}`
+                          .toLowerCase()
+                          .includes(toolQuery.trim().toLowerCase()),
+                      )
+                      .map((tool) => (
+                        <label key={tool.canonicalName}>
+                          <input
+                            type="checkbox"
+                            checked={draft.tools.includes(tool.canonicalName)}
+                            onChange={() => toggleTool(tool.canonicalName)}
+                          />
+                          <span>
+                            <strong>{tool.title ?? tool.name}</strong>
+                            <code>{tool.name}</code>
+                            <small>{tool.description || "服务端未提供工具说明"}</small>
+                          </span>
+                        </label>
+                      ))}
+                  </div>
+                </section>
+              )}
+              <div className={styles.checks}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.sendsUserData}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        sendsUserData: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span>调用会向外部服务发送用户数据</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.preflightRequired}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        preflightRequired: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span>运行前必须通过预检</span>
+                </label>
+              </div>
+              <div className={styles.formActions}>
+                <span>已审核 {draft.tools.length} 个工具；保存后可在「智能体 → 工具与 MCP」中绑定。</span>
+                <button type="button" onClick={() => setShowForm(false)}>取消</button>
+                <button type="submit" disabled={busy === "save"}>
+                  {busy === "save" ? "正在保存…" : editingReference ? "保存更新" : "完成注册"}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        <section className={styles.runtime}>
+          <div>
+            <p>Runtime boundary</p>
+            <h2>连接信息在哪里配置？</h2>
+            <span>
+              地址、传输方式和已审核工具保存在能力目录；鉴权值仍由部署环境管理，浏览器只看到引用名。
+            </span>
+          </div>
+          <ol>
+            <li><span>1</span><div><strong>地址检测</strong><p>服务端连接 MCP 地址，读取 initialize 与 tools/list。</p></div></li>
+            <li><span>2</span><div><strong>服务端注入</strong><p>在 Compose 环境中配置允许的凭据引用与实际 secret。</p></div></li>
+            <li><span>3</span><div><strong>工具审核与绑定</strong><p>只勾选需要暴露的工具，再到智能体编辑页绑定 MCP。</p></div></li>
+          </ol>
+          <details>
+            <summary>查看 Compose 配置键</summary>
+            <pre>{`HARNESS_MCP_SECRET_REFERENCES_JSON={"company-search":{"authorization":"COMPANY_MCP_TOKEN"}}
+HARNESS_MCP_SERVER_SECRETS_JSON={"COMPANY_MCP_TOKEN":"<server-managed-secret>"}`}</pre>
+            <p>修改部署环境后需重新创建 API / Worker 容器；不要把真实 secret 提交到仓库。</p>
+          </details>
+        </section>
+      </section>
+    </main>
+  );
+}

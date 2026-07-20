@@ -31,7 +31,13 @@ class AuthRepository(Protocol):
 
     async def get_membership(self, tenant_id: str, user_id: str) -> Membership: ...
 
+    async def list_members(self, tenant_id: str) -> list[tuple[AuthUser, Membership]]: ...
+
+    async def save_membership(self, membership: Membership) -> Membership: ...
+
     async def count_members(self, tenant_id: str) -> int: ...
+
+    async def count_members_with_role(self, tenant_id: str, role: Role) -> int: ...
 
     async def get_oauth_user(self, provider: str, subject: str) -> AuthUser | None: ...
 
@@ -106,8 +112,32 @@ class InMemoryAuthRepository:
         except KeyError as error:
             raise NotFoundError("tenant membership not found") from error
 
+    async def list_members(self, tenant_id: str) -> list[tuple[AuthUser, Membership]]:
+        memberships = sorted(
+            (
+                membership
+                for (membership_tenant_id, _), membership in self.memberships.items()
+                if membership_tenant_id == tenant_id
+            ),
+            key=lambda item: item.created_at,
+        )
+        return [(self.users[item.user_id], item) for item in memberships]
+
+    async def save_membership(self, membership: Membership) -> Membership:
+        key = (membership.tenant_id, membership.user_id)
+        if key not in self.memberships:
+            raise NotFoundError("tenant membership not found")
+        self.memberships[key] = membership
+        return membership
+
     async def count_members(self, tenant_id: str) -> int:
         return sum(key[0] == tenant_id for key in self.memberships)
+
+    async def count_members_with_role(self, tenant_id: str, role: Role) -> int:
+        return sum(
+            membership.tenant_id == tenant_id and membership.role == role
+            for membership in self.memberships.values()
+        )
 
     async def get_oauth_user(self, provider: str, subject: str) -> AuthUser | None:
         user_id = self.identities.get((provider, subject))
@@ -252,9 +282,56 @@ class PostgresAuthRepository:
                 raise NotFoundError("tenant membership not found")
             return _membership_from_row(row)
 
+    async def list_members(self, tenant_id: str) -> list[tuple[AuthUser, Membership]]:
+        statement = (
+            select(UserRow, TenantMembershipRow)
+            .join(
+                TenantMembershipRow,
+                TenantMembershipRow.user_id == UserRow.user_id,
+            )
+            .where(TenantMembershipRow.tenant_id == tenant_id)
+            .order_by(TenantMembershipRow.created_at.asc())
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).all()
+            return [
+                (_user_from_row(user), _membership_from_row(membership))
+                for user, membership in rows
+            ]
+
+    async def save_membership(self, membership: Membership) -> Membership:
+        async with self._sessions() as session:
+            result = await session.execute(
+                update(TenantMembershipRow)
+                .where(
+                    TenantMembershipRow.tenant_id == membership.tenant_id,
+                    TenantMembershipRow.user_id == membership.user_id,
+                )
+                .values(role=membership.role)
+            )
+            if not cast(CursorResult[object], result).rowcount:
+                await session.rollback()
+                raise NotFoundError("tenant membership not found")
+            await session.commit()
+        return membership
+
     async def count_members(self, tenant_id: str) -> int:
-        statement = select(func.count()).select_from(TenantMembershipRow).where(
-            TenantMembershipRow.tenant_id == tenant_id
+        statement = (
+            select(func.count())
+            .select_from(TenantMembershipRow)
+            .where(TenantMembershipRow.tenant_id == tenant_id)
+        )
+        async with self._sessions() as session:
+            return int((await session.execute(statement)).scalar_one())
+
+    async def count_members_with_role(self, tenant_id: str, role: Role) -> int:
+        statement = (
+            select(func.count())
+            .select_from(TenantMembershipRow)
+            .where(
+                TenantMembershipRow.tenant_id == tenant_id,
+                TenantMembershipRow.role == role,
+            )
         )
         async with self._sessions() as session:
             return int((await session.execute(statement)).scalar_one())

@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 const page = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
+const codexStyles = readFileSync(
+  join(process.cwd(), "src/app/codex-theme.css"),
+  "utf8",
+);
 const taskSidebar = readFileSync(
   join(process.cwd(), "src/components/task-sidebar.tsx"),
   "utf8",
@@ -58,19 +62,22 @@ describe("full-page agent workbench", () => {
     expect(taskSidebar).toContain('<WorkspaceModeSwitcher mode="tasks" />');
     expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
-    expect(studioSidebar).toContain('visible={collapsed ? undefined : ["agents", "data"]}');
+    expect(studioSidebar).toContain(
+      ': ["agents", "capabilities", "knowledge", "data", "usage"]',
+    );
     expect(workspaceNavigation).toContain('aria-label="工作模式"');
     expect(workspaceNavigation).toContain("<span>Studio</span>");
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
+      ["/studio/capabilities", "能力"],
+      ["/studio/knowledge", "知识库"],
       ["/studio/data", "数据"],
+      ["/studio/usage", "用量"],
     ]) {
       expect(workspaceNavigation).toContain(`href: "${href}"`);
       expect(workspaceNavigation).toContain(`label: "${label}"`);
     }
-    expect(workspaceNavigation).not.toContain('href: "/studio/usage"');
-    expect(workspaceNavigation).not.toContain('label: "用量"');
     expect(workspaceNavigationStyles).toContain(".navigationActive");
     expect(workspaceNavigationStyles).toContain(".modeSwitcher");
     expect(workspaceNavigationStyles).toContain(".modeActive");
@@ -93,8 +100,17 @@ describe("full-page agent workbench", () => {
     expect(taskSidebar).toContain("approvalStore.reset()");
     expect(taskSidebar).toContain("approvalStore.show(selected.pending_approval)");
     expect(taskSidebar).toContain('runView?.phase !== "waiting_approval"');
-    expect(taskSidebar).toContain("[refreshToken, runView?.phase]");
+    expect(taskSidebar).toContain("[runView?.phase]");
     expect(taskSidebar).not.toContain("task-approval-panel");
+  });
+
+  it("keeps the conversation runtime mounted while task status changes", () => {
+    expect(page).toContain(
+      'key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}`}',
+    );
+    expect(page).not.toContain("refreshToken");
+    expect(taskSidebar).not.toContain("onCurrentTaskStatusChange");
+    expect(taskSidebar).not.toContain("currentStatusRef");
   });
 
   it("removes the decorative live rail and hard-coded agent coordinate", () => {
@@ -271,6 +287,39 @@ describe("full-page agent workbench", () => {
     );
     expect(styles).toMatch(
       /\.aui-table-scroll table\s*\{[^}]*width:\s*max-content;[^}]*min-width:\s*100%;/s,
+    );
+  });
+
+  it("renders Mermaid fences as stable, theme-aware task visualizations", () => {
+    const markdown = readFileSync(
+      join(process.cwd(), "src/components/markdown-text.tsx"),
+      "utf8",
+    );
+    const mermaid = readFileSync(
+      join(process.cwd(), "src/components/mermaid-diagram.tsx"),
+      "utf8",
+    );
+    expect(markdown).toContain("componentsByLanguage");
+    expect(markdown).toContain("SyntaxHighlighter: MermaidDiagram");
+    expect(mermaid).toContain('securityLevel: "strict"');
+    expect(mermaid).toContain('suppressErrorRendering: true');
+    expect(mermaid).toContain('attributeFilter: ["data-color-mode"]');
+    expect(mermaid).toContain("setRendered({ code: source, svg: result.svg })");
+    expect(mermaid).toContain("下载 SVG");
+    expect(codexStyles).toMatch(
+      /\.mermaid-canvas\s*\{[^}]*overflow:\s*auto;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.mermaid-card\s*\{[^}]*border:\s*1px solid var\(--codex-line\);/s,
+    );
+  });
+
+  it("keeps composer shadow local instead of blurring the full-width footer", () => {
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.aui-thread-viewport-footer\s*\{[^}]*background:\s*transparent;[^}]*backdrop-filter:\s*none;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.harness-composer-shell \.aui-composer-root\s*\{[^}]*box-shadow:\s*0 7px 22px rgb\(0 0 0 \/ 11%\)/s,
     );
   });
 

@@ -38,6 +38,33 @@ function errorMessage(value: unknown, fallback: string) {
   return typeof message === "string" ? message : fallback;
 }
 
+export function inputAttachmentType(
+  mediaType: string,
+  name: string,
+): PendingAttachment["type"] {
+  const normalized = mediaType.toLowerCase();
+  const extension = name.split(".").at(-1)?.toLowerCase();
+  if (
+    normalized.startsWith("image/")
+    || ["avif", "gif", "heic", "heif", "jpeg", "jpg", "png", "webp"].includes(
+      extension ?? "",
+    )
+  ) {
+    return "image";
+  }
+  if (
+    normalized.startsWith("text/")
+    || normalized === "application/json"
+    || normalized === "application/pdf"
+    || ["csv", "doc", "docx", "json", "md", "pdf", "ppt", "pptx", "txt", "xls", "xlsx"].includes(
+      extension ?? "",
+    )
+  ) {
+    return "document";
+  }
+  return "file";
+}
+
 export function createInputAttachmentAdapter(
   fetcher: typeof fetch = fetch,
 ): AttachmentAdapter {
@@ -46,12 +73,13 @@ export function createInputAttachmentAdapter(
     async *add({ file }): AsyncGenerator<PendingAttachment, void> {
       const key = uploadKey(file);
       const attachmentId = `upload:${key}`;
+      const initialMediaType = file.type || "application/octet-stream";
       uploadFeedbackStore.begin(key, file.name);
       yield {
         id: attachmentId,
-        type: "document",
+        type: inputAttachmentType(initialMediaType, file.name),
         name: file.name,
-        contentType: file.type || "application/octet-stream",
+        contentType: initialMediaType,
         file,
         status: { type: "running", reason: "uploading", progress: 0 },
       };
@@ -73,7 +101,7 @@ export function createInputAttachmentAdapter(
         uploadFeedbackStore.succeed(key);
         const ready: ServerBackedPendingAttachment = {
           id: attachmentId,
-          type: "document",
+          type: inputAttachmentType(payload.media_type, payload.name),
           name: payload.name,
           contentType: payload.media_type,
           file,

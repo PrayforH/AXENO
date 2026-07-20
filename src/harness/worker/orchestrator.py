@@ -44,6 +44,7 @@ from harness.policy.rules import PolicyEngine
 from harness.policy.runtime import ResolvedPolicy
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
+from harness.reliability.metrics import ReliabilityMetrics
 from harness.runtime.artifact_tools import ArtifactPublisher
 from harness.runtime.audit_redaction import redact_tool_arguments
 from harness.runtime.base import (
@@ -59,6 +60,7 @@ from harness.runtime.input_redaction import (
     staged_input_paths,
     staged_read_path,
 )
+from harness.runtime.tools import ToolResolutionError
 from harness.sandbox.base import (
     SandboxCommandResult,
     SandboxHandle,
@@ -152,6 +154,7 @@ class RunOrchestrator:
         sandbox_resolver: SandboxResolver | None = None,
         quotas: QuotaService | None = None,
         quota_plan_resolver: RunQuotaPlanResolver | None = None,
+        metrics: ReliabilityMetrics | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -176,6 +179,7 @@ class RunOrchestrator:
         self._sandbox_resolver = sandbox_resolver
         self._quotas = quotas
         self._quota_plan_resolver = quota_plan_resolver
+        self._metrics = metrics
 
     def _stage(
         self,
@@ -417,6 +421,16 @@ class RunOrchestrator:
             event_type=f"run.{target.value}",
             payload=event_payload,
         )
+        if (
+            self._metrics is not None
+            and current.status is RunStatus.CANCELLING
+            and target is RunStatus.CANCELLED
+        ):
+            self._metrics.observe(
+                "harness_workflow_convergence_seconds",
+                max(0, (updated.updated_at - current.updated_at).total_seconds()),
+                labels={"workflow": "run.cancel"},
+            )
         return updated
 
     async def _handle_unexpected_error(
@@ -439,6 +453,9 @@ class RunOrchestrator:
             run=latest,
             error_code="parent_failed",
         )
+        payload = {"error_type": type(error).__name__}
+        if isinstance(error, ToolResolutionError):
+            payload["message"] = str(error)
         return await self._move(
             latest,
             RunStatus.FAILED,
@@ -447,7 +464,7 @@ class RunOrchestrator:
                 if isinstance(error, QuotaExceededError)
                 else "runtime_error"
             ),
-            payload={"error_type": type(error).__name__},
+            payload=payload,
         )
 
     async def _reclaim(self, current: Run) -> Run:

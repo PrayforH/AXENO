@@ -178,7 +178,7 @@ async def test_create_run_annotates_the_api_trace_with_session_identity() -> Non
 
 
 @pytest.mark.asyncio
-async def test_cancel_reaches_cancelled_and_emits_both_lifecycle_events() -> None:
+async def test_cancel_queued_run_reaches_cancelled_without_worker_owner() -> None:
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     queue = InMemoryTaskQueue()
@@ -216,3 +216,49 @@ async def test_cancel_reaches_cancelled_and_emits_both_lifecycle_events() -> Non
     ]
 
     assert await service.cancel("tenant-a", run.run_id) == cancelled
+
+
+@pytest.mark.asyncio
+async def test_cancel_active_run_waits_for_worker_terminal_and_is_idempotent() -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    queue = InMemoryTaskQueue()
+    events = InMemoryEventRepository()
+    ids = id_generator()
+    await sessions.add(
+        Session(
+            session_id="session-1",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="1.0.0",
+            created_at=NOW,
+        )
+    )
+    service = RunService(
+        sessions,
+        runs,
+        queue,
+        EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids),
+        clock=lambda: NOW,
+        id_generator=ids,
+    )
+    queued = await service.create("tenant-a", "session-1", "idem-1")
+    running = queued.model_copy(
+        update={
+            "status": RunStatus.RUNNING,
+            "fencing_token": queued.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.QUEUED, running)
+
+    cancelling = await service.cancel("tenant-a", queued.run_id)
+
+    assert cancelling.status is RunStatus.CANCELLING
+    assert await runs.get("tenant-a", queued.run_id) == cancelling
+    assert await service.cancel("tenant-a", queued.run_id) == cancelling
+    stored_events = await events.list_after("tenant-a", queued.run_id, 0)
+    assert [(item.sequence, item.type) for item in stored_events] == [
+        (1, "run.queued"),
+        (2, "run.cancelling"),
+    ]

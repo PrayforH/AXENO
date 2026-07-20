@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Callable
 
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.memory import UserMemoryService
+from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelRoute, Session
 from harness.core.ports import AgentRegistry
@@ -68,6 +69,7 @@ class RegistryClaudeRuntime:
         route_id: str,
         *,
         legacy_fallback: bool = False,
+        strict: bool = False,
     ) -> CcSwitchClaudeConfig:
         candidates = tuple(
             config for config in (self._config, self._fallback_config) if config is not None
@@ -78,8 +80,14 @@ class RegistryClaudeRuntime:
         )
         if exact is not None:
             return exact
-        if legacy_fallback and self._fallback_config is not None:
+        if (
+            legacy_fallback
+            and self._fallback_config is not None
+            and self._fallback_config.route_id is None
+        ):
             return self._fallback_config
+        if strict:
+            raise ConflictError(f"task model route is not configured: {route_id}")
         return self._config
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
@@ -92,8 +100,14 @@ class RegistryClaudeRuntime:
         )
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         enforce_runtime_environment(session, snapshot)
-        route_id = snapshot.manifest.spec.model.route
-        selected_config = self._config_for_route(route_id)
+        configured_route = snapshot.manifest.spec.model.route
+        raw_override = context.run.input.get("model_route_override")
+        route_override = raw_override if isinstance(raw_override, str) else None
+        route_id = route_override or configured_route
+        selected_config = self._config_for_route(
+            route_id,
+            strict=route_override is not None,
+        )
         route = ModelRoute(
             route_id=route_id,
             provider=selected_config.provider,
@@ -119,8 +133,14 @@ class RegistryClaudeRuntime:
             values = await self._credential_broker.resolve(lease.lease_id, context.identity)
             route_secret = values["api_key"].get_secret_value()
         route_secrets = {route_id: route_secret}
-        fallback_route_id = snapshot.manifest.spec.model.fallback_route
-        if fallback_route_id is not None and self._fallback_config is not None:
+        fallback_route_id = (
+            None if route_override is not None else snapshot.manifest.spec.model.fallback_route
+        )
+        if (
+            fallback_route_id is not None
+            and self._fallback_config is not None
+            and self._fallback_config.route_id in {None, fallback_route_id}
+        ):
             selected_fallback = self._config_for_route(
                 fallback_route_id,
                 legacy_fallback=True,

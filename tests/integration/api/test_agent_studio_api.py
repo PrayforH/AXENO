@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -21,6 +22,10 @@ from harness.core.errors import NotFoundError
 from harness.core.manifest import ToolDirectorySnapshot
 from harness.evals.models import EvalRunStatus
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.studio.mcp_discovery import (
+    DiscoveredServer,
+    McpDiscoveryService,
+)
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -155,6 +160,7 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
         spec["model"] = {
             **spec["model"],
             "routeId": "anthropic-official",
+            "model": "claude-sonnet-4-6",
             "requiredCapabilities": [
                 "streaming",
                 "tool_use",
@@ -184,14 +190,10 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
     assert validation.json()["contract"]["toolExposureMode"] == "on_demand"
     assert validation.json()["contract"]["toolDirectoryEntries"] == 5
     with ZipFile(BytesIO(bundle.content)) as archive:
-        directory = ToolDirectorySnapshot.model_validate_json(
-            archive.read("tool-directory.json")
-        )
+        directory = ToolDirectorySnapshot.model_validate_json(archive.read("tool-directory.json"))
     assert directory.exposure_mode == "on_demand"
     assert directory.content_hash == directory.digest()
-    assert {
-        entry.name for entry in directory.entries if entry.source == "mcp"
-    } == {
+    assert {entry.name for entry in directory.entries if entry.source == "mcp"} == {
         "mcp__tavily__tavily_search",
         "mcp__tavily__tavily_extract",
     }
@@ -235,9 +237,7 @@ async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -
         environments = await client.get(
             "/v1/studio/agents/deployed-agent/environments", headers=headers
         )
-        production = next(
-            item for item in environments.json() if item["name"] == "production"
-        )
+        production = next(item for item in environments.json() if item["name"] == "production")
         policy = {
             **production["resourcePolicy"],
             "quota": {
@@ -273,10 +273,7 @@ async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -
     assert session.json()["deployment_snapshot_id"] == production["healthySnapshotId"]
     assert session.json()["environment_snapshot"]["policyRevision"] == 2
     assert (
-        session.json()["environment_snapshot"]["resourcePolicy"]["quota"][
-            "maxRunBudgetUsd"
-        ]
-        == 0.75
+        session.json()["environment_snapshot"]["resourcePolicy"]["quota"]["maxRunBudgetUsd"] == 0.75
     )
 
 
@@ -461,9 +458,7 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
         a2a = a2a_created.json()
         trigger_id = a2a["trigger"]["triggerId"]
         secret = a2a["secret"]
-        card = await client.get(
-            f"/a2a/agent-triggers/{trigger_id}/agent-card.json"
-        )
+        card = await client.get(f"/a2a/agent-triggers/{trigger_id}/agent-card.json")
         a2a_headers = {
             "Authorization": f"Bearer {secret}",
             "A2A-Version": "1.0",
@@ -548,9 +543,7 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
     schedule_key = f"schedule:{due_at.isoformat()}"
     schedule_digest = hashlib.sha256(f"{schedule_id}:{schedule_key}".encode()).hexdigest()
     schedule_session_id = f"trigger_session_{schedule_digest[:32]}"
-    schedule_runs = await container.runs.list_for_sessions(
-        "tenant-a", [schedule_session_id]
-    )
+    schedule_runs = await container.runs.list_for_sessions("tenant-a", [schedule_session_id])
 
     assert promoted.status_code == 202
     assert card.status_code == 200
@@ -1161,6 +1154,75 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
     assert current.json()["revision"] == 2
     assert member_catalog.status_code == 200
     assert member_catalog.json()["tenantId"] == member["membership"]["tenant_id"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_admin_can_discover_mcp_tools_but_member_cannot() -> None:
+    class Connector:
+        async def discover(
+            self,
+            endpoint_url: str,
+            *,
+            headers: Mapping[str, str],
+            timeout_seconds: float,
+        ) -> DiscoveredServer:
+            assert endpoint_url == "https://mcp.example.com/mcp"
+            assert headers == {}
+            assert timeout_seconds == 12
+            return DiscoveredServer(
+                title="Company MCP",
+                version="1.0.0",
+                tools=(
+                    ("search", "Search", "Search documents"),
+                    ("open", "Open", "Open a document"),
+                ),
+            )
+
+    async def resolve_public(_host: str, _port: int) -> tuple[str, ...]:
+        return ("1.1.1.1",)
+
+    application, container = app_and_container()
+    object.__setattr__(
+        container,
+        "mcp_discovery",
+        McpDiscoveryService(
+            connector=Connector(),
+            host_resolver=resolve_public,
+        ),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        owner = await register(client, "mcp-owner@example.com")
+        member = await register(client, "mcp-member@example.com")
+        body = {
+            "reference": "company-search",
+            "serverName": "company",
+            "endpointUrl": "https://mcp.example.com/mcp",
+            "networkAccess": "external",
+            "authMode": "none",
+            "authKey": "authorization",
+        }
+        discovered = await client.post(
+            "/v1/studio/mcp/discover",
+            headers={"Authorization": f"Bearer {owner['access_token']}"},
+            json=body,
+        )
+        rejected = await client.post(
+            "/v1/studio/mcp/discover",
+            headers={"Authorization": f"Bearer {member['access_token']}"},
+            json=body,
+        )
+
+    assert discovered.status_code == 200
+    assert discovered.json()["transport"] == "http"
+    assert [tool["canonicalName"] for tool in discovered.json()["tools"]] == [
+        "mcp__company__search",
+        "mcp__company__open",
+    ]
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "permission_denied"
 
 
 @pytest.mark.asyncio

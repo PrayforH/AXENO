@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from importlib import import_module
 from types import MappingProxyType
 from typing import Any, cast
@@ -45,6 +45,7 @@ class McpServerRegistration:
     config: McpServerConfig
     allowed_tools: tuple[str, ...] = ()
     credential_headers: tuple[tuple[str, str], ...] = ()
+    credential_header_prefixes: tuple[tuple[str, str], ...] = ()
     credential_environment: tuple[tuple[str, str], ...] = ()
     credential_query_parameters: tuple[tuple[str, str], ...] = ()
     preflight_smoke: McpSmokeCheck | None = None
@@ -61,6 +62,12 @@ class McpServerRegistration:
         targets.extend(name for name, _ in self.credential_query_parameters)
         if len(targets) != len(set(targets)):
             raise ToolResolutionError("duplicate MCP credential target")
+        header_targets = {name for name, _ in self.credential_headers}
+        prefix_targets = {name for name, _ in self.credential_header_prefixes}
+        if not prefix_targets.issubset(header_targets):
+            raise ToolResolutionError("MCP credential prefix targets an unknown header")
+        if any("\n" in prefix or "\r" in prefix for _, prefix in self.credential_header_prefixes):
+            raise ToolResolutionError("MCP credential header prefix contains a newline")
 
 
 @dataclass(frozen=True)
@@ -85,9 +92,13 @@ class ToolResolver:
         self,
         *,
         mcp_registry: Mapping[str, McpServerRegistration] | None = None,
+        mcp_registry_provider: (
+            Callable[[str], Awaitable[Mapping[str, McpServerRegistration]]] | None
+        ) = None,
         credential_provider: DynamicMcpCredentialProvider | None = None,
     ) -> None:
         self._mcp_registry = MappingProxyType(dict(mcp_registry or {}))
+        self._mcp_registry_provider = mcp_registry_provider
         self._credential_provider = credential_provider or EmptyMcpCredentialProvider()
 
     async def resolve(
@@ -103,6 +114,22 @@ class ToolResolver:
         result_trust: dict[str, ContextTrust] = {}
         sensitive_names: set[str] = set()
         sensitive_values: set[str] = set()
+        mcp_registry = dict(self._mcp_registry)
+        requested_mcp = {
+            cast(str, tool.mcp)
+            for tool in manifest.spec.tools
+            if tool.mcp is not None
+        }
+        needs_tenant_registry = bool(requested_mcp.difference(mcp_registry))
+        if self._mcp_registry_provider is not None and needs_tenant_registry:
+            if identity is None and any(tool.mcp is not None for tool in manifest.spec.tools):
+                raise McpCredentialError(
+                    "execution identity is required for tenant MCP registrations"
+                )
+            if identity is not None:
+                mcp_registry.update(
+                    await self._mcp_registry_provider(identity.tenant_id)
+                )
 
         for tool_spec in manifest.spec.tools:
             if tool_spec.builtin is not None:
@@ -114,7 +141,7 @@ class ToolResolver:
                 continue
 
             reference = cast(str, tool_spec.mcp)
-            registration = self._mcp_registry.get(reference)
+            registration = mcp_registry.get(reference)
             if registration is None:
                 raise ToolResolutionError(
                     f"MCP tool registration is not configured: {reference}"
@@ -133,25 +160,33 @@ class ToolResolver:
                 raise McpCredentialError(
                     f"execution identity is required for MCP credentials: {reference}"
                 )
-            credentials = await self._credential_provider.resolve(
-                reference,
-                identity
-                if identity is not None
-                else ExecutionIdentity(
-                    tenant_id="none",
-                    user_id="none",
-                    project_id="none",
-                    session_id="none",
-                    run_id="none",
-                    agent_name=manifest.metadata.name,
-                    agent_version=manifest.metadata.version,
-                ),
-                required_keys,
+            credentials = (
+                await self._credential_provider.resolve(
+                    reference,
+                    identity
+                    if identity is not None
+                    else ExecutionIdentity(
+                        tenant_id="none",
+                        user_id="none",
+                        project_id="none",
+                        session_id="none",
+                        run_id="none",
+                        agent_name=manifest.metadata.name,
+                        agent_version=manifest.metadata.version,
+                    ),
+                    required_keys,
+                )
+                if required_keys
+                else {}
             )
             config = dict(cast(dict[str, object], registration.config))
             if registration.credential_headers:
+                prefixes = dict(registration.credential_header_prefixes)
                 headers = {
-                    target: credentials[key].get_secret_value()
+                    target: (
+                        prefixes.get(target, "")
+                        + credentials[key].get_secret_value()
+                    )
                     for target, key in registration.credential_headers
                 }
                 config["headers"] = headers
@@ -255,8 +290,8 @@ class ToolResolver:
 def enforce_published_tool_directory(
     snapshot: AgentManifestSnapshot,
     resolved: ResolvedTools,
-) -> None:
-    """Fail closed when runtime registrations drift from the published directory."""
+) -> ResolvedTools:
+    """Keep runtime tools within the published directory without blocking additions."""
 
     directory = snapshot.tool_directory
     mode = snapshot.manifest.spec.tool_exposure_mode
@@ -265,7 +300,7 @@ def enforce_published_tool_directory(
             raise ToolResolutionError(
                 "on-demand tool exposure is missing its published directory"
             )
-        return
+        return resolved
     if directory.exposure_mode != mode:
         raise ToolResolutionError(
             "published tool directory exposure mode does not match the Manifest"
@@ -282,9 +317,12 @@ def enforce_published_tool_directory(
         raise ToolResolutionError(
             "runtime builtin tools differ from the published tool directory"
         )
-    if expected_mcp != actual_mcp:
+    missing_mcp = expected_mcp.difference(actual_mcp)
+    if missing_mcp:
+        missing_names = ", ".join(sorted(missing_mcp))
         raise ToolResolutionError(
-            "runtime MCP allowlist differs from the published tool directory"
+            "published MCP tools are no longer available; "
+            f"recheck and publish the Agent: {missing_names}"
         )
     if mode == "on_demand" and any(
         tool.python_entry is not None
@@ -293,3 +331,16 @@ def enforce_published_tool_directory(
         raise ToolResolutionError(
             "on-demand loading does not support in-process Python tools"
         )
+    return replace(
+        resolved,
+        allowed_tools=tuple(
+            tool for tool in resolved.allowed_tools if tool in expected_mcp
+        ),
+        result_trust=MappingProxyType(
+            {
+                tool: trust
+                for tool, trust in resolved.result_trust.items()
+                if tool in expected_mcp
+            }
+        ),
+    )

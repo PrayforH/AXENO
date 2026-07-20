@@ -37,6 +37,30 @@ async function moduleUnderTest() {
 }
 
 describe("run view model", () => {
+  it("shows an actionable failure summary instead of the generic event title", async () => {
+    const { reduceRunViewModel } = await moduleUnderTest();
+    const view = reduceRunViewModel(
+      undefined,
+      activity("failed", [
+        {
+        id: "failed",
+        event_type: "run.failed",
+        kind: "error",
+        status: "failed",
+        title: "Agent 工具配置需要更新",
+        summary: "当前版本绑定的 MCP 工具已变化，请切换到最新版本。",
+        sequence: 1,
+        metadata: { error_code: "runtime_error" },
+        },
+      ]),
+    );
+
+    expect(view.phase).toBe("failed");
+    expect(view.summary).toBe(
+      "当前版本绑定的 MCP 工具已变化，请切换到最新版本。",
+    );
+  });
+
   it("keeps terminal state monotonic when stale running activity arrives", async () => {
     const { reduceRunViewModel } = await moduleUnderTest();
     const running = reduceRunViewModel(

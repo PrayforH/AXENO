@@ -72,6 +72,13 @@ const environmentPolicyStyles = readFileSync(
   ),
   "utf8",
 );
+const governanceControlPlane = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/governance-control-plane.tsx",
+  ),
+  "utf8",
+);
 const errorBoundary = readFileSync(
   join(process.cwd(), "src/app/studio/agents/error.tsx"),
   "utf8",
@@ -82,6 +89,12 @@ const loadingBoundary = readFileSync(
 );
 
 describe("Agent Studio management page", () => {
+  it("keeps the desktop release controls on one row", () => {
+    expect(styles).toMatch(
+      /\.headerActions\s*\{[^}]*grid-template-columns:\s*auto auto auto auto;/s,
+    );
+  });
+
   it("is an independent control-plane route", () => {
     expect(page).toContain("AgentStudioWorkbench");
     expect(workbench).toContain("<StudioSidebar");
@@ -138,6 +151,14 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".capabilitySpine");
   });
 
+  it("opens knowledge sync links on the affected agent and capability section", () => {
+    expect(workbench).toContain('new URLSearchParams(window.location.search)');
+    expect(workbench).toContain('navigationState.get("draft")');
+    expect(workbench).toContain('navigationState.get("section")');
+    expect(workbench).toContain('navigationState.get("source") === "knowledge-sync"');
+    expect(workbench).toContain("知识库工具已更新：请确认绑定工具");
+  });
+
   it("provides a structured prompt editor instead of an undifferentiated textarea", () => {
     expect(workbench).toContain('aria-label="System Prompt 结构"');
     expect(workbench).toContain("选择章节可定位");
@@ -192,6 +213,16 @@ describe("Agent Studio management page", () => {
   });
 
   it("keeps runtime and permission surfaces on shared light/dark theme tokens", () => {
+    expect(workbench).toContain("当前场景推荐");
+    expect(workbench).toContain("应用推荐配置");
+    expect(workbench).toContain("permissionCoverage");
+    expect(workbench).toContain("mcpTools={selectedMcpTools}");
+    expect(governanceControlPlane).toContain("defaultCallRules(policyId, mcpTools)");
+    expect(governanceControlPlane).toContain("个 MCP 工具已纳入模板");
+    expect(governanceControlPlane).toContain("同步当前 Agent 工具");
+    expect(governanceControlPlane).toContain("保存并发布后才会影响真实 Run");
+    expect(styles).toContain(".runtimeRecommendation");
+    expect(styles).toContain(".permissionCoverage");
     expect(styles).toMatch(
       /\.profileFacts span \{[\s\S]*?background: var\(--studio-panel-subtle\);/,
     );
@@ -206,14 +237,20 @@ describe("Agent Studio management page", () => {
     );
   });
 
-  it("uses authenticated roles and gates immutable publication on server validation", () => {
+  it("keeps publication permissioned while making every disabled reason actionable", () => {
     expect(workbench).toContain("membership.role");
     expect(workbench).toContain("studioClient.publishDraft");
-    expect(workbench).toContain("请先通过服务端检查");
-    expect(workbench).toContain("发布为不可覆盖的 Agent 版本");
-    expect(workbench).toMatch(
-      /className=\{styles\.publishButton\}[\s\S]*?disabled=\{!canPublish/,
-    );
+    expect(workbench).toContain("handleReleaseAction");
+    expect(workbench).toContain("保存并检查");
+    expect(workbench).toContain("检查发布条件");
+    expect(workbench).toContain("等待管理员发布");
+    expect(workbench).toContain("发布会创建不可覆盖的 Bundle");
+    expect(workbench).toContain('aria-label="发布准备"');
+    expect(workbench).toContain("validationIssueSection");
+    expect(workbench).toContain("去处理");
+    expect(workbench).toContain("移除不兼容 MCP");
+    expect(styles).toContain(".releaseAssistant");
+    expect(styles).toContain(".releaseIssues");
     expect(styles).toContain(".publicationBadge");
   });
 
@@ -244,6 +281,16 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("版本差异");
     expect(workbench).toContain("必须调用");
     expect(workbench).toContain("禁止");
+    expect(workbench).toContain("评测集缺少");
+    expect(workbench).toContain("一键补齐");
+    expect(workbench).toContain("evaluationCoverageCase");
+    expect(workbench).toContain("Agent Eval");
+    expect(workbench).toContain("evaluationEnabled");
+    expect(workbench).toContain("新增评测场景");
+    expect(workbench).toContain("正常 happy");
+    expect(workbench).toContain("歧义 ambiguous");
+    expect(workbench).toContain("安全 safety");
+    expect(workbench).toContain("updateEvalCase");
     expect(errorBoundary).toContain("Agent Studio 没有正常加载");
     expect(errorBoundary).toContain("重新加载");
     expect(loadingBoundary).toContain("正在恢复 Agent Studio");
@@ -297,6 +344,12 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("Preview · {activePreview.status}");
     expect(styles).toContain(".previewBanner");
     expect(styles).toContain(".preflightDisclosure");
+    expect(styles).toContain(
+      "background: color-mix(in srgb, var(--studio-panel) 88%, var(--studio-green) 12%)",
+    );
+    expect(styles).not.toContain(
+      "background: color-mix(in srgb, #fff 72%, transparent)",
+    );
   });
 
   it("renders only tenant API rows instead of invented live agents", () => {

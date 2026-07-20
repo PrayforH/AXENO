@@ -181,19 +181,10 @@ describe("Codex-style activity UI", () => {
     expect(hasProjectedTool(view, "read-fallback")).toBe(false);
   });
 
-  it("keeps the current activity in one stable slot through durable handoff", () => {
-    expect(
-      shouldKeepActivityInLatestSlot("run-1", "run-1", "run-1"),
-    ).toBe(true);
-    expect(
-      shouldKeepActivityInLatestSlot("run-1", "run-1", undefined),
-    ).toBe(true);
-    expect(
-      shouldKeepActivityInLatestSlot("run-1", "run-2", "run-2"),
-    ).toBe(false);
-    expect(
-      shouldKeepActivityInLatestSlot("run-1", "run-1", "run-2"),
-    ).toBe(false);
+  it("keeps activity by durable Harness identity without comparing AG-UI client ids", () => {
+    expect(shouldKeepActivityInLatestSlot("run-1", "run-1")).toBe(true);
+    expect(shouldKeepActivityInLatestSlot("run-1", "run-2")).toBe(false);
+    expect(shouldKeepActivityInLatestSlot("run-1", undefined)).toBe(false);
   });
 
   it("selects multiple completed ordinary tools for one collapsed batch", () => {

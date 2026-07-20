@@ -24,6 +24,12 @@ x-harness-environment: &harness-environment
   HARNESS_NEW_API_AUTH_SCHEME: ${HARNESS_NEW_API_AUTH_SCHEME:-bearer}
   HARNESS_NEW_API_COMPATIBILITY: ${HARNESS_NEW_API_COMPATIBILITY:-full}
   HARNESS_NEW_API_CAPABILITIES: ${HARNESS_NEW_API_CAPABILITIES:-streaming,tool_use}
+  HARNESS_MINIMAX_M3_BASE_URL: ${HARNESS_MINIMAX_M3_BASE_URL:-}
+  HARNESS_MINIMAX_M3_API_KEY: ${HARNESS_MINIMAX_M3_API_KEY:-}
+  HARNESS_MINIMAX_M3_MODEL: ${HARNESS_MINIMAX_M3_MODEL:-MiniMax-M3}
+  HARNESS_MINIMAX_M3_AUTH_SCHEME: ${HARNESS_MINIMAX_M3_AUTH_SCHEME:-x-api-key}
+  HARNESS_MINIMAX_M3_COMPATIBILITY: ${HARNESS_MINIMAX_M3_COMPATIBILITY:-full}
+  HARNESS_MINIMAX_M3_CAPABILITIES: ${HARNESS_MINIMAX_M3_CAPABILITIES:-streaming,tool_use,vision}
   HARNESS_ANTHROPIC_BASE_URL: ${HARNESS_ANTHROPIC_BASE_URL:-https://api.anthropic.com}
   HARNESS_ANTHROPIC_API_KEY: ${HARNESS_ANTHROPIC_API_KEY:-}
   HARNESS_ANTHROPIC_MODEL: ${HARNESS_ANTHROPIC_MODEL:-}
@@ -111,6 +117,7 @@ x-control-environment: &control-environment
   HARNESS_AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
   HARNESS_AUTH_GITHUB_CLIENT_ID: ${AUTH_GITHUB_CLIENT_ID:-}
   HARNESS_AUTH_GITHUB_CLIENT_SECRET: ${AUTH_GITHUB_CLIENT_SECRET:-}
+  HARNESS_MCP_DISCOVERY_PROXY_URL: ${HARNESS_MCP_DISCOVERY_PROXY_URL:-}
   # The control plane generates short semantic task titles. Agent execution still
   # remains isolated in the worker, but title generation needs the same compatible
   # model endpoint when no dedicated title gateway is configured.
@@ -120,6 +127,12 @@ x-control-environment: &control-environment
   HARNESS_NEW_API_AUTH_SCHEME: ${HARNESS_NEW_API_AUTH_SCHEME:-bearer}
   HARNESS_NEW_API_COMPATIBILITY: ${HARNESS_NEW_API_COMPATIBILITY:-full}
   HARNESS_NEW_API_CAPABILITIES: ${HARNESS_NEW_API_CAPABILITIES:-streaming,tool_use}
+  HARNESS_MINIMAX_M3_BASE_URL: ${HARNESS_MINIMAX_M3_BASE_URL:-}
+  HARNESS_MINIMAX_M3_API_KEY: ${HARNESS_MINIMAX_M3_API_KEY:-}
+  HARNESS_MINIMAX_M3_MODEL: ${HARNESS_MINIMAX_M3_MODEL:-MiniMax-M3}
+  HARNESS_MINIMAX_M3_AUTH_SCHEME: ${HARNESS_MINIMAX_M3_AUTH_SCHEME:-x-api-key}
+  HARNESS_MINIMAX_M3_COMPATIBILITY: ${HARNESS_MINIMAX_M3_COMPATIBILITY:-full}
+  HARNESS_MINIMAX_M3_CAPABILITIES: ${HARNESS_MINIMAX_M3_CAPABILITIES:-streaming,tool_use,vision}
   HARNESS_ANTHROPIC_BASE_URL: ${HARNESS_ANTHROPIC_BASE_URL:-https://api.anthropic.com}
   HARNESS_ANTHROPIC_API_KEY: ${HARNESS_ANTHROPIC_API_KEY:-}
   HARNESS_ANTHROPIC_MODEL: ${HARNESS_ANTHROPIC_MODEL:-}
@@ -132,7 +145,7 @@ x-control-environment: &control-environment
 
 services:
   postgres:
-    image: postgres:17.5-alpine
+    image: postgres:18.4-bookworm
     environment:
       POSTGRES_DB: harness
       POSTGRES_USER: harness
@@ -145,7 +158,7 @@ services:
       timeout: 3s
       retries: 30
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres18-cluster-data:/var/lib/postgresql
     restart: unless-stopped
 
   redis:
@@ -298,7 +311,7 @@ services:
       HARNESS_TENANT_ID: ${HARNESS_TENANT_ID:-local}
       HARNESS_USER_ID: ${HARNESS_USER_ID:-system}
       HARNESS_SEED_AGENT_MANIFESTS: /app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/public-opinion-agent/agent.yaml,/app/agents/archive-file-classifier-agent/agent.yaml
-      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml
+      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml,/app/agents/networked-knowledge-research-agent/agent.yaml
     depends_on:
       api:
         condition: service_healthy
@@ -345,6 +358,9 @@ services:
       LANGFUSE_OTLP_ENDPOINT: ${LANGFUSE_OTLP_ENDPOINT:-}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      HTTP_PROXY: ${LANGFUSE_EXPORT_PROXY_URL:-}
+      HTTPS_PROXY: ${LANGFUSE_EXPORT_PROXY_URL:-}
+      NO_PROXY: ${LANGFUSE_EXPORT_NO_PROXY:-localhost,127.0.0.1,otel-collector}
     volumes:
       - ../otel-collector/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
@@ -353,6 +369,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  # Retain the previous PG17 volume for rollback after the PG18 migration.
   postgres-data:
+  postgres18-cluster-data:
   redis-data:
   minio-data:

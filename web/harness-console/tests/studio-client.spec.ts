@@ -88,6 +88,131 @@ describe("Studio typed API mapping", () => {
     ]);
   });
 
+  it("writes and disables MCP catalog entries with revision CAS", async () => {
+    const calls: Array<{ url: string; method: string | undefined; body: unknown }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      });
+      return Response.json({
+        record: { revision: 8, catalog: { mcpServers: [] } },
+        impact: { resourceType: "mcp", resourceId: "company-search", draftIds: [] },
+      });
+    });
+
+    const resource = {
+      reference: "company-search",
+      category: "tool" as const,
+      serverName: "company",
+      label: "企业搜索",
+      description: "查询企业内部资料",
+      endpointUrl: "https://mcp.example.com/mcp",
+      tools: ["mcp__company__search"],
+      risk: "medium" as const,
+      networkAccess: "internal" as const,
+      sendsUserData: true,
+      credentialManaged: true,
+      executionLocation: "external-mcp",
+      preflightRequired: true,
+      credentialReference: "COMPANY_MCP_TOKEN",
+      authMode: "bearer" as const,
+      authName: null,
+      authKey: "authorization",
+      version: 1,
+      enabled: true,
+    };
+    await studioClient.upsertMcp(resource.reference, 7, resource);
+    await studioClient.disableMcp(resource.reference, 8);
+
+    expect(calls).toEqual([
+      {
+        url: "/api/studio/catalog/mcp/company-search",
+        method: "PUT",
+        body: { expectedRevision: 7, resource },
+      },
+      {
+        url: "/api/studio/catalog/mcp/company-search?expected_revision=8",
+        method: "DELETE",
+        body: null,
+      },
+    ]);
+  });
+
+  it("surfaces FastAPI MCP discovery detail instead of a generic status", async () => {
+    vi.stubGlobal("fetch", async () => Response.json(
+      {
+        detail: {
+          code: "mcp_unreachable",
+          message: "MCP initialize / tools/list failed",
+        },
+      },
+      { status: 422 },
+    ));
+
+    await expect(studioClient.discoverMcp({
+      reference: "company-search",
+      serverName: "company",
+      endpointUrl: "http://company-mcp:4174/mcp",
+      networkAccess: "internal",
+      authMode: "none",
+      authName: null,
+      authKey: "authorization",
+    })).rejects.toMatchObject({
+      status: 422,
+      code: "mcp_unreachable",
+      message: "MCP initialize / tools/list failed",
+    } satisfies Partial<StudioApiError>);
+  });
+
+  it("discovers MCP tools through the server boundary", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        endpointUrl: "https://mcp.example.com/mcp",
+        serverName: "company",
+        serverTitle: "Company MCP",
+        serverVersion: "1.0.0",
+        latencyMs: 24,
+        tools: [
+          {
+            name: "search",
+            canonicalName: "mcp__company__search",
+            title: "Search",
+            description: "Search documents",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+
+    await studioClient.discoverMcp({
+      reference: "company-search",
+      serverName: "company",
+      endpointUrl: "https://mcp.example.com/mcp",
+      networkAccess: "external",
+      authMode: "none",
+      authName: null,
+      authKey: "authorization",
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/studio/mcp/discover",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          reference: "company-search",
+          serverName: "company",
+          endpointUrl: "https://mcp.example.com/mcp",
+          networkAccess: "external",
+          authMode: "none",
+          authName: null,
+          authKey: "authorization",
+        }),
+      }),
+    );
+  });
+
   it("maps server eval tags into the editor and restores them on save", () => {
     const source = apiDraft();
     source.spec.evaluationCases[0].tags = ["safety", "public-opinion"];

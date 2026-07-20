@@ -145,10 +145,9 @@ export function DeveloperDrawer({
     >
       <header className="inspector-header">
         <div className="inspector-title">
-          <span className="inspector-title-mark" aria-hidden="true"><i /><i /><i /></span>
           <div>
-            <h2>本次运行</h2>
-            <p>状态摘要与外部观测</p>
+            <p>本次运行</p>
+            <h2>运行详情</h2>
           </div>
         </div>
         {onClose && (
@@ -161,37 +160,46 @@ export function DeveloperDrawer({
           <section className="run-overview">
             <div className="run-overview-status">
               <span className={`activity-pulse status-${activity.status}`} aria-hidden="true" />
-              <div><small>当前状态</small><strong>{statusLabels[activity.status] ?? activity.status}</strong></div>
+              <div><strong>{statusLabels[activity.status] ?? activity.status}</strong><small>本次运行</small></div>
               <span className="run-overview-duration">{overview.duration}</span>
             </div>
             <dl className="run-metrics">
-              <div><dt>模型</dt><dd title={overview.model}>{overview.model}</dd></div>
+              <div className="run-metric-wide"><dt>模型</dt><dd title={overview.model}>{overview.model}</dd></div>
               <div><dt>服务</dt><dd>{overview.provider}</dd></div>
               <div><dt>轮次</dt><dd>{overview.turns}</dd></div>
               <div><dt>费用</dt><dd>{overview.cost}</dd></div>
+              <div><dt>耗时</dt><dd>{overview.duration}</dd></div>
             </dl>
             <div className="run-counts">
-              <span><strong>{overview.toolCalls}</strong> 工具调用</span>
-              <span><strong>{overview.subagents}</strong> 子 Agent</span>
-              <span>{overview.stopReason === "—" ? "执行中" : overview.stopReason}</span>
+              <span><strong>{overview.toolCalls}</strong> 工具</span>
+              <span><strong>{overview.subagents}</strong> 子任务</span>
+              <span>结束原因 <strong>{overview.stopReason === "—" ? "执行中" : overview.stopReason}</strong></span>
             </div>
           </section>
 
           <section className="observability-panel" aria-label="外部观测">
-            <div className="inspector-section-title"><span>外部观测</span><span>Langfuse</span></div>
-            <a
-              className="observability-link"
-              href={`/api/harness/observability?run_id=${encodeURIComponent(activity.run_id)}${activity.trace_id ? `&trace_id=${encodeURIComponent(activity.trace_id)}` : ""}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="observability-mark" aria-hidden="true"><i /></span>
-              <span>
-                <strong>在 Langfuse 中查看</strong>
-                <small>Trace、Span、模型指标与错误诊断</small>
-              </span>
-              <span className="external-arrow" aria-hidden="true">↗</span>
-            </a>
+            <div className="inspector-section-title"><span>可观测性</span><span>Langfuse</span></div>
+            {activity.trace_id ? (
+              <a
+                className="observability-link"
+                href={`/api/harness/observability?run_id=${encodeURIComponent(activity.run_id)}&trace_id=${encodeURIComponent(activity.trace_id)}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span>
+                  <strong>打开 Trace</strong>
+                  <small title={activity.trace_id}>{activity.trace_id.slice(0, 12)}…</small>
+                </span>
+                <span className="external-arrow" aria-hidden="true">↗</span>
+              </a>
+            ) : (
+              <div className="observability-link is-disabled">
+                <span>
+                  <strong>Trace 尚未生成</strong>
+                  <small>运行开始后会在这里提供直接链接</small>
+                </span>
+              </div>
+            )}
           </section>
 
           <details className="inspector-activity">
@@ -227,7 +235,6 @@ export function DeveloperDrawer({
         </>
       ) : (
         <div className="inspector-empty">
-          <span className="empty-orbit" aria-hidden="true" />
           <strong>还没有运行记录</strong>
           <p>提交任务后，可在这里查看运行摘要并跳转到外部 Trace。</p>
         </div>

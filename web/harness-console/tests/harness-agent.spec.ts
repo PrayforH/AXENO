@@ -1,10 +1,46 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RunAgentInput } from "@ag-ui/client";
 import { HarnessHttpAgent } from "../src/lib/harness-agent";
-import { liveResponseStore } from "../src/lib/live-response-store";
+import {
+  RESPONSE_CANDIDATE_HOLD_MS,
+  liveResponseStore,
+} from "../src/lib/live-response-store";
 import { runStreamStore } from "../src/lib/run-stream-store";
 
 describe("HarnessHttpAgent", () => {
+  it("adds the task model override to AG-UI forwarded props", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const streamFetch: typeof fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        [
+          'data: {"type":"RUN_STARTED","threadId":"thread-model","runId":"run-model"}',
+          "",
+          'data: {"type":"RUN_FINISHED","threadId":"thread-model","runId":"run-model"}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    };
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+      modelRouteOverride: "minimax-m3",
+    });
+
+    await agent.runAgent({
+      threadId: "thread-model",
+      runId: "run-model",
+      forwardedProps: { existing: true },
+    });
+
+    expect(requestBody?.forwardedProps).toEqual({
+      existing: true,
+      modelRoute: "minimax-m3",
+    });
+  });
+
   it("notifies Harness when CopilotRuntime stops an active thread", () => {
     let cancelUrl = "";
     let cancelInit: RequestInit | undefined;
@@ -29,6 +65,8 @@ describe("HarnessHttpAgent", () => {
     };
 
     agent.run(input);
+    liveResponseStore.startRun("run/1");
+    runStreamStore.startRun("run/1");
     agent.abortRun();
 
     expect(cancelUrl).toBe(
@@ -37,6 +75,11 @@ describe("HarnessHttpAgent", () => {
     expect(cancelInit).toEqual({
       method: "POST",
       headers: { "X-Tenant-ID": "local", "X-User-ID": "developer" },
+    });
+    expect(liveResponseStore.getSnapshot().status).toBe("complete");
+    expect(runStreamStore.getSnapshot()).toMatchObject({
+      runId: "run/1",
+      status: "complete",
     });
   });
 
@@ -173,7 +216,8 @@ describe("HarnessHttpAgent", () => {
     unsubscribe();
   });
 
-  it("publishes the first text chunk before the response stream finishes", async () => {
+  it("buffers an ambiguous first text chunk before the response stream finishes", async () => {
+    vi.useFakeTimers();
     const encoder = new TextEncoder();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
     let resolveFirstChunk: (() => void) | undefined;
@@ -219,6 +263,13 @@ describe("HarnessHttpAgent", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "第一段",
       status: "streaming",
+      visible: false,
+    });
+
+    vi.advanceTimersByTime(RESPONSE_CANDIDATE_HOLD_MS);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "第一段",
+      status: "streaming",
       visible: true,
     });
 
@@ -244,5 +295,6 @@ describe("HarnessHttpAgent", () => {
       visible: true,
     });
     unsubscribe();
+    vi.useRealTimers();
   });
 });

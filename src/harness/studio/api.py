@@ -57,6 +57,7 @@ from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
+from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
 from harness.studio.models import (
     AgentDraft,
     AgentDraftSummary,
@@ -66,6 +67,8 @@ from harness.studio.models import (
     CatalogMutationResult,
     CreateAgentDraftRequest,
     DraftValidationResult,
+    McpDiscoveryRequest,
+    McpDiscoveryResult,
     PublishAgentDraftRequest,
     PublishedAgentVersion,
     ReplaceAgentDraftRequest,
@@ -159,6 +162,20 @@ def get_catalog_service(request: Request) -> CapabilityCatalogService:
             detail={
                 "code": "catalog_not_configured",
                 "message": "Capability Catalog is not configured",
+            },
+        )
+    return service
+
+
+def get_mcp_discovery_service(request: Request) -> McpDiscoveryService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "mcp_discovery", None)
+    if not isinstance(service, McpDiscoveryService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "mcp_discovery_not_configured",
+                "message": "MCP discovery is not configured",
             },
         )
     return service
@@ -692,6 +709,25 @@ async def get_catalog(
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CapabilityCatalogRecord:
     return await service.get(actor.tenant_id)
+
+
+@router.post("/mcp/discover", response_model=McpDiscoveryResult)
+async def discover_mcp(
+    body: McpDiscoveryRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[McpDiscoveryService, Depends(get_mcp_discovery_service)],
+) -> McpDiscoveryResult:
+    try:
+        return await service.discover(
+            body,
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+        )
+    except McpDiscoveryError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.summary},
+        ) from error
 
 
 @router.put("/catalog", response_model=CapabilityCatalogRecord)

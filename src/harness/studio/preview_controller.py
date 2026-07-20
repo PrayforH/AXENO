@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
-from harness.core.errors import ConflictError
+from harness.core.errors import ConflictError, NotFoundError
 from harness.quota.service import QuotaService
 from harness.studio.preview_models import (
     PreviewDeployment,
@@ -55,6 +55,11 @@ class PreviewController:
             return None
         try:
             result = await self.reconcile(task.tenant_id, task.preview_id)
+        except NotFoundError:
+            # Redis can outlive a restored PostgreSQL snapshot. A task whose
+            # authoritative Preview row no longer exists is stale, not retryable.
+            await self._queue.acknowledge(task)
+            return None
         except PreviewProvisioningError as error:
             try:
                 result = await self._fail(task, error.error_code)

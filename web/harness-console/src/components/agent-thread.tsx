@@ -38,6 +38,10 @@ import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity, useRunViewModel } from "../lib/activity-store";
 import { selectComposerDisabled } from "../lib/run-view-model";
+import {
+  TaskModelControl,
+  TaskModelVisionNotice,
+} from "./task-model-context";
 import { runActivitySchema } from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
 import {
@@ -48,7 +52,10 @@ import {
   type LiveResponseSnapshot,
   useLiveResponse,
 } from "../lib/live-response-store";
-import { useRunStream } from "../lib/run-stream-store";
+import {
+  type RunStreamStatus,
+  useRunStream,
+} from "../lib/run-stream-store";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -98,10 +105,22 @@ function UploadFeedbackNotice() {
   return <UploadFeedbackContent items={items} onDismiss={uploadFeedbackStore.dismiss} />;
 }
 
+export function shouldShowComposerStop(
+  threadRunning: boolean,
+  streamStatus: RunStreamStatus,
+): boolean {
+  return threadRunning || streamStatus === "running";
+}
+
 function HarnessComposer() {
+  const aui = useAui();
+  const threadRunning = useAuiState((state) => state.thread.isRunning);
+  const composerAttachments = useAuiState((state) => state.composer.attachments);
+  const stream = useRunStream();
   const runView = useRunViewModel();
   const pendingApproval = usePendingApproval();
   const runLocked = selectComposerDisabled(runView);
+  const showStop = shouldShowComposerStop(threadRunning, stream.status);
   const composerHint = runLocked
     ? runView?.phase === "waiting_approval"
       ? "处理审批后，Agent 会从当前步骤继续"
@@ -138,7 +157,41 @@ function HarnessComposer() {
         </div>
       ) : null}
       <UploadFeedbackNotice />
-      <Composer />
+      <TaskModelVisionNotice
+        disabled={runLocked || showStop}
+        requiresVision={composerAttachments.some((attachment) => attachment.type === "image")}
+      />
+      <Composer.Root>
+        <Composer.Attachments />
+        <Composer.Input autoFocus />
+        <div className="composer-toolbar">
+          <Composer.AddAttachment />
+          <TaskModelControl disabled={runLocked || showStop} />
+        </div>
+        {showStop ? (
+          <button
+            type="button"
+            className="aui-button aui-button-primary aui-button-icon aui-composer-cancel"
+            aria-label="停止运行"
+            title="停止运行"
+            onClick={() => aui.thread().cancelRun()}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+              />
+              <rect x="8" y="8" width="8" height="8" rx="1.25" fill="currentColor" />
+            </svg>
+          </button>
+        ) : (
+          <Composer.Send />
+        )}
+      </Composer.Root>
       <div className="composer-meta" aria-live="polite">
         <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
         <span className="composer-hint">{composerHint}</span>
@@ -253,19 +306,14 @@ export function hasProjectedTool(
 export function shouldKeepActivityInLatestSlot(
   activityRunId: string,
   viewRunId: string | undefined,
-  liveRunId: string | undefined,
 ) {
-  return (
-    viewRunId === activityRunId &&
-    (liveRunId === undefined || liveRunId === activityRunId)
-  );
+  return viewRunId === activityRunId;
 }
 
 function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
   const runView = useRunViewModel();
-  const stream = useRunStream();
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
     if (
@@ -273,7 +321,6 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
       shouldKeepActivityInLatestSlot(
         parsed.data.run_id,
         runView?.runId,
-        stream.runId,
       )
     ) {
       return null;
@@ -398,7 +445,11 @@ function LiveAssistantResponse({
 function HarnessAssistantMessage() {
   const live = useLiveResponse();
   const isLast = useAuiState((state) => state.message.isLast);
-  const directStream = isLast && Boolean(live.text.trim());
+  // Own the native text slot as soon as a Harness message starts. Candidate
+  // text may still be waiting to see whether a tool call follows, so basing
+  // this only on visible text lets assistant-ui paint the same preface once.
+  const directStream =
+    isLast && live.status !== "idle" && Boolean(live.messageId);
   return (
     <AssistantMessage.Root
       className="harness-assistant-message"
@@ -479,22 +530,58 @@ export function inputArtifactDownloadHref(
 function HarnessMessageAttachment() {
   const attachment = useAttachment((state) => state);
   const filePart = attachment.content?.find((part) => part.type === "file");
-  const data = filePart?.type === "file" ? filePart.data : undefined;
+  const imagePart = attachment.content?.find((part) => part.type === "image");
+  const data = filePart?.type === "file"
+    ? filePart.data
+    : imagePart?.type === "image"
+      ? imagePart.image
+      : undefined;
   const href = inputArtifactDownloadHref(data, attachment.id);
   const extension = attachment.name.split(".").at(-1)?.toUpperCase() || "文件";
+  const contentType = attachment.contentType
+    ?? (filePart?.type === "file" ? filePart.mimeType : undefined);
+  const isImage =
+    attachment.type === "image"
+    || contentType?.startsWith("image/")
+    || ["AVIF", "GIF", "HEIC", "HEIF", "JPEG", "JPG", "PNG", "WEBP"].includes(
+      extension,
+    );
+  const imageSrc = isImage
+    ? href ?? (data?.startsWith("data:") || data?.startsWith("http") ? data : undefined)
+    : undefined;
   const content = (
     <>
-      <span className="message-attachment-icon"><AttachmentFileIcon /></span>
+      {imageSrc ? (
+        <span className="message-attachment-preview">
+          {/* The same-origin artifact endpoint enforces the current user scope. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imageSrc} alt={`${attachment.name} 缩略图`} />
+        </span>
+      ) : (
+        <span className="message-attachment-icon"><AttachmentFileIcon /></span>
+      )}
       <span className="message-attachment-copy">
         <strong>{attachment.name}</strong>
-        <small>{extension} 文件{href ? " · 点击下载" : ""}</small>
+        <small>
+          {extension} {isImage ? "图片" : "文件"}
+          {href ? (isImage ? " · 点击查看" : " · 点击下载") : ""}
+        </small>
       </span>
     </>
   );
   return (
-    <AttachmentPrimitive.Root className="message-attachment-card">
+    <AttachmentPrimitive.Root
+      className="message-attachment-card"
+      data-kind={isImage ? "image" : "file"}
+    >
       {href ? (
-        <a href={href} download={attachment.name} title={`下载 ${attachment.name}`}>
+        <a
+          href={href}
+          {...(isImage
+            ? { target: "_blank", rel: "noreferrer" }
+            : { download: attachment.name })}
+          title={`${isImage ? "查看" : "下载"} ${attachment.name}`}
+        >
           {content}
         </a>
       ) : (
@@ -628,21 +715,17 @@ function HarnessUserMessage() {
 function LatestActivity() {
   const activity = useRunActivity();
   const runView = useRunViewModel();
-  const stream = useRunStream();
   const live = useLiveResponse();
   const nativeResponseStarted = useAssistantResponseStarted();
   const finalResponseStarted =
     nativeResponseStarted ||
-    (Boolean(live.text.trim()) &&
-      live.visible &&
-      live.runId === runView?.runId);
+    (Boolean(live.text.trim()) && live.visible);
   if (
     !activity ||
     !runView ||
     !shouldKeepActivityInLatestSlot(
       activity.run_id,
       runView.runId,
-      stream.runId,
     )
   ) {
     return null;

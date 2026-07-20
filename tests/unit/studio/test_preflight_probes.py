@@ -205,14 +205,16 @@ async def test_model_probe_returns_stable_compatibility_errors(
     assert SECRET not in str(captured.value)
 
 
-def mcp_resolver() -> ToolResolver:
+def mcp_resolver(
+    transport: Literal["http", "sse"] = "http",
+) -> ToolResolver:
     return ToolResolver(
         mcp_registry={
             "tavily-readonly": McpServerRegistration(
                 server_name="tavily",
                 config=cast(
                     McpServerConfig,
-                    {"type": "http", "url": "https://mcp.example.test/mcp"},
+                    {"type": transport, "url": "https://mcp.example.test/mcp"},
                 ),
                 allowed_tools=("mcp__tavily__tavily_search",),
                 preflight_smoke=McpSmokeCheck(
@@ -314,3 +316,57 @@ async def test_mcp_probe_reports_tools_list_mismatch(
         )
 
     assert captured.value.error_code == "mcp_tool_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_mcp_probe_supports_sse_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def fake_sse(
+        *_args: object,
+        **_kwargs: object,
+    ) -> AsyncGenerator[tuple[object, object]]:
+        yield object(), object()
+
+    class FakeSession:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> FakeSession:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def list_tools(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                tools=[SimpleNamespace(name="tavily_search")]
+            )
+
+        async def call_tool(
+            self,
+            _name: str,
+            _arguments: dict[str, object],
+        ) -> SimpleNamespace:
+            return SimpleNamespace(isError=False)
+
+    monkeypatch.setattr("harness.studio.preflight_probes.sse_client", fake_sse)
+    monkeypatch.setattr("harness.studio.preflight_probes.ClientSession", FakeSession)
+    sandbox = CommandSandbox(
+        tmp_path,
+        SandboxCommandResult(exit_code=0, stdout="200"),
+    )
+
+    result = await StreamableHttpMcpProbe(mcp_resolver("sse")).verify(
+        manifest(mcp=True),
+        identity(),
+        sandbox,
+        await handle(sandbox),
+    )
+
+    assert result.details == {"serverCount": 1, "toolCount": 1}

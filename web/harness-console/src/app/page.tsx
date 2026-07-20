@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AgentThread } from "../components/agent-thread";
 import { AuthProvider } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
@@ -19,16 +19,23 @@ import {
   type TaskAgent,
 } from "../lib/task-agent-catalog";
 import { loadTasks, type TaskSummary } from "../lib/task-history";
+import {
+  loadTaskModelOverride,
+  loadTaskModelRoutes,
+  saveTaskModelOverride,
+  type TaskModelRoute,
+} from "../lib/task-model-catalog";
 
 export default function Home() {
   const [threadId, setThreadId] = useState("");
   const [taskAgents, setTaskAgents] = useState<TaskAgent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<TaskAgent | null>(null);
+  const [modelRoutes, setModelRoutes] = useState<TaskModelRoute[]>([]);
+  const [modelRouteOverride, setModelRouteOverride] = useState<string | null>(null);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState("");
   const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
-  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     if (window.matchMedia("(max-width: 820px)").matches) {
@@ -43,8 +50,9 @@ export default function Home() {
     async function loadAgentBinding() {
       setAgentsLoading(true);
       try {
-        const [catalog, tasks] = await Promise.all([
+        const [catalog, routes, tasks] = await Promise.all([
           loadTaskAgentCatalog(),
+          loadTaskModelRoutes().catch(() => []),
           loadTasks().catch(() => []),
         ]);
         if (!active) return;
@@ -76,7 +84,17 @@ export default function Home() {
           ? catalog.agents
           : [selected, ...catalog.agents];
         setTaskAgents(agents);
+        setModelRoutes(routes);
         setSelectedAgent(selected);
+        const storedModelRoute = loadTaskModelOverride(
+          window.localStorage,
+          currentThreadId,
+        );
+        setModelRouteOverride(
+          routes.some((route) => route.id === storedModelRoute)
+            ? storedModelRoute
+            : null,
+        );
         bindThreadAgent(window.localStorage, currentThreadId, selected);
         setAgentsError("");
       } catch (error) {
@@ -99,6 +117,7 @@ export default function Home() {
     const nextThreadId = createNewThread(window.localStorage);
     bindThreadAgent(window.localStorage, nextThreadId, selectedAgent);
     setThreadId(nextThreadId);
+    setModelRouteOverride(null);
     setRunDetailsOpen(false);
   }
 
@@ -123,6 +142,15 @@ export default function Home() {
     }
     bindThreadAgent(window.localStorage, task.thread_id, nextAgent);
     setSelectedAgent(nextAgent);
+    const storedModelRoute = loadTaskModelOverride(
+      window.localStorage,
+      task.thread_id,
+    );
+    setModelRouteOverride(
+      modelRoutes.some((route) => route.id === storedModelRoute)
+        ? storedModelRoute
+        : null,
+    );
     setThreadId(selectThread(window.localStorage, task.thread_id));
     setRunDetailsOpen(false);
   }
@@ -137,13 +165,10 @@ export default function Home() {
     const nextThreadId = createNewThread(window.localStorage);
     bindThreadAgent(window.localStorage, nextThreadId, nextAgent);
     setSelectedAgent(nextAgent);
+    setModelRouteOverride(null);
     setThreadId(nextThreadId);
     setRunDetailsOpen(false);
   }
-
-  const refreshCurrentTask = useCallback(() => {
-    setRefreshToken((value) => value + 1);
-  }, []);
 
   return (
     <AuthProvider>
@@ -157,8 +182,6 @@ export default function Home() {
           onToggle={() => setTaskSidebarOpen((current) => !current)}
           onSelect={switchTask}
           onNewTask={startNewTask}
-          refreshToken={refreshToken}
-          onCurrentTaskStatusChange={refreshCurrentTask}
         />
         <div className="task-content-shell">
           <header className="console-header">
@@ -190,10 +213,17 @@ export default function Home() {
             <div className="chat-surface">
               {threadId && selectedAgent ? (
                 <AssistantRuntimeShell
-                  key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}:${refreshToken}`}
+                  key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}`}
                   threadId={threadId}
                   agentName={selectedAgent.name}
                   agentVersion={selectedAgent.version}
+                  agentDefaultModelRoute={selectedAgent.modelRoute ?? null}
+                  modelRoutes={modelRoutes}
+                  modelRouteOverride={modelRouteOverride}
+                  onModelRouteOverrideChange={(routeId) => {
+                    saveTaskModelOverride(window.localStorage, threadId, routeId);
+                    setModelRouteOverride(routeId);
+                  }}
                 >
                   <AgentThread />
                 </AssistantRuntimeShell>

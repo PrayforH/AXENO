@@ -19,6 +19,7 @@ type Props = {
   agentName: string;
   policyId: string;
   mcpReferences: string[];
+  mcpTools: string[];
   canManage: boolean;
   policies: StudioGovernedPolicy[];
   onPoliciesChanged: (policies: StudioGovernedPolicy[]) => void;
@@ -36,7 +37,10 @@ const trustLabels: Record<StudioContextTrust, string> = {
   untrusted: "不可信",
 };
 
-function defaultCallRules(policyId: string): StudioCallPolicyRule[] {
+function defaultCallRules(
+  policyId: string,
+  mcpTools: readonly string[],
+): StudioCallPolicyRule[] {
   const rules: StudioCallPolicyRule[] = [
     { name: "allow-read", decision: "allow", tool: "Read", priority: 0 },
     { name: "allow-glob", decision: "allow", tool: "Glob", priority: 0 },
@@ -53,6 +57,12 @@ function defaultCallRules(policyId: string): StudioCallPolicyRule[] {
       tool: "MCPSearch",
       priority: 0,
     },
+    ...mcpTools.map((tool, index) => ({
+      name: `allow-selected-mcp-${index + 1}`,
+      decision: "allow" as const,
+      tool,
+      priority: 0,
+    })),
   ];
   if (policyId !== "production-read-only") {
     rules.push(
@@ -83,6 +93,7 @@ export function GovernanceControlPlane({
   agentName,
   policyId,
   mcpReferences,
+  mcpTools,
   canManage,
   policies,
   onPoliciesChanged,
@@ -164,6 +175,14 @@ export function GovernanceControlPlane({
       || JSON.stringify(resultRules) !== JSON.stringify(policy.resultRules)
     ),
   );
+  const explicitlyAllowedTools = new Set(
+    callRules
+      .filter((rule) => rule.decision === "allow" && rule.tool)
+      .map((rule) => rule.tool),
+  );
+  const missingMcpTools = mcpTools.filter(
+    (tool) => !explicitlyAllowedTools.has(tool),
+  );
   const activeConnections = connections.filter((item) => item.status === "active");
 
   async function reloadPolicies() {
@@ -233,7 +252,7 @@ export function GovernanceControlPlane({
         policyId,
         displayName: `${policyId} · 租户策略`,
         description: "由 Agent Studio 发布的确定性调用与结果策略。",
-        callRules: defaultCallRules(policyId),
+        callRules: defaultCallRules(policyId, mcpTools),
         resultRules: [],
       });
       await reloadPolicies();
@@ -341,6 +360,22 @@ export function GovernanceControlPlane({
     setResultRules((current) => current.map((rule, currentIndex) =>
       currentIndex === index ? { ...rule, ...update } : rule
     ));
+  }
+
+  function syncMcpTools() {
+    if (!canManage || missingMcpTools.length === 0) return;
+    setCallRules((current) => [
+      ...current,
+      ...missingMcpTools.map((tool, index) => ({
+        name: `allow-agent-mcp-${current.length + index + 1}`,
+        decision: "allow" as const,
+        tool,
+        priority: 0,
+      })),
+    ]);
+    setMessage(
+      `已把 ${missingMcpTools.length} 个 MCP 工具加入策略草稿；保存并发布后才会影响真实 Run`,
+    );
   }
 
   return (
@@ -526,10 +561,14 @@ export function GovernanceControlPlane({
         </div>
       </details>
 
-      <details className={styles.section} open>
+      <details className={styles.section}>
         <summary>
           <span>调用与结果策略</span>
-          <small>{policy ? `草稿 r${policy.revision}` : "当前使用平台内置策略"}</small>
+          <small>
+            {policy
+              ? `草稿 r${policy.revision}`
+              : `内置策略 · ${mcpTools.length} 个 MCP 工具已纳入模板`}
+          </small>
         </summary>
         <div className={styles.sectionBody}>
           {!policy ? (
@@ -545,6 +584,23 @@ export function GovernanceControlPlane({
             </div>
           ) : (
             <>
+              {missingMcpTools.length > 0 && (
+                <div className={styles.coverageWarning}>
+                  <div>
+                    <strong>当前策略尚未明确允许 {missingMcpTools.length} 个已绑定 MCP 工具</strong>
+                    <small>
+                      这会在运行时得到“no policy rule matched”；同步后仍需保存并发布策略。
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!canManage || Boolean(action)}
+                    onClick={syncMcpTools}
+                  >
+                    同步当前 Agent 工具
+                  </button>
+                </div>
+              )}
               <div className={styles.ruleGroup}>
                 <header>
                   <div>

@@ -17,6 +17,7 @@ import { redirectOnUnauthorized } from "./client-auth";
 
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
   cancelFetch?: typeof fetch;
+  modelRouteOverride?: string | null;
 }
 
 interface AssistantUiRunOptions {
@@ -26,16 +27,23 @@ interface AssistantUiRunOptions {
 export class HarnessHttpAgent extends HttpAgent {
   private activeInput?: Pick<RunAgentInput, "threadId" | "runId">;
   private cancelFetch: typeof fetch;
+  private modelRouteOverride?: string;
 
   constructor(config: HarnessHttpAgentConfig) {
-    const transportFetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    const {
+      cancelFetch,
+      modelRouteOverride,
+      ...httpConfig
+    } = config;
+    const transportFetch = httpConfig.fetch ?? globalThis.fetch.bind(globalThis);
     const sessionAwareFetch: typeof transportFetch = async (url, init) => {
       const response = await transportFetch(url, init);
       redirectOnUnauthorized(response);
       return response;
     };
-    super({ ...config, fetch: sessionAwareFetch });
-    const cancelTransport = config.cancelFetch ?? globalThis.fetch.bind(globalThis);
+    super({ ...httpConfig, fetch: sessionAwareFetch });
+    this.modelRouteOverride = modelRouteOverride || undefined;
+    const cancelTransport = cancelFetch ?? globalThis.fetch.bind(globalThis);
     this.cancelFetch = async (input, init) => {
       const response = await cancelTransport(input, init);
       redirectOnUnauthorized(response);
@@ -45,7 +53,19 @@ export class HarnessHttpAgent extends HttpAgent {
 
   override run(input: RunAgentInput) {
     this.activeInput = { threadId: input.threadId, runId: input.runId };
-    return super.run(input);
+    return super.run(this.withModelOverride(input));
+  }
+
+  private withModelOverride<T extends object>(input: T): T {
+    if (!this.modelRouteOverride) return input;
+    const current = input as T & { forwardedProps?: Record<string, unknown> };
+    return {
+      ...input,
+      forwardedProps: {
+        ...current.forwardedProps,
+        modelRoute: this.modelRouteOverride,
+      },
+    };
   }
 
   override runAgent(
@@ -120,7 +140,10 @@ export class HarnessHttpAgent extends HttpAgent {
     if (signal?.aborted) cancelFromSignal();
     else signal?.addEventListener("abort", cancelFromSignal, { once: true });
 
-    return super.runAgent(parameters, wrapped).finally(() => {
+    const routedParameters = parameters
+      ? this.withModelOverride(parameters)
+      : parameters;
+    return super.runAgent(routedParameters, wrapped).finally(() => {
       signal?.removeEventListener("abort", cancelFromSignal);
       if (
         activeInput &&
@@ -134,21 +157,24 @@ export class HarnessHttpAgent extends HttpAgent {
 
   cancelActiveRun(): void {
     if (!this.activeInput) return;
+    const activeInput = this.activeInput;
     const relative = this.url.startsWith("/");
     const base = globalThis.location?.origin ?? "http://localhost";
     const url = new URL(this.url, base);
     url.search = "";
     url.pathname = `${url.pathname.replace(/\/$/, "")}/threads/${encodeURIComponent(
-      this.activeInput.threadId,
-    )}/runs/${encodeURIComponent(this.activeInput.runId)}/cancel`;
+      activeInput.threadId,
+    )}/runs/${encodeURIComponent(activeInput.runId)}/cancel`;
     const target = relative ? `${url.pathname}${url.search}` : url.toString();
+    liveResponseStore.completeRun();
+    runStreamStore.completeRun(activeInput.runId);
+    this.activeInput = undefined;
     void this.cancelFetch(target, {
       method: "POST",
       headers: this.headers,
     }).catch((error: unknown) => {
       console.error("[Harness Console] Failed to cancel Harness run", error);
     });
-    this.activeInput = undefined;
   }
 
   override abortRun(): void {
@@ -159,6 +185,7 @@ export class HarnessHttpAgent extends HttpAgent {
   override clone(): HarnessHttpAgent {
     const cloned = super.clone() as HarnessHttpAgent;
     cloned.cancelFetch = this.cancelFetch;
+    cloned.modelRouteOverride = this.modelRouteOverride;
     cloned.activeInput = this.activeInput ? { ...this.activeInput } : undefined;
     return cloned;
   }

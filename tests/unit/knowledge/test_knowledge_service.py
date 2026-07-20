@@ -10,6 +10,7 @@ from harness.knowledge.models import (
     CreateKnowledgeSourceRequest,
     KnowledgeAcl,
     KnowledgeChunk,
+    KnowledgeResultTrust,
     KnowledgeSnapshot,
     KnowledgeSnapshotBinding,
     KnowledgeVisibility,
@@ -240,11 +241,12 @@ async def test_pinned_binding_does_not_bypass_later_acl_revocation() -> None:
         "owner",
         file_source("restricted", "A confidential operational fact."),
     )
+    assert source.active_snapshot_id is not None
     binding = KnowledgeSnapshotBinding(
         knowledgeBaseReference="company",
         sourceReference="restricted",
         snapshotId=source.active_snapshot_id,
-        trust="sensitive",
+        trust=KnowledgeResultTrust.SENSITIVE,
     )
     current = await service.get_source("tenant", "restricted")
     await service.replace_source(

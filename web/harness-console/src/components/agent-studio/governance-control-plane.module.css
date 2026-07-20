@@ -222,6 +222,51 @@
   padding: 14px 16px;
 }
 
+.coverageWarning {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--studio-warning) 38%, var(--studio-line));
+  background: color-mix(in srgb, var(--studio-warning) 8%, var(--studio-panel));
+}
+
+.coverageWarning > div {
+  display: grid;
+  gap: 3px;
+}
+
+.coverageWarning strong {
+  color: var(--studio-ink);
+  font-size: 9px;
+}
+
+.coverageWarning small {
+  color: var(--studio-muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.coverageWarning button {
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--studio-warning) 55%, var(--studio-line));
+  border-radius: 6px;
+  color: var(--studio-ink);
+  background: var(--studio-panel);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.coverageWarning button:not(:disabled):hover {
+  border-color: var(--studio-warning);
+}
+
+.coverageWarning button:disabled {
+  opacity: 0.42;
+}
+
 .connectionEditor {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -482,5 +527,13 @@
   .simulationResult,
   .impact {
     grid-column: auto;
+  }
+
+  .coverageWarning {
+    grid-template-columns: 1fr;
+  }
+
+  .coverageWarning button {
+    justify-self: start;
   }
 }

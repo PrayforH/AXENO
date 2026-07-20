@@ -265,7 +265,10 @@ class ClaudeSdkRuntime:
         else:
             environment["ANTHROPIC_API_KEY"] = secret
         resolved_tools = await self._tool_resolver.resolve(manifest, context.identity)
-        enforce_published_tool_directory(self._snapshot, resolved_tools)
+        resolved_tools = enforce_published_tool_directory(
+            self._snapshot,
+            resolved_tools,
+        )
         mcp_servers = dict(resolved_tools.mcp_servers)
         allowed_tools = list(resolved_tools.allowed_tools)
         builtin_tools = list(resolved_tools.builtin_tools)
@@ -487,21 +490,59 @@ class ClaudeSdkRuntime:
 
     async def _execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         model = self._snapshot.manifest.spec.model
+        raw_override = context.run.input.get("model_route_override")
+        route_override = raw_override if isinstance(raw_override, str) else None
+        run_capabilities = context.run.input.get("required_model_capabilities")
+        required_capabilities = set(model.required_capabilities)
+        if isinstance(run_capabilities, list):
+            required_capabilities.update(
+                value for value in run_capabilities if isinstance(value, str)
+            )
         decision = self._router.resolve(
-            model.route,
-            required_capabilities=frozenset(model.required_capabilities),
-            fallback_route_id=model.fallback_route,
+            route_override or model.route,
+            required_capabilities=frozenset(required_capabilities),
+            fallback_route_id=None if route_override is not None else model.fallback_route,
         )
-        yield RuntimeEvent(type="model.route.selected", payload=decision.event_payload)
+        yield RuntimeEvent(
+            type="model.route.selected",
+            payload={
+                **decision.event_payload,
+                "selection_source": (
+                    "task_override" if route_override is not None else "agent_default"
+                ),
+                "agent_default_route": model.route,
+            },
+        )
         prompt = str(context.run.input.get("prompt", ""))
         if context.memory_projection:
             prompt = f"<user_memory>\n{context.memory_projection}\n</user_memory>\n\n{prompt}"
         if context.input_files:
-            inventory = "\n".join(f"- {path}" for path in context.input_files)
+            processed = set(context.processed_input_paths)
+            originals = tuple(path for path in context.input_files if path not in processed)
+            inventory_sections: list[str] = []
+            if context.processed_input_paths:
+                processed_inventory = "\n".join(
+                    f"- {path}" for path in context.processed_input_paths
+                )
+                inventory_sections.append(
+                    "Preferred model-readable representations:\n"
+                    f"{processed_inventory}\n"
+                    "Read these exact relative paths first. When a processed "
+                    "representation is listed, do not call Read on its source "
+                    "PDF or Office binary."
+                )
+            if originals:
+                original_inventory = "\n".join(f"- {path}" for path in originals)
+                inventory_sections.append(
+                    "Original uploads:\n"
+                    f"{original_inventory}\n"
+                    "Read an original directly only when no processed "
+                    "representation exists, such as for an image."
+                )
             prompt = (
                 f"{prompt}\n\n"
                 "Browser-uploaded input files are available in this run workspace:\n"
-                f"{inventory}\n"
+                f"{'\n\n'.join(inventory_sections)}\n"
                 "Use the available file tools to inspect them when relevant."
             )
         with self._span(

@@ -45,7 +45,6 @@ class Settings(BaseSettings):
     knowledge_workload_token_secret: SecretStr = SecretStr(
         "local-development-knowledge-workload-secret-change-before-production"
     )
-
     database_url: str = "postgresql+asyncpg://harness:harness@localhost:5432/harness"
     redis_url: str = "redis://localhost:6379/0"
 
@@ -61,6 +60,13 @@ class Settings(BaseSettings):
     new_api_auth_scheme: Literal["bearer", "x-api-key"] = "bearer"
     new_api_compatibility: Literal["full", "degraded", "unsupported"] = "full"
     new_api_capabilities: str = "streaming,tool_use"
+
+    minimax_m3_base_url: str = ""
+    minimax_m3_api_key: SecretStr = SecretStr("")
+    minimax_m3_model: str = "MiniMax-M3"
+    minimax_m3_auth_scheme: Literal["bearer", "x-api-key"] = "x-api-key"
+    minimax_m3_compatibility: Literal["full", "degraded", "unsupported"] = "full"
+    minimax_m3_capabilities: str = "streaming,tool_use,vision"
 
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_api_key: SecretStr = SecretStr("")
@@ -127,6 +133,7 @@ class Settings(BaseSettings):
 
     mcp_secret_references_json: str = "{}"
     mcp_server_secrets_json: SecretStr = SecretStr("{}")
+    mcp_discovery_proxy_url: SecretStr = SecretStr("")
 
     otlp_endpoint: str = ""
     otlp_headers: SecretStr = SecretStr("")

@@ -17,6 +17,7 @@ describe("Data lifecycle control plane", () => {
     expect(component).toContain("导出我的数据");
     expect(component).toContain("删除我的数据");
     expect(component).toContain("重试失败步骤");
+    expect(component).not.toContain("KnowledgeControlPlane");
     expect(component).toContain("/artifact");
     expect(styles).toContain(".cascade");
     expect(styles).not.toContain("linear-gradient");

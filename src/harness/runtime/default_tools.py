@@ -12,6 +12,8 @@ from harness.runtime.mcp_credentials import (
     ServerSecretReferenceProvider,
 )
 from harness.runtime.tools import McpServerRegistration, McpSmokeCheck, ToolResolver
+from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.models import McpCapability
 
 TAVILY_REFERENCE = "tavily-readonly"
 TAVILY_ALLOWED_TOOLS = (
@@ -48,8 +50,22 @@ def server_secret_credential_provider(
 
 def default_tool_resolver(
     credential_provider: DynamicMcpCredentialProvider | None = None,
+    *,
+    catalogs: CapabilityCatalogService | None = None,
 ) -> ToolResolver:
     """Build the reviewed capability registry shared by every composition root."""
+
+    async def tenant_registry(
+        tenant_id: str,
+    ) -> dict[str, McpServerRegistration]:
+        if catalogs is None:
+            return {}
+        record = await catalogs.get(tenant_id)
+        return {
+            capability.reference: registration
+            for capability in record.catalog.mcp_servers
+            if (registration := _catalog_registration(capability)) is not None
+        }
 
     return ToolResolver(
         mcp_registry={
@@ -72,5 +88,48 @@ def default_tool_resolver(
                 ),
             )
         },
+        mcp_registry_provider=tenant_registry if catalogs is not None else None,
         credential_provider=credential_provider,
+    )
+
+
+def _catalog_registration(
+    capability: McpCapability,
+) -> McpServerRegistration | None:
+    if not capability.endpoint_url:
+        return None
+    credential_headers: tuple[tuple[str, str], ...] = ()
+    credential_header_prefixes: tuple[tuple[str, str], ...] = ()
+    credential_query_parameters: tuple[tuple[str, str], ...] = ()
+    if capability.auth_mode == "bearer":
+        credential_headers = (("Authorization", capability.auth_key),)
+        credential_header_prefixes = (("Authorization", "Bearer "),)
+    elif capability.auth_mode == "header" and capability.auth_name:
+        credential_headers = ((capability.auth_name, capability.auth_key),)
+    elif capability.auth_mode == "query" and capability.auth_name:
+        credential_query_parameters = ((capability.auth_name, capability.auth_key),)
+    smoke = (
+        McpSmokeCheck(
+            tool="tavily_search",
+            arguments={
+                "query": "Model Context Protocol connectivity check",
+                "max_results": 1,
+                "search_depth": "basic",
+            },
+        )
+        if capability.reference == TAVILY_REFERENCE
+        else None
+    )
+    return McpServerRegistration(
+        server_name=capability.server_name or capability.reference,
+        config=cast(
+            McpServerConfig,
+            {"type": capability.transport, "url": capability.endpoint_url},
+        ),
+        allowed_tools=capability.tools,
+        credential_headers=credential_headers,
+        credential_header_prefixes=credential_header_prefixes,
+        credential_query_parameters=credential_query_parameters,
+        result_trust=ContextTrust.UNTRUSTED,
+        preflight_smoke=smoke,
     )

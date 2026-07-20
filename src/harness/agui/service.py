@@ -1,16 +1,20 @@
 """Translate AG-UI thread/run identifiers into Harness domain identifiers."""
 
 import asyncio
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
 from ag_ui.core import (
+    AudioInputContent,
     BinaryInputContent,
     DocumentInputContent,
+    ImageInputContent,
     InputContentDataSource,
     RunAgentInput,
     TextInputContent,
+    VideoInputContent,
 )
 
 from harness.adapters.memory import InMemoryAguiThreadBindingRepository
@@ -68,9 +72,7 @@ class AguiRunService:
     async def list_bindings(
         self, *, tenant_id: str, user_id: str, limit: int = 50
     ) -> list[StoredAguiThreadBinding]:
-        return await self._bindings.list_for_user(
-            tenant_id, user_id, limit=limit
-        )
+        return await self._bindings.list_for_user(tenant_id, user_id, limit=limit)
 
     async def create_run(
         self,
@@ -103,12 +105,20 @@ class AguiRunService:
                 "prompt": prompt,
                 "conversation_prompts": conversation_prompts,
                 "input_artifact_ids": [item.input_artifact_id for item in resolved],
+                **(
+                    {"required_model_capabilities": ["vision"]}
+                    if any(item.media_type.startswith("image/") for item in resolved)
+                    else {}
+                ),
+                **(
+                    {"model_route_override": model_route_override}
+                    if (model_route_override := _model_route_override(request)) is not None
+                    else {}
+                ),
             },
         )
         async with self._lock:
-            self._run_bindings[
-                (tenant_id, user_id, request.thread_id, request.run_id)
-            ] = run.run_id
+            self._run_bindings[(tenant_id, user_id, request.thread_id, request.run_id)] = run.run_id
         title_timestamp = datetime.now(UTC)
         await self._bindings.update_title(
             tenant_id,
@@ -127,13 +137,9 @@ class AguiRunService:
         )
         return run
 
-    async def resolve_title(
-        self, binding: StoredAguiThreadBinding, prompts: list[str]
-    ) -> str:
+    async def resolve_title(self, binding: StoredAguiThreadBinding, prompts: list[str]) -> str:
         if binding.title and (
-            binding.title_source == "model"
-            or self._title_generator is None
-            or not prompts
+            binding.title_source == "model" or self._title_generator is None or not prompts
         ):
             return binding.title
         generated_at = binding.title_updated_at or datetime.now(UTC)
@@ -231,9 +237,7 @@ class AguiRunService:
         async with self._lock:
             run_id = self._run_bindings.get(key)
         if run_id is None:
-            raise NotFoundError(
-                f"AG-UI run is not bound: {thread_id}/{client_run_id}"
-            )
+            raise NotFoundError(f"AG-UI run is not bound: {thread_id}/{client_run_id}")
         return await self._run_service.cancel(tenant_id, run_id)
 
     async def _resolve_binding(
@@ -247,9 +251,7 @@ class AguiRunService:
     ) -> AguiThreadBinding:
         async with self._lock:
             try:
-                stored = await self._bindings.get_by_thread(
-                    tenant_id, user_id, thread_id
-                )
+                stored = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
             except NotFoundError:
                 stored = None
             if stored is not None:
@@ -265,9 +267,7 @@ class AguiRunService:
                         f"{existing.agent_name}@{existing.agent_version}"
                     )
                 return existing
-            session = await self._sessions.create(
-                tenant_id, user_id, agent_name, agent_version
-            )
+            session = await self._sessions.create(tenant_id, user_id, agent_name, agent_version)
             binding = AguiThreadBinding(
                 session_id=session.session_id,
                 agent_name=agent_name,
@@ -287,6 +287,18 @@ class AguiRunService:
             return binding
 
 
+def _model_route_override(request: RunAgentInput) -> str | None:
+    raw = request.forwarded_props
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("modelRoute")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value):
+        raise ConflictError("task model route override is invalid")
+    return value
+
+
 def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
     for message in reversed(request.messages):
         if message.role != "user":
@@ -294,15 +306,21 @@ def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
         content = message.content
         if isinstance(content, str):
             return content, []
-        text = "\n".join(
-            item.text for item in content if isinstance(item, TextInputContent)
-        )
+        text = "\n".join(item.text for item in content if isinstance(item, TextInputContent))
         input_artifact_ids: list[str] = []
         for item in content:
             input_artifact_id: object | None = None
             if isinstance(item, BinaryInputContent):
                 input_artifact_id = item.id
-            elif isinstance(item, DocumentInputContent):
+            elif isinstance(
+                item,
+                (
+                    ImageInputContent,
+                    AudioInputContent,
+                    VideoInputContent,
+                    DocumentInputContent,
+                ),
+            ):
                 raw_metadata: object = item.metadata
                 if isinstance(raw_metadata, dict):
                     metadata = cast(dict[str, object], raw_metadata)
@@ -314,9 +332,9 @@ def _latest_user_input(request: RunAgentInput) -> tuple[str, list[str]]:
                     and isinstance(item.source, InputContentDataSource)
                     and item.source.value.startswith("input_artifact_")
                 ):
-                    # @assistant-ui/react-ag-ui converts a completed file
-                    # attachment to a document data source. The value is an
-                    # opaque server-issued ID, never the browser file bytes.
+                    # @assistant-ui/react-ag-ui converts completed attachments
+                    # to typed media data sources based on MIME type. The value
+                    # is an opaque server-issued ID, never browser file bytes.
                     input_artifact_id = item.source.value
             if isinstance(input_artifact_id, str) and input_artifact_id:
                 input_artifact_ids.append(input_artifact_id)

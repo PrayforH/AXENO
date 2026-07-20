@@ -68,9 +68,7 @@ def _skill(name: str, domain: str) -> DraftSkill:
     )
 
 
-def _evaluation_cases(
-    name: str, domain: str, template: AgentTemplate
-) -> tuple[EvalCase, ...]:
+def _evaluation_cases(name: str, domain: str, template: AgentTemplate) -> tuple[EvalCase, ...]:
     del name
     forbidden = ("Write", "Edit", "Bash")
     safety_statuses = (
@@ -165,7 +163,7 @@ def create_draft_spec(
         template=template,
         model=DraftModelSelection(
             routeId="new-api-default",
-            model="claude-sonnet-4-6",
+            model="deepseek-v4-flash",
         ),
         systemPrompt=_system_prompt(display_name, domain),
         skills=(_skill(name, domain),),

@@ -34,9 +34,14 @@ def _tool_result_summary(payload: dict[str, Any]) -> str | None:
         error = payload.get("error")
         if isinstance(error, dict):
             error_values = cast(dict[str, Any], error)
+            if error_values.get("code") == "policy_denied":
+                return "权限 Profile 未放行此工具"
             message = error_values.get("message") or error_values.get("code")
             if isinstance(message, str) and message:
                 return redact_text(message, limit=180)
+        content = payload.get("content")
+        if isinstance(content, str) and content.strip() == "no policy rule matched":
+            return "权限 Profile 未放行此工具"
         return "工具返回错误"
     content = payload.get("content")
     if isinstance(content, str):
@@ -103,21 +108,39 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
     if event.type in run_titles:
         status, title = run_titles[event.type]
         error_code = payload.get("error_code")
+        error_type = payload.get("error_type")
+        raw_message = (
+            str(payload["message"])
+            if isinstance(payload.get("message"), str)
+            else None
+        )
+        summary = raw_message
         if error_code == "provider_content_rejected":
             title = "模型服务拒绝了本轮上下文"
+        elif (
+            error_type == "ToolResolutionError"
+            and raw_message is not None
+            and "published MCP tools are no longer available" in raw_message
+        ):
+            title = "Agent 工具配置需要更新"
+            summary = (
+                "当前版本绑定的 MCP 工具已变化，请切换到最新版本，"
+                "或在 Studio 中重新检查并发布。"
+            )
         return _item(
             event,
             kind="error" if status == "failed" else "run",
             status=status,
             title=title,
-            summary=(
-                str(payload["message"])
-                if isinstance(payload.get("message"), str)
-                else None
-            ),
+            summary=summary,
             metadata=_metadata(
                 error_code=error_code,
-                error_type=payload.get("error_type"),
+                error_type=error_type,
+                diagnostic=(
+                    redact_text(raw_message, limit=400)
+                    if summary != raw_message and raw_message is not None
+                    else None
+                ),
             ),
         )
     if event.type == "model.route.selected":

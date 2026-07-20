@@ -6,6 +6,9 @@ export interface TaskAgent {
   version: string;
   displayName: string;
   domain: string;
+  modelRoute?: string;
+  model?: string;
+  modelCapabilities?: string[];
 }
 
 interface RuntimeAgent {
@@ -18,6 +21,9 @@ interface PublishedAgent {
   version: string;
   display_name: string;
   domain: string;
+  model_route?: string | null;
+  model?: string | null;
+  model_capabilities?: string[];
 }
 
 export interface TaskAgentCatalog {
@@ -66,7 +72,14 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
   const registryVersions = registry.map((agent) => {
     const studio = studioByCoordinate.get(agentCoordinate(agent));
     return (
-      studio ?? {
+      studio
+        ? {
+            ...studio,
+            modelRoute: agent.model_route ?? undefined,
+            model: agent.model ?? undefined,
+            modelCapabilities: agent.model_capabilities ?? [],
+          }
+        : {
         name: agent.name,
         version: agent.version,
         displayName:
@@ -74,6 +87,9 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
             ? "舆情分析"
             : agent.display_name,
         domain: agent.domain,
+        modelRoute: agent.model_route ?? undefined,
+        model: agent.model ?? undefined,
+        modelCapabilities: agent.model_capabilities ?? [],
       }
     );
   });

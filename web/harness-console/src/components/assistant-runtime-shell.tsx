@@ -14,16 +14,26 @@ import { liveResponseStore } from "../lib/live-response-store";
 import { runStreamStore } from "../lib/run-stream-store";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
 import { createThreadHistoryAdapter } from "../lib/task-history";
+import type { TaskModelRoute } from "../lib/task-model-catalog";
+import { TaskModelProvider } from "./task-model-context";
 
 export function AssistantRuntimeShell({
   threadId,
   agentName,
   agentVersion,
+  agentDefaultModelRoute,
+  modelRoutes,
+  modelRouteOverride,
+  onModelRouteOverrideChange,
   children,
 }: {
   threadId: string;
   agentName: string;
   agentVersion: string;
+  agentDefaultModelRoute: string | null;
+  modelRoutes: TaskModelRoute[];
+  modelRouteOverride: string | null;
+  onModelRouteOverrideChange: (routeId: string | null) => void;
   children: ReactNode;
 }) {
   const runView = useRunViewModel();
@@ -32,10 +42,13 @@ export function AssistantRuntimeShell({
       agent_name: agentName,
       agent_version: agentVersion,
     });
-    const next = new HarnessHttpAgent({ url: `/api/agui?${query.toString()}` });
+    const next = new HarnessHttpAgent({
+      url: `/api/agui?${query.toString()}`,
+      modelRouteOverride,
+    });
     next.threadId = threadId;
     return next;
-  }, [agentName, agentVersion, threadId]);
+  }, [agentName, agentVersion, modelRouteOverride, threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);
@@ -55,12 +68,19 @@ export function AssistantRuntimeShell({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div
-        className="assistant-runtime-shell"
-        data-run-phase={runView?.phase ?? "idle"}
+      <TaskModelProvider
+        routes={modelRoutes}
+        agentDefaultRouteId={agentDefaultModelRoute}
+        overrideRouteId={modelRouteOverride}
+        onOverrideChange={onModelRouteOverrideChange}
       >
-        {children}
-      </div>
+        <div
+          className="assistant-runtime-shell"
+          data-run-phase={runView?.phase ?? "idle"}
+        >
+          {children}
+        </div>
+      </TaskModelProvider>
     </AssistantRuntimeProvider>
   );
 }

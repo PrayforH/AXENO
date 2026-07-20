@@ -45,6 +45,7 @@ def controller(
     *,
     quotas: QuotaService | None = None,
     maintenance: tuple[MaintenanceReaper, ...] = (),
+    metrics: ReliabilityMetrics | None = None,
 ) -> ReliabilityController:
     return ReliabilityController(
         runs=runs,
@@ -55,7 +56,7 @@ def controller(
             id_generator=lambda prefix: f"{prefix}-{len(raw_events._items) + 1}",  # pyright: ignore[reportPrivateUsage]
         ),
         repository=repository,
-        metrics=ReliabilityMetrics(),
+        metrics=metrics or ReliabilityMetrics(),
         thresholds={status: 60 for status in ACTIVE},
         quotas=quotas,
         maintenance=maintenance,
@@ -74,8 +75,9 @@ async def test_reaper_converges_all_active_states_without_touching_fresh_runs() 
         )
     fresh = run(RunStatus.RUNNING, suffix="fresh", updated_at=NOW - timedelta(seconds=59))
     await runs.add(fresh)
+    metrics = ReliabilityMetrics()
 
-    reaped = await controller(runs, events, repository).process_once()
+    reaped = await controller(runs, events, repository, metrics=metrics).process_once()
 
     assert reaped == 5
     for status in ACTIVE:
@@ -93,6 +95,13 @@ async def test_reaper_converges_all_active_states_without_touching_fresh_runs() 
     actions = await repository.list_reaper_actions("tenant-a", limit=20)
     assert len(actions) == 5
     assert all(item.outcome is ReaperOutcome.REAPED for item in actions)
+    convergence, count = metrics.quantile(
+        "harness_workflow_convergence_seconds",
+        0.95,
+        labels={"workflow": "run.cancel"},
+    )
+    assert convergence == 61
+    assert count == 1
 
 
 class FlakyQuotaRelease:

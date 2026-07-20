@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 from mcp import ClientSession
+from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 
 from harness.core.manifest import AgentManifest
@@ -295,10 +297,11 @@ class StreamableHttpMcpProbe:
         total_tools = 0
         for server_name, raw_config in resolved.mcp_servers.items():
             config = cast(dict[str, object], raw_config)
-            if config.get("type") != "http" or not isinstance(config.get("url"), str):
+            transport = config.get("type")
+            if transport not in {"http", "sse"} or not isinstance(config.get("url"), str):
                 raise PreflightCheckError(
                     "mcp_transport_unsupported",
-                    "Preview Preflight requires an authenticated HTTP MCP server",
+                    "Preview Preflight requires an authenticated HTTP or SSE MCP server",
                 )
             url = cast(str, config["url"])
             raw_headers = config.get("headers", {})
@@ -314,41 +317,34 @@ class StreamableHttpMcpProbe:
             )
             await self._target_reachability(sandbox, handle, url, headers)
             try:
-                async with httpx.AsyncClient(
-                    headers=headers,
-                    timeout=httpx.Timeout(self._timeout_seconds),
-                    trust_env=False,
-                ) as client:
-                    async with streamable_http_client(
-                        url, http_client=client
-                    ) as (read_stream, write_stream, _session_id):
-                        async with ClientSession(
-                            read_stream,
-                            write_stream,
-                            read_timeout_seconds=timedelta(
-                                seconds=self._timeout_seconds
-                            ),
-                        ) as session:
-                            await session.initialize()
-                            listed = await session.list_tools()
-                            actual = {tool.name for tool in listed.tools}
-                            prefix = f"mcp__{server_name}__"
-                            expected = {
-                                tool.removeprefix(prefix)
-                                for tool in resolved.allowed_tools
-                                if tool.startswith(prefix)
-                            }
-                            if not expected.issubset(actual):
-                                raise PreflightCheckError(
-                                    "mcp_tool_mismatch",
-                                    "MCP tools/list does not contain every reviewed tool",
-                                )
-                            smoke = resolved.mcp_smokes.get(server_name)
-                            if smoke is None:
-                                raise PreflightCheckError(
-                                    "mcp_smoke_not_configured",
-                                    "MCP server has no reviewed read-only smoke call",
-                                )
+                async with self._client_streams(
+                    cast(Literal["http", "sse"], transport),
+                    url,
+                    headers,
+                ) as (read_stream, write_stream):
+                    async with ClientSession(
+                        read_stream,
+                        write_stream,
+                        read_timeout_seconds=timedelta(
+                            seconds=self._timeout_seconds
+                        ),
+                    ) as session:
+                        await session.initialize()
+                        listed = await session.list_tools()
+                        actual = {tool.name for tool in listed.tools}
+                        prefix = f"mcp__{server_name}__"
+                        expected = {
+                            tool.removeprefix(prefix)
+                            for tool in resolved.allowed_tools
+                            if tool.startswith(prefix)
+                        }
+                        if not expected.issubset(actual):
+                            raise PreflightCheckError(
+                                "mcp_tool_mismatch",
+                                "MCP tools/list does not contain every reviewed tool",
+                            )
+                        smoke = resolved.mcp_smokes.get(server_name)
+                        if smoke is not None:
                             if smoke.tool not in actual:
                                 raise PreflightCheckError(
                                     "mcp_tool_mismatch",
@@ -362,7 +358,7 @@ class StreamableHttpMcpProbe:
                                     "mcp_smoke_failed",
                                     "MCP read-only smoke call returned an error",
                                 )
-                            total_tools += len(actual)
+                        total_tools += len(actual)
             except PreflightCheckError:
                 raise
             except Exception as error:
@@ -370,9 +366,36 @@ class StreamableHttpMcpProbe:
                     "mcp_unreachable", "MCP initialize or tools/list failed"
                 ) from error
         return PreflightEvidence(
-            summary="MCP initialize, tools/list and read-only smoke passed",
+            summary="MCP initialize and tools/list passed",
             details={"serverCount": len(resolved.mcp_servers), "toolCount": total_tools},
         )
+
+    @asynccontextmanager
+    async def _client_streams(
+        self,
+        transport: Literal["http", "sse"],
+        url: str,
+        headers: Mapping[str, str],
+    ) -> AsyncIterator[tuple[Any, Any]]:
+        if transport == "sse":
+            async with sse_client(
+                url,
+                headers=dict(headers),
+                timeout=self._timeout_seconds,
+                sse_read_timeout=self._timeout_seconds,
+            ) as streams:
+                yield streams
+            return
+        async with httpx.AsyncClient(
+            headers=dict(headers),
+            timeout=httpx.Timeout(self._timeout_seconds),
+            trust_env=False,
+        ) as client:
+            async with streamable_http_client(
+                url,
+                http_client=client,
+            ) as (read_stream, write_stream, _session_id):
+                yield read_stream, write_stream
 
     async def _target_reachability(
         self,
