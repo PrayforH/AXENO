@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import McpSdkServerConfig, SdkMcpTool, create_sdk_mcp_server
 
+from harness.core.manifest import PythonToolSnapshot
 from harness.runtime.base import SandboxCommandExecutor
 
 SERVER_NAME = "harness-sandbox"
@@ -15,6 +17,32 @@ SUPPORTED_BUILTINS = frozenset({"Read", "Write", "Edit", "Bash", "Glob", "Grep"}
 COORDINATION_BUILTINS = frozenset({"Task", "Agent"})
 _MAX_ARGUMENT_CHARS = 512 * 1024
 _MAX_OUTPUT_CHARS = 256 * 1024
+
+_BUNDLE_PYTHON_RUNNER = r"""
+import asyncio
+import importlib.util
+import inspect
+import json
+import sys
+from pathlib import Path
+
+root = Path.cwd().resolve()
+path = (root / sys.argv[1]).resolve()
+if path == root or root not in path.parents or path.suffix != ".py":
+    raise ValueError("Bundle tool path escaped workspace")
+spec = importlib.util.spec_from_file_location("harness_bundle_tool", path)
+if spec is None or spec.loader is None:
+    raise ValueError("Bundle tool could not be loaded")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+handler = getattr(module, "run", None)
+if not callable(handler):
+    raise ValueError("Bundle tool has no callable run(arguments)")
+value = handler(json.loads(sys.argv[2]))
+if inspect.isawaitable(value):
+    value = asyncio.run(value)
+print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+"""
 
 _REMOTE_TOOL_SCRIPT = r"""
 import fnmatch
@@ -280,3 +308,67 @@ def create_sandbox_tools_mcp_server(
         for builtin in sorted(requested)
     ]
     return create_sdk_mcp_server(SERVER_NAME, tools=tools)
+
+
+def create_bundle_python_tools_mcp_server(
+    *,
+    server_name: str,
+    snapshots: Iterable[PythonToolSnapshot],
+    materialized_paths: Mapping[str, Path],
+    executor: SandboxCommandExecutor,
+) -> McpSdkServerConfig:
+    """Expose self-contained Bundle operators while executing code in the Sandbox."""
+
+    tools = [
+        create_bundle_python_tool(
+            snapshot=snapshot,
+            materialized_path=materialized_paths.get(snapshot.reference),
+            executor=executor,
+        )
+        for snapshot in snapshots
+    ]
+    return create_sdk_mcp_server(server_name, tools=tools)
+
+
+def create_bundle_python_tool(
+    *,
+    snapshot: PythonToolSnapshot,
+    materialized_path: Path | None,
+    executor: SandboxCommandExecutor,
+) -> SdkMcpTool[Any]:
+    if (
+        materialized_path is None
+        or materialized_path.is_absolute()
+        or ".." in materialized_path.parts
+    ):
+        raise ValueError(f"Bundle tool was not materialized: {snapshot.reference}")
+
+    async def handler(arguments: dict[str, Any]) -> dict[str, Any]:
+        encoded = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        if len(encoded) > _MAX_ARGUMENT_CHARS:
+            return _tool_result(
+                "tool arguments exceed the Bundle operator limit",
+                is_error=True,
+            )
+        result = await executor(
+            (
+                "python3",
+                "-c",
+                _BUNDLE_PYTHON_RUNNER,
+                materialized_path.as_posix(),
+                encoded,
+            ),
+            None,
+            120.0,
+        )
+        if result.exit_code != 0:
+            message = result.stderr.strip() or result.stdout.strip() or "Bundle tool failed"
+            return _tool_result(message, is_error=True)
+        return _tool_result(result.stdout)
+
+    return SdkMcpTool(
+        name=snapshot.name,
+        description=snapshot.description,
+        input_schema=snapshot.input_schema,
+        handler=handler,
+    )

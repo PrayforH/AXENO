@@ -79,9 +79,24 @@ class ArtifactPublisher:
             return await self._publish(path=path, name=name, media_type=media_type)
         with self._observability.span(
             "harness.artifact.publish",
-            attributes={"run.id": self._run_id},
+            attributes={
+                "run.id": self._run_id,
+                "langfuse.observation.type": "tool",
+                "langfuse.observation.metadata.tool_name": "publish_artifact",
+            },
         ):
-            return await self._publish(path=path, name=name, media_type=media_type)
+            self._observability.annotate_current_io(
+                input_value={"path": path, "name": name, "media_type": media_type}
+            )
+            artifact = await self._publish(path=path, name=name, media_type=media_type)
+            self._observability.annotate_current_io(
+                output_value={
+                    "artifact_id": artifact.artifact_id,
+                    "name": artifact.name,
+                    "media_type": artifact.media_type,
+                }
+            )
+            return artifact
 
     async def _publish(
         self,
@@ -123,12 +138,14 @@ class ArtifactPublisher:
                         or "application/octet-stream"),
             content=resolved.read_bytes(),
         )
+        payload = artifact.model_dump(mode="json")
+        payload["source_path"] = relative.as_posix()
         await self._events.append(
             tenant_id=self._tenant_id,
             run_id=self._run_id,
             session_id=self._session_id,
             event_type="artifact.ready",
-            payload=artifact.model_dump(mode="json"),
+            payload=payload,
         )
         return artifact
 

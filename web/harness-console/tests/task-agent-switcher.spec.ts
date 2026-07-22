@@ -52,12 +52,15 @@ describe("task agent switcher", () => {
     expect(groupTaskAgents(agents, "missing")).toEqual([]);
   });
 
-  it("uses an accessible custom searchable list instead of a native long select", () => {
+  it("uses an accessible agent list and reserves a select for internal versions", () => {
     expect(component).toContain('aria-haspopup="listbox"');
     expect(component).toContain('role="listbox"');
     expect(component).toContain('role="option"');
     expect(component).toContain('type="search"');
     expect(component).toContain("切换后新建任务");
-    expect(component).not.toContain("<select");
+    expect(component).toContain("<select");
+    expect(component).toContain("task-agent-version-select");
+    expect(component).toContain("group.agents.length > 1");
+    expect(component).toContain("`${selected.displayName} · ${selected.version}`");
   });
 });

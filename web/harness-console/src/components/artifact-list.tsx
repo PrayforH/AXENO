@@ -37,38 +37,23 @@ export function ArtifactCard({ details }: { details: ArtifactDetails }) {
         target={previewable ? "_blank" : undefined}
         rel={previewable ? "noreferrer" : undefined}
         download={previewable ? undefined : details.name}
-        title={previewable ? `打开 ${details.name || "运行产物"}` : `下载 ${details.name || "运行产物"}`}
+        aria-label={previewable ? `预览 ${details.name || "运行产物"}` : `下载 ${details.name || "运行产物"}`}
+        title={previewable ? `点击预览 ${details.name || "运行产物"}` : `点击下载 ${details.name || "运行产物"}`}
       >
         <div className="artifact-filemark" aria-hidden="true">
           {filemark}
         </div>
         <div className="artifact-copy">
-          <div className="domain-card-kicker">运行产物</div>
           <h3>
             {details.name || "未命名产物"}
             <span aria-hidden="true">{previewable ? "↗" : "↓"}</span>
           </h3>
           <p>
-            {mediaType} · {formatBytes(details.size_bytes)}
+            <span>运行产物</span> · {mediaType} · {formatBytes(details.size_bytes)}
+            {details.sha256 && <code title={`sha256 ${details.sha256}`}> · {details.sha256.slice(0, 8)}</code>}
           </p>
-          {details.sha256 && <code>sha256 {details.sha256.slice(0, 12)}…</code>}
         </div>
       </a>
-      <div className="artifact-actions">
-        {previewable && (
-          <a
-            className="preview-button"
-            href={`${contentUrl}?preview=1`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            <span>预览</span><i aria-hidden="true">↗</i>
-          </a>
-        )}
-        <a className="download-button" href={contentUrl} download={details.name}>
-          <span>下载</span><i aria-hidden="true">↓</i>
-        </a>
-      </div>
     </section>
   );
 }

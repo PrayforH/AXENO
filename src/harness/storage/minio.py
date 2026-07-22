@@ -9,7 +9,7 @@ from minio import Minio
 from minio.commonconfig import CopySource
 from minio.error import S3Error
 
-from harness.core.errors import NotFoundError
+from harness.core.errors import NotFoundError, StorageCapacityError
 from harness.core.ports import StoredObject
 
 
@@ -36,19 +36,36 @@ class MinioArtifactStore:
         temporary_key = f".tmp/{tenant_id}/{artifact_id}-{uuid4().hex}"
 
         def upload() -> None:
-            self._client.put_object(
-                self._bucket,
-                temporary_key,
-                BytesIO(content),
-                len(content),
-                content_type="application/octet-stream",
-            )
-            self._client.copy_object(
-                self._bucket,
-                final_key,
-                CopySource(self._bucket, temporary_key),
-            )
-            self._client.remove_object(self._bucket, temporary_key)
+            try:
+                self._client.put_object(
+                    self._bucket,
+                    temporary_key,
+                    BytesIO(content),
+                    len(content),
+                    content_type="application/octet-stream",
+                )
+                self._client.copy_object(
+                    self._bucket,
+                    final_key,
+                    CopySource(self._bucket, temporary_key),
+                )
+            except S3Error as error:
+                if error.code in {
+                    "XMinioStorageFull",
+                    "StorageFull",
+                    "InsufficientStorage",
+                }:
+                    raise StorageCapacityError(
+                        "attachment storage is full; free Colima storage and retry"
+                    ) from error
+                raise
+            finally:
+                # Promotion is atomic from the caller's perspective; a failed
+                # copy must not leave temporary uploads accumulating forever.
+                try:
+                    self._client.remove_object(self._bucket, temporary_key)
+                except S3Error:
+                    pass
 
         await asyncio.to_thread(upload)
         return StoredObject(

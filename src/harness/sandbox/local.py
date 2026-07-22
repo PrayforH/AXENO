@@ -39,10 +39,21 @@ class LocalSandboxProvider:
             raise ValueError("sandbox command argv must not be empty")
         if timeout_seconds <= 0:
             raise ValueError("sandbox command timeout must be positive")
+        temporary_directory = handle.path / ".tmp"
+        temporary_directory.mkdir(exist_ok=True)
+        isolated_environment = {
+            "HOME": str(handle.path),
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "TMPDIR": str(temporary_directory),
+        }
+        for name in ("LANG", "LC_ALL"):
+            if value := os.environ.get(name):
+                isolated_environment[name] = value
+        isolated_environment.update(dict(environment or {}))
         process = await asyncio.create_subprocess_exec(
             *argv,
             cwd=handle.path,
-            env={**os.environ, **dict(environment or {})},
+            env=isolated_environment,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

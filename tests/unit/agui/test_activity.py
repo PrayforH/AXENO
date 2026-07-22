@@ -176,6 +176,47 @@ def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -
     )
 
 
+def test_projects_safe_runtime_milestones_without_internal_identifiers() -> None:
+    restored = activity_projection(
+        event(
+            "workspace.restored",
+            {
+                "snapshot_id": "private-snapshot",
+                "object_key": "private/object/key",
+            },
+        )
+    )[0].model_dump(by_alias=True)
+    runtime = activity_projection(
+        event(
+            "runtime.system",
+            {
+                "subtype": "init",
+                "session_id": "private-runtime-session",
+                "tools": ["Read", "Glob", "Grep"],
+            },
+            2,
+        )
+    )[0].model_dump(by_alias=True)
+
+    assert restored["patch"][0]["value"] == {
+        "id": "event-1",
+        "event_type": "workspace.restored",
+        "kind": "analysis",
+        "status": "succeeded",
+        "title": "工作区已恢复",
+        "summary": "已载入本会话上次保存的工作区",
+        "timestamp": "2026-07-13T00:00:00Z",
+        "sequence": 1,
+        "metadata": {},
+    }
+    runtime_item = runtime["patch"][0]["value"]
+    assert runtime_item["title"] == "运行时与工具已连接"
+    assert runtime_item["summary"] == "3 项工具可用"
+    assert runtime_item["metadata"] == {"subtype": "init", "tool_count": 3}
+    assert "private-snapshot" not in repr(restored)
+    assert "private-runtime-session" not in repr(runtime)
+
+
 def test_historical_provider_diagnostic_is_sanitized_in_activity_replay() -> None:
     projected = activity_projection(
         event("message.delta", {"text": "API Error: 400 Content Exists Risk"})
@@ -229,9 +270,10 @@ def test_tool_activity_keeps_redacted_arguments_and_compact_result_facts() -> No
     assert result["patch"][0]["value"]["metadata"] == {
         "tool_call_id": "tool-1",
         "result_summary": "返回 3 行 · 36 字符",
+        "result_preview": "first match\nsecond match\nthird match",
     }
     assert "never-show" not in repr(request)
-    assert "first match" not in repr(result)
+    assert "first match" in repr(result)
 
 
 def test_policy_denied_tool_result_explains_the_permission_mismatch() -> None:
@@ -335,3 +377,37 @@ def test_build_run_activity_folds_each_turn_for_history_replay() -> None:
         "runtime.result",
         "run.succeeded",
     ]
+
+
+def test_history_replay_hides_internal_skill_read_content() -> None:
+    activity = build_run_activity(
+        [
+            event("run.queued", sequence=1),
+            event(
+                "tool.request",
+                {
+                    "tool_call_id": "skill-read-1",
+                    "name": "Read",
+                    "arguments": {
+                        "file_path": "/workspace/.claude/skills/domain/SKILL.md"
+                    },
+                },
+                sequence=2,
+            ),
+            event(
+                "tool.result",
+                {
+                    "tool_call_id": "skill-read-1",
+                    "content": "PRIVATE SKILL INSTRUCTIONS",
+                    "is_error": False,
+                },
+                sequence=3,
+            ),
+        ]
+    )
+
+    assert activity is not None
+    result = activity["items"][-1]
+    assert result["metadata"]["result_summary"] == "内部 Skill / 提示词内容已隐藏"
+    assert result["metadata"].get("result_preview") is None
+    assert "PRIVATE SKILL INSTRUCTIONS" not in repr(activity)

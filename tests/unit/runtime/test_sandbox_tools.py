@@ -1,9 +1,15 @@
+import asyncio
+import base64
+import hashlib
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pytest
 
+from harness.core.manifest import PythonToolSnapshot
 from harness.runtime.sandbox_tools import (
     canonical_tool_name,
+    create_bundle_python_tool,
     create_sandbox_tool,
     proxy_tool_name,
 )
@@ -69,3 +75,54 @@ async def test_file_proxy_uses_argument_vector_and_reports_backend_failure() -> 
     assert result["content"] == [
         {"type": "text", "text": "path escaped workspace"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_bundle_python_tool_executes_source_in_workspace_sandbox(
+    tmp_path: Path,
+) -> None:
+    relative = Path(".harness-runtime/bundle-tools/hash/tools/double.py")
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    source = b"def run(arguments):\n    return {'result': arguments['value'] * 2}\n"
+    target.write_bytes(source)
+
+    async def execute(
+        argv: Sequence[str],
+        environment: Mapping[str, str] | None,
+        timeout_seconds: float,
+    ) -> SandboxCommandResult:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            cwd=tmp_path,
+            env=dict(environment) if environment is not None else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=timeout_seconds
+        )
+        return SandboxCommandResult(
+            exit_code=process.returncode or 0,
+            stdout=stdout.decode(),
+            stderr=stderr.decode(),
+        )
+
+    tool = create_bundle_python_tool(
+        snapshot=PythonToolSnapshot(
+            reference="bundle:tools/double.py",
+            path="tools/double.py",
+            name="double_value",
+            description="Double a numeric value.",
+            inputSchema={"type": "object"},
+            contentBase64=base64.b64encode(source).decode(),
+            sha256=hashlib.sha256(source).hexdigest(),
+            sizeBytes=len(source),
+        ),
+        materialized_path=relative,
+        executor=execute,
+    )
+
+    result = await tool.handler({"value": 4})
+
+    assert result["content"] == [{"type": "text", "text": '{"result": 8}\n'}]

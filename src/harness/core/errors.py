@@ -17,5 +17,9 @@ class ConflictError(HarnessDomainError):
     """Raised when an idempotency or optimistic concurrency rule is violated."""
 
 
+class StorageCapacityError(HarnessDomainError):
+    """Raised when durable artifact storage cannot accept more content."""
+
+
 class EventSequenceConflictError(ConflictError):
     """Raised when another writer claims an event sequence first."""

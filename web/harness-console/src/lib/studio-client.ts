@@ -6,6 +6,7 @@ import type {
   StudioDraft,
   StudioEvalCase,
   StudioRisk,
+  StudioSkill,
 } from "./agent-studio";
 
 export type StudioRole = "owner" | "admin" | "member" | "viewer";
@@ -144,6 +145,18 @@ export type StudioDraftSummary = {
   publishedVersion: string | null;
 };
 
+export type StudioSkillConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type StudioSkillConversationReply = {
+  status: "clarifying" | "ready";
+  reply: string;
+  skill: StudioSkill | null;
+  followUpQuestions: string[];
+};
+
 type ApiEvalCase = {
   id: string;
   tags: string[];
@@ -174,6 +187,7 @@ type ApiDraftSpec = {
     files: Array<{ path: string; content: string }>;
   }>;
   builtinTools: string[];
+  pythonTools: StudioDraft["pythonTools"];
   mcpServers: string[];
   toolExposureMode: StudioDraft["toolExposureMode"];
   knowledgeReferences: string[];
@@ -182,14 +196,14 @@ type ApiDraftSpec = {
   executionProfile: string;
   workspace: { restoreSession: boolean; archiveOnComplete: boolean };
   limits: {
-    maxTurns: number;
+    maxTurns: number | null;
     timeoutSeconds: number;
-    maxBudgetUsd: number;
-    maxModelTokens: number;
+    maxBudgetUsd: number | null;
+    maxModelTokens: number | null;
     maxSubagents: number;
     maxSubagentTasks: number;
     maxConcurrentSubagents: number;
-    maxSubagentUsageUnits: number;
+    maxSubagentUsageUnits: number | null;
   };
   evaluationEnabled: boolean;
   evaluationCases: ApiEvalCase[];
@@ -207,6 +221,15 @@ export type ApiAgentDraft = {
   publishedVersion: string | null;
   publishedHash: string | null;
   publishedPackageHash: string | null;
+};
+
+export type StudioImportedAgentBundle = {
+  draft: ApiAgentDraft;
+  sourceContentHash: string;
+  sourcePackageHash: string;
+  lossless: boolean;
+  roundTripVerified: boolean;
+  warnings: string[];
 };
 
 export type ApiAgentVersion = {
@@ -951,6 +974,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     systemPrompt: spec.systemPrompt,
     skills: spec.skills,
     builtinTools: spec.builtinTools,
+    pythonTools: spec.pythonTools ?? [],
     mcpServers: spec.mcpServers,
     toolExposureMode: spec.toolExposureMode,
     knowledgeReferences: spec.knowledgeReferences ?? [],
@@ -996,6 +1020,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     systemPrompt: draft.systemPrompt,
     skills: draft.skills.map((skill) => ({ ...skill, files: skill.files ?? [] })),
     builtinTools: draft.builtinTools,
+    pythonTools: draft.pythonTools,
     mcpServers: draft.mcpServers,
     toolExposureMode: draft.toolExposureMode,
     knowledgeReferences: draft.knowledgeReferences,
@@ -1204,6 +1229,20 @@ export const studioClient = {
   getDraft: (draftId: string) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draftId)}`),
   capabilities: () => request<StudioCapabilities>("capabilities"),
+  continueSkillConversation: (body: {
+    modelRoute: string;
+    context: {
+      agentName: string;
+      displayName: string;
+      domain: string;
+      description: string;
+      currentSkill: StudioSkill;
+    };
+    messages: StudioSkillConversationMessage[];
+  }) => request<StudioSkillConversationReply>("skills/conversation", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
   catalog: () => request<StudioCapabilityCatalogRecord>("catalog"),
   catalogImpact: (resourceType: StudioCatalogImpact["resourceType"], resourceId: string) =>
     request<StudioCatalogImpact>(
@@ -1250,6 +1289,18 @@ export const studioClient = {
         template: draft.template,
       }),
     }),
+  async importBundle(file: Blob): Promise<StudioImportedAgentBundle> {
+    const response = requireAuthenticatedResponse(
+      await fetch("/api/studio/drafts/import", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/zip" },
+        body: file,
+      }),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    return response.json() as Promise<StudioImportedAgentBundle>;
+  },
   replaceDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draft.id)}`, {
       method: "PUT",

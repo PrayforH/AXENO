@@ -21,6 +21,7 @@ import {
   useEffect,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   AssistantActionBar,
   AssistantMessage,
@@ -37,7 +38,7 @@ import { MarkdownText } from "./markdown-text";
 import { SubagentCard } from "./subagent-card";
 import { ToolCard } from "./tool-card";
 import { useRunActivity, useRunViewModel } from "../lib/activity-store";
-import { selectComposerDisabled } from "../lib/run-view-model";
+import { selectComposerDisabled, type RunPhase } from "../lib/run-view-model";
 import {
   TaskModelControl,
   TaskModelVisionNotice,
@@ -108,7 +109,16 @@ function UploadFeedbackNotice() {
 export function shouldShowComposerStop(
   threadRunning: boolean,
   streamStatus: RunStreamStatus,
+  runPhase?: RunPhase,
 ): boolean {
+  if (
+    runPhase === "completed" ||
+    runPhase === "failed" ||
+    runPhase === "rejected" ||
+    runPhase === "cancelled"
+  ) {
+    return false;
+  }
   return threadRunning || streamStatus === "running";
 }
 
@@ -120,7 +130,23 @@ function HarnessComposer() {
   const runView = useRunViewModel();
   const pendingApproval = usePendingApproval();
   const runLocked = selectComposerDisabled(runView);
-  const showStop = shouldShowComposerStop(threadRunning, stream.status);
+  useEffect(() => {
+    const visibleApprovalId = pendingApproval.details?.approval_id;
+    if (
+      pendingApproval.visible &&
+      visibleApprovalId &&
+      runView &&
+      runView.phase !== "waiting_approval" &&
+      runView?.pendingApprovalId !== visibleApprovalId
+    ) {
+      approvalStore.settle(visibleApprovalId);
+    }
+  }, [pendingApproval.details?.approval_id, pendingApproval.visible, runView?.pendingApprovalId]);
+  const showStop = shouldShowComposerStop(
+    threadRunning,
+    stream.status,
+    runView?.phase,
+  );
   const composerHint = runLocked
     ? runView?.phase === "waiting_approval"
       ? "处理审批后，Agent 会从当前步骤继续"
@@ -529,6 +555,7 @@ export function inputArtifactDownloadHref(
 
 function HarnessMessageAttachment() {
   const attachment = useAttachment((state) => state);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const filePart = attachment.content?.find((part) => part.type === "file");
   const imagePart = attachment.content?.find((part) => part.type === "image");
   const data = filePart?.type === "file"
@@ -569,25 +596,89 @@ function HarnessMessageAttachment() {
       </span>
     </>
   );
-  return (
-    <AttachmentPrimitive.Root
-      className="message-attachment-card"
-      data-kind={isImage ? "image" : "file"}
-    >
-      {href ? (
-        <a
-          href={href}
-          {...(isImage
-            ? { target: "_blank", rel: "noreferrer" }
-            : { download: attachment.name })}
-          title={`${isImage ? "查看" : "下载"} ${attachment.name}`}
+  useEffect(() => {
+    if (!previewOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [previewOpen]);
+
+  const preview = previewOpen && imageSrc
+    ? createPortal(
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${attachment.name} 原图预览`}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPreviewOpen(false);
+          }}
         >
-          {content}
-        </a>
-      ) : (
-        <span className="message-attachment-static">{content}</span>
-      )}
-    </AttachmentPrimitive.Root>
+          <header className="image-lightbox-toolbar">
+            <span className="image-lightbox-title">
+              <small>上传原图</small>
+              <strong>{attachment.name}</strong>
+            </span>
+            <span className="image-lightbox-actions">
+              {href ? (
+                <a href={href} download={attachment.name}>
+                  下载原图
+                </a>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                aria-label="关闭原图预览"
+                autoFocus
+              >
+                ×
+              </button>
+            </span>
+          </header>
+          <div className="image-lightbox-stage">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imageSrc} alt={attachment.name} />
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+  return (
+    <>
+      <AttachmentPrimitive.Root
+        className="message-attachment-card"
+        data-kind={isImage ? "image" : "file"}
+      >
+        {isImage && imageSrc ? (
+          <button
+            className="message-attachment-open"
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            title={`放大查看 ${attachment.name}`}
+          >
+            {content}
+          </button>
+        ) : href ? (
+          <a
+            href={href}
+            download={attachment.name}
+            title={`下载 ${attachment.name}`}
+          >
+            {content}
+          </a>
+        ) : (
+          <span className="message-attachment-static">{content}</span>
+        )}
+      </AttachmentPrimitive.Root>
+      {preview}
+    </>
   );
 }
 

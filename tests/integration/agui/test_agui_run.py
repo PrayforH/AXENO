@@ -335,6 +335,33 @@ async def test_cancel_agui_run_resolves_protocol_ids_to_harness_run() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_agui_run_recovers_protocol_binding_after_api_restart() -> None:
+    app = create_memory_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        request = RunAgentInput.model_validate(
+            _request(thread_id="thread-restarted", run_id="client-run-restarted", prompt="wait")
+        )
+        run = await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=request,
+        )
+        app.state.container.agui._run_bindings.clear()
+
+        response = await client.post(
+            "/v1/agui/threads/thread-restarted/runs/client-run-restarted/cancel",
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run.run_id
+    assert response.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_agui_run_persists_a_task_scoped_model_route_override() -> None:
     app = create_memory_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

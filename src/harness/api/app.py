@@ -17,7 +17,7 @@ from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, auth, input_artifacts, runs, sessions
 from harness.config import Settings
-from harness.core.errors import HarnessDomainError, NotFoundError
+from harness.core.errors import HarnessDomainError, NotFoundError, StorageCapacityError
 from harness.core.manifest import ManifestValidationError
 from harness.governance import api as governance_routes
 from harness.knowledge import api as knowledge_routes
@@ -65,8 +65,15 @@ async def _request_validation_error(_request: Request, error: Exception) -> JSON
 
 async def _domain_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, HarnessDomainError)
-    status_code = 404 if isinstance(error, NotFoundError) else 409
-    if isinstance(error, QuotaExceededError):
+    if isinstance(error, NotFoundError):
+        status_code = 404
+    elif isinstance(error, StorageCapacityError):
+        status_code = 507
+    else:
+        status_code = 409
+    if isinstance(error, StorageCapacityError):
+        code = "storage_capacity_exceeded"
+    elif isinstance(error, QuotaExceededError):
         code = "quota_exceeded"
     else:
         code = "not_found" if status_code == 404 else "conflict"
@@ -266,6 +273,10 @@ def create_app(container: ApiContainer) -> FastAPI:
     app.add_exception_handler(ManifestValidationError, _manifest_error)
     app.add_exception_handler(AgentPackageCheckError, _agent_package_error)
     app.add_exception_handler(AgentBundleValidationError, _agent_package_error)
+    app.add_exception_handler(
+        a2a_routes.A2AProtocolError,
+        a2a_routes.a2a_protocol_error_response,
+    )
 
     for router in (
         agents.router,

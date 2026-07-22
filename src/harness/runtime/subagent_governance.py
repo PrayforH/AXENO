@@ -199,6 +199,10 @@ class SubagentRuntimeGovernor:
         usage = self._safe_usage(payload)
         attributes: dict[str, str | bool | int | float] = {
             "run.id": run_id,
+            "langfuse.observation.type": "agent",
+            "langfuse.observation.metadata.alias": state.binding.alias,
+            "langfuse.observation.metadata.agent_name": state.binding.agent_name,
+            "langfuse.version": state.binding.agent_version,
             "harness.subagent.alias": state.binding.alias,
             "harness.subagent.agent_name": state.binding.agent_name,
             "harness.subagent.agent_version": state.binding.agent_version,
@@ -206,6 +210,12 @@ class SubagentRuntimeGovernor:
             "harness.subagent.depth": 1,
             "harness.subagent.status": str(payload.get("status", "unknown")),
             "harness.subagent.duration_ms": int(payload.get("duration_ms", 0)),
+            "langfuse.observation.level": (
+                "ERROR" if event.type == "subagent.failed" else "DEFAULT"
+            ),
+            "langfuse.observation.status_message": str(
+                payload.get("status", "unknown")
+            ),
         }
         for key in ("total_tokens", "tool_uses"):
             if key in usage:

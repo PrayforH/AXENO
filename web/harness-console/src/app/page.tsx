@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AgentThread } from "../components/agent-thread";
 import { AuthProvider } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
-import { DeveloperDrawer } from "../components/developer-drawer";
+import { LangfuseTraceLink } from "../components/langfuse-trace-link";
 import { TaskAgentSwitcher } from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
 import {
@@ -34,7 +34,6 @@ export default function Home() {
   const [modelRouteOverride, setModelRouteOverride] = useState<string | null>(null);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState("");
-  const [runDetailsOpen, setRunDetailsOpen] = useState(false);
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
 
   useEffect(() => {
@@ -118,7 +117,6 @@ export default function Home() {
     bindThreadAgent(window.localStorage, nextThreadId, selectedAgent);
     setThreadId(nextThreadId);
     setModelRouteOverride(null);
-    setRunDetailsOpen(false);
   }
 
   function switchTask(task: TaskSummary) {
@@ -152,7 +150,6 @@ export default function Home() {
         : null,
     );
     setThreadId(selectThread(window.localStorage, task.thread_id));
-    setRunDetailsOpen(false);
   }
 
   function switchAgent(nextAgent: TaskAgent) {
@@ -167,14 +164,13 @@ export default function Home() {
     setSelectedAgent(nextAgent);
     setModelRouteOverride(null);
     setThreadId(nextThreadId);
-    setRunDetailsOpen(false);
   }
 
   return (
     <AuthProvider>
     <main className="console-shell" id="main-content">
       <div
-        className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""} ${runDetailsOpen ? "inspector-open" : ""}`}
+        className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""}`}
       >
         <TaskSidebar
           currentThreadId={threadId}
@@ -193,20 +189,7 @@ export default function Home() {
             />
 
             <div className="header-actions">
-              <button
-                className="icon-button"
-                type="button"
-                aria-pressed={runDetailsOpen}
-                aria-label="切换本次运行详情"
-                onClick={() => setRunDetailsOpen((current) => !current)}
-              >
-                <span className="details-glyph" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </span>
-                <span>{runDetailsOpen ? "收起详情" : "运行详情"}</span>
-              </button>
+              <LangfuseTraceLink />
             </div>
           </header>
           <section className="chat-stage" aria-label="Agent 任务对话">
@@ -245,9 +228,6 @@ export default function Home() {
             </div>
           </section>
         </div>
-        {runDetailsOpen && (
-          <DeveloperDrawer threadId={threadId} onClose={() => setRunDetailsOpen(false)} />
-        )}
       </div>
     </main>
     </AuthProvider>

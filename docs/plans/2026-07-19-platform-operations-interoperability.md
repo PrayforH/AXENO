@@ -102,7 +102,8 @@ Run states map as follows:
 
 | Run | A2A task state |
 | --- | --- |
-| queued / provisioning / running / cancelling | `TASK_STATE_WORKING` |
+| queued | `TASK_STATE_SUBMITTED` |
+| provisioning / running / cancelling | `TASK_STATE_WORKING` |
 | waiting_approval | `TASK_STATE_AUTH_REQUIRED` |
 | succeeded | `TASK_STATE_COMPLETED` |
 | failed / timed_out | `TASK_STATE_FAILED` |

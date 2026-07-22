@@ -4,6 +4,7 @@ import {
   proxyAgentTriggerRequest,
   proxyAguiRequest,
   proxyDataLifecycleRequest,
+  proxyExternalAgentRequest,
   proxyInputArtifactRequest,
   proxyMemoryBankRequest,
   proxyStudioRequest,
@@ -325,6 +326,41 @@ describe("Harness same-origin proxies", () => {
     expect(upstreamHeaders.get("X-Harness-Service-Token")).toBeNull();
     expect(upstreamHeaders.get("Cookie")).toBeNull();
     expect(response.status).toBe(202);
+  });
+
+  it("preserves external protocol cursors, query parameters, and auth challenges", async () => {
+    let upstreamUrl = "";
+    let upstreamHeaders = new Headers();
+    const response = await proxyExternalAgentRequest(
+      new Request(
+        "http://console.test/a2a/agent-triggers/trigger-1/tasks?pageSize=10&pageToken=next",
+        {
+          headers: {
+            Authorization: "Bearer trigger-secret",
+            "A2A-Version": "1.0",
+            "Last-Event-ID": "7",
+          },
+        },
+      ),
+      config,
+      "a2a/agent-triggers",
+      async (input, init) => {
+        upstreamUrl = String(input);
+        upstreamHeaders = new Headers(init?.headers);
+        return Response.json(
+          { error: { status: "UNAUTHENTICATED" } },
+          { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
+        );
+      },
+      "trigger-1/tasks",
+    );
+
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/a2a/agent-triggers/trigger-1/tasks?pageSize=10&pageToken=next",
+    );
+    expect(upstreamHeaders.get("A2A-Version")).toBe("1.0");
+    expect(upstreamHeaders.get("Last-Event-ID")).toBe("7");
+    expect(response.headers.get("WWW-Authenticate")).toBe("Bearer");
   });
 
   it("preserves lifecycle export filenames through the authenticated BFF", async () => {

@@ -59,9 +59,7 @@ def apply_environment_quota(plan: RunQuotaPlan, session: Session) -> RunQuotaPla
     tokens = plan.max_model_tokens
     if boundary.max_model_tokens is not None:
         tokens = (
-            boundary.max_model_tokens
-            if tokens is None
-            else min(tokens, boundary.max_model_tokens)
+            boundary.max_model_tokens if tokens is None else min(tokens, boundary.max_model_tokens)
         )
 
     return RunQuotaPlan(
@@ -191,10 +189,20 @@ class RunService:
     async def get(self, tenant_id: str, run_id: str) -> Run:
         return await self._runs.get(tenant_id, run_id)
 
+    async def find_by_idempotency_key(
+        self, tenant_id: str, session_id: str, idempotency_key: str
+    ) -> Run | None:
+        return await self._runs.find_by_idempotency_key(
+            tenant_id, session_id, idempotency_key
+        )
+
     async def list_for_sessions(
         self, tenant_id: str, session_ids: list[str], *, limit: int = 200
     ) -> list[Run]:
         return await self._runs.list_for_sessions(tenant_id, session_ids, limit=limit)
+
+    async def list_for_tenant(self, tenant_id: str, *, limit: int = 1_000) -> list[Run]:
+        return await self._runs.list_for_tenant(tenant_id, limit=limit)
 
     async def cancel(self, tenant_id: str, run_id: str) -> Run:
         current = await self._runs.get(tenant_id, run_id)
@@ -217,9 +225,7 @@ class RunService:
             if current.status.is_terminal:
                 return current
             if current.status is not RunStatus.CANCELLING:
-                raise ConflictError(
-                    f"run changed while cancellation was requested: {run_id}"
-                )
+                raise ConflictError(f"run changed while cancellation was requested: {run_id}")
         else:
             current = cancelling
             await self._events.append(

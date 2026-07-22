@@ -158,6 +158,7 @@ from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_service import PreviewService
 from harness.studio.service import AgentStudioService
+from harness.studio.skill_builder import AnthropicCompatibleSkillConversationService
 from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator, SandboxResolver
 
@@ -374,9 +375,10 @@ def build_production_container(
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     credential_broker: InMemoryCredentialBroker | None = None
     try:
-        title_gateway, _ = _gateways(settings)
+        title_gateway, title_fallback_gateway = _gateways(settings)
     except ValueError:
         title_gateway = None
+        title_fallback_gateway = None
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
         sandbox_backend = _sandbox(settings)
@@ -667,6 +669,7 @@ def build_production_container(
         trigger_repository,
         sessions=session_service,
         runs=run_service,
+        registry=registry,
         audit=audit,
         clock=clock,
         id_generator=ids,
@@ -763,6 +766,7 @@ def build_production_container(
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
+    trigger_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
         environments=environment_repository,
         deployments=deployment_repository,
@@ -1133,6 +1137,17 @@ def build_production_container(
         worker=worker,
         agui=agui,
         auto_execute=False,
+        skill_conversation=(
+            AnthropicCompatibleSkillConversationService(
+                tuple(
+                    gateway
+                    for gateway in (title_gateway, title_fallback_gateway)
+                    if gateway is not None
+                )
+            )
+            if title_gateway is not None
+            else None
+        ),
         sandbox_maintenance=sandbox_maintenance,
         close=close,
     )

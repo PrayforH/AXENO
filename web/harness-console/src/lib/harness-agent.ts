@@ -143,21 +143,30 @@ export class HarnessHttpAgent extends HttpAgent {
     const routedParameters = parameters
       ? this.withModelOverride(parameters)
       : parameters;
-    return super.runAgent(routedParameters, wrapped).finally(() => {
-      signal?.removeEventListener("abort", cancelFromSignal);
-      if (
-        activeInput &&
-        this.activeInput?.threadId === activeInput.threadId &&
-        this.activeInput.runId === activeInput.runId
-      ) {
-        this.activeInput = undefined;
-      }
-    });
+    return super.runAgent(routedParameters, wrapped)
+      .catch((error: unknown) => {
+        liveResponseStore.failRun();
+        runStreamStore.failRun(activeInput?.runId);
+        throw error;
+      })
+      .finally(() => {
+        signal?.removeEventListener("abort", cancelFromSignal);
+        if (
+          activeInput &&
+          this.activeInput?.threadId === activeInput.threadId &&
+          this.activeInput.runId === activeInput.runId
+        ) {
+          this.activeInput = undefined;
+        }
+      });
   }
 
   cancelActiveRun(): void {
-    if (!this.activeInput) return;
     const activeInput = this.activeInput;
+    liveResponseStore.completeRun();
+    runStreamStore.completeRun(activeInput?.runId);
+    this.activeInput = undefined;
+    if (!activeInput) return;
     const relative = this.url.startsWith("/");
     const base = globalThis.location?.origin ?? "http://localhost";
     const url = new URL(this.url, base);
@@ -166,9 +175,6 @@ export class HarnessHttpAgent extends HttpAgent {
       activeInput.threadId,
     )}/runs/${encodeURIComponent(activeInput.runId)}/cancel`;
     const target = relative ? `${url.pathname}${url.search}` : url.toString();
-    liveResponseStore.completeRun();
-    runStreamStore.completeRun(activeInput.runId);
-    this.activeInput = undefined;
     void this.cancelFetch(target, {
       method: "POST",
       headers: this.headers,

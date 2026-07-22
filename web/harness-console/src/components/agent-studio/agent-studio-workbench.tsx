@@ -38,6 +38,7 @@ import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import { GovernanceControlPlane } from "./governance-control-plane";
+import { SkillConversationBuilder } from "./skill-conversation-builder";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -74,10 +75,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       label: "多智能体编排",
       description: "允许委派并为较长的协同链路预留运行时间。",
       policy: "production-orchestrator",
-      maxTurns: 28,
       timeoutSeconds: 1800,
-      maxBudgetUsd: 4,
-      maxModelTokens: 400_000,
     };
   }
   if (writes) {
@@ -85,10 +83,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       label: "文件交付",
       description: "读取自动通过，写入、编辑和命令按生产规则审批。",
       policy: "production-standard",
-      maxTurns: 20,
       timeoutSeconds: 1200,
-      maxBudgetUsd: 2,
-      maxModelTokens: 300_000,
     };
   }
   return {
@@ -98,10 +93,7 @@ function runtimeRecommendation(draft: StudioDraft) {
         ? "自动放行已绑定的只读 MCP 工具，其余未声明调用默认拒绝。"
         : "仅允许工作区读取和检索，不产生写入副作用。",
     policy: "production-read-only",
-    maxTurns: draft.mcpServers.length > 0 ? 24 : 12,
     timeoutSeconds: 1200,
-    maxBudgetUsd: 2,
-    maxModelTokens: 300_000,
   };
 }
 
@@ -254,6 +246,7 @@ export function AgentStudioWorkbench() {
   const [saving, setSaving] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [importingBundle, setImportingBundle] = useState(false);
   const [creatingPreview, setCreatingPreview] = useState(false);
   const [previews, setPreviews] = useState<StudioPreview[]>([]);
   const [evalDatasets, setEvalDatasets] = useState<StudioEvalDataset[]>([]);
@@ -277,9 +270,11 @@ export function AgentStudioWorkbench() {
   const [agentQuery, setAgentQuery] = useState("");
   const [inspected, setInspected] = useState(false);
   const [promptFocusMode, setPromptFocusMode] = useState(false);
+  const [skillConversationOpen, setSkillConversationOpen] = useState(false);
   const [notice, setNotice] = useState("正在读取控制面草稿…");
   const promptEditorRef = useRef<HTMLTextAreaElement>(null);
   const releaseAssistantRef = useRef<HTMLElement>(null);
+  const bundleInputRef = useRef<HTMLInputElement>(null);
   const canEdit = membership.role !== "viewer";
   const canPublish = membership.role === "owner" || membership.role === "admin";
   const options = useMemo(
@@ -332,22 +327,20 @@ export function AgentStudioWorkbench() {
   );
   const recommendationApplied =
     draft.policy === recommendedRuntime.policy
-    && draft.maxTurns === recommendedRuntime.maxTurns
-    && draft.timeoutSeconds === recommendedRuntime.timeoutSeconds
-    && draft.maxBudgetUsd === recommendedRuntime.maxBudgetUsd
-    && draft.maxModelTokens === recommendedRuntime.maxModelTokens;
-  const publishedSubagents = useMemo(
+    && draft.timeoutSeconds === recommendedRuntime.timeoutSeconds;
+  const subagentCandidates = useMemo(
     () => drafts
-      .filter((item) => item.publishedVersion)
+      .filter((item) => item.draftId !== draft.id)
       .map((item) => ({
-        ref: `${item.name}@${item.publishedVersion}`,
+        draftId: item.draftId,
+        ref: `${item.name}@${item.version}`,
         label: item.displayName,
-        description: `${item.domain} · 已发布租户版本`,
-        policy: "已发布快照",
+        description: `${item.domain} · ${item.publishedVersion ? "已发布版本" : `可编辑草稿 r${item.revision}`}`,
+        policy: item.publishedVersion ? "已发布快照" : "Studio 草稿",
         tools: [] as string[],
-        status: "approved" as const,
+        status: item.publishedVersion ? "approved" as const : "draft" as const,
       })),
-    [drafts],
+    [draft.id, drafts],
   );
   const filteredAgentRows = useMemo(() => {
     const query = agentQuery.trim().toLocaleLowerCase();
@@ -528,6 +521,54 @@ export function AgentStudioWorkbench() {
     });
   }
 
+  function addPythonTool() {
+    let sequence = draft.pythonTools.length + 1;
+    let name = `custom_operator_${sequence}`;
+    while (draft.pythonTools.some((tool) => tool.name === name)) {
+      sequence += 1;
+      name = `custom_operator_${sequence}`;
+    }
+    updateDraft({
+      pythonTools: [
+        ...draft.pythonTools,
+        {
+          name,
+          description: "在隔离 Sandbox 中执行确定性计算并返回 JSON 结果。",
+          inputSchema: {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+            additionalProperties: false,
+          },
+          code: "def run(arguments):\n    value = arguments[\"value\"]\n    return {\"result\": value}",
+        },
+      ],
+      toolExposureMode: "eager",
+      requiredCapabilities: draft.requiredCapabilities.filter(
+        (item) => item !== "tool_search",
+      ),
+    });
+  }
+
+  function updatePythonTool(
+    index: number,
+    update: Partial<StudioDraft["pythonTools"][number]>,
+  ) {
+    updateDraft({
+      pythonTools: draft.pythonTools.map((tool, currentIndex) =>
+        currentIndex === index ? { ...tool, ...update } : tool,
+      ),
+    });
+  }
+
+  function removePythonTool(index: number) {
+    updateDraft({
+      pythonTools: draft.pythonTools.filter(
+        (_tool, currentIndex) => currentIndex !== index,
+      ),
+    });
+  }
+
   function updateSubagent(index: number, update: Partial<StudioSubagent>) {
     updateDraft({
       subagents: draft.subagents.map((subagent, currentIndex) =>
@@ -541,9 +582,9 @@ export function AgentStudioWorkbench() {
       setNotice("单个 Lead 最多绑定 8 个 Sub Agent");
       return;
     }
-    const published = publishedSubagents[0];
-    if (!published) {
-      setNotice("当前租户没有可绑定的已发布 Agent 版本");
+    const candidate = subagentCandidates[0];
+    if (!candidate) {
+      setNotice("请先新建另一个 Agent 草稿，再把它绑定为 Sub Agent");
       return;
     }
     const sequence = draft.subagents.length + 1;
@@ -552,7 +593,7 @@ export function AgentStudioWorkbench() {
         ...draft.subagents,
         {
           alias: `specialist-${sequence}`,
-          ref: published.ref,
+          ref: candidate.ref,
           responsibility: "说明 Lead 应在什么情况下委派，以及 Sub Agent 必须返回什么。",
           background: true,
         },
@@ -565,6 +606,18 @@ export function AgentStudioWorkbench() {
           ? "production-orchestrator"
           : draft.policy,
     });
+  }
+
+  async function editSubagentDraft(ref: string) {
+    const candidate = subagentCandidates.find((item) => item.ref === ref);
+    if (!candidate) {
+      setNotice(`没有找到可编辑草稿：${ref}`);
+      return;
+    }
+    if (dirty && !(await saveDraft())) return;
+    await selectDraft(candidate.draftId);
+    setActiveSection("identity");
+    setNotice(`正在编辑 Sub Agent：${candidate.label}`);
   }
 
   function removeSubagent(index: number) {
@@ -706,6 +759,34 @@ export function AgentStudioWorkbench() {
       setNotice("Bundle 下载已开始");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Bundle 下载失败");
+    }
+  }
+
+  async function importBundle(file: File) {
+    if (dirty && !window.confirm("当前修改尚未保存，导入 Bundle 将切换到新 Agent，是否继续？")) {
+      return;
+    }
+    setImportingBundle(true);
+    try {
+      const imported = await studioClient.importBundle(file);
+      const rows = await studioClient.listDrafts();
+      setDraft(apiDraftToStudioDraft(imported.draft));
+      setDrafts(rows);
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setServerValidation(null);
+      setInspected(false);
+      setNotice(
+        imported.lossless && imported.roundTripVerified
+          ? `已无损导入 ${imported.draft.spec.name}@${imported.draft.spec.version}，可继续编辑`
+          : `已兼容导入 Agent；${imported.warnings.join("；") || "请保存并重新预检"}`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Bundle 导入失败");
+    } finally {
+      setImportingBundle(false);
+      if (bundleInputRef.current) bundleInputRef.current.value = "";
     }
   }
 
@@ -943,6 +1024,10 @@ export function AgentStudioWorkbench() {
     options.routes.find((route) => route.id === draft.modelRoute) ?? options.routes[0];
   const toolSearchCompatible =
     selectedRoute?.capabilities.includes("tool_search") ?? false;
+  const toolSearchEligible = toolSearchCompatible
+    && draft.pythonTools.length === 0
+    && selectedMcpTools.length > 0;
+  const toolSearchRecommended = selectedMcpTools.length >= 10;
   const toolDirectoryEntries = draft.builtinTools.length + options.mcp
     .filter((item) => draft.mcpServers.includes(item.id))
     .reduce((total, item) => total + item.tools.length, 0);
@@ -1295,6 +1380,27 @@ export function AgentStudioWorkbench() {
                 <span aria-hidden="true">•••</span>
               </summary>
               <div className={styles.actionMenuPopover}>
+                <input
+                  ref={bundleInputRef}
+                  hidden
+                  type="file"
+                  accept=".zip,application/zip"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (file) void importBundle(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={!canEdit || importingBundle}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    bundleInputRef.current?.click();
+                  }}
+                >
+                  <span><strong>{importingBundle ? "正在导入 Agent" : "导入 Agent / NexAU"}</strong><small>支持 Harness Bundle 与 NexAU ZIP，导入后可继续编辑</small></span>
+                </button>
                 <button
                   type="button"
                   className={styles.previewButton}
@@ -1774,7 +1880,7 @@ export function AgentStudioWorkbench() {
                   id="orchestration-title"
                   kicker="04 / Collaboration"
                   title="让 Lead 负责决策，让专家并行取证"
-                  description="Lead 是唯一面向用户的主线；Sub Agent 使用固定版本、独立职责和自己的权限上限，通过 Task 返回可验收结果。"
+                  description="Lead 是唯一面向用户的主线；Sub Agent 可直接绑定并打开 Studio 草稿编辑，正式发布 Lead 时再固定依赖版本。"
                 />
 
                 <div className={styles.orchestrationSummary} aria-label="协同运行摘要">
@@ -1829,7 +1935,7 @@ export function AgentStudioWorkbench() {
                   ) : (
                     <div className={styles.orchestrationEmpty}>
                       <strong>当前为单 Agent</strong>
-                      <span>添加已发布的 Sub Agent 后，Lead 才能使用 Task 委派。</span>
+                      <span>先新建另一个 Agent 草稿，即可绑定、编辑并在发布前完成检查。</span>
                     </div>
                   )}
                 </div>
@@ -1846,7 +1952,7 @@ export function AgentStudioWorkbench() {
 
                 <div className={styles.subagentEditors}>
                   {draft.subagents.map((subagent, index) => {
-                    const catalogAgent = publishedSubagents.find(
+                    const catalogAgent = subagentCandidates.find(
                       (agent) => agent.ref === subagent.ref,
                     );
                     return (
@@ -1872,16 +1978,16 @@ export function AgentStudioWorkbench() {
                             onChange={(event) => updateSubagent(index, { alias: event.target.value })}
                           />
                         </Field>
-                        <Field label="固定版本引用" hint="从已发布目录选择">
+                        <Field label="Sub Agent 草稿" hint="草稿可编辑；发布时固定版本">
                           <select
                             className={styles.monoInput}
                             value={subagent.ref}
                             onChange={(event) => updateSubagent(index, { ref: event.target.value })}
                           >
-                            {!publishedSubagents.some((agent) => agent.ref === subagent.ref) && (
+                            {!subagentCandidates.some((agent) => agent.ref === subagent.ref) && (
                               <option value={subagent.ref}>{subagent.ref || "未识别版本"}</option>
                             )}
-                            {publishedSubagents.map((agent) => (
+                            {subagentCandidates.map((agent) => (
                               <option key={agent.ref} value={agent.ref}>
                                 {agent.label} · {agent.ref}
                               </option>
@@ -1901,13 +2007,19 @@ export function AgentStudioWorkbench() {
                       {catalogAgent && (
                         <div className={styles.catalogBinding}>
                           <span data-status={catalogAgent.status}>
-                            {catalogAgent.status === "approved" ? "目录已审批" : "目录已弃用"}
+                            {catalogAgent.status === "approved" ? "已发布" : "草稿可编辑"}
                           </span>
                           <div>
                             <strong>{catalogAgent.label}</strong>
                             <small>{catalogAgent.description}</small>
                           </div>
                           <code>{catalogAgent.policy} · {catalogAgent.tools.join(" / ")}</code>
+                          <button
+                            type="button"
+                            onClick={() => void editSubagentDraft(subagent.ref)}
+                          >
+                            打开并编辑
+                          </button>
                         </div>
                       )}
                       <label className={styles.backgroundMode}>
@@ -1930,7 +2042,7 @@ export function AgentStudioWorkbench() {
                 </div>
 
                 <InfoStrip tone="neutral">
-                  每个 Sub Agent 继承自己的 Prompt、Skills、Builtin Tools、Policy 和轮次上限。当前运行时不向 Sub Agent 注入 MCP 或 Python Tool；需要联网的证据先由 Lead 收集到共享沙箱。
+                  每个 Sub Agent 继承自己的 Prompt、Skills、Builtin Tools、MCP、自定义算子、Policy 和轮次上限。草稿可以直接编辑；发布 Lead 时才要求依赖版本已发布且内容哈希固定。
                 </InfoStrip>
               </section>
             )}
@@ -1949,8 +2061,37 @@ export function AgentStudioWorkbench() {
                     <strong>{skill.name}</strong>
                     <span>Agent 内置 Skill · 随版本发布</span>
                   </div>
-                  <button type="button" onClick={() => setNotice("Skill 模板库将在目录 API 接入后启用")}>从模板添加</button>
+                  <button
+                    type="button"
+                    aria-expanded={skillConversationOpen}
+                    aria-controls="skill-conversation-builder"
+                    disabled={!canEdit}
+                    title={canEdit ? "通过多轮模型对话创建或改写 Skill" : "当前角色只有查看权限"}
+                    onClick={() => setSkillConversationOpen((current) => !current)}
+                  >
+                    {skillConversationOpen ? "收起共创" : "对话创建"}
+                  </button>
                 </div>
+                {skillConversationOpen && (
+                  <SkillConversationBuilder
+                    key={`${draft.id || "unsaved"}:${skill.name}`}
+                    agent={{
+                      name: draft.name,
+                      displayName: draft.displayName,
+                      domain: draft.domain,
+                      description: draft.description,
+                      modelRoute: draft.modelRoute,
+                    }}
+                    modelLabel={selectedRoute?.label ?? draft.model}
+                    currentSkill={skill}
+                    onClose={() => setSkillConversationOpen(false)}
+                    onApply={(generatedSkill) => {
+                      updateDraft({ skills: [generatedSkill] });
+                      setSkillConversationOpen(false);
+                      setNotice(`已应用模型生成的 Skill：${generatedSkill.name} · 尚未保存`);
+                    }}
+                  />
+                )}
                 <div className={styles.formGridSingle}>
                   <Field label="Skill 描述">
                     <input
@@ -2033,7 +2174,7 @@ export function AgentStudioWorkbench() {
                     <small>
                       目录 {toolDirectoryEntries} 项 · {
                         draft.toolExposureMode === "on_demand"
-                          ? "MCP Schema 在搜索命中后进入上下文"
+                          ? `${selectedMcpTools.length} 个 MCP Schema 命中后才进入上下文`
                           : "适合当前小型工具集"
                       }
                     </small>
@@ -2061,7 +2202,7 @@ export function AgentStudioWorkbench() {
                       type="button"
                       data-active={draft.toolExposureMode === "on_demand"}
                       aria-pressed={draft.toolExposureMode === "on_demand"}
-                      disabled={!toolSearchCompatible}
+                      disabled={!toolSearchEligible}
                       onClick={() => updateDraft({
                         toolExposureMode: "on_demand",
                         requiredCapabilities: Array.from(new Set([
@@ -2076,13 +2217,19 @@ export function AgentStudioWorkbench() {
                   </div>
                   <div
                     className={styles.toolExposureCompatibility}
-                    data-ready={toolSearchCompatible}
+                    data-ready={toolSearchEligible}
                   >
                     <i aria-hidden="true" />
                     <span>
-                      {toolSearchCompatible
-                        ? `${selectedRoute?.label ?? "当前路由"} 已审核 Tool Search`
-                        : "当前路由未审核 Tool Search，按需模式已锁定"}
+                      {!toolSearchCompatible
+                        ? "当前路由未审核 Tool Search，按需模式已锁定"
+                        : draft.pythonTools.length > 0
+                          ? "自定义算子必须启动时加载，移除后才可切换"
+                          : selectedMcpTools.length === 0
+                            ? "先选择至少一个 MCP 工具源"
+                            : toolSearchRecommended
+                              ? `${selectedMcpTools.length} 个 MCP 工具，建议按需加载`
+                              : `${selectedMcpTools.length} 个 MCP 工具；可按需加载，达到 10 个时收益更明显`}
                     </span>
                   </div>
                 </div>
@@ -2114,6 +2261,90 @@ export function AgentStudioWorkbench() {
                       </label>
                     );
                   })}
+                </div>
+
+                <div className={styles.groupHeading}>
+                  <div>
+                    <h3>自定义算子</h3>
+                    <p>源码随 Bundle 导入导出，调用时只在隔离 Sandbox 内执行。</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.addSubagentButton}
+                    onClick={addPythonTool}
+                  >
+                    + 新建自定义算子
+                  </button>
+                </div>
+                <div className={styles.subagentEditors}>
+                  {draft.pythonTools.map((tool, index) => (
+                    <article className={styles.subagentEditor} key={`${tool.name}-${index}`}>
+                      <header>
+                        <div>
+                          <span>PY {String(index + 1).padStart(2, "0")}</span>
+                          <strong>{tool.name || "未命名算子"}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removePythonTool(index)}
+                          aria-label={`移除 ${tool.name || `自定义算子 ${index + 1}`}`}
+                        >
+                          移除
+                        </button>
+                      </header>
+                      <div className={styles.formGrid}>
+                        <Field label="工具名称" hint="小写字母、数字和下划线">
+                          <input
+                            className={styles.monoInput}
+                            value={tool.name}
+                            onChange={(event) =>
+                              updatePythonTool(index, { name: event.target.value })
+                            }
+                          />
+                        </Field>
+                        <Field label="工具说明">
+                          <input
+                            value={tool.description}
+                            onChange={(event) =>
+                              updatePythonTool(index, { description: event.target.value })
+                            }
+                          />
+                        </Field>
+                        <Field label="Input Schema" hint="JSON Schema" wide>
+                          <textarea
+                            key={`${tool.name}-schema-${JSON.stringify(tool.inputSchema)}`}
+                            rows={7}
+                            className={styles.monoInput}
+                            defaultValue={JSON.stringify(tool.inputSchema, null, 2)}
+                            onBlur={(event) => {
+                              try {
+                                const value = JSON.parse(event.target.value) as Record<string, unknown>;
+                                updatePythonTool(index, { inputSchema: value });
+                              } catch {
+                                setNotice(`Input Schema 不是有效 JSON：${tool.name}`);
+                              }
+                            }}
+                          />
+                        </Field>
+                        <Field label="Python 源码" hint="必须定义 run(arguments)" wide>
+                          <textarea
+                            rows={12}
+                            className={styles.codeEditor}
+                            spellCheck={false}
+                            value={tool.code}
+                            onChange={(event) =>
+                              updatePythonTool(index, { code: event.target.value })
+                            }
+                          />
+                        </Field>
+                      </div>
+                    </article>
+                  ))}
+                  {draft.pythonTools.length === 0 && (
+                    <div className={styles.skillFilesEmpty}>
+                      暂无自定义算子。新建后会自动切换为启动时加载，并随 Bundle 保存源码。
+                    </div>
+                  )}
                 </div>
 
                 <div className={styles.groupHeading}>
@@ -2208,8 +2439,7 @@ export function AgentStudioWorkbench() {
                     <strong>{recommendedRuntime.label}</strong>
                     <p>{recommendedRuntime.description}</p>
                     <small>
-                      {recommendedRuntime.policy} · {recommendedRuntime.maxTurns} 轮 ·
-                      {" "}{recommendedRuntime.timeoutSeconds}s · ${recommendedRuntime.maxBudgetUsd}
+                      {recommendedRuntime.policy} · {recommendedRuntime.timeoutSeconds}s · 长程任务不限轮次与 Token
                     </small>
                   </div>
                   <button
@@ -2218,10 +2448,7 @@ export function AgentStudioWorkbench() {
                     onClick={() =>
                       updateDraft({
                         policy: recommendedRuntime.policy,
-                        maxTurns: recommendedRuntime.maxTurns,
                         timeoutSeconds: recommendedRuntime.timeoutSeconds,
-                        maxBudgetUsd: recommendedRuntime.maxBudgetUsd,
-                        maxModelTokens: recommendedRuntime.maxModelTokens,
                         restoreSession: true,
                         archiveOnComplete: true,
                       })
@@ -2331,38 +2558,12 @@ export function AgentStudioWorkbench() {
                       </span>
                     </div>
                   </div>
-                  <Field label="最大轮次">
-                    <input
-                      type="number"
-                      min={1}
-                      value={draft.maxTurns}
-                      onChange={(event) => updateDraft({ maxTurns: Number(event.target.value) })}
-                    />
-                  </Field>
                   <Field label="超时（秒）">
                     <input
                       type="number"
                       min={1}
                       value={draft.timeoutSeconds}
                       onChange={(event) => updateDraft({ timeoutSeconds: Number(event.target.value) })}
-                    />
-                  </Field>
-                  <Field label="单次预算（USD）">
-                    <input
-                      type="number"
-                      min={0.01}
-                      step={0.1}
-                      value={draft.maxBudgetUsd}
-                      onChange={(event) => updateDraft({ maxBudgetUsd: Number(event.target.value) })}
-                    />
-                  </Field>
-                  <Field label="单次模型 Token 上限">
-                    <input
-                      type="number"
-                      min={1}
-                      step={1000}
-                      value={draft.maxModelTokens}
-                      onChange={(event) => updateDraft({ maxModelTokens: Number(event.target.value) })}
                     />
                   </Field>
                   <Field label="可绑定 Sub 上限">
@@ -2392,17 +2593,8 @@ export function AgentStudioWorkbench() {
                       onChange={(event) => updateDraft({ maxConcurrentSubagents: Number(event.target.value) })}
                     />
                   </Field>
-                  <Field label="单 Sub Usage 上限">
-                    <input
-                      type="number"
-                      min={1}
-                      step={1000}
-                      value={draft.maxSubagentUsageUnits}
-                      onChange={(event) => updateDraft({ maxSubagentUsageUnits: Number(event.target.value) })}
-                    />
-                  </Field>
                   <p className={styles.fieldHint}>
-                    委派深度固定为 1；Sub 不启用 MCP 或 Python Tool。
+                    每个 Sub 使用独立会话，只把结果返回 Lead。当前阶段不限制轮次、模型 Token、预算或单 Sub Usage；委派深度固定为 1，隔离与权限边界仍然生效。
                   </p>
                 </div>
                 <GovernanceControlPlane
@@ -2977,7 +3169,7 @@ export function AgentStudioWorkbench() {
           <dl>
             <div><dt>联网</dt><dd>{contract.networkLabel}</dd></div>
             <div><dt>文件</dt><dd>{draft.builtinTools.includes("Write") ? "可在沙箱生成" : "只读"}</dd></div>
-            <div><dt>命令</dt><dd>{draft.builtinTools.includes("Bash") ? "启用 · 默认审批" : "未启用"}</dd></div>
+            <div><dt>命令</dt><dd>{draft.builtinTools.includes("Bash") ? "启用 · 沙箱安全命令自动执行" : "未启用"}</dd></div>
             <div>
               <dt>协同</dt>
               <dd>{contract.collaborationLabel}</dd>
@@ -2993,7 +3185,7 @@ export function AgentStudioWorkbench() {
             <div><dt>会话</dt><dd>{draft.restoreSession ? "允许恢复" : "每轮新建"}</dd></div>
             <div><dt>归档</dt><dd>{draft.archiveOnComplete ? "运行结束归档" : "按 TTL 回收"}</dd></div>
             <div><dt>身份</dt><dd>发布版本独立工作负载身份</dd></div>
-            <div><dt>预算</dt><dd>${draft.maxBudgetUsd.toFixed(2)} / Run</dd></div>
+            <div><dt>运行限额</dt><dd>轮次、Token、预算与 Sub Usage 不限</dd></div>
           </dl>
         </section>
 

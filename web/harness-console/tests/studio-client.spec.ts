@@ -55,6 +55,16 @@ describe("Studio typed API mapping", () => {
   it("round-trips the editable server Draft without losing revision or files", () => {
     const source = apiDraft();
     source.spec.skills[0].files = [{ path: "references/rules.md", content: "rules" }];
+    source.spec.pythonTools = [{
+      name: "score_signal",
+      description: "Score a normalized signal inside the sandbox.",
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+        required: ["value"],
+      },
+      code: "def run(arguments):\n    return {\"score\": arguments[\"value\"]}",
+    }];
 
     const draft = apiDraftToStudioDraft(source);
     const saved = studioDraftToSpec(draft);
@@ -62,13 +72,44 @@ describe("Studio typed API mapping", () => {
     expect(draft.id).toBe("draft-api");
     expect(draft.revision).toBe(3);
     expect(draft.executionProfile).toBe("isolated-default");
-    expect(draft.maxModelTokens).toBe(200000);
+    expect(draft.maxModelTokens).toBeNull();
     expect(saved.skills[0].files).toEqual([
       { path: "references/rules.md", content: "rules" },
     ]);
+    expect(saved.pythonTools).toEqual(source.spec.pythonTools);
     expect(saved.model.requiredCapabilities).toEqual(["streaming", "tool_use"]);
     expect(saved.toolExposureMode).toBe(DEFAULT_STUDIO_DRAFT.toolExposureMode);
-    expect(saved.limits.maxModelTokens).toBe(200000);
+    expect(saved.limits.maxModelTokens).toBeNull();
+  });
+
+  it("imports a ZIP bundle without converting it to JSON", async () => {
+    let captured: { url: string; contentType: string | null; body: BodyInit | null } | null = null;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = {
+        url: String(input),
+        contentType: new Headers(init?.headers).get("Content-Type"),
+        body: init?.body ?? null,
+      };
+      return Response.json({
+        draft: apiDraft(),
+        sourceContentHash: "a".repeat(64),
+        sourcePackageHash: "b".repeat(64),
+        lossless: true,
+        roundTripVerified: true,
+        warnings: [],
+      });
+    });
+    const bundle = new Blob(["agent-bundle"], { type: "application/zip" });
+
+    const imported = await studioClient.importBundle(bundle);
+
+    expect(captured).toEqual({
+      url: "/api/studio/drafts/import",
+      contentType: "application/zip",
+      body: bundle,
+    });
+    expect(imported.lossless).toBe(true);
+    expect(imported.roundTripVerified).toBe(true);
   });
 
   it("reads usage and replaces quota policy with revision CAS", async () => {
@@ -86,6 +127,52 @@ describe("Studio typed API mapping", () => {
       { url: "/api/studio/quotas", body: null },
       { url: "/api/studio/quotas/tenant-default", body: { expectedRevision: 1, scope: { agentName: null, environment: null }, limits: { concurrent_runs: 12 } } },
     ]);
+  });
+
+  it("sends the current Skill and conversation to the model authoring endpoint", async () => {
+    let captured: { url: string; body: unknown } | null = null;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = {
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : null,
+      };
+      return Response.json({
+        status: "clarifying",
+        reply: "请提供一个真实请求示例。",
+        skill: null,
+        followUpQuestions: ["用户会怎样提出请求？"],
+      });
+    });
+    const skill = DEFAULT_STUDIO_DRAFT.skills[0];
+
+    const reply = await studioClient.continueSkillConversation({
+      modelRoute: DEFAULT_STUDIO_DRAFT.modelRoute,
+      context: {
+        agentName: DEFAULT_STUDIO_DRAFT.name,
+        displayName: DEFAULT_STUDIO_DRAFT.displayName,
+        domain: DEFAULT_STUDIO_DRAFT.domain,
+        description: DEFAULT_STUDIO_DRAFT.description,
+        currentSkill: skill,
+      },
+      messages: [{ role: "user", content: "帮我补全这个 Skill" }],
+    });
+
+    expect(captured).toEqual({
+      url: "/api/studio/skills/conversation",
+      body: {
+        modelRoute: DEFAULT_STUDIO_DRAFT.modelRoute,
+        context: {
+          agentName: DEFAULT_STUDIO_DRAFT.name,
+          displayName: DEFAULT_STUDIO_DRAFT.displayName,
+          domain: DEFAULT_STUDIO_DRAFT.domain,
+          description: DEFAULT_STUDIO_DRAFT.description,
+          currentSkill: skill,
+        },
+        messages: [{ role: "user", content: "帮我补全这个 Skill" }],
+      },
+    });
+    expect(reply.status).toBe("clarifying");
+    expect(reply.followUpQuestions).toEqual(["用户会怎样提出请求？"]);
   });
 
   it("writes and disables MCP catalog entries with revision CAS", async () => {
@@ -109,6 +196,7 @@ describe("Studio typed API mapping", () => {
       label: "企业搜索",
       description: "查询企业内部资料",
       endpointUrl: "https://mcp.example.com/mcp",
+      transport: "http" as const,
       tools: ["mcp__company__search"],
       risk: "medium" as const,
       networkAccess: "internal" as const,

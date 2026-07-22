@@ -109,6 +109,8 @@ it("switches the single composer action to stop for either active run signal", (
   expect(shouldShowComposerStop(false, "running")).toBe(true);
   expect(shouldShowComposerStop(false, "complete")).toBe(false);
   expect(shouldShowComposerStop(false, "error")).toBe(false);
+  expect(shouldShowComposerStop(true, "running", "failed")).toBe(false);
+  expect(shouldShowComposerStop(true, "running", "cancelled")).toBe(false);
   expect(agentThreadSource).toContain(
     'className="aui-button aui-button-primary aui-button-icon aui-composer-cancel"',
   );
@@ -174,7 +176,7 @@ it("places each run activity before its assistant answer", () => {
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");
 });
 
-it("renders uploaded message files with a same-origin download link", () => {
+it("renders uploaded images in an in-app original-size preview", () => {
   expect(
     inputArtifactDownloadHref("input_artifact_123", "history-index"),
   ).toBe("/api/input-artifacts/input_artifact_123/content");
@@ -182,7 +184,11 @@ it("renders uploaded message files with a same-origin download link", () => {
   expect(agentThreadSource).toContain("点击下载");
   expect(agentThreadSource).toContain('data-kind={isImage ? "image" : "file"}');
   expect(agentThreadSource).toContain("message-attachment-preview");
-  expect(agentThreadSource).toContain("点击查看");
+  expect(agentThreadSource).toContain("message-attachment-open");
+  expect(agentThreadSource).toContain("image-lightbox");
+  expect(agentThreadSource).toContain("上传原图");
+  expect(agentThreadSource).toContain("下载原图");
+  expect(agentThreadSource).not.toContain('target: "_blank"');
 });
 
 it("keeps final assistant text mounted while tool-bearing responses stream", () => {

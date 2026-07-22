@@ -7,6 +7,7 @@ from ag_ui.core import ActivityDeltaEvent, ActivitySnapshotEvent, BaseEvent
 
 from harness.core.events import RunEvent
 from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
+from harness.runtime.input_redaction import redact_internal_agent_asset_events
 from harness.runtime.message_mapper import safe_model_text
 
 ACTIVITY_TYPE = "harness.run.v1"
@@ -29,6 +30,8 @@ def _safe_tool_arguments(name: str, payload: dict[str, Any]) -> dict[str, Any] |
 
 def _tool_result_summary(payload: dict[str, Any]) -> str | None:
     if payload.get("redacted") is True:
+        if payload.get("redaction_reason") == "internal_agent_asset":
+            return "内部 Skill / 提示词内容已隐藏"
         return "输入文件内容已隐藏"
     if payload.get("is_error") is True:
         error = payload.get("error")
@@ -63,6 +66,18 @@ def _tool_result_summary(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _tool_result_preview(payload: dict[str, Any]) -> str | None:
+    if payload.get("redacted") is True:
+        return None
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return None
+    stripped = content.strip()
+    if not stripped:
+        return None
+    return redact_text(stripped, limit=1_200)
+
+
 def _item(
     event: RunEvent,
     *,
@@ -93,6 +108,63 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             kind="run",
             status="queued",
             title="任务已加入队列",
+        )
+    if event.type == "workspace.restored":
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="工作区已恢复",
+            summary="已载入本会话上次保存的工作区",
+        )
+    if event.type == "agent.assets.staged":
+        skills = payload.get("skills")
+        skill_count = len(skills) if isinstance(skills, list) else 0
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="Agent 资源已准备",
+            summary=f"已装载 {skill_count} 个技能" if skill_count else None,
+            metadata=_metadata(skill_count=skill_count or None),
+        )
+    if event.type == "policy.resolved":
+        policy_id = payload.get("policy_id")
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="运行权限已确认",
+            summary=str(policy_id) if policy_id else None,
+            metadata=_metadata(policy_id=policy_id),
+        )
+    if event.type == "credential.lease.issued":
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="模型访问已就绪",
+        )
+    if event.type == "tool.directory.loaded":
+        entry_count = payload.get("entry_count")
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="工具能力已加载",
+            summary=(
+                f"已加载 {entry_count} 项工具能力"
+                if isinstance(entry_count, int)
+                else None
+            ),
+            metadata=_metadata(entry_count=entry_count),
+        )
+    if event.type == "workspace.archived":
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="工作区状态已保存",
         )
     run_titles = {
         "run.provisioning": ("running", "正在准备运行环境"),
@@ -161,14 +233,30 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
         subtype = str(payload.get("subtype", ""))
         if subtype == "thinking_tokens":
             return None
-        title = "运行时已连接" if subtype == "init" else "运行时状态更新"
+        status = str(payload.get("status", ""))
+        title = (
+            "运行时与工具已连接"
+            if subtype == "init"
+            else "模型正在处理"
+            if status == "requesting"
+            else "运行时状态更新"
+        )
+        tool_count = (
+            len(payload["tools"]) if isinstance(payload.get("tools"), list) else None
+        )
         return _item(
             event,
             kind="analysis",
             status="running",
             title=title,
-            summary=str(payload["status"]) if "status" in payload else None,
-            metadata=_metadata(subtype=subtype or None),
+            summary=(
+                f"{tool_count} 项工具可用"
+                if subtype == "init" and tool_count is not None
+                else "正在等待本轮模型结果"
+                if status == "requesting"
+                else status or None
+            ),
+            metadata=_metadata(subtype=subtype or None, tool_count=tool_count),
         )
     if event.type == "message.delta":
         text = safe_model_text(str(payload.get("text", "")))
@@ -187,14 +275,16 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             event,
             kind="analysis",
             status="running",
-            title="正在整理回答",
+            title="正在生成本轮回复",
+            metadata=_metadata(message_id=payload.get("message_id")),
         )
     if event.type == "message.completed":
         return _item(
             event,
             kind="analysis",
             status="succeeded",
-            title="回答已生成",
+            title="本轮回复已生成",
+            metadata=_metadata(message_id=payload.get("message_id")),
         )
     if event.type == "tool.request":
         name = str(payload.get("name", "工具"))
@@ -219,6 +309,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             metadata=_metadata(
                 tool_call_id=payload.get("tool_call_id"),
                 result_summary=_tool_result_summary(payload),
+                result_preview=_tool_result_preview(payload),
             ),
         )
     if event.type == "approval.requested":
@@ -286,6 +377,8 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
                 artifact_id=payload.get("artifact_id"),
                 media_type=payload.get("media_type"),
                 size_bytes=payload.get("size_bytes"),
+                source_path=payload.get("source_path"),
+                source=payload.get("source"),
             ),
         )
     if event.type == "runtime.result":
@@ -309,6 +402,7 @@ def build_run_activity(events: Sequence[RunEvent]) -> dict[str, Any] | None:
     """Fold durable run events into the same final activity used by live AG-UI."""
     if not events:
         return None
+    events = redact_internal_agent_asset_events(events)
     items: list[dict[str, Any]] = []
     metrics: dict[str, object] = {}
     status = "queued"

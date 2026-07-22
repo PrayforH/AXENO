@@ -39,7 +39,8 @@ describe("full-page agent workbench", () => {
     );
     expect(page).not.toContain("Agent Harness");
     expect(page).not.toContain('<span>新任务</span>');
-    expect(page).toContain("运行详情");
+    expect(page).toContain("<LangfuseTraceLink />");
+    expect(page).not.toContain("<DeveloperDrawer");
     expect(page).not.toContain("交互验证台");
     expect(page).not.toContain("切换开发者信息");
     expect(page).not.toContain("developerMode");

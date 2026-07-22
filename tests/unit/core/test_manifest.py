@@ -9,6 +9,7 @@ from harness.core.manifest import (
     ToolDirectoryEntry,
     ToolDirectorySnapshot,
     load_manifest,
+    materialize_python_tool_snapshot_set,
 )
 
 FIXTURE = Path("tests/fixtures/agents/echo-agent/agent.yaml")
@@ -27,6 +28,36 @@ def test_loads_valid_manifest_and_resolves_prompt() -> None:
 
 def test_content_hash_is_deterministic() -> None:
     assert load_manifest(FIXTURE).content_hash == load_manifest(FIXTURE).content_hash
+
+
+def test_snapshots_and_materializes_self_contained_bundle_python_tool(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent"
+    root.mkdir()
+    manifest = yaml.safe_load(FIXTURE.read_text())
+    manifest["spec"]["tools"].append({"python": "bundle:tools/normalize.py"})
+    (root / "agent.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    (root / "prompts").mkdir()
+    (root / "prompts/system.md").write_text(
+        (FIXTURE.parent / "prompts/system.md").read_text()
+    )
+    (root / "tools").mkdir()
+    source = (
+        "TOOL_SPEC = {'name': 'normalize', 'description': 'Normalize input.', "
+        "'input_schema': {'type': 'object', 'properties': {'value': {'type': 'number'}}}}\n"
+        "def run(arguments):\n    return {'value': arguments['value']}\n"
+    )
+    (root / "tools/normalize.py").write_text(source)
+
+    snapshot = load_manifest(root / "agent.yaml")
+    materialized = materialize_python_tool_snapshot_set(
+        (snapshot,), tmp_path / "workspace"
+    )
+
+    assert snapshot.python_tool_snapshots[0].name == "normalize"
+    relative = materialized[snapshot.content_hash]["bundle:tools/normalize.py"]
+    assert (tmp_path / "workspace" / relative).read_text() == source
 
 
 def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:

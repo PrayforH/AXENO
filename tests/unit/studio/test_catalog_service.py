@@ -11,6 +11,17 @@ from harness.studio.repositories import InMemoryAgentDraftRepository
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
 
 
+def test_default_catalog_exposes_both_deepseek_v4_models() -> None:
+    route = next(
+        item
+        for item in default_capability_catalog().model_routes
+        if item.route_id == "new-api-default"
+    )
+
+    assert route.label == "DeepSeek V4"
+    assert route.models == ("deepseek-v4-flash", "deepseek-v4-pro")
+
+
 def previous_system_catalog():
     catalog = default_capability_catalog()
     return catalog.model_copy(

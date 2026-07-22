@@ -94,6 +94,7 @@ async def test_publish_artifact_stores_file_then_emits_authoritative_event(
     assert result.name == "Summary.txt"
     assert events.appended[0]["event_type"] == "artifact.ready"
     assert events.appended[0]["payload"]["sha256"] == hashlib.sha256(b"verified").hexdigest()
+    assert events.appended[0]["payload"]["source_path"] == "reports/summary.txt"
 
 
 @pytest.mark.asyncio
@@ -113,6 +114,8 @@ async def test_publish_artifact_emits_stage_trace_without_file_content(
 
     spans = exporter.get_finished_spans()
     assert [span.name for span in spans] == ["harness.artifact.publish"]
+    assert spans[0].attributes is not None
+    assert spans[0].attributes["langfuse.observation.type"] == "tool"
     assert "private artifact body" not in repr(spans)
 
 

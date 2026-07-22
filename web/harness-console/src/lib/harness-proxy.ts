@@ -20,6 +20,8 @@ const RESPONSE_HEADERS = [
   "content-disposition",
   "content-type",
   "etag",
+  "vary",
+  "www-authenticate",
   "x-accel-buffering",
   "x-agent-content-sha256",
   "x-agent-package-sha256",
@@ -291,8 +293,15 @@ export async function proxyAgentTriggerRequest(
   const url = new URL(
     `${config.apiUrl}/webhooks/agent-triggers${path ? `/${path.replace(/^\//, "")}` : ""}`,
   );
+  url.search = new URL(request.url).search;
   const headers = new Headers();
-  for (const name of ["accept", "authorization", "content-type", "idempotency-key"]) {
+  for (const name of [
+    "accept",
+    "authorization",
+    "content-type",
+    "idempotency-key",
+    "last-event-id",
+  ]) {
     const value = request.headers.get(name);
     if (value) headers.set(name, value);
   }
@@ -324,6 +333,7 @@ export async function proxyExternalAgentRequest(
   const url = new URL(
     `${config.apiUrl}/${prefix}${path ? `/${path.replace(/^\//, "")}` : ""}`,
   );
+  url.search = new URL(request.url).search;
   const headers = new Headers();
   for (const name of [
     "accept",

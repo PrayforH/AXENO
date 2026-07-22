@@ -125,11 +125,11 @@ def create_draft_spec(
     if template is AgentTemplate.OPERATOR:
         tools = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
         policy = "production-standard"
-        limits = DraftLimits(maxTurns=24, timeoutSeconds=1800, maxBudgetUsd=2)
+        limits = DraftLimits(timeoutSeconds=1800)
     elif template is AgentTemplate.ORCHESTRATOR:
         tools = ("Read", "Glob", "Grep", "Task")
         policy = "production-orchestrator"
-        limits = DraftLimits(maxTurns=24, timeoutSeconds=1800, maxBudgetUsd=2)
+        limits = DraftLimits(timeoutSeconds=1800)
         subagents = (
             DraftSubagent(
                 alias="evidence-researcher",
@@ -152,7 +152,7 @@ def create_draft_spec(
     else:
         tools = ("Read", "Glob", "Grep")
         policy = "production-read-only"
-        limits = DraftLimits(maxTurns=15, timeoutSeconds=900, maxBudgetUsd=1)
+        limits = DraftLimits(timeoutSeconds=900)
 
     return AgentDraftSpec(
         name=name,

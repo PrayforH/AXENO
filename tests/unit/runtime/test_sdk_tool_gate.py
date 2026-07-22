@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -35,8 +35,9 @@ from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 from harness.quota.repositories import InMemoryQuotaRepository
 from harness.quota.service import QuotaService
 from harness.runtime.base import RuntimeContext
+from harness.runtime.input_redaction import INTERNAL_AGENT_ASSET_MARKER
 from harness.runtime.sdk_tool_gate import SdkToolGate
-from harness.sandbox.base import SandboxIsolation
+from harness.sandbox.base import SandboxCommandResult, SandboxIsolation
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
 
@@ -166,6 +167,159 @@ async def _invoke(
 def _decision(output: SyncHookJSONOutput) -> str:
     specific = cast(dict[str, object], output.get("hookSpecificOutput", {}))
     return str(specific.get("permissionDecision", ""))
+
+
+def _updated_input(output: SyncHookJSONOutput) -> dict[str, object] | None:
+    specific = cast(dict[str, object], output.get("hookSpecificOutput", {}))
+    value = specific.get("updatedInput")
+    return cast(dict[str, object], value) if isinstance(value, dict) else None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_path",
+    [
+        "/root/.claude/skills/public-opinion-analysis/references/query-contract.md",
+        "{workspace}/references/query-contract.md",
+    ],
+)
+async def test_read_normalizes_unique_immutable_skill_reference(
+    tmp_path: Path,
+    requested_path: str,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    target = (
+        tmp_path
+        / ".claude/skills/public-opinion-analysis/references/query-contract.md"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_text("query rules")
+    requested_path = requested_path.format(workspace=tmp_path)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input("Read", {"file_path": requested_path}, "tool-read-skill-reference"),
+    )
+
+    relative = (
+        ".claude/skills/public-opinion-analysis/references/query-contract.md"
+    )
+    assert _decision(output) == "allow"
+    assert _updated_input(output) == {"file_path": relative}
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["arguments"] == {"file_path": relative}
+    assert emitted[0].payload[INTERNAL_AGENT_ASSET_MARKER] is True
+
+
+@pytest.mark.asyncio
+async def test_read_maps_virtual_workspace_path_to_local_run_workspace(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    target = tmp_path / ".claude/skills/grid-system/SKILL.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("grid rules")
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Read",
+            {"file_path": "/workspace/.claude/skills/grid-system/SKILL.md"},
+            "tool-read-virtual-workspace",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    assert _updated_input(output) == {"file_path": str(target)}
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["arguments"] == {"file_path": str(target)}
+
+
+@pytest.mark.asyncio
+async def test_read_maps_stale_imported_input_root_to_current_workspace(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    target = tmp_path / "inputs/original/photo.jpg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"image")
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Read",
+            {"file_path": "/home/user/inputs/original/photo.jpg"},
+            "tool-read-stale-input-root",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    assert _updated_input(output) == {"file_path": str(target)}
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["arguments"] == {"file_path": str(target)}
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_guess_ambiguous_skill_reference(tmp_path: Path) -> None:
+    gate, _, _, _, context = await _arrange(tmp_path)
+    for skill_name in ("skill-a", "skill-b"):
+        target = tmp_path / f".claude/skills/{skill_name}/references/rules.md"
+        target.parent.mkdir(parents=True)
+        target.write_text(skill_name)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Read",
+            {"file_path": str(tmp_path / "references/rules.md")},
+            "tool-read-ambiguous-reference",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    assert _updated_input(output) is None
+
+
+@pytest.mark.asyncio
+async def test_read_removes_empty_pages_before_native_image_read(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Read",
+            {"file_path": "inputs/photo.jpg", "pages": ""},
+            "tool-read-image",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    assert _updated_input(output) == {"file_path": "inputs/photo.jpg"}
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert emitted[0].payload["arguments"] == {"file_path": "inputs/photo.jpg"}
+
+
+@pytest.mark.asyncio
+async def test_read_does_not_remap_unrelated_home_path(tmp_path: Path) -> None:
+    gate, _, _, _, context = await _arrange(tmp_path)
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(
+            "Read",
+            {"file_path": "/root/private.txt"},
+            "tool-read-unrelated-home-path",
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    assert _updated_input(output) is None
 
 
 @pytest.mark.asyncio
@@ -417,7 +571,13 @@ async def test_denies_destructive_bash_before_tool_execution(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_ask_waits_inline_and_continues_only_after_approval(tmp_path: Path) -> None:
     gate, approvals, runs, events, context = await _arrange(tmp_path)
-    task = asyncio.create_task(_invoke(gate, context, _input("Bash", {"command": "ls"}, "tool-3")))
+    task = asyncio.create_task(
+        _invoke(
+            gate,
+            context,
+            _input("Bash", {"command": "python scripts/check.py"}, "tool-3"),
+        )
+    )
     requested = []
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     for _ in range(20):
@@ -561,6 +721,69 @@ async def test_successful_workspace_write_and_edit_do_not_require_approval(
 
 
 @pytest.mark.asyncio
+async def test_low_risk_sandbox_bash_is_allowed_without_approval(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    output = await asyncio.wait_for(
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Bash",
+                {
+                    "command": "pwd && ls -la && wc -l outputs/report.html",
+                    "description": "Inspect and validate a sandbox report",
+                },
+                "tool-low-risk-sandbox-bash",
+            ),
+        ),
+        timeout=0.1,
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert not any(event.type == "approval.requested" for event in emitted)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+
+
+@pytest.mark.asyncio
+async def test_declared_bundle_python_tool_is_allowed_only_with_sandbox_executor(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(
+        tmp_path,
+        sandbox_isolation=SandboxIsolation.CONTAINER,
+    )
+
+    async def execute(
+        _argv: Sequence[str],
+        _environment: Mapping[str, str] | None,
+        _timeout_seconds: float,
+    ) -> SandboxCommandResult:
+        return SandboxCommandResult(exit_code=0, stdout="ok")
+
+    context = context.model_copy(update={"sandbox_command_executor": execute})
+    tool_name = "mcp__harness-python-domain-agent__normalize_score"
+    matcher = gate.hooks(
+        context,
+        result_trust_by_tool={tool_name: ContextTrust.SAFE},
+    )["PreToolUse"][0]
+    output = cast(
+        SyncHookJSONOutput,
+        await matcher.hooks[0](
+            _input(tool_name, {"value": 0.8}, "tool-bundle-python"),
+            "tool-bundle-python",
+            {"signal": None},
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+
+
+@pytest.mark.asyncio
 async def test_tool_lifecycle_records_redacted_langfuse_observation(
     tmp_path: Path,
 ) -> None:
@@ -611,10 +834,11 @@ async def test_tool_lifecycle_records_redacted_langfuse_observation(
     spans = exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
-    assert span.name == "harness.tool.run"
+    assert span.name == "Read"
     assert span.attributes is not None
     assert span.attributes["harness.tool.name"] == "Read"
     assert span.attributes["harness.tool.status"] == "succeeded"
+    assert span.attributes["langfuse.observation.type"] == "tool"
     assert span.attributes["langfuse.observation.input"] == (
         '{"file_path":"'
         + str(tmp_path / "report.md")
@@ -713,7 +937,15 @@ async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
 ) -> None:
     gate, approvals, runs, events, context = await _arrange(tmp_path)
     task = asyncio.create_task(
-        _invoke(gate, context, _input("Bash", {"command": "pwd"}, "tool-rejected"))
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Bash",
+                {"command": "python scripts/check.py"},
+                "tool-rejected",
+            ),
+        )
     )
     requested = []
     for _ in range(20):
@@ -743,7 +975,15 @@ async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
 async def test_cancelled_sdk_wait_closes_pending_approval(tmp_path: Path) -> None:
     gate, approvals, runs, events, context = await _arrange(tmp_path)
     task = asyncio.create_task(
-        _invoke(gate, context, _input("Bash", {"command": "pwd"}, "tool-timeout"))
+        _invoke(
+            gate,
+            context,
+            _input(
+                "Bash",
+                {"command": "python scripts/check.py"},
+                "tool-timeout",
+            ),
+        )
     )
     requested = []
     for _ in range(20):

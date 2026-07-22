@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   StudioApiError,
@@ -16,14 +17,22 @@ type AgentTriggerControlPlaneProps = {
   publishedVersion: string | null;
   environments: StudioEnvironment[];
   canManage: boolean;
+  kindFilter?: "a2a";
 };
 
 function endpoint(trigger: Pick<StudioAgentTrigger, "triggerId" | "kind">) {
   const id = encodeURIComponent(trigger.triggerId);
-  if (trigger.kind === "a2a") return `/a2a/agent-triggers/${id}/agent-card.json`;
+  if (trigger.kind === "a2a") return `/a2a/agent-triggers/${id}/message:send`;
   if (trigger.kind === "chatops") return `/chatops/agent-triggers/${id}`;
   if (trigger.kind === "schedule") return "由 Worker 按计划触发";
   return `/webhooks/agent-triggers/${id}`;
+}
+
+function discoveryEndpoint(trigger: Pick<StudioAgentTrigger, "triggerId" | "kind">) {
+  const id = encodeURIComponent(trigger.triggerId);
+  if (trigger.kind === "a2a") return `/a2a/agent-triggers/${id}/agent-card.json`;
+  if (trigger.kind === "webhook") return `/webhooks/agent-triggers/${id}/openapi.json`;
+  return null;
 }
 
 export function AgentTriggerControlPlane({
@@ -31,10 +40,14 @@ export function AgentTriggerControlPlane({
   publishedVersion,
   environments,
   canManage,
+  kindFilter,
 }: AgentTriggerControlPlaneProps) {
+  const isA2A = kindFilter === "a2a";
   const [triggers, setTriggers] = useState<StudioAgentTrigger[]>([]);
-  const [name, setName] = useState("Webhook 入口");
-  const [kind, setKind] = useState<StudioAgentTrigger["kind"]>("webhook");
+  const [name, setName] = useState(isA2A ? "A2A 入口" : "Webhook 入口");
+  const [kind, setKind] = useState<StudioAgentTrigger["kind"]>(
+    isA2A ? "a2a" : "webhook",
+  );
   const [schedulePrompt, setSchedulePrompt] = useState("执行定时任务");
   const [intervalMinutes, setIntervalMinutes] = useState(60);
   const [environment, setEnvironment] =
@@ -49,6 +62,18 @@ export function AgentTriggerControlPlane({
     ),
     [environments],
   );
+  const visibleTriggers = useMemo(
+    () => triggers.filter((item) => isA2A ? item.kind === "a2a" : item.kind !== "a2a"),
+    [isA2A, triggers],
+  );
+  const a2aTriggers = useMemo(
+    () => triggers.filter((item) => item.kind === "a2a"),
+    [triggers],
+  );
+
+  useEffect(() => {
+    if (isA2A) setKind("a2a");
+  }, [isA2A]);
 
   useEffect(() => {
     const preferred =
@@ -163,7 +188,7 @@ export function AgentTriggerControlPlane({
         `  -H 'Authorization: Bearer ${created.secret}' \\`,
         "  -H 'A2A-Version: 1.0' \\",
         "  -H 'Content-Type: application/a2a+json' \\",
-        `  -d '{"message":{"messageId":"your-event-id","role":"ROLE_USER","parts":[{"text":"描述要执行的任务"}]}}'`,
+        `  -d '{"message":{"messageId":"your-event-id","role":"ROLE_USER","parts":[{"text":"描述要执行的任务"}]},"configuration":{"returnImmediately":true}}'`,
       ].join("\n") : isChatOps ? [
         `curl -X POST '${url}' \\`,
         `  -H 'Authorization: Bearer ${created.secret}' \\`,
@@ -180,17 +205,36 @@ export function AgentTriggerControlPlane({
   }
 
   return (
-    <section className={styles.controlPlane} aria-label="Agent 触发器">
+    <section className={styles.controlPlane} aria-label={isA2A ? "A2A 接入" : "Agent 触发器"}>
       <header>
         <div>
-          <span>INVOCATION</span>
-          <strong>外部触发器</strong>
+          <span>{isA2A ? "AGENT-TO-AGENT" : "INVOCATION"}</span>
+          <strong>{isA2A ? "A2A 接入" : "外部触发器"}</strong>
           <small>
-            外部系统复用当前环境快照，并进入同一套运行、审批、取消、制品与 Trace。
+            {isA2A
+              ? "以 A2A 1.0 Agent Card 暴露能力，并复用当前环境的治理、审批与 Trace。"
+              : "外部系统复用当前环境快照，并进入同一套运行、审批、取消、制品与 Trace。"}
           </small>
         </div>
-        <em>{triggers.filter((item) => item.enabled).length} 个启用</em>
+        <em>{visibleTriggers.filter((item) => item.enabled).length} 个启用</em>
       </header>
+
+      {!isA2A && publishedVersion && (
+        <aside className={styles.a2aEntry}>
+          <div>
+            <span>A2A 1.0</span>
+            <strong>Agent 间协议接入</strong>
+            <small>
+              {a2aTriggers.length > 0
+                ? `${a2aTriggers.length} 个入口 · ${a2aTriggers.filter((item) => item.enabled).length} 个启用`
+                : "配置 Agent Card、消息端点和独立访问密钥。"}
+            </small>
+          </div>
+          <Link href={`/studio/agents/${encodeURIComponent(agentName)}/a2a`}>
+            打开 A2A 控制台
+          </Link>
+        </aside>
+      )}
 
       {!publishedVersion ? (
         <p className={styles.empty}>发布不可变版本后才能创建外部入口。</p>
@@ -201,21 +245,27 @@ export function AgentTriggerControlPlane({
       ) : (
         <>
           {canManage && (
-            <div className={styles.creator}>
-              <label>
-                <span>入口</span>
-                <select
-                  value={kind}
-                  onChange={(event) =>
-                    setKind(event.target.value as StudioAgentTrigger["kind"])
-                  }
-                >
-                  <option value="webhook">Webhook</option>
-                  <option value="a2a">A2A 1.0</option>
-                  <option value="schedule">定时</option>
-                  <option value="chatops">ChatOps</option>
-                </select>
-              </label>
+            <div className={styles.creator} data-focused={isA2A}>
+              {isA2A ? (
+                <div className={styles.protocolField}>
+                  <span>协议</span>
+                  <strong>A2A 1.0</strong>
+                </div>
+              ) : (
+                <label>
+                  <span>入口</span>
+                  <select
+                    value={kind}
+                    onChange={(event) =>
+                      setKind(event.target.value as StudioAgentTrigger["kind"])
+                    }
+                  >
+                    <option value="webhook">Webhook</option>
+                    <option value="schedule">定时</option>
+                    <option value="chatops">ChatOps</option>
+                  </select>
+                </label>
+              )}
               <label>
                 <span>名称</span>
                 <input
@@ -292,7 +342,7 @@ export function AgentTriggerControlPlane({
           )}
 
           <div className={styles.triggerList}>
-            {triggers.map((trigger) => (
+            {visibleTriggers.map((trigger) => (
               <article key={trigger.triggerId} data-enabled={trigger.enabled}>
                 <span className={styles.state}>
                   {trigger.enabled ? "已启用" : "已停用"}
@@ -306,6 +356,11 @@ export function AgentTriggerControlPlane({
                       : " · 尚未调用"}
                   </small>
                   <code>{endpoint(trigger)}</code>
+                  {discoveryEndpoint(trigger) && discoveryEndpoint(trigger) !== endpoint(trigger) && (
+                    <small>
+                      机器发现 <code>{discoveryEndpoint(trigger)}</code>
+                    </small>
+                  )}
                   {trigger.nextFireAt && (
                     <small>下次执行 {new Date(trigger.nextFireAt).toLocaleString("zh-CN")}</small>
                   )}
@@ -320,6 +375,16 @@ export function AgentTriggerControlPlane({
                   >
                     复制地址
                   </button>
+                  {discoveryEndpoint(trigger) && discoveryEndpoint(trigger) !== endpoint(trigger) && (
+                    <button
+                      type="button"
+                      onClick={() => void copy(
+                        `${window.location.origin}${discoveryEndpoint(trigger)}`,
+                      )}
+                    >
+                      复制协议描述
+                    </button>
+                  )}
                   {canManage && (
                     <>
                       <button
@@ -345,8 +410,8 @@ export function AgentTriggerControlPlane({
                 </div>
               </article>
             ))}
-            {triggers.length === 0 && (
-              <p className={styles.empty}>还没有外部入口。</p>
+            {visibleTriggers.length === 0 && (
+              <p className={styles.empty}>{isA2A ? "还没有 A2A 入口。" : "还没有外部入口。"}</p>
             )}
           </div>
         </>

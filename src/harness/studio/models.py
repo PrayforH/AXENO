@@ -83,21 +83,38 @@ class DraftSkill(StudioModel):
         return self
 
 
+class DraftPythonTool(StudioModel):
+    """Editable Python operator packaged and executed inside the Run sandbox."""
+
+    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    description: str = Field(min_length=1, max_length=2_000)
+    input_schema: dict[str, object] = Field(alias="inputSchema")
+    code: str = Field(min_length=1, max_length=1024 * 1024)
+
+    @model_validator(mode="after")
+    def valid_operator_contract(self) -> DraftPythonTool:
+        if self.input_schema.get("type") != "object":
+            raise ValueError("Python tool inputSchema must be an object schema")
+        if "def run(" not in self.code and "async def run(" not in self.code:
+            raise ValueError("Python tool code must define run(arguments)")
+        return self
+
+
 class DraftWorkspace(StudioModel):
     restore_session: bool = Field(default=True, alias="restoreSession")
     archive_on_complete: bool = Field(default=True, alias="archiveOnComplete")
 
 
 class DraftLimits(StudioModel):
-    max_turns: int = Field(default=15, alias="maxTurns", ge=1, le=200)
+    max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
     timeout_seconds: int = Field(default=900, alias="timeoutSeconds", ge=1, le=86_400)
-    max_budget_usd: float = Field(default=1, alias="maxBudgetUsd", gt=0)
-    max_model_tokens: int = Field(default=200_000, alias="maxModelTokens", ge=1, le=10_000_000)
+    max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
+    max_model_tokens: int | None = Field(default=None, alias="maxModelTokens", ge=1)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
     max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
     max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
     max_subagent_usage_units: int | None = Field(
-        default=200_000, alias="maxSubagentUsageUnits", gt=0
+        default=None, alias="maxSubagentUsageUnits", gt=0
     )
 
 
@@ -119,6 +136,7 @@ class AgentDraftSpec(StudioModel):
     system_prompt: str = Field(alias="systemPrompt", min_length=1, max_length=512 * 1024)
     skills: tuple[DraftSkill, ...] = Field(min_length=1)
     builtin_tools: tuple[str, ...] = Field(default=(), alias="builtinTools")
+    python_tools: tuple[DraftPythonTool, ...] = Field(default=(), alias="pythonTools")
     mcp_servers: tuple[str, ...] = Field(default=(), alias="mcpServers")
     tool_exposure_mode: ToolExposureMode = Field(
         default="eager",
@@ -156,6 +174,14 @@ class AgentDraftSpec(StudioModel):
         duplicate_skills = sorted({name for name in skill_names if skill_names.count(name) > 1})
         if duplicate_skills:
             raise ValueError(f"duplicate Skill: {', '.join(duplicate_skills)}")
+        python_tool_names = [tool.name for tool in self.python_tools]
+        duplicate_python_tools = sorted(
+            {name for name in python_tool_names if python_tool_names.count(name) > 1}
+        )
+        if duplicate_python_tools:
+            raise ValueError(
+                f"duplicate Python tool: {', '.join(duplicate_python_tools)}"
+            )
         return self
 
 
@@ -202,6 +228,21 @@ class PublishedAgentVersion(StudioModel):
     manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     package_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     created_at: datetime
+
+
+class ImportedAgentBundle(StudioModel):
+    draft: AgentDraft
+    source_content_hash: str = Field(
+        alias="sourceContentHash",
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    source_package_hash: str = Field(
+        alias="sourcePackageHash",
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    lossless: bool
+    round_trip_verified: bool = Field(alias="roundTripVerified")
+    warnings: tuple[str, ...] = ()
 
 
 class AgentDraftSummary(StudioModel):

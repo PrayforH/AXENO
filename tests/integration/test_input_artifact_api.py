@@ -5,9 +5,16 @@ from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_app, create_memory_app
 from harness.api.dependencies import build_memory_container
+from harness.core.errors import StorageCapacityError
 from harness.core.models import ExecutionIdentity
 
 HEADERS = {"X-Tenant-ID": "tenant-a", "X-User-ID": "user-1"}
+
+
+class _FullArtifactStore:
+    async def put(self, tenant_id: str, artifact_id: str, content: bytes):
+        del tenant_id, artifact_id, content
+        raise StorageCapacityError("attachment storage is full")
 
 
 @pytest.mark.asyncio
@@ -60,6 +67,26 @@ async def test_upload_rejects_oversized_input_without_returning_an_id() -> None:
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "input_artifact_too_large"
     assert "input_artifact_id" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_upload_reports_storage_capacity_instead_of_generic_500() -> None:
+    container = build_memory_container()
+    container.input_artifacts._store = _FullArtifactStore()  # type: ignore[attr-defined]
+    app = create_app(container)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/v1/input-artifacts",
+            files={"file": ("notes.txt", b"content", "text/plain")},
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 507
+    assert response.json()["error"] == {
+        "code": "storage_capacity_exceeded",
+        "message": "attachment storage is full",
+    }
 
 
 @pytest.mark.asyncio

@@ -28,9 +28,7 @@ class TriggerSchedule(StudioModel):
 
 class TriggerChatOps(StudioModel):
     provider: Literal["slack", "teams", "email", "generic"] = "generic"
-    allowed_channel_ids: tuple[str, ...] = Field(
-        default=(), alias="allowedChannelIds"
-    )
+    allowed_channel_ids: tuple[str, ...] = Field(default=(), alias="allowedChannelIds")
 
 
 class AgentTrigger(StudioModel):
@@ -120,3 +118,18 @@ class TriggerInvocation(StudioModel):
     agent_name: str = Field(alias="agentName")
     agent_version: str = Field(alias="agentVersion")
     deployment_snapshot_id: str = Field(alias="deploymentSnapshotId")
+
+
+class AgentExposureSkill(StudioModel):
+    skill_id: str = Field(alias="skillId", min_length=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    tags: tuple[str, ...] = ()
+
+
+class AgentExposureDescriptor(StudioModel):
+    trigger: AgentTrigger
+    agent_version: str = Field(alias="agentVersion", min_length=1)
+    display_name: str = Field(alias="displayName", min_length=1)
+    description: str = Field(min_length=1)
+    skills: tuple[AgentExposureSkill, ...]

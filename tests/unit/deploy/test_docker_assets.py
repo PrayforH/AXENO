@@ -64,12 +64,13 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert services["web"]["depends_on"]["seed"]["condition"] == "service_completed_successfully"
     seed_manifests = services["seed"]["environment"]["HARNESS_SEED_AGENT_MANIFESTS"]
     for manifest in (
-        "public-opinion-agent/agent.yaml",
         "archive-file-classifier-agent/agent.yaml",
     ):
         assert manifest in seed_manifests
+    assert "public-opinion-agent/agent.yaml" not in seed_manifests
     studio_manifests = services["seed"]["environment"]["HARNESS_SEED_STUDIO_MANIFESTS"]
     for manifest in (
+        "public-opinion-agent/agent.yaml",
         "similar-case-analysis-agent/agent.yaml",
         "govdoc-writer-agent/agent.yaml",
         "archive-assistant-agent/agent.yaml",

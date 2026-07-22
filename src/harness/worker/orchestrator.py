@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import mimetypes
+import re
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -12,7 +13,7 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import AbstractContextManager, nullcontext, suppress
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar, cast
 from uuid import uuid4
 
@@ -55,7 +56,10 @@ from harness.runtime.base import (
 )
 from harness.runtime.input_redaction import (
     INPUT_CONTENT_REDACTION,
+    INTERNAL_AGENT_ASSET_MARKER,
+    INTERNAL_AGENT_ASSET_REDACTION,
     STAGED_INPUT_READ_MARKER,
+    internal_agent_asset_access,
     redact_workspace_paths,
     staged_input_paths,
     staged_read_path,
@@ -77,6 +81,13 @@ RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
 RunCredentialRevoker = Callable[[str, str], Awaitable[None]]
 SandboxResolver = Callable[[str, Session], Awaitable[SandboxProvider]]
 T = TypeVar("T")
+_MARKDOWN_ARTIFACT_PATH = re.compile(r"`([^`\r\n]+)`|\]\(([^)\r\n]+)\)")
+_PLAIN_ARTIFACT_PATH = re.compile(
+    r"(?<![\w/])((?:\.?/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.@+-]+\.[A-Za-z0-9]{1,12})"
+)
+_NON_DELIVERABLE_ROOTS = frozenset(
+    {".claude", ".git", ".harness-runtime", ".tmp", "inputs"}
+)
 
 
 class _RunCancellationRequestedError(RuntimeExecutionTimeoutError):
@@ -125,6 +136,40 @@ def read_runtime_artifact(
     if len(content) > max_bytes:
         raise ValueError("runtime artifact exceeds the output size limit")
     return artifact_path, content
+
+
+def final_artifact_paths(workspace: Path, response: str) -> tuple[str, ...]:
+    """Resolve files explicitly declared by the final answer inside the workspace."""
+
+    raw_candidates = [
+        left or right
+        for left, right in _MARKDOWN_ARTIFACT_PATH.findall(response)
+    ]
+    raw_candidates.extend(_PLAIN_ARTIFACT_PATH.findall(response))
+    resolved: list[str] = []
+    root = workspace.resolve()
+    for raw in dict.fromkeys(raw_candidates):
+        value = raw.strip().strip("'\"").removeprefix("file://")
+        if value.startswith("/workspace/"):
+            value = value.removeprefix("/workspace/")
+        value = value.removeprefix("./")
+        path = PurePosixPath(value)
+        if (
+            not value
+            or path.is_absolute()
+            or ".." in path.parts
+            or not path.parts
+            or path.parts[0] in _NON_DELIVERABLE_ROOTS
+        ):
+            continue
+        candidate = workspace.joinpath(*path.parts)
+        try:
+            artifact = candidate.resolve(strict=True)
+        except (FileNotFoundError, RuntimeError):
+            continue
+        if artifact.is_relative_to(root) and artifact.is_file() and not candidate.is_symlink():
+            resolved.append(path.as_posix())
+    return tuple(resolved)
 
 
 class RunOrchestrator:
@@ -189,6 +234,27 @@ class RunOrchestrator:
         if self._observability is None:
             return nullcontext()
         return self._observability.span(name, attributes=attributes)
+
+    def _record_visible_assistant_message(
+        self,
+        *,
+        run_id: str,
+        message_id: str,
+        text: str,
+    ) -> None:
+        """Mirror public model progress into Langfuse without private reasoning."""
+        if self._observability is None or not text.strip():
+            return
+        with self._observability.span(
+            "assistant-progress",
+            attributes={
+                "run.id": run_id,
+                "harness.message.id": message_id,
+                "langfuse.observation.type": "event",
+                "langfuse.observation.metadata.message_id": message_id,
+            },
+        ):
+            self._observability.annotate_current_io(output_value=text)
 
     async def _runtime_events(self, context: RuntimeContext) -> AsyncIterator[Any]:
         with self._stage(
@@ -318,35 +384,48 @@ class RunOrchestrator:
             fingerprints[relative] = hashlib.sha256(content).hexdigest()
         return fingerprints
 
-    async def _publish_remote_outputs(
+    async def _publish_workspace_outputs(
         self,
         *,
         tenant_id: str,
         run: Run,
         workspace: Path,
         baseline: Mapping[str, str],
+        final_response: str,
     ) -> None:
         if self._artifacts is None:
             return
+        candidates: dict[str, str] = {}
         output_root = workspace / "outputs"
-        if not output_root.is_dir():
-            return
-        files: list[Path] = []
-        for path in output_root.rglob("*"):
-            if path.is_symlink() or path.is_file():
-                files.append(path)
-                if len(files) > 100:
-                    raise ValueError("workspace outputs exceed the artifact count limit")
+        if output_root.is_dir():
+            for path in output_root.rglob("*"):
+                if path.is_symlink() or path.is_file():
+                    candidates[path.relative_to(workspace).as_posix()] = "workspace-output"
+        for relative in final_artifact_paths(workspace, final_response):
+            candidates[relative] = "final-response"
+        if len(candidates) > 100:
+            raise ValueError("workspace artifacts exceed the artifact count limit")
+        prior_events = await self._events.list_after(tenant_id, run.run_id, 0)
+        published_paths = {
+            str(event.payload["source_path"])
+            for event in prior_events
+            if event.type == "artifact.ready"
+            and isinstance(event.payload.get("source_path"), str)
+        }
         remaining = self._output_artifact_max_bytes
-        for path in sorted(files):
-            relative = path.relative_to(workspace).as_posix()
+        for relative, source in sorted(candidates.items()):
+            if relative in published_paths:
+                continue
             resolved, content = read_runtime_artifact(
                 workspace,
                 relative,
                 max_bytes=remaining,
             )
             remaining -= len(content)
-            if baseline.get(relative) == hashlib.sha256(content).hexdigest():
+            if (
+                source == "workspace-output"
+                and baseline.get(relative) == hashlib.sha256(content).hexdigest()
+            ):
                 continue
             artifact = await self._artifacts.upload(
                 tenant_id=tenant_id,
@@ -356,7 +435,7 @@ class RunOrchestrator:
                 content=content,
             )
             payload = artifact.model_dump(mode="json")
-            payload["source"] = "workspace-output"
+            payload["source"] = source
             await self._events.append(
                 tenant_id=tenant_id,
                 run_id=run.run_id,
@@ -544,7 +623,11 @@ class RunOrchestrator:
         session = await self._sessions.get(tenant_id, run.session_id)
         correlation_attributes: dict[str, str] = {
             "langfuse.session.id": run.session_id,
+            "langfuse.trace.name": "agent-run",
+            "langfuse.user.id": correlation_hash(session.user_id),
             "langfuse.trace.metadata.run_id": run.run_id,
+            "langfuse.trace.metadata.agent_name": session.agent_name,
+            "langfuse.trace.metadata.agent_version": session.agent_version,
             "session.id": run.session_id,
             "agent.name": session.agent_name,
             "agent.version": session.agent_version,
@@ -553,6 +636,9 @@ class RunOrchestrator:
             correlation_attributes["deployment.snapshot.id"] = session.deployment_snapshot_id
         if session.environment:
             correlation_attributes["deployment.environment"] = session.environment
+            correlation_attributes["langfuse.trace.metadata.environment"] = (
+                session.environment
+            )
         environment_policy = session_environment_policy(session)
         if environment_policy is not None:
             correlation_attributes["environment.policy.hash"] = (
@@ -571,9 +657,26 @@ class RunOrchestrator:
                 attributes={
                     "run.id": run_id,
                     "tenant.hash": correlation_hash(tenant_id),
+                    "langfuse.observation.type": "agent",
+                    "langfuse.observation.metadata.agent_name": session.agent_name,
+                    "langfuse.version": session.agent_version,
                 },
             ):
+                prompt = run.input.get("prompt")
+                self._observability.annotate_current_io(input_value=prompt)
+                self._observability.annotate_current_io(
+                    input_value=prompt,
+                    trace_level=True,
+                )
                 result = await self._execute(tenant_id, run_id)
+                self._observability.annotate_current_span(
+                    {
+                        "langfuse.observation.level": (
+                            "ERROR" if result.status is RunStatus.FAILED else "DEFAULT"
+                        ),
+                        "langfuse.observation.status_message": result.status.value,
+                    }
+                )
                 await self._release_terminal_quota(result)
                 trace_id = self._observability.current_trace_id()
                 if result.status.is_terminal and self._quality_hook is not None:
@@ -731,6 +834,7 @@ class RunOrchestrator:
                     active_sandbox.prepare(handle),
                 )
             staged_read_tool_calls: set[str] = set()
+            internal_asset_tool_calls: set[str] = set()
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
             else:
@@ -778,7 +882,7 @@ class RunOrchestrator:
                 runtime_transport_factory=handle.runtime_transport_factory,
                 sandbox_command_executor=(
                     _bind_sandbox_command_executor(active_sandbox, handle)
-                    if handle.deferred_tool_execution
+                    if handle.deferred_tool_execution or handle.provider == "local"
                     else None
                 ),
                 artifact_publisher=artifact_publisher,
@@ -796,12 +900,10 @@ class RunOrchestrator:
                         "content_hash": resolved_policy.content_hash,
                     },
                 )
-            output_baseline = (
-                self._workspace_output_fingerprints(handle.path)
-                if handle.isolation_level is SandboxIsolation.CONTAINER
-                else {}
-            )
+            output_baseline = self._workspace_output_fingerprints(handle.path)
             active_message_id: str | None = context.assistant_message_id
+            active_message_text = ""
+            final_response_text = ""
             runtime_events = self._cancellable_runtime_events(context)
             async for runtime_event in runtime_events:
                 latest = await self._runs.get(tenant_id, run_id)
@@ -854,9 +956,15 @@ class RunOrchestrator:
                         sanitized_arguments["file_path"] = relative_input_path
                         payload["arguments"] = sanitized_arguments
                         payload[STAGED_INPUT_READ_MARKER] = True
+                    if internal_agent_asset_access(payload):
+                        tool_call_id = str(payload.get("tool_call_id", ""))
+                        if tool_call_id:
+                            internal_asset_tool_calls.add(tool_call_id)
+                        payload[INTERNAL_AGENT_ASSET_MARKER] = True
                 elif runtime_event.type == "tool.result":
                     tool_call_id = str(payload.get("tool_call_id", ""))
                     redact_result = tool_call_id in staged_read_tool_calls
+                    redact_internal_asset = tool_call_id in internal_asset_tool_calls
                     if not redact_result and tool_call_id:
                         prior_events = await self._events.list_after(
                             tenant_id,
@@ -876,14 +984,30 @@ class RunOrchestrator:
                             matching_request
                             and matching_request.payload.get(STAGED_INPUT_READ_MARKER)
                         )
+                        redact_internal_asset = bool(
+                            matching_request
+                            and (
+                                matching_request.payload.get(
+                                    INTERNAL_AGENT_ASSET_MARKER
+                                )
+                                or internal_agent_asset_access(
+                                    matching_request.payload
+                                )
+                            )
+                        )
                     if redact_result:
                         payload["content"] = INPUT_CONTENT_REDACTION
                         payload["redacted"] = True
+                    elif redact_internal_asset:
+                        payload["content"] = INTERNAL_AGENT_ASSET_REDACTION
+                        payload["redacted"] = True
+                        payload["redaction_reason"] = "internal_agent_asset"
                 payload = cast(
                     dict[str, Any],
                     redact_workspace_paths(payload, handle.path),
                 )
                 if runtime_event.type == "message.start":
+                    active_message_text = ""
                     active_message_id = str(
                         payload.get("message_id")
                         or active_message_id
@@ -897,6 +1021,15 @@ class RunOrchestrator:
                         or f"assistant-{run_id}-{uuid4().hex}"
                     )
                     payload["message_id"] = active_message_id
+                    if runtime_event.type == "message.delta":
+                        active_message_text += str(payload.get("text", ""))
+                    else:
+                        final_response_text = active_message_text
+                        self._record_visible_assistant_message(
+                            run_id=run_id,
+                            message_id=active_message_id,
+                            text=active_message_text,
+                        )
                 elif runtime_event.type == "tool.request" and active_message_id is not None:
                     payload["message_id"] = active_message_id
                 if runtime_event.type == "tool.request":
@@ -924,6 +1057,7 @@ class RunOrchestrator:
                             content=artifact_content,
                         )
                     artifact_payload = artifact.model_dump(mode="json")
+                    artifact_payload["source_path"] = relative_path
                     if active_message_id is not None:
                         artifact_payload["message_id"] = active_message_id
                     await self._events.append(
@@ -1029,14 +1163,14 @@ class RunOrchestrator:
                     active_message_id = None
             with self._stage("harness.sandbox.collect", {"run.id": run_id}):
                 await active_sandbox.collect(handle)
-            if handle.isolation_level is SandboxIsolation.CONTAINER:
-                with self._stage("harness.artifact.publish_outputs", {"run.id": run_id}):
-                    await self._publish_remote_outputs(
-                        tenant_id=tenant_id,
-                        run=run,
-                        workspace=handle.path,
-                        baseline=output_baseline,
-                    )
+            with self._stage("harness.artifact.publish_outputs", {"run.id": run_id}):
+                await self._publish_workspace_outputs(
+                    tenant_id=tenant_id,
+                    run=run,
+                    workspace=handle.path,
+                    baseline=output_baseline,
+                    final_response=final_response_text,
+                )
             if self._workspaces is not None and workspace_policy.archive_on_complete:
                 with self._stage("harness.workspace.archive", {"run.id": run_id}):
                     snapshot = await self._workspaces.archive(
@@ -1056,6 +1190,14 @@ class RunOrchestrator:
                 return await self._move(latest, RunStatus.CANCELLED)
             if latest.status.is_terminal:
                 return latest
+            if self._observability is not None:
+                self._observability.annotate_current_io(
+                    output_value=final_response_text
+                )
+                self._observability.annotate_current_io(
+                    output_value=final_response_text,
+                    trace_level=True,
+                )
             return await self._move(latest, RunStatus.SUCCEEDED)
         except RuntimeExecutionTimeoutError:
             latest = await self._runs.get(tenant_id, run_id)

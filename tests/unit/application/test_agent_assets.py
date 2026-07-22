@@ -11,7 +11,6 @@ from harness.application.agent_assets import (
 from harness.core.manifest import (
     ManifestValidationError,
     SubagentSpec,
-    ToolSpec,
     load_manifest,
 )
 from harness.core.models import AgentVersion, AgentVersionStatus
@@ -55,24 +54,13 @@ async def test_stages_main_and_pinned_subagent_skills(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("unsupported", ["nested", "python"])
-async def test_pinned_subagent_rejects_nested_or_custom_capabilities(
-    unsupported: str,
-) -> None:
+async def test_pinned_subagent_rejects_nested_delegation() -> None:
     registry = InMemoryAgentRegistry()
     root = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     child = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
-    if unsupported == "nested":
-        child_spec = child.manifest.spec.model_copy(
-            update={"subagents": (SubagentSpec(ref="leaf@1.0.0"),)}
-        )
-    else:
-        child_spec = child.manifest.spec.model_copy(
-            update={
-                "tools": child.manifest.spec.tools
-                + (ToolSpec.model_validate({"python": "package:tool"}),)
-            }
-        )
+    child_spec = child.manifest.spec.model_copy(
+        update={"subagents": (SubagentSpec(ref="leaf@1.0.0"),)}
+    )
     child = child.model_copy(
         update={
             "manifest": child.manifest.model_copy(update={"spec": child_spec})
@@ -93,7 +81,7 @@ async def test_pinned_subagent_rejects_nested_or_custom_capabilities(
             )
         )
 
-    with pytest.raises(ManifestValidationError, match="nested|MCP/Python"):
+    with pytest.raises(ManifestValidationError, match="nested"):
         await resolve_published_agent_versions(
             registry,
             tenant_id="tenant-a",

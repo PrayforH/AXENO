@@ -21,7 +21,9 @@ from harness.api.dependencies import (
     require_identity,
     require_owned_run,
 )
+from harness.core.events import RunEvent
 from harness.core.models import ApprovalRequest, ApprovalStatus, Run
+from harness.runtime.input_redaction import redact_internal_agent_asset_events
 
 router = APIRouter(prefix="/agui", tags=["ag-ui"])
 
@@ -32,6 +34,27 @@ _TERMINAL_EVENT_TYPES = {
     "run.succeeded",
     "run.timed_out",
 }
+
+_RESPONSE_BOUNDARY_PREFIXES = ("approval.", "subagent.", "tool.")
+
+
+def _final_response_text(events: list[RunEvent]) -> str:
+    """Return only the answer emitted after the last auditable action.
+
+    Providers stream progress commentary and final prose through the same
+    message.delta channel. Activity renders the former in the execution
+    timeline; history must not concatenate it into the final answer again.
+    """
+
+    last_action_index = -1
+    for index, event in enumerate(events):
+        if event.type.startswith(_RESPONSE_BOUNDARY_PREFIXES):
+            last_action_index = index
+    return "".join(
+        str(event.payload.get("text", ""))
+        for index, event in enumerate(events)
+        if index > last_action_index and event.type == "message.delta"
+    )
 
 
 class AguiThreadSummary(BaseModel):
@@ -147,9 +170,14 @@ async def run_agui_agent(
     async def stream() -> AsyncIterator[str]:
         sequence = 0
         terminal_event_seen = False
+        protected_tool_call_ids: set[str] = set()
         while True:
             events = await container.observed_events.list_after(
                 identity.tenant_id, run.run_id, sequence
+            )
+            events = redact_internal_agent_asset_events(
+                events,
+                protected_tool_call_ids=protected_tool_call_ids,
             )
             for event in events:
                 projected = map_harness_event(event)
@@ -342,11 +370,8 @@ async def get_agui_thread_history(
         events = await container.observed_events.list_after(
             identity.tenant_id, run.run_id, 0
         )
-        response = "".join(
-            str(event.payload.get("text", ""))
-            for event in events
-            if event.type == "message.delta"
-        )
+        events = redact_internal_agent_asset_events(events)
+        response = _final_response_text(events)
         artifacts = await container.artifacts.list_for_run(
             identity.tenant_id, run.run_id
         )
@@ -514,6 +539,7 @@ async def stream_agui_events(
     events = await container.observed_events.list_after(
         identity.tenant_id, run_id, int(raw_id)
     )
+    events = redact_internal_agent_asset_events(events)
 
     async def stream() -> AsyncIterator[str]:
         for event in events:

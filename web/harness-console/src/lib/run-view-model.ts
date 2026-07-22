@@ -33,6 +33,7 @@ export interface RunToolNode {
   sequence: number;
   arguments?: Record<string, unknown>;
   resultSummary?: string;
+  resultPreview?: string;
 }
 
 export interface RunViewModel {
@@ -229,6 +230,10 @@ function toolNodes(items: readonly ActivityItem[]): RunToolNode[] {
           resultSummary:
             typeof item.metadata.result_summary === "string"
               ? item.metadata.result_summary
+              : undefined,
+          resultPreview:
+            typeof item.metadata.result_preview === "string"
+              ? item.metadata.result_preview
               : undefined,
         });
       }

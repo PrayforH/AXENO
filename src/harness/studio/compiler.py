@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import pprint
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +24,10 @@ from harness.core.manifest import (
     ToolDirectorySnapshot,
 )
 from harness.evals.suite import EvalSuite
+from harness.studio.bundle_format import (
+    STUDIO_BUNDLE_METADATA_FILENAME,
+    StudioBundleMetadata,
+)
 from harness.studio.models import (
     AgentDraft,
     CapabilityCatalog,
@@ -48,6 +54,22 @@ class CompiledAgentDraft:
     manifest_yaml: str
 
 
+_FUTURE_IMPORT = re.compile(r"(?m)^from __future__\s+import\s+[^\n]+\n?")
+
+
+def _python_tool_source(code: str, metadata: str) -> str:
+    """Insert generated metadata without invalidating module future imports."""
+    generated = (
+        "# Generated metadata is part of the editable Bundle tool contract.\n"
+        f"TOOL_SPEC = {metadata}\n\n"
+    )
+    matches = list(_FUTURE_IMPORT.finditer(code))
+    if not matches:
+        return f"{generated}{code.strip()}\n"
+    insertion = matches[-1].end()
+    return f"{code[:insertion]}\n{generated}{code[insertion:].strip()}\n"
+
+
 class AgentDraftCompiler:
     def __init__(
         self,
@@ -64,6 +86,10 @@ class AgentDraftCompiler:
         if spec.tool_exposure_mode == "on_demand" and "tool_search" not in required_capabilities:
             required_capabilities.append("tool_search")
         tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
+        tools.extend(
+            {"python": f"bundle:tools/{tool.name}.py"}
+            for tool in spec.python_tools
+        )
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
         manifest = AgentManifest.model_validate(
             {
@@ -76,6 +102,7 @@ class AgentDraftCompiler:
                         "domain": spec.domain,
                         "template": spec.template.value,
                         "display-name": spec.display_name,
+                        "description": spec.description,
                         "evaluation-enabled": str(spec.evaluation_enabled).lower(),
                     },
                 },
@@ -209,9 +236,13 @@ class AgentDraftCompiler:
             network = NetworkAccess.NONE
             network_summary = "未启用外部网络能力"
 
-        if "Bash" in spec.builtin_tools:
+        if "Bash" in spec.builtin_tools or spec.python_tools:
             risk = CapabilityRisk.HIGH
-            approval = "工作区文件写入自动允许；Bash 默认进入人工审批"
+            approval = (
+                "自定义算子在隔离 Sandbox 执行；高风险系统动作仍由策略拦截"
+                if spec.python_tools
+                else "工作区文件写入自动允许；Bash 默认进入人工审批"
+            )
         elif any(tool in spec.builtin_tools for tool in ("Write", "Edit", "Task")):
             risk = CapabilityRisk.MEDIUM
             approval = "工作区文件写入自动允许；委派受权限上限约束"
@@ -304,6 +335,24 @@ class AgentDraftCompiler:
                     )
                 )
         mcp_servers = {server.reference: server for server in self._catalog.mcp_servers}
+        if spec.python_tools and spec.tool_exposure_mode == "on_demand":
+            issues.append(
+                ValidationIssue(
+                    code="python_tool_on_demand_unsupported",
+                    message="自定义算子仅支持启动时加载",
+                    severity=ValidationSeverity.ERROR,
+                    path="pythonTools",
+                )
+            )
+        if spec.tool_exposure_mode == "on_demand" and not spec.mcp_servers:
+            issues.append(
+                ValidationIssue(
+                    code="tool_search_without_mcp",
+                    message="按需工具加载至少需要一个 MCP 工具源",
+                    severity=ValidationSeverity.ERROR,
+                    path="toolExposureMode",
+                )
+            )
         for reference in spec.mcp_servers:
             server = mcp_servers.get(reference)
             if server is None:
@@ -406,15 +455,6 @@ class AgentDraftCompiler:
             if (capability := mcp_by_reference.get(reference)) is not None
             and capability.preflight_required
         ]
-        if draft.spec.tool_exposure_mode == "on_demand" and not draft.spec.mcp_servers:
-            warnings.append(
-                ValidationIssue(
-                    code="tool_search_not_needed",
-                    message="当前没有 MCP 工具，按需加载不会减少工具上下文",
-                    severity=ValidationSeverity.WARNING,
-                    path="toolExposureMode",
-                )
-            )
         return tuple(warnings)
 
     def tool_directory(self, draft: AgentDraft) -> ToolDirectorySnapshot:
@@ -457,6 +497,20 @@ class AgentDraftCompiler:
                         resultTrust=result_trust,
                     )
                 )
+        for tool in draft.spec.python_tools:
+            reference = f"bundle:tools/{tool.name}.py"
+            entries.append(
+                ToolDirectoryEntry(
+                    name=(
+                        f"mcp__harness-python-{draft.spec.name}__{tool.name}"
+                    ),
+                    source="python",
+                    logicalReference=reference,
+                    description=tool.description,
+                    risk="high",
+                    resultTrust="safe",
+                )
+            )
         return ToolDirectorySnapshot.create(
             catalog_revision=self._catalog_revision,
             exposure_mode=draft.spec.tool_exposure_mode,
@@ -486,6 +540,21 @@ class AgentDraftCompiler:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(file.content, encoding="utf-8")
 
+        tools_root = root / "tools"
+        for tool in spec.python_tools:
+            tools_root.mkdir(parents=True, exist_ok=True)
+            metadata = pprint.pformat(
+                {
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                    "name": tool.name,
+                },
+                sort_dicts=True,
+                width=100,
+            )
+            source = _python_tool_source(tool.code, metadata)
+            (tools_root / f"{tool.name}.py").write_text(source, encoding="utf-8")
+
         eval_path = root / "evals" / "suite.yaml"
         eval_path.parent.mkdir(parents=True, exist_ok=True)
         suite = EvalSuite(
@@ -504,6 +573,21 @@ class AgentDraftCompiler:
         )
         (root / "README.md").write_text(
             f"# {spec.display_name}\n\n{spec.description}\n",
+            encoding="utf-8",
+        )
+        (root / STUDIO_BUNDLE_METADATA_FILENAME).write_text(
+            json.dumps(
+                StudioBundleMetadata(
+                    apiVersion="harness.studio/v1",
+                    kind="AgentDraftMetadata",
+                    description=spec.description,
+                    executionProfile=spec.execution_profile,
+                ).model_dump(mode="json", by_alias=True),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         (root / TOOL_DIRECTORY_FILENAME).write_text(

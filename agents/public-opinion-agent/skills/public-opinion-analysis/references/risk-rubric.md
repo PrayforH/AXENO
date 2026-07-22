@@ -1,19 +1,19 @@
-# Risk rubric
+# 风险分级
 
-## Level 0 — background
+## Level 0 — 背景噪声
 
-Isolated discussion with no verified material impact. Continue observation only when the topic is relevant.
+零散讨论，尚无经核验的实质影响。仅在主题与业务相关时继续观察。
 
-## Level 1 — emerging
+## Level 1 — 萌芽风险
 
-Multiple independent discussions or one credible report, but reach and business impact remain limited or unclear. Verify facts and define monitoring triggers.
+出现多个独立讨论或一个可信报道，但传播范围和业务影响仍有限或不清晰。核验事实并定义监测触发条件。
 
-## Level 2 — material
+## Level 2 — 实质风险
 
-Credible claims are spreading across independent communities or media, and there is plausible impact on customers, employees, operations, regulation or reputation. Assign an owner and prepare a factual response plan.
+可信主张在独立社群或媒体间传播，并可能影响客户、员工、运营、监管或声誉。建议指定负责人并准备基于事实的响应方案。
 
-## Level 3 — critical
+## Level 3 — 重大风险
 
-Verified severe harm, rapid cross-platform propagation, authoritative investigation, immediate safety risk or major operational disruption. Escalate to authorized incident leadership and legal/compliance functions.
+存在经核验的严重损害、快速跨平台传播、权威调查、即时安全风险或重大运营中断。建议升级至有权限的事件负责人及法务/合规岗位。
 
-Never select a level from tone alone. Report evidence strength, affected stakeholders, propagation characteristics, verified impact, uncertainty, and the signals that would move the assessment up or down.
+不得只按措辞激烈程度定级。至少说明：证据强度、受影响方、传播特征、已验证影响、不确定性，以及会使等级上调或下调的信号。热度和情感比例只有在数据源及采样方法支持时才可作为辅助信号。

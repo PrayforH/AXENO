@@ -16,6 +16,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import CreateRunRequest
 from harness.core.models import Run
+from harness.runtime.input_redaction import redact_internal_agent_asset_events
 
 router = APIRouter(tags=["runs"])
 
@@ -83,6 +84,7 @@ async def replay_events(
     events = await container.observed_events.list_after(
         identity.tenant_id, run_id, after_sequence
     )
+    events = redact_internal_agent_asset_events(events)
 
     async def stream() -> AsyncIterator[str]:
         for event in events:

@@ -132,15 +132,17 @@ describe("Codex-style activity UI", () => {
     ).toBe(false);
   });
 
-  it("summarizes model, tools, and subagents without raw event JSON", () => {
+  it("renders tools and subagents in one flat Codex transcript", () => {
     const html = renderToStaticMarkup(
       <ActivitySummary activity={runActivitySchema.parse(activity)} />,
     );
     expect(html).toContain("执行进度");
     expect(html).toContain("正在读取 docs/agent-production-platform-design.md");
-    expect(html).toContain('aria-label="思考与行动"');
-    expect(html).toContain("运行模型");
-    expect(html).toContain("claude-sonnet");
+    expect(html).toContain('aria-label="处理过程"');
+    expect(html).toContain("正在运行子任务 分析仓库");
+    expect(html).not.toContain("运行模型");
+    expect(html).not.toContain("claude-sonnet");
+    expect(html.match(/<details/g)).toHaveLength(1);
     expect(html).not.toContain("model.route.selected");
   });
 
@@ -240,11 +242,11 @@ describe("Codex-style activity UI", () => {
       />,
     );
     expect(html).toContain("PDF");
-    expect(html).toContain("预览");
+    expect(html).toContain("预览 report.pdf");
     expect(html).toContain("?preview=1");
-    expect(html).toContain("下载");
     expect(html).toContain("artifact-primary-link");
-    expect(html).toContain("打开 report.pdf");
+    expect(html).toContain("点击预览 report.pdf");
+    expect(html).not.toContain("artifact-actions");
   });
 
   it("renders actionable controls for a pending inline approval", () => {

@@ -17,6 +17,20 @@ const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
 );
+const skillConversationBuilder = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/skill-conversation-builder.tsx",
+  ),
+  "utf8",
+);
+const skillConversationStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/skill-conversation-builder.module.css",
+  ),
+  "utf8",
+);
 const sidebar = readFileSync(
   join(process.cwd(), "src/components/agent-studio/studio-sidebar.tsx"),
   "utf8",
@@ -58,6 +72,18 @@ const triggerStyles = readFileSync(
   ),
   "utf8",
 );
+const a2aPage = readFileSync(
+  join(process.cwd(), "src/app/studio/agents/[agentName]/a2a/page.tsx"),
+  "utf8",
+);
+const a2aWorkspace = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-a2a-workspace.tsx",
+  ),
+  "utf8",
+);
+const nextConfig = readFileSync(join(process.cwd(), "next.config.ts"), "utf8");
 const environmentPolicyControlPlane = readFileSync(
   join(
     process.cwd(),
@@ -106,6 +132,25 @@ describe("Agent Studio management page", () => {
     expect(workspaceNavigation).toContain('href: "/studio/agents"');
     expect(page).toContain("AuthProvider");
     expect(workbench).toContain('data-studio-integration="api"');
+  });
+
+  it("separates A2A protocol management from generic trigger creation", () => {
+    expect(a2aPage).toContain("AgentA2AWorkspace");
+    expect(a2aPage).toContain("AuthProvider");
+    expect(a2aWorkspace).toContain('kindFilter="a2a"');
+    expect(a2aWorkspace).toContain("Agent Card + message:send");
+    expect(triggerControlPlane).toContain("打开 A2A 控制台");
+    expect(triggerControlPlane).toContain("/message:send");
+    expect(triggerControlPlane).toContain("/agent-card.json");
+    expect(triggerControlPlane).toContain('item.kind !== "a2a"');
+    expect(triggerControlPlane).not.toContain('<option value="a2a">');
+    expect(triggerStyles).toMatch(
+      /\.triggerList \.actions\s*\{[^}]*grid-column:\s*1 \/ -1;/s,
+    );
+  });
+
+  it("hides the Next.js development badge from the product navigation", () => {
+    expect(nextConfig).toContain("devIndicators: false");
   });
 
   it("shares a persistent task-style collapsible control-plane rail", () => {
@@ -171,16 +216,29 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".promptEditorFooter");
   });
 
-  it("shows a Lead topology with editable, version-pinned Sub Agent roles", () => {
+  it("opens a review-before-apply model conversation for Skill authoring", () => {
+    expect(workbench).toContain("SkillConversationBuilder");
+    expect(workbench).toContain("对话创建");
+    expect(workbench).toContain("aria-expanded={skillConversationOpen}");
+    expect(skillConversationBuilder).toContain('aria-label="Skill 对话共创"');
+    expect(skillConversationBuilder).toContain("continueSkillConversation");
+    expect(skillConversationBuilder).toContain("currentSkill: proposal ?? currentSkill");
+    expect(skillConversationBuilder).toContain("应用到当前 Skill");
+    expect(skillConversationBuilder).toContain("生成结果需确认后才会写入当前草稿");
+    expect(skillConversationStyles).toContain(".workspaceWithProposal");
+    expect(skillConversationStyles).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("shows a Lead topology with editable drafts and version-pinned releases", () => {
     expect(workbench).toContain('aria-label="多智能体协同拓扑"');
     expect(workbench).toContain("Lead 是唯一面向用户的主线");
     expect(workbench).toContain("value={contract.collaborationLabel}");
-    expect(workbench).toContain("固定版本引用");
+    expect(workbench).toContain("草稿可编辑；发布时固定版本");
     expect(workbench).toContain("允许后台并行");
     expect(workbench).toContain("同一通用 Agent 版本可绑定多个职责");
-    expect(workbench).toContain("从已发布目录选择");
+    expect(workbench).toContain("打开并编辑");
     expect(workbench).toContain("协同运行摘要");
-    expect(workbench).toContain("publishedSubagents");
+    expect(workbench).toContain("subagentCandidates");
     expect(studioClient).toContain("publishedVersion");
     expect(styles).toContain(".orchestrationGraph");
     expect(styles).toContain(".subagentTopology");
@@ -203,9 +261,10 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain('aria-label="工具加载方式"');
     expect(workbench).toContain("启动时加载");
     expect(workbench).toContain("按需发现");
-    expect(workbench).toContain("MCP Schema 在搜索命中后进入上下文");
+    expect(workbench).toContain("个 MCP Schema 命中后才进入上下文");
     expect(workbench).toContain("当前路由未审核 Tool Search，按需模式已锁定");
-    expect(workbench).toContain('disabled={!toolSearchCompatible}');
+    expect(workbench).toContain('disabled={!toolSearchEligible}');
+    expect(workbench).toContain("达到 10 个时收益更明显");
     expect(studioConfig).toContain('toolExposureMode: "eager"');
     expect(studioClient).toContain("toolExposureMode");
     expect(styles).toContain(".toolExposureControl");

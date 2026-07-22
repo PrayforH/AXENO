@@ -24,6 +24,7 @@ from harness.application.approvals import ApprovalService
 from harness.application.events import EventService
 from harness.core.models import ApprovalStatus
 from harness.observability.provider import Observability
+from harness.policy.bash_safety import sandboxed_bash_is_low_risk
 from harness.policy.models import (
     ContextTrust,
     PolicyContext,
@@ -39,7 +40,9 @@ from harness.quota.service import QuotaService
 from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
 from harness.runtime.base import RuntimeContext
 from harness.runtime.input_redaction import (
+    INTERNAL_AGENT_ASSET_MARKER,
     STAGED_INPUT_READ_MARKER,
+    internal_agent_asset_access,
     staged_input_paths,
     staged_read_path,
 )
@@ -100,15 +103,23 @@ def _approval_risk(tool_name: str) -> str:
     return "low"
 
 
-def _hook_output(decision: str, reason: str) -> SyncHookJSONOutput:
+def _hook_output(
+    decision: str,
+    reason: str,
+    *,
+    updated_input: dict[str, Any] | None = None,
+) -> SyncHookJSONOutput:
+    specific: dict[str, Any] = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": reason,
+    }
+    if updated_input is not None:
+        specific["updatedInput"] = updated_input
     return cast(
         SyncHookJSONOutput,
         {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": decision,
-                "permissionDecisionReason": reason,
-            }
+            "hookSpecificOutput": specific,
         },
     )
 
@@ -161,6 +172,80 @@ class _RunFileCapabilities:
     def target(self, arguments: dict[str, Any]) -> Path | None:
         value = arguments.get("file_path", arguments.get("path"))
         return self._normalize(value) if isinstance(value, str) else None
+
+    def normalize_skill_read(
+        self,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Map stale HOME/temp Skill references to one immutable workspace file."""
+
+        value = arguments.get("file_path")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        pure = PurePosixPath(value)
+        parts = pure.parts
+        current = self._normalize(value)
+        if current is not None and current.is_file():
+            if pure.is_absolute() and len(parts) >= 2 and parts[1] == "workspace":
+                updated = dict(arguments)
+                updated["file_path"] = str(current)
+                return updated
+            return None
+
+        if pure.is_absolute() and "inputs" in parts:
+            input_index = parts.index("inputs")
+            input_candidate = self._workspace.joinpath(*parts[input_index:])
+            try:
+                resolved_input = input_candidate.resolve(strict=True)
+            except (FileNotFoundError, OSError, RuntimeError):
+                resolved_input = None
+            if (
+                resolved_input is not None
+                and resolved_input.is_relative_to(self._workspace)
+                and resolved_input.is_file()
+            ):
+                updated = dict(arguments)
+                updated["file_path"] = str(resolved_input)
+                return updated
+
+        skills_root = self._workspace / ".claude" / "skills"
+        relative: PurePosixPath | None = None
+        for index in range(len(parts) - 2):
+            if parts[index : index + 2] == (".claude", "skills"):
+                relative = PurePosixPath(*parts[index:])
+                break
+
+        candidates: list[Path] = []
+        if relative is not None:
+            candidates.append(self._workspace.joinpath(*relative.parts))
+        else:
+            try:
+                reference_index = parts.index("references")
+            except ValueError:
+                reference_index = -1
+            reference_parts = parts[reference_index + 1 :] if reference_index >= 0 else ()
+            if reference_parts and ".." not in reference_parts:
+                for reference_root in skills_root.glob("*/references"):
+                    if reference_root.is_dir():
+                        candidates.append(reference_root.joinpath(*reference_parts))
+
+        matches: list[Path] = []
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=False)
+            except (OSError, RuntimeError):
+                continue
+            if (
+                resolved.is_relative_to(skills_root)
+                and resolved.is_file()
+                and resolved not in matches
+            ):
+                matches.append(resolved)
+        if len(matches) != 1:
+            return None
+        updated = dict(arguments)
+        updated["file_path"] = matches[0].relative_to(self._workspace).as_posix()
+        return updated
 
     def is_generated(self, target: Path) -> bool:
         return target in self._generated
@@ -260,8 +345,15 @@ class SdkToolGate:
                 return
             started_at_ns, tool_name, arguments, selected_policy_id = state
             ended_at_ns = time.time_ns()
+            output_value: object = (
+                {"error": str(hook_input.get("error", error_type or "tool_failed"))}
+                if status != "succeeded"
+                else {"status": status}
+                if tool_name == "Read"
+                else hook_input.get("tool_response", {"status": status})
+            )
             self._observability.record_completed_span(
-                "harness.tool.run",
+                tool_name,
                 started_at_ns=started_at_ns,
                 ended_at_ns=ended_at_ns,
                 attributes={
@@ -275,9 +367,19 @@ class SdkToolGate:
                     "harness.policy.profile": selected_policy_id,
                     "harness.sandbox.provider": context.sandbox_provider,
                     "harness.sandbox.isolation": context.sandbox_isolation.value,
+                    "langfuse.observation.type": "tool",
+                    "langfuse.observation.level": (
+                        "ERROR" if status != "succeeded" else "DEFAULT"
+                    ),
+                    "langfuse.observation.status_message": status,
+                    "langfuse.observation.metadata.call_id": hook_input["tool_use_id"],
+                    "langfuse.observation.metadata.policy": selected_policy_id,
+                    "langfuse.observation.metadata.sandbox": (
+                        f"{context.sandbox_provider}:{context.sandbox_isolation.value}"
+                    ),
                 },
                 input_value=arguments,
-                output_value={"status": status},
+                output_value=output_value,
                 error_type=error_type,
             )
 
@@ -348,6 +450,7 @@ class SdkToolGate:
                 policy_id=selected_policy_id,
                 file_capabilities=file_capabilities,
                 allowed_subagent_aliases=frozenset(subagent_policies),
+                declared_tools=frozenset(declared_result_trust),
                 context_trust=current_context_trust,
             )
             specific = cast(dict[str, Any], output).get("hookSpecificOutput", {})
@@ -484,12 +587,23 @@ class SdkToolGate:
         policy_id: str,
         file_capabilities: _RunFileCapabilities,
         allowed_subagent_aliases: frozenset[str] = frozenset(),
+        declared_tools: frozenset[str] = frozenset(),
         context_trust: ContextTrust = ContextTrust.SAFE,
     ) -> SyncHookJSONOutput:
         raw_tool_name = hook_input["tool_name"]
         tool_name = canonical_tool_name(raw_tool_name)
         tool_call_id = hook_input["tool_use_id"]
         arguments = hook_input["tool_input"]
+        updated_arguments = (
+            file_capabilities.normalize_skill_read(arguments)
+            if tool_name == "Read"
+            else None
+        )
+        if tool_name == "Read" and arguments.get("pages") == "":
+            updated_arguments = dict(updated_arguments or arguments)
+            updated_arguments.pop("pages", None)
+        if updated_arguments is not None:
+            arguments = updated_arguments
         request_payload: dict[str, Any] = {
             "name": tool_name,
             "tool_call_id": tool_call_id,
@@ -513,6 +627,8 @@ class SdkToolGate:
             safe_arguments["file_path"] = relative_input_path
             request_payload["arguments"] = safe_arguments
             request_payload[STAGED_INPUT_READ_MARKER] = True
+        if internal_agent_asset_access(request_payload):
+            request_payload[INTERNAL_AGENT_ASSET_MARKER] = True
         audit_arguments = request_payload.get("arguments")
         if isinstance(audit_arguments, dict):
             request_payload["arguments"] = redact_tool_arguments(
@@ -569,6 +685,31 @@ class SdkToolGate:
                 )
             )
         )
+        if (
+            tool_name == "Bash"
+            and result.decision is PolicyDecision.ASK
+            and sandboxed_bash_is_low_risk(
+                str(arguments.get("command", "")),
+                workspace=str(context.workspace),
+                remote_workspace=context.remote_workspace,
+            )
+        ):
+            result = PolicyResult(
+                decision=PolicyDecision.ALLOW,
+                rule_name="sandbox-low-risk-bash",
+                reason="matched sandbox low-risk Bash policy",
+            )
+        if (
+            result.decision is PolicyDecision.DENY
+            and raw_tool_name.startswith("mcp__harness-python-")
+            and raw_tool_name in declared_tools
+            and context.sandbox_command_executor is not None
+        ):
+            result = PolicyResult(
+                decision=PolicyDecision.ALLOW,
+                rule_name="declared-sandbox-python-tool",
+                reason="matched declared Bundle Python tool in isolated Sandbox",
+            )
 
         if result.decision is PolicyDecision.DENY:
             await self._append_denied(context, tool_call_id, result.reason)
@@ -641,7 +782,11 @@ class SdkToolGate:
             event_type="tool.allowed",
             payload={"tool_call_id": tool_call_id},
         )
-        return _hook_output("allow", result.reason)
+        return _hook_output(
+            "allow",
+            result.reason,
+            updated_input=updated_arguments,
+        )
 
     async def _append_denied(
         self,

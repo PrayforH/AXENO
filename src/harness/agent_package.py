@@ -190,8 +190,6 @@ def check_agent_package(
         and "tool_search" not in spec.model.required_capabilities
     ):
         issues.append("on-demand tool exposure requires the tool_search capability")
-    if spec.limits.max_budget_usd is None:
-        issues.append("limits.maxBudgetUsd is required")
     if not spec.workspace.archive_on_complete:
         issues.append("workspace.archiveOnComplete must be enabled")
     if spec.permissions.policy not in default_policy_profiles().ids:

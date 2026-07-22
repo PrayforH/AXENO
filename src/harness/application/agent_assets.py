@@ -6,6 +6,7 @@ from harness.core.errors import ConflictError
 from harness.core.manifest import (
     AgentManifestSnapshot,
     ManifestValidationError,
+    materialize_python_tool_snapshot_set,
     materialize_skill_snapshot_set,
 )
 from harness.core.models import AgentVersion, AgentVersionStatus
@@ -46,12 +47,6 @@ async def resolve_published_agent_versions(
             raise ManifestValidationError(
                 f"nested subagent delegation is not supported: {runtime_name}"
             )
-        if any(
-            tool.builtin is None for tool in child_snapshot.manifest.spec.tools
-        ):
-            raise ManifestValidationError(
-                f"subagent MCP/Python tools are not supported: {runtime_name}"
-            )
         children[runtime_name] = child
     return root, children
 
@@ -74,4 +69,5 @@ async def stage_published_agent_assets(
     snapshots = [snapshot]
     for child in children.values():
         snapshots.append(AgentManifestSnapshot.model_validate(child.snapshot))
+    materialize_python_tool_snapshot_set(snapshots, workspace)
     return materialize_skill_snapshot_set(snapshots, workspace)

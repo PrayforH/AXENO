@@ -1,11 +1,16 @@
 import json
 from datetime import UTC, datetime
 from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 
 import yaml
 
+from harness.agent_package import extract_agent_bundle, pack_agent_package
 from harness.core.manifest import ToolDirectorySnapshot
+from harness.studio.bundle_format import StudioBundleMetadata
+from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import AgentDraftCompiler
 from harness.studio.factory import create_draft_spec
@@ -14,6 +19,7 @@ from harness.studio.models import (
     AgentDraftSpec,
     AgentTemplate,
     CapabilityRisk,
+    DraftPythonTool,
     NetworkAccess,
     ValidationSeverity,
 )
@@ -55,6 +61,7 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         assert {
             "agent.yaml",
             "bundle.json",
+            "studio.json",
             "prompts/system.md",
             "skills/invoice-reviewer-core/SKILL.md",
             "evals/suite.yaml",
@@ -62,15 +69,242 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         }.issubset(names)
         manifest = bundle.read("agent.yaml").decode()
         directory = ToolDirectorySnapshot.model_validate_json(bundle.read("tool-directory.json"))
+        studio_metadata = StudioBundleMetadata.model_validate_json(bundle.read("studio.json"))
     assert "route: new-api-default" in manifest
     assert "mode: isolated" in manifest
     assert directory.exposure_mode == "eager"
     assert directory.catalog_revision == 1
+    assert studio_metadata.description == draft().spec.description
+    assert studio_metadata.execution_profile == draft().spec.execution_profile
     assert {entry.name for entry in directory.entries} == {
         "Read",
         "Glob",
         "Grep",
     }
+
+
+def test_studio_bundle_round_trips_into_an_editable_spec() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    source = draft()
+    compiled = compiler.compile(source)
+
+    imported = parse_agent_bundle(compiled.bundle)
+    rebuilt = source.model_copy(update={"spec": imported.spec})
+    rebuilt_bundle = compiler.compile(rebuilt)
+
+    assert imported.lossless is True
+    assert imported.warnings == ()
+    assert imported.spec.name == source.spec.name
+    assert imported.spec.description == source.spec.description
+    assert imported.spec.execution_profile == source.spec.execution_profile
+    assert imported.spec.system_prompt == source.spec.system_prompt
+    assert (
+        imported.spec.skills[0].instructions.strip() == source.spec.skills[0].instructions.strip()
+    )
+    assert rebuilt_bundle.report.package_hash == compiled.report.package_hash
+
+
+def test_bundle_python_tool_round_trips_with_source_and_directory_contract() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    source = draft()
+    python_tool = DraftPythonTool(
+        name="normalize_score",
+        description="Normalize a score inside the isolated sandbox.",
+        inputSchema={
+            "type": "object",
+            "properties": {"value": {"type": "number"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        code=(
+            "def run(arguments):\n"
+            "    value = float(arguments['value'])\n"
+            "    return {'normalized': max(0, min(1, value))}\n"
+        ),
+    )
+    source = source.model_copy(
+        update={
+            "spec": source.spec.model_copy(
+                update={"python_tools": (python_tool,)}
+            )
+        }
+    )
+
+    compiled = compiler.compile(source)
+    imported = parse_agent_bundle(compiled.bundle)
+    rebuilt = source.model_copy(update={"spec": imported.spec})
+    rebuilt_bundle = compiler.compile(rebuilt)
+
+    assert imported.spec.python_tools == (python_tool,)
+    assert rebuilt_bundle.report.package_hash == compiled.report.package_hash
+    with ZipFile(BytesIO(compiled.bundle)) as bundle:
+        assert "tools/normalize_score.py" in bundle.namelist()
+        directory = ToolDirectorySnapshot.model_validate_json(
+            bundle.read("tool-directory.json")
+        )
+    python_entry = next(entry for entry in directory.entries if entry.source == "python")
+    assert python_entry.name == (
+        "mcp__harness-python-invoice-reviewer__normalize_score"
+    )
+    assert python_entry.logical_reference == "bundle:tools/normalize_score.py"
+
+
+def test_bundle_python_tool_keeps_future_import_before_generated_metadata() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    source = draft()
+    python_tool = DraftPythonTool(
+        name="future_safe",
+        description="Exercise a module future import.",
+        inputSchema={"type": "object", "properties": {}},
+        code=(
+            '"""Imported operator."""\n\n'
+            "from __future__ import annotations\n\n"
+            "def run(arguments):\n"
+            "    return {'ok': True}\n"
+        ),
+    )
+    source = source.model_copy(
+        update={"spec": source.spec.model_copy(update={"python_tools": (python_tool,)})}
+    )
+
+    compiled = compiler.compile(source)
+    with ZipFile(BytesIO(compiled.bundle)) as bundle:
+        generated = bundle.read("tools/future_safe.py").decode()
+
+    compile(generated, "tools/future_safe.py", "exec")
+    assert generated.index("from __future__ import annotations") < generated.index("TOOL_SPEC")
+
+
+def test_legacy_bundle_import_is_compatible_but_not_marked_lossless() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    compiled = compiler.compile(draft())
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest, _content_hash, _package_hash = extract_agent_bundle(
+            compiled.bundle,
+            destination=root / "source",
+        )
+        (manifest.parent / "studio.json").unlink()
+        archive, _report = pack_agent_package(
+            manifest,
+            output_directory=root / "dist",
+        )
+        imported = parse_agent_bundle(archive.read_bytes())
+
+    assert imported.lossless is False
+    assert imported.spec.description == draft().spec.description
+    assert imported.spec.execution_profile == "isolated-default"
+    assert any("旧 Bundle 不含 studio.json" in warning for warning in imported.warnings)
+
+
+def test_nexau_export_imports_python_bindings_skills_and_unlimited_runtime() -> None:
+    archive = BytesIO()
+    with ZipFile(archive, "w") as bundle:
+        bundle.writestr(
+            "agent.yaml",
+            yaml.safe_dump(
+                {
+                    "type": "agent",
+                    "name": "image_detector",
+                    "description": "图像检测智能体",
+                    "system_prompt": "./systemprompt.md",
+                    "max_iterations": 300,
+                    "max_context_tokens": 128000,
+                    "llm_config": {"model": "${env.LLM_MODEL}"},
+                    "tools": [
+                        {
+                            "name": "read_visual_file",
+                            "binding": "nexau.archs.tool.builtin.file_tools:read_visual_file",
+                        },
+                        {
+                            "name": "read_file",
+                            "binding": "nexau.archs.tool.builtin.file_tools:read_file",
+                        },
+                        {
+                            "name": "score_detections",
+                            "yaml_path": "tools/score.tool.yaml",
+                            "binding": "custom_tools.detection:score_detections",
+                        },
+                    ],
+                    "skills": ["./skills/grid-system", "./skills/检测规则"],
+                },
+                allow_unicode=True,
+            ),
+        )
+        bundle.writestr("systemprompt.md", "# Mission\n\nDo the work.\n")
+        bundle.writestr(
+            "tools/score.tool.yaml",
+            yaml.safe_dump({
+                "type": "tool",
+                "name": "score_detections",
+                "description": "Score detections.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"value": {"type": "number"}},
+                    "required": ["value"],
+                },
+            }),
+        )
+        bundle.writestr(
+            "custom_tools/detection.py",
+            "def score_detections(value):\n    return {'score': value}\n",
+        )
+        bundle.writestr(
+            "skills/grid-system/SKILL.md",
+            "---\nname: 网格系统\ndescription: Grid workflow.\n---\n\n# Grid\n\nUse a grid.\n",
+        )
+        bundle.writestr(
+            "skills/grid-system/scripts/grid.py",
+            "output = '/tmp/detection_output/grid.jpg'\n",
+        )
+        bundle.writestr(
+            "skills/检测规则/SKILL.md",
+            "---\nname: 检测规则\ndescription: Detection rules.\n---\n\n# Rules\n\nApply rules.\n",
+        )
+
+    imported = parse_agent_bundle(archive.getvalue())
+
+    assert imported.lossless is False
+    assert imported.spec.builtin_tools == ("Read",)
+    assert imported.spec.model.route_id == "minimax-m3"
+    assert imported.spec.model.model == "MiniMax-M3"
+    assert "vision" in imported.spec.model.required_capabilities
+    assert [item.name for item in imported.spec.python_tools] == ["score_detections"]
+    assert "def run(arguments)" in imported.spec.python_tools[0].code
+    assert imported.spec.skills[0].name == "grid-system"
+    assert imported.spec.skills[0].files[0].path == "scripts/grid.py"
+    assert "outputs/detection_output/grid.jpg" in imported.spec.skills[0].files[0].content
+    assert imported.spec.skills[1].name.startswith("imported-skill-")
+    assert imported.spec.limits.max_turns is None
+    assert imported.spec.limits.max_model_tokens is None
+    assert imported.spec.limits.max_subagent_usage_units is None
+    assert any("不设硬上限" in warning for warning in imported.warnings)
+
+
+def test_studio_bundle_rejects_metadata_that_disagrees_with_readme() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    compiled = compiler.compile(draft())
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest, _content_hash, _package_hash = extract_agent_bundle(
+            compiled.bundle,
+            destination=root / "source",
+        )
+        (manifest.parent / "README.md").write_text(
+            "# 被篡改的说明\n\n内容不一致。\n",
+            encoding="utf-8",
+        )
+        archive, _report = pack_agent_package(
+            manifest,
+            output_directory=root / "dist",
+        )
+
+        try:
+            parse_agent_bundle(archive.read_bytes())
+        except AgentBundleImportError as error:
+            assert "README.md" in str(error)
+        else:
+            raise AssertionError("Expected inconsistent Studio metadata to be rejected")
 
 
 def test_missing_eval_coverage_has_a_stable_actionable_issue() -> None:
@@ -93,9 +327,7 @@ def test_missing_eval_coverage_has_a_stable_actionable_issue() -> None:
     validation = compiler.validate(without_ambiguous)
 
     issue = next(
-        item
-        for item in validation.issues
-        if item.code == "evaluation_coverage_ambiguous_missing"
+        item for item in validation.issues if item.code == "evaluation_coverage_ambiguous_missing"
     )
     assert validation.ready is False
     assert issue.path == "evaluationCases"

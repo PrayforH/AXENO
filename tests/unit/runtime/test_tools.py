@@ -70,7 +70,10 @@ async def test_wraps_python_sdk_tools_in_one_in_process_server() -> None:
     server = cast(McpSdkServerConfig, resolved.mcp_servers["harness-python"])
     assert server["type"] == "sdk"
     assert server["name"] == "harness-python"
-    assert resolved.allowed_tools == ()
+    assert resolved.allowed_tools == (
+        "mcp__harness-python__lookup_customer",
+        "mcp__harness-python__summarize_account",
+    )
 
 
 @pytest.mark.asyncio

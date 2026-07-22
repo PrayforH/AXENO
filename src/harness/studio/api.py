@@ -11,6 +11,10 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 
+from harness.agent_package import (
+    MAX_AGENT_BUNDLE_UPLOAD_BYTES,
+    AgentBundleValidationError,
+)
 from harness.api.dependencies import (
     ApiContainer,
     Identity,
@@ -55,6 +59,7 @@ from harness.quota.models import (
 )
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
+from harness.studio.bundle_import import AgentBundleImportError
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
 from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
@@ -67,6 +72,7 @@ from harness.studio.models import (
     CatalogMutationResult,
     CreateAgentDraftRequest,
     DraftValidationResult,
+    ImportedAgentBundle,
     McpDiscoveryRequest,
     McpDiscoveryResult,
     PublishAgentDraftRequest,
@@ -83,6 +89,13 @@ from harness.studio.service import (
     AgentStudioService,
     StudioPublicationConflictError,
     StudioPublisherNotConfiguredError,
+)
+from harness.studio.skill_builder import (
+    SkillConversationReply,
+    SkillConversationRequest,
+    SkillConversationService,
+    SkillConversationUnavailableError,
+    SkillConversationUpstreamError,
 )
 
 
@@ -148,6 +161,20 @@ def get_studio_service(request: Request) -> AgentStudioService:
             detail={
                 "code": "studio_not_configured",
                 "message": "Agent Studio control plane is not configured",
+            },
+        )
+    return service
+
+
+def get_skill_conversation_service(request: Request) -> SkillConversationService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "skill_conversation", None)
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "skill_conversation_not_configured",
+                "message": "当前环境未连接真实模型，无法开始 Skill 对话创建",
             },
         )
     return service
@@ -831,6 +858,29 @@ async def list_drafts(
     return await service.list(actor.tenant_id)
 
 
+@router.post("/skills/conversation", response_model=SkillConversationReply)
+async def continue_skill_conversation(
+    body: SkillConversationRequest,
+    _actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[
+        SkillConversationService,
+        Depends(get_skill_conversation_service),
+    ],
+) -> SkillConversationReply:
+    try:
+        return await service.respond(body)
+    except SkillConversationUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "skill_model_route_unavailable", "message": str(error)},
+        ) from error
+    except SkillConversationUpstreamError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "skill_model_failed", "message": str(error)},
+        ) from error
+
+
 @router.post(
     "/previews",
     response_model=PreviewDeployment,
@@ -940,6 +990,76 @@ async def create_draft(
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
+
+
+@router.post(
+    "/drafts/import",
+    response_model=ImportedAgentBundle,
+    status_code=status.HTTP_201_CREATED,
+)
+async def import_draft_bundle(
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> ImportedAgentBundle:
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/zip":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "bundle_import_media_type_invalid",
+                "message": "Agent Bundle 导入必须使用 Content-Type application/zip",
+            },
+        )
+    raw_length = request.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            content_length = int(raw_length)
+        except ValueError:
+            content_length = -1
+        if content_length < 0 or content_length > MAX_AGENT_BUNDLE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={
+                    "code": "bundle_import_too_large",
+                    "message": (
+                        f"Agent Bundle 超过最大上传大小 {MAX_AGENT_BUNDLE_UPLOAD_BYTES} bytes"
+                    ),
+                },
+            )
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_AGENT_BUNDLE_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={
+                    "code": "bundle_import_too_large",
+                    "message": (
+                        f"Agent Bundle 超过最大上传大小 {MAX_AGENT_BUNDLE_UPLOAD_BYTES} bytes"
+                    ),
+                },
+            )
+    try:
+        return await service.import_bundle(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            content=bytes(content),
+        )
+    except (AgentBundleValidationError, AgentBundleImportError) as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "bundle_import_invalid", "message": str(error)},
+        ) from error
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "bundle_import_incompatible",
+                "message": str(error),
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
+            },
+        ) from error
 
 
 @router.get("/drafts/{draft_id}", response_model=AgentDraft)

@@ -53,6 +53,18 @@
   font: inherit;
 }
 
+.studioShell button:not(:disabled),
+.studioShell a[href],
+.studioShell summary,
+.studioShell label:has(> input[type="checkbox"]) {
+  cursor: pointer;
+}
+
+.studioShell button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .studioShell button,
 .studioShell a,
 .studioShell input,
@@ -2148,6 +2160,28 @@
   white-space: nowrap;
 }
 
+.catalogBinding > button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 7px;
+  color: var(--studio-ink);
+  background: var(--studio-panel);
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.catalogBinding > button:hover {
+  border-color: var(--studio-violet);
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+}
+
+.catalogBinding > button:active {
+  transform: translateY(1px);
+}
+
 .backgroundMode {
   position: relative;
   margin-top: 14px;
@@ -2258,6 +2292,11 @@
   border-radius: 8px;
   cursor: pointer;
   font-size: 10px;
+}
+
+.skillHeader button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .skillFiles {

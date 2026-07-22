@@ -153,6 +153,10 @@ from harness.studio.repositories import (
     InMemoryAgentDraftRepository,
 )
 from harness.studio.service import AgentStudioService
+from harness.studio.skill_builder import (
+    AnthropicCompatibleSkillConversationService,
+    SkillConversationService,
+)
 from harness.triggers.repositories import InMemoryAgentTriggerRepository
 from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator
@@ -224,6 +228,7 @@ class ApiContainer:
     worker: RunOrchestrator
     agui: AguiRunService
     auto_execute: bool
+    skill_conversation: SkillConversationService | None = None
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     close: Callable[[], Awaitable[None]] | None = None
 
@@ -417,6 +422,7 @@ def build_memory_container(
         InMemoryAgentTriggerRepository(),
         sessions=session_service,
         runs=run_service,
+        registry=registry,
         audit=audit,
         clock=clock,
         id_generator=id_generator,
@@ -506,6 +512,7 @@ def build_memory_container(
         quotas=quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
+    trigger_service.configure_deployment_resolver(deployment_service.resolve)
     deployment_controller = DeploymentController(
         environments=environment_repository,
         deployments=deployment_repository,
@@ -683,6 +690,7 @@ def build_memory_container(
             preflight_sandbox,
             provider_name=resolved_settings.sandbox_provider,
         )
+    skill_conversation: SkillConversationService | None = None
     if resolved_settings.runtime == "fake":
         runtime: AgentRuntime = FakeRuntime()
         model_probe = FakeModelPreflightProbe()
@@ -690,6 +698,7 @@ def build_memory_container(
     else:
         credential_provider = mcp_credentials
         gateway = load_cc_switch_claude_config(resolved_settings.cc_switch_settings_path)
+        skill_conversation = AnthropicCompatibleSkillConversationService((gateway,))
         tool_resolver = default_tool_resolver(
             credential_provider,
             catalogs=capability_catalogs,
@@ -869,6 +878,7 @@ def build_memory_container(
         worker=worker,
         agui=agui,
         auto_execute=auto_execute,
+        skill_conversation=skill_conversation,
         sandbox_maintenance=sandbox_maintenance,
     )
 

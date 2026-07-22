@@ -32,7 +32,201 @@ const noisyEventTypes = new Set([
   "subagent.progress",
   "subagent.updated",
   "runtime.system",
+  "message.start",
+  "message.completed",
 ]);
+
+interface TraceEntry {
+  id: string;
+  kind: ActivityItem["kind"];
+  status: string;
+  title: string;
+  summary?: string;
+  sequence: number;
+  timestamp: string;
+  durationMs?: number;
+  input?: string;
+  output?: string;
+  artifact?: {
+    id: string;
+    name: string;
+    mediaType?: string;
+    sizeBytes?: number;
+  };
+}
+
+function traceDuration(start: string, end: string) {
+  const duration = Date.parse(end) - Date.parse(start);
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
+}
+
+function traceDurationLabel(durationMs?: number) {
+  if (durationMs === undefined) return undefined;
+  if (durationMs < 1_000) return `${durationMs}ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
+}
+
+function traceToolTitle(name: string, argumentsValue: Record<string, unknown>) {
+  const description = argumentsValue.description;
+  if (typeof description === "string" && description.trim()) return description.trim();
+  const labels: Record<string, string> = {
+    Bash: "运行命令",
+    Glob: "查找文件",
+    Grep: "搜索内容",
+    Read: "读取文件",
+    Write: "写入文件",
+    Edit: "编辑文件",
+    Task: "委派子任务",
+    Agent: "委派子任务",
+  };
+  return labels[name] ?? `调用 ${name}`;
+}
+
+function traceToolInput(name: string, argumentsValue: Record<string, unknown>) {
+  if (name === "Bash" && typeof argumentsValue.command === "string") {
+    return argumentsValue.command;
+  }
+  return JSON.stringify(argumentsValue, null, 2);
+}
+
+/** Build a compact audit trace while keeping each tool input and result inspectable. */
+export function traceActivityEntries(items: readonly ActivityItem[]): TraceEntry[] {
+  const results = new Map<string, ActivityItem>();
+  const approvals = new Map<string, ActivityItem>();
+  const messageGroups = new Map<string, TraceEntry>();
+
+  for (const item of items) {
+    const toolCallId = item.metadata.tool_call_id;
+    if (typeof toolCallId !== "string") continue;
+    if (item.event_type === "tool.result" || item.event_type === "tool.allowed") {
+      results.set(toolCallId, item);
+    } else if (item.event_type === "approval.requested") {
+      approvals.set(toolCallId, item);
+    }
+  }
+
+  const entries: TraceEntry[] = [];
+  for (const item of items) {
+    if (item.event_type === "message.delta") {
+      if (!item.summary?.trim()) continue;
+      const rawMessageId = item.metadata.message_id;
+      const messageId = typeof rawMessageId === "string" ? rawMessageId : "model-progress";
+      const existing = messageGroups.get(messageId);
+      if (existing) {
+        existing.output = `${existing.output ?? ""}${item.summary}`;
+        existing.durationMs = traceDuration(existing.timestamp, item.timestamp);
+      } else {
+        const entry: TraceEntry = {
+          id: `message-${messageId}`,
+          kind: "analysis",
+          status: "succeeded",
+          title: "模型进展说明",
+          sequence: item.sequence,
+          timestamp: item.timestamp,
+          output: item.summary,
+        };
+        messageGroups.set(messageId, entry);
+        entries.push(entry);
+      }
+      continue;
+    }
+
+    if (noisyEventTypes.has(item.event_type)) continue;
+    if (
+      item.event_type === "tool.result" ||
+      item.event_type === "tool.allowed" ||
+      item.event_type === "approval.requested"
+    ) continue;
+
+    if (item.event_type === "tool.request") {
+      const name = typeof item.metadata.name === "string" ? item.metadata.name : "工具";
+      const rawArguments = item.metadata.arguments;
+      const argumentsValue =
+        rawArguments && typeof rawArguments === "object" && !Array.isArray(rawArguments)
+          ? rawArguments as Record<string, unknown>
+          : {};
+      const toolCallId =
+        typeof item.metadata.tool_call_id === "string" ? item.metadata.tool_call_id : item.id;
+      const result = results.get(toolCallId);
+      const approval = approvals.get(toolCallId);
+      const resultSummary = result?.metadata.result_summary;
+      const resultPreview = result?.metadata.result_preview;
+      entries.push({
+        id: `trace-${toolCallId}`,
+        kind: item.kind,
+        status: result?.status ?? approval?.status ?? item.status,
+        title: traceToolTitle(name, argumentsValue),
+        summary:
+          typeof resultSummary === "string"
+            ? resultSummary
+            : approval?.summary ?? item.summary ?? undefined,
+        sequence: item.sequence,
+        timestamp: item.timestamp,
+        durationMs: result ? traceDuration(item.timestamp, result.timestamp) : undefined,
+        input: traceToolInput(name, argumentsValue),
+        output: typeof resultPreview === "string" ? resultPreview : undefined,
+      });
+      continue;
+    }
+
+    if (item.event_type === "artifact.ready") {
+      const artifactId = item.metadata.artifact_id;
+      if (typeof artifactId === "string") {
+        const sourcePath =
+          typeof item.metadata.source_path === "string"
+            ? item.metadata.source_path
+            : undefined;
+        entries.push({
+          id: item.id,
+          kind: item.kind,
+          status: item.status,
+          title: "生成运行产物",
+          summary: sourcePath ?? item.summary ?? undefined,
+          sequence: item.sequence,
+          timestamp: item.timestamp,
+          artifact: {
+            id: artifactId,
+            name: sourcePath ?? item.summary ?? "未命名产物",
+            mediaType:
+              typeof item.metadata.media_type === "string"
+                ? item.metadata.media_type
+                : undefined,
+            sizeBytes:
+              typeof item.metadata.size_bytes === "number"
+                ? item.metadata.size_bytes
+                : undefined,
+          },
+        });
+        continue;
+      }
+    }
+
+    entries.push({
+      id: item.id,
+      kind: item.kind,
+      status: item.status,
+      title: item.title,
+      summary: item.summary ?? undefined,
+      sequence: item.sequence,
+      timestamp: item.timestamp,
+    });
+  }
+  return entries.sort((left, right) => left.sequence - right.sequence);
+}
+
+function traceStatusLabel(status: string) {
+  if (["succeeded", "completed"].includes(status)) return "成功";
+  if (["failed", "rejected", "timed_out"].includes(status)) return "失败";
+  if (status === "waiting") return "待审批";
+  if (status === "cancelled") return "已停止";
+  return "运行中";
+}
+
+function traceBytes(value?: number) {
+  if (value === undefined) return undefined;
+  if (value < 1_024) return `${value} B`;
+  return `${(value / 1_024).toFixed(1)} KB`;
+}
 
 export function notableActivityItems(items: readonly ActivityItem[]) {
   return items
@@ -71,7 +265,7 @@ export function DeveloperDrawer({
   const activity = useRunActivity();
   const overview = activity ? activityOverview(activity) : undefined;
   const isModal = useNarrowRunPanel();
-  const notableItems = activity ? notableActivityItems(activity.items) : [];
+  const traceEntries = activity ? traceActivityEntries(activity.items) : [];
   const panelRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -202,25 +396,83 @@ export function DeveloperDrawer({
             )}
           </section>
 
-          <details className="inspector-activity">
+          <details className="inspector-activity inspector-trace" open>
             <summary>
-              <span>已记录 {activity.items.length} 条活动</span>
-              <small>{notableItems.length} 条关键记录</small>
+              <span>Trace · {traceEntries.length} 个步骤</span>
+              <small>{activity.items.length} 条原始事件</small>
               <span className="inspector-disclosure-chevron" aria-hidden="true" />
             </summary>
-            <div className="inspector-timeline" aria-label="关键执行记录">
-              {notableItems.map((item) => (
-                <article className={`inspector-event inspector-kind-${item.kind}`} key={item.id}>
-                  <div className="inspector-event-summary">
-                    <span className="inspector-node" aria-hidden="true" />
-                    <span className="inspector-event-copy">
-                      <small>{kindLabels[item.kind] ?? "步骤"} · {item.sequence}</small>
-                      <strong>{item.title}</strong>
-                      {item.summary && <span>{item.summary}</span>}
+            <div className="trace-ledger" aria-label="完整执行 Trace">
+              {traceEntries.map((entry, index) => (
+                <details
+                  className={`trace-step trace-kind-${entry.kind} trace-status-${entry.status}`}
+                  key={entry.id}
+                  open={entry.status === "failed"}
+                >
+                  <summary>
+                    <span className="trace-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="trace-step-copy">
+                      <span className="trace-step-title">{entry.title}</span>
+                      <span className="trace-step-meta">
+                        {kindLabels[entry.kind] ?? "步骤"}
+                        {entry.summary ? ` · ${entry.summary}` : ""}
+                      </span>
                     </span>
-                    <time>{new Date(item.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>
+                    <span className="trace-step-facts">
+                      {traceDurationLabel(entry.durationMs) && <time>{traceDurationLabel(entry.durationMs)}</time>}
+                      <span>{traceStatusLabel(entry.status)}</span>
+                    </span>
+                    <span className="trace-chevron" aria-hidden="true" />
+                  </summary>
+                  <div className="trace-step-detail">
+                    <div className="trace-step-clock">
+                      <span>事件 #{entry.sequence}</span>
+                      <time>{new Date(entry.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</time>
+                    </div>
+                    {entry.input && (
+                      <section>
+                        <h3>输入</h3>
+                        <pre>{entry.input}</pre>
+                      </section>
+                    )}
+                    {entry.output && (
+                      <section>
+                        <h3>返回</h3>
+                        <pre>{entry.output}</pre>
+                      </section>
+                    )}
+                    {!entry.output && entry.summary && !entry.artifact && (
+                      <section>
+                        <h3>结果</h3>
+                        <p>{entry.summary}</p>
+                      </section>
+                    )}
+                    {entry.artifact && (
+                      <section className="trace-artifact">
+                        <h3>可访问产物</h3>
+                        <div>
+                          <span>
+                            <strong>{entry.artifact.name}</strong>
+                            <small>
+                              {[entry.artifact.mediaType, traceBytes(entry.artifact.sizeBytes)]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </small>
+                          </span>
+                          <a
+                            href={`/api/harness/artifacts/${encodeURIComponent(entry.artifact.id)}?preview=1`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >预览</a>
+                          <a
+                            href={`/api/harness/artifacts/${encodeURIComponent(entry.artifact.id)}`}
+                            download={entry.artifact.name}
+                          >下载</a>
+                        </div>
+                      </section>
+                    )}
                   </div>
-                </article>
+                </details>
               ))}
             </div>
           </details>

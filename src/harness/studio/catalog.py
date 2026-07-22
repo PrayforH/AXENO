@@ -21,9 +21,9 @@ def default_capability_catalog() -> CapabilityCatalog:
         modelRoutes=(
             ModelRouteCapability(
                 routeId="new-api-default",
-                label="DeepSeek V4 Flash",
+                label="DeepSeek V4",
                 provider="deepseek",
-                models=("deepseek-v4-flash",),
+                models=("deepseek-v4-flash", "deepseek-v4-pro"),
                 capabilities=("streaming", "tool_use"),
                 credentialReference="NEW_API_KEY",
             ),
@@ -88,10 +88,10 @@ def default_capability_catalog() -> CapabilityCatalog:
             BuiltinToolCapability(
                 name="Bash",
                 label="运行命令",
-                description="在隔离工作区中运行受策略约束的命令。",
+                description="在隔离工作区中运行受策略约束的命令；安全只读命令自动放行。",
                 risk=CapabilityRisk.HIGH,
                 executionLocation="sandbox",
-                approvalBehavior="默认需要人工审批",
+                approvalBehavior="安全命令自动允许，危险、越界或无法证明安全的命令拒绝或审批",
             ),
             BuiltinToolCapability(
                 name="Task",

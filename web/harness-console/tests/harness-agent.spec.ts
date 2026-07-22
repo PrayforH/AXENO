@@ -27,10 +27,10 @@ describe("HarnessHttpAgent", () => {
       url: "http://harness/v1/agui",
       fetch: streamFetch,
       modelRouteOverride: "minimax-m3",
+      threadId: "thread-model",
     });
 
     await agent.runAgent({
-      threadId: "thread-model",
       runId: "run-model",
       forwardedProps: { existing: true },
     });
@@ -157,6 +157,30 @@ describe("HarnessHttpAgent", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("settles local stream state when transport fails before a terminal event", async () => {
+    liveResponseStore.clear();
+    runStreamStore.clear();
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: async () => {
+        throw new Error("connection closed");
+      },
+    });
+
+    await expect(agent.runAgent({ runId: "run-disconnected" })).rejects.toThrow(
+      "connection closed",
+    );
+
+    expect(liveResponseStore.getSnapshot().status).toBe("error");
+    expect(runStreamStore.getSnapshot()).toMatchObject({
+      runId: "run-disconnected",
+      status: "error",
+    });
+
+    agent.cancelActiveRun();
+    expect(runStreamStore.getSnapshot().status).toBe("complete");
   });
 
   it("forwards native text deltas while tracking run lifecycle without duplicating text", async () => {

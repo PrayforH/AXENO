@@ -141,6 +141,65 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_studio_bundle_import_creates_a_complete_editable_agent() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("portable-agent"),
+        )
+        source = created.json()
+        source["spec"]["description"] = "可无损导入并继续编辑的完整 Agent。"
+        source["spec"]["executionProfile"] = "isolated-default"
+        saved = await client.put(
+            f"/v1/studio/drafts/{source['draftId']}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": source["spec"]},
+        )
+        bundle = await client.get(
+            f"/v1/studio/drafts/{source['draftId']}/bundle",
+            headers=headers,
+        )
+        imported = await client.post(
+            "/v1/studio/drafts/import",
+            headers={**headers, "Content-Type": "application/zip"},
+            content=bundle.content,
+        )
+        invalid_media = await client.post(
+            "/v1/studio/drafts/import",
+            headers={**headers, "Content-Type": "application/json"},
+            content=bundle.content,
+        )
+        invalid_archive = await client.post(
+            "/v1/studio/drafts/import",
+            headers={**headers, "Content-Type": "application/zip"},
+            content=b"not-a-zip",
+        )
+
+    assert saved.status_code == 200, saved.text
+    assert bundle.status_code == 200, bundle.text
+    assert imported.status_code == 201, imported.text
+    payload = imported.json()
+    assert payload["lossless"] is True
+    assert payload["roundTripVerified"] is True
+    assert payload["warnings"] == []
+    assert payload["draft"]["draftId"] != source["draftId"]
+    assert payload["draft"]["publishedVersion"] is None
+    assert payload["draft"]["spec"] == saved.json()["spec"]
+    assert payload["sourceContentHash"] == bundle.headers["x-agent-content-sha256"]
+    assert payload["sourcePackageHash"] == bundle.headers["x-agent-package-sha256"]
+    assert invalid_media.status_code == 415
+    assert invalid_media.json()["error"]["code"] == "bundle_import_media_type_invalid"
+    assert invalid_archive.status_code == 422
+    assert invalid_archive.json()["error"]["code"] == "bundle_import_invalid"
+
+
+@pytest.mark.asyncio
 async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> None:
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
@@ -279,7 +338,7 @@ async def test_deployment_api_promotes_and_environment_sessions_pin_snapshot() -
 
 @pytest.mark.asyncio
 async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> None:
-    application, _container = app_and_container(auto_execute=True)
+    application, container = app_and_container(auto_execute=True)
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
         "X-Tenant-ID": "tenant-a",
@@ -321,6 +380,11 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
         trigger = trigger_created.json()["trigger"]
         secret = trigger_created.json()["secret"]
         trigger_id = trigger["triggerId"]
+        descriptor = await client.get(f"/webhooks/agent-triggers/{trigger_id}/openapi.json")
+        cached_descriptor = await client.get(
+            f"/webhooks/agent-triggers/{trigger_id}/openapi.json",
+            headers={"If-None-Match": descriptor.headers["etag"]},
+        )
         invocation_headers = {
             "Authorization": f"Bearer {secret}",
             "Idempotency-Key": "external-ticket-42",
@@ -328,12 +392,12 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
         first = await client.post(
             f"/webhooks/agent-triggers/{trigger_id}",
             headers=invocation_headers,
-            json={"prompt": "分析工单 42"},
+            json={"prompt": "分析工单 42 [artifact]"},
         )
         retry = await client.post(
             f"/webhooks/agent-triggers/{trigger_id}",
             headers=invocation_headers,
-            json={"prompt": "分析工单 42"},
+            json={"prompt": "分析工单 42 [artifact]"},
         )
         conflict = await client.post(
             f"/webhooks/agent-triggers/{trigger_id}",
@@ -343,6 +407,37 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
         status_response = await client.get(
             f"/webhooks/agent-triggers/{trigger_id}/runs/{first.json()['runId']}",
             headers={"Authorization": f"Bearer {secret}"},
+        )
+        event_stream = await client.get(
+            f"/webhooks/agent-triggers/{trigger_id}/runs/{first.json()['runId']}/events",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        artifacts = await container.artifacts.list_for_run(
+            "tenant-a",
+            first.json()["runId"],
+        )
+        artifact_download = await client.get(
+            f"/webhooks/agent-triggers/{trigger_id}/runs/{first.json()['runId']}"
+            f"/artifacts/{artifacts[0].artifact_id}/content",
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        wrong_protocol = await client.post(
+            f"/a2a/agent-triggers/{trigger_id}/message:send",
+            headers={
+                "Authorization": f"Bearer {secret}",
+                "A2A-Version": "1.0",
+                "Content-Type": "application/a2a+json",
+            },
+            content=json.dumps(
+                {
+                    "message": {
+                        "messageId": "wrong-protocol",
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "不应运行"}],
+                    },
+                    "configuration": {"returnImmediately": True},
+                }
+            ),
         )
         invalid = await client.post(
             f"/webhooks/agent-triggers/{trigger_id}",
@@ -392,6 +487,12 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
     assert trigger_created.status_code == 201, trigger_created.text
     assert len(secret) >= 32
     assert "secretDigest" not in trigger
+    assert descriptor.status_code == 200
+    assert descriptor.json()["info"]["version"] == published.json()["version"]
+    assert descriptor.json()["x-agent-studio"]["lifecycle"] == (
+        "Session -> Run -> Event -> Artifact"
+    )
+    assert cached_descriptor.status_code == 304
     assert first.status_code == 202, first.text
     assert first.json()["runId"] == retry.json()["runId"]
     assert first.json()["sessionId"] == retry.json()["sessionId"]
@@ -399,6 +500,10 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
     assert conflict.status_code == 409
     assert status_response.status_code == 200
     assert status_response.json()["input"]["trigger_id"] == trigger_id
+    assert "event: run.succeeded" in event_stream.text
+    assert artifact_download.status_code == 200
+    assert artifact_download.content == b"fake runtime artifact"
+    assert wrong_protocol.status_code == 401
     assert invalid.status_code == 401
     assert len(listed.json()) == 1
     assert "secret" not in listed.json()[0]
@@ -413,7 +518,7 @@ async def test_webhook_trigger_is_secret_scoped_idempotent_and_disableable() -> 
 
 @pytest.mark.asyncio
 async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane() -> None:
-    application, container = app_and_container(auto_execute=True)
+    application, container = app_and_container(auto_execute=False)
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
         "X-Tenant-ID": "tenant-a",
@@ -446,6 +551,10 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
                 "idempotencyKey": "interop-release",
             },
         )
+        await container.deployment_controller.drain_locally(
+            "tenant-a",
+            promoted.json()["deployment"]["deploymentId"],
+        )
         a2a_created = await client.post(
             "/v1/studio/agents/interop-agent/triggers",
             headers=headers,
@@ -462,6 +571,7 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
         a2a_headers = {
             "Authorization": f"Bearer {secret}",
             "A2A-Version": "1.0",
+            "Content-Type": "application/a2a+json",
         }
         sent = await client.post(
             f"/a2a/agent-triggers/{trigger_id}/message:send",
@@ -471,7 +581,8 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
                     "messageId": "a2a-message-1",
                     "role": "ROLE_USER",
                     "parts": [{"text": "执行互操作任务"}],
-                }
+                },
+                "configuration": {"returnImmediately": True},
             },
         )
         assert sent.status_code == 200, sent.text
@@ -547,14 +658,13 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
 
     assert promoted.status_code == 202
     assert card.status_code == 200
+    assert card.json()["version"] == published.json()["version"]
+    assert card.json()["securitySchemes"]["bearer"]["httpAuthSecurityScheme"]["scheme"] == "Bearer"
     assert card.json()["supportedInterfaces"][0]["protocolVersion"] == "1.0"
     assert card.json()["capabilities"]["streaming"] is True
     assert sent.status_code == 200
     assert task.json()["task"]["id"] == task_id
-    assert cancelled.json()["task"]["status"]["state"] in {
-        "TASK_STATE_WORKING",
-        "TASK_STATE_COMPLETED",
-    }
+    assert cancelled.json()["task"]["status"]["state"] == "TASK_STATE_CANCELED"
     assert chatops.status_code == 202
     assert chatops.json()["runId"]
     assert schedule.status_code == 201
@@ -564,6 +674,177 @@ async def test_a2a_chatops_schedule_and_platform_mcp_use_existing_control_plane(
     assert mcp_access.status_code == 200
     assert mcp_access.json()["mutations_enabled"] is False
     assert mcp_access.json()["token"]
+
+
+@pytest.mark.asyncio
+async def test_a2a_1_0_projects_completed_tasks_context_streams_and_artifacts() -> None:
+    application, _container = app_and_container(auto_execute=True)
+    admin_headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "a2a-admin",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=admin_headers,
+            json=draft_request("a2a-complete-agent"),
+        )
+        published = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/publish",
+            headers=admin_headers,
+        )
+        promoted = await client.post(
+            "/v1/studio/deployments/promote",
+            headers=admin_headers,
+            json={
+                "agentName": "a2a-complete-agent",
+                "agentVersion": published.json()["version"],
+                "environment": "production",
+                "expectedEnvironmentRevision": 0,
+                "canaryPercent": 100,
+                "imageDigest": "sha256:" + "d" * 64,
+                "executionProfile": "isolated-default",
+                "config": {},
+                "idempotencyKey": "a2a-complete-release",
+            },
+        )
+        trigger_response = await client.post(
+            "/v1/studio/agents/a2a-complete-agent/triggers",
+            headers=admin_headers,
+            json={"name": "Partner A2A", "environment": "production", "kind": "a2a"},
+        )
+        trigger_id = trigger_response.json()["trigger"]["triggerId"]
+        secret = trigger_response.json()["secret"]
+        path = f"/a2a/agent-triggers/{trigger_id}"
+        a2a_headers = {
+            "Authorization": f"Bearer {secret}",
+            "A2A-Version": "1.0",
+            "Content-Type": "application/a2a+json",
+        }
+
+        card = await client.get(f"{path}/agent-card.json")
+        cached_card = await client.get(
+            f"{path}/agent-card.json",
+            headers={"If-None-Match": card.headers["etag"]},
+        )
+        invalid_version = await client.post(
+            f"{path}/message:send",
+            headers={**a2a_headers, "A2A-Version": "0.3"},
+            content=json.dumps(
+                {
+                    "message": {
+                        "messageId": "invalid-version",
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "hello"}],
+                    }
+                }
+            ),
+        )
+        first = await client.post(
+            f"{path}/message:send",
+            headers=a2a_headers,
+            content=json.dumps(
+                {
+                    "message": {
+                        "messageId": "a2a-complete-1",
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "生成合作方报告 [artifact]"}],
+                    }
+                }
+            ),
+        )
+        first_task = first.json()["task"]
+        file_artifact = next(
+            item for item in first_task["artifacts"] if item["name"] == "result.txt"
+        )
+        artifact_download = await client.get(
+            file_artifact["parts"][0]["url"],
+            headers={"Authorization": f"Bearer {secret}"},
+        )
+        followup = await client.post(
+            f"{path}/message:send",
+            headers=a2a_headers,
+            content=json.dumps(
+                {
+                    "message": {
+                        "messageId": "a2a-complete-2",
+                        "contextId": first_task["contextId"],
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "继续补充结论"}],
+                    }
+                }
+            ),
+        )
+        listed = await client.get(
+            f"{path}/tasks",
+            headers=a2a_headers,
+            params={"pageSize": 1, "historyLength": 1, "includeArtifacts": "true"},
+        )
+        next_page = await client.get(
+            f"{path}/tasks",
+            headers=a2a_headers,
+            params={"pageSize": 1, "pageToken": listed.json()["nextPageToken"]},
+        )
+        no_history = await client.get(
+            f"{path}/tasks/{first_task['id']}",
+            headers=a2a_headers,
+            params={"historyLength": 0},
+        )
+        terminal_cancel = await client.post(
+            f"{path}/tasks/{first_task['id']}:cancel",
+            headers=a2a_headers,
+        )
+        terminal_subscribe = await client.post(
+            f"{path}/tasks/{first_task['id']}:subscribe",
+            headers=a2a_headers,
+        )
+        streamed = await client.post(
+            f"{path}/message:stream",
+            headers=a2a_headers,
+            content=json.dumps(
+                {
+                    "message": {
+                        "messageId": "a2a-stream-1",
+                        "role": "ROLE_USER",
+                        "parts": [{"text": "流式回答"}],
+                    }
+                }
+            ),
+        )
+
+    assert promoted.status_code == 202, promoted.text
+    assert card.status_code == 200
+    assert card.json()["version"] == published.json()["version"]
+    assert card.json()["skills"][0]["description"]
+    assert cached_card.status_code == 304
+    assert invalid_version.status_code == 400
+    assert invalid_version.json()["error"]["details"][0]["reason"] == ("VERSION_NOT_SUPPORTED")
+    assert first.status_code == 200, first.text
+    assert first_task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert first_task["status"]["timestamp"].endswith("Z")
+    assert first_task["artifacts"][0]["parts"][0]["text"].startswith("Echo:")
+    assert artifact_download.content == b"fake runtime artifact"
+    assert followup.status_code == 200, followup.text
+    assert followup.json()["task"]["contextId"] == first_task["contextId"]
+    assert followup.json()["task"]["id"] != first_task["id"]
+    assert listed.json()["totalSize"] == 2
+    assert listed.json()["nextPageToken"]
+    assert len(listed.json()["tasks"][0]["history"]) == 1
+    assert len(next_page.json()["tasks"]) == 1
+    assert "history" not in no_history.json()["task"]
+    assert terminal_cancel.status_code == 400
+    assert terminal_cancel.json()["error"]["details"][0]["reason"] == ("TASK_NOT_CANCELABLE")
+    assert terminal_subscribe.status_code == 400
+    assert terminal_subscribe.json()["error"]["details"][0]["reason"] == ("UNSUPPORTED_OPERATION")
+    assert streamed.status_code == 200
+    assert '"artifactUpdate"' in streamed.text
+    assert '"lastChunk":true' in streamed.text
+    assert '"statusUpdate"' in streamed.text
+    assert "TASK_STATE_COMPLETED" in streamed.text
 
 
 @pytest.mark.asyncio
@@ -1370,6 +1651,7 @@ def test_studio_routes_are_exposed_once_in_openapi() -> None:
     expected = {
         "/v1/studio/capabilities",
         "/v1/studio/drafts",
+        "/v1/studio/drafts/import",
         "/v1/studio/drafts/{draft_id}",
         "/v1/studio/drafts/{draft_id}/validate",
         "/v1/studio/drafts/{draft_id}/bundle",

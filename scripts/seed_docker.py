@@ -339,7 +339,6 @@ def main() -> None:
         (
             "/app/agents/helper-agent/agent.yaml,"
             "/app/agents/echo-agent/agent.yaml,"
-            "/app/agents/public-opinion-agent/agent.yaml,"
             "/app/agents/archive-file-classifier-agent/agent.yaml"
         ),
     )
@@ -357,6 +356,7 @@ def main() -> None:
     raw_studio_manifests = os.getenv(
         "HARNESS_SEED_STUDIO_MANIFESTS",
         (
+            "/app/agents/public-opinion-agent/agent.yaml,"
             "/app/agents/similar-case-analysis-agent/agent.yaml,"
             "/app/agents/govdoc-writer-agent/agent.yaml,"
             "/app/agents/archive-assistant-agent/agent.yaml"

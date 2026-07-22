@@ -45,7 +45,6 @@ from harness.runtime.claude_sdk import ClaudeSdkRuntime
 from harness.runtime.mcp_credentials import RequestMcpCredentialProvider
 from harness.runtime.tools import (
     McpServerRegistration,
-    ToolResolutionError,
     ToolResolver,
 )
 from harness.sandbox.base import SandboxCommandResult
@@ -102,6 +101,7 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
             num_turns=1,
             session_id="sdk-session",
             result="fake response",
+            usage={"input_tokens": 12, "output_tokens": 8},
         )
 
     gate = RecordingToolGate()
@@ -175,13 +175,21 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
         if span.name == "harness.model.run"
     )
     assert model_span.attributes is not None
+    assert model_span.attributes["langfuse.observation.type"] == "generation"
+    assert (
+        model_span.attributes["langfuse.observation.model.name"]
+        == "claude-sonnet-4-6"
+    )
     assert model_span.attributes["langfuse.observation.input"] == "hello"
     assert model_span.attributes["langfuse.observation.output"] == "fake response"
     assert model_span.attributes["langfuse.trace.output"] == "fake response"
+    assert model_span.attributes["langfuse.observation.usage_details"] == (
+        '{"input":12,"output":8}'
+    )
 
 
 @pytest.mark.asyncio
-async def test_deferred_sandbox_replaces_file_builtins_but_keeps_coordination_local(
+async def test_local_sandbox_keeps_native_file_builtins_for_multimodal_reads(
     tmp_path: Path,
 ) -> None:
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
@@ -265,10 +273,10 @@ async def test_deferred_sandbox_replaces_file_builtins_but_keeps_coordination_lo
     _events = [event async for event in runtime.execute(context)]
 
     options = captured[0]
-    assert options.tools == ["Task"]
+    assert options.tools == ["Read", "Task"]
     assert isinstance(options.mcp_servers, dict)
-    assert "harness-sandbox" in options.mcp_servers
-    assert "mcp__harness-sandbox__read" in options.allowed_tools
+    assert options.mcp_servers == {}
+    assert options.allowed_tools == []
     assert sandbox_calls == []
 
 
@@ -773,7 +781,10 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
     assert options.tools == ["Read", "Task"]
     assert isinstance(options.mcp_servers, dict)
     assert set(options.mcp_servers) == {"harness-python", "crm-prod"}
-    assert options.allowed_tools == ["mcp__crm-prod__search"]
+    assert set(options.allowed_tools or []) == {
+        "mcp__crm-prod__search",
+        "mcp__harness-python__lookup_customer",
+    }
     crm = cast(dict[str, object], options.mcp_servers["crm-prod"])
     assert crm["headers"] == {"Authorization": "crm-token"}
     assert "crm-token" not in repr(_events)
@@ -781,7 +792,7 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_custom_tools_declared_by_subagents(tmp_path: Path) -> None:
+async def test_runtime_wires_custom_tools_declared_by_subagents(tmp_path: Path) -> None:
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     helper_snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     helper_spec = helper_snapshot.manifest.spec.model_copy(
@@ -824,19 +835,28 @@ async def test_runtime_rejects_custom_tools_declared_by_subagents(tmp_path: Path
         capabilities=frozenset({"streaming", "tool_use"}),
     )
 
-    async def should_not_query(
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
         _prompt: str,
-        _options: ClaudeAgentOptions,
+        options: ClaudeAgentOptions,
     ) -> AsyncIterator[object]:
-        raise AssertionError("subagent custom tools must fail before the SDK query")
-        yield
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
 
     runtime = ClaudeSdkRuntime(
         agent_version=main_version,
         routes=[route],
         route_secrets={"new-api-default": "secret"},
         subagent_versions={"helper": helper_version},
-        query_factory=should_not_query,
+        query_factory=fake_query,
     )
     context = RuntimeContext(
         run=Run(
@@ -860,9 +880,10 @@ async def test_runtime_rejects_custom_tools_declared_by_subagents(tmp_path: Path
         workspace=tmp_path,
     )
 
-    with pytest.raises(
-        ToolResolutionError,
-        match="subagent custom tools are not supported: helper",
-    ):
-        async for _event in runtime.execute(context):
-            pass
+    _events = [event async for event in runtime.execute(context)]
+
+    options = captured[0]
+    assert options.agents is not None
+    helper = options.agents["helper"]
+    assert helper.tools is not None
+    assert "mcp__harness-python__lookup_customer" in helper.tools

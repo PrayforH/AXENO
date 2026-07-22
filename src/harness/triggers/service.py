@@ -9,11 +9,15 @@ from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
 
 from harness.application.runs import RunService
-from harness.application.sessions import SessionService
+from harness.application.sessions import DeploymentResolver, SessionService
 from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError, NotFoundError
+from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import Run, Session
+from harness.core.ports import AgentRegistry
 from harness.triggers.models import (
+    AgentExposureDescriptor,
+    AgentExposureSkill,
     AgentTrigger,
     CreateAgentTriggerRequest,
     CreatedAgentTrigger,
@@ -29,6 +33,10 @@ class TriggerAuthenticationError(Exception):
     """A public trigger could not be authenticated without revealing why."""
 
 
+class TriggerTaskNotFoundError(Exception):
+    """A trigger-authenticated task or context does not exist in that trigger scope."""
+
+
 def _default_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(16)}"
 
@@ -40,6 +48,8 @@ class AgentTriggerService:
         *,
         sessions: SessionService,
         runs: RunService,
+        registry: AgentRegistry | None = None,
+        deployment_resolver: DeploymentResolver | None = None,
         audit: AuditService | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[str], str] | None = None,
@@ -48,10 +58,17 @@ class AgentTriggerService:
         self._repository = repository
         self._sessions = sessions
         self._runs = runs
+        self._registry = registry
+        self._deployment_resolver = deployment_resolver
         self._audit = audit
         self._clock = clock or (lambda: datetime.now(UTC))
         self._ids = id_generator or _default_id
         self._secrets = secret_generator or (lambda: secrets.token_urlsafe(32))
+
+    def configure_deployment_resolver(self, resolver: DeploymentResolver) -> None:
+        if self._deployment_resolver is not None:
+            raise RuntimeError("deployment resolver is already configured")
+        self._deployment_resolver = resolver
 
     async def create(
         self,
@@ -99,11 +116,62 @@ class AgentTriggerService:
             for trigger in await self._repository.list_for_agent(tenant_id, agent_name)
         ]
 
-    async def public_card(self, trigger_id: str) -> AgentTrigger:
+    async def public_descriptor(
+        self,
+        trigger_id: str,
+        *,
+        kind: TriggerKind,
+    ) -> AgentExposureDescriptor:
         trigger = await self._repository.get_public(trigger_id)
-        if not trigger.enabled:
+        if not trigger.enabled or trigger.kind is not kind:
             raise NotFoundError(f"Agent Trigger not found: {trigger_id}")
-        return trigger.public()
+        if self._registry is None or self._deployment_resolver is None:
+            raise ConflictError("Trigger deployment description is unavailable")
+        resolution = await self._deployment_resolver(
+            trigger.tenant_id,
+            trigger.agent_name,
+            trigger.environment,
+            trigger.trigger_id,
+        )
+        version = await self._registry.get(
+            trigger.tenant_id,
+            trigger.agent_name,
+            resolution.agent_version,
+        )
+        snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
+        labels = snapshot.manifest.metadata.labels
+        display_name = labels.get("display-name", trigger.name).strip() or trigger.name
+        description = labels.get("description", "").strip() or (
+            f"Execute {trigger.agent_name} in the {trigger.environment.value} environment."
+        )
+        skills = tuple(
+            AgentExposureSkill(
+                skillId=skill.name,
+                name=skill.name,
+                description=skill.description,
+                tags=(
+                    labels.get("domain", "agent-studio"),
+                    trigger.environment.value,
+                ),
+            )
+            for skill in snapshot.skill_snapshots
+        )
+        if not skills:
+            skills = (
+                AgentExposureSkill(
+                    skillId=trigger.agent_name,
+                    name=display_name,
+                    description=description,
+                    tags=("agent-studio", trigger.environment.value),
+                ),
+            )
+        return AgentExposureDescriptor(
+            trigger=trigger.public(),
+            agentVersion=resolution.agent_version,
+            displayName=display_name,
+            description=description,
+            skills=skills,
+        )
 
     async def update(
         self,
@@ -164,11 +232,37 @@ class AgentTriggerService:
         idempotency_key: str,
         prompt: str,
     ) -> tuple[TriggerInvocation, Run]:
-        trigger = await self._authenticate(trigger_id, secret)
+        trigger = await self._authenticate(
+            trigger_id,
+            secret,
+            kind=TriggerKind.WEBHOOK,
+        )
         return await self._invoke_stored(
             trigger,
             idempotency_key=idempotency_key,
             prompt=prompt,
+        )
+
+    async def invoke_a2a(
+        self,
+        *,
+        trigger_id: str,
+        secret: str,
+        message_id: str,
+        prompt: str,
+        context_id: str | None = None,
+    ) -> tuple[TriggerInvocation, Run]:
+        trigger = await self._authenticate(
+            trigger_id,
+            secret,
+            kind=TriggerKind.A2A,
+        )
+        return await self._invoke_stored(
+            trigger,
+            idempotency_key=f"a2a:{message_id}",
+            prompt=prompt,
+            context_id=context_id,
+            input_metadata={"a2a_message_id": message_id},
         )
 
     async def _invoke_stored(
@@ -177,11 +271,15 @@ class AgentTriggerService:
         *,
         idempotency_key: str,
         prompt: str,
+        context_id: str | None = None,
+        input_metadata: dict[str, object] | None = None,
     ) -> tuple[TriggerInvocation, Run]:
         trigger_id = trigger.trigger_id
-        session_id = self._session_id(trigger_id, idempotency_key)
+        session_id = context_id or self._session_id(trigger_id, idempotency_key)
         workload_id = f"trigger:{trigger_id}"
         session = await self._existing_session(trigger, session_id, workload_id)
+        if context_id is not None and session is None:
+            raise TriggerTaskNotFoundError
         if session is None:
             session = await self._sessions.create(
                 trigger.tenant_id,
@@ -200,6 +298,7 @@ class AgentTriggerService:
                 "prompt": prompt,
                 "trigger_id": trigger_id,
                 "trigger_kind": trigger.kind,
+                **(input_metadata or {}),
             },
         )
         if run.input.get("prompt") != prompt or run.input.get("trigger_id") != trigger_id:
@@ -236,7 +335,11 @@ class AgentTriggerService:
         channel_id: str,
         prompt: str,
     ) -> tuple[TriggerInvocation, Run]:
-        trigger = await self._authenticate(trigger_id, secret)
+        trigger = await self._authenticate(
+            trigger_id,
+            secret,
+            kind=TriggerKind.CHATOPS,
+        )
         if trigger.kind is not TriggerKind.CHATOPS or trigger.chatops is None:
             raise TriggerAuthenticationError
         allowed = trigger.chatops.allowed_channel_ids
@@ -255,9 +358,7 @@ class AgentTriggerService:
             if trigger.schedule is None or trigger.next_fire_at is None:
                 continue
             scheduled_at = trigger.next_fire_at
-            next_fire_at = scheduled_at + timedelta(
-                seconds=trigger.schedule.interval_seconds
-            )
+            next_fire_at = scheduled_at + timedelta(seconds=trigger.schedule.interval_seconds)
             advanced = await self._repository.advance_schedule(
                 trigger.trigger_id,
                 expected_next_fire_at=scheduled_at,
@@ -284,16 +385,43 @@ class AgentTriggerService:
         return dispatched
 
     async def run(
-        self, *, trigger_id: str, secret: str, run_id: str
+        self,
+        *,
+        trigger_id: str,
+        secret: str,
+        run_id: str,
+        kind: TriggerKind = TriggerKind.WEBHOOK,
     ) -> Run:
-        trigger = await self._authenticate(trigger_id, secret)
-        run = await self._runs.get(trigger.tenant_id, run_id)
+        trigger = await self._authenticate(trigger_id, secret, kind=kind)
+        try:
+            run = await self._runs.get(trigger.tenant_id, run_id)
+        except NotFoundError as error:
+            raise TriggerTaskNotFoundError from error
         if run.input.get("trigger_id") != trigger_id:
-            raise TriggerAuthenticationError
+            raise TriggerTaskNotFoundError
         return run
 
+    async def runs(
+        self,
+        *,
+        trigger_id: str,
+        secret: str,
+        kind: TriggerKind,
+        limit: int = 100_000,
+    ) -> list[Run]:
+        trigger = await self._authenticate(trigger_id, secret, kind=kind)
+        return [
+            run
+            for run in await self._runs.list_for_tenant(trigger.tenant_id, limit=limit)
+            if run.input.get("trigger_id") == trigger_id
+        ]
+
     async def _authenticate(
-        self, trigger_id: str, secret: str
+        self,
+        trigger_id: str,
+        secret: str,
+        *,
+        kind: TriggerKind | None = None,
     ) -> StoredAgentTrigger:
         supplied = self._digest(secret)
         try:
@@ -301,7 +429,11 @@ class AgentTriggerService:
         except NotFoundError as error:
             compare_digest(supplied, "0" * 64)
             raise TriggerAuthenticationError from error
-        if not trigger.enabled or not compare_digest(supplied, trigger.secret_digest):
+        if (
+            not trigger.enabled
+            or (kind is not None and trigger.kind is not kind)
+            or not compare_digest(supplied, trigger.secret_digest)
+        ):
             raise TriggerAuthenticationError
         return trigger
 

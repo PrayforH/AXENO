@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import json
 import re
 import shutil
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
 import yaml
@@ -147,16 +148,16 @@ class WorkspaceSpec(ManifestModel):
 
 
 class LimitSpec(ManifestModel):
-    max_turns: int = Field(default=30, alias="maxTurns", ge=1)
+    max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
     timeout_seconds: int = Field(default=1800, alias="timeoutSeconds", ge=1)
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
-    max_model_tokens: int = Field(default=200_000, alias="maxModelTokens", ge=1)
+    max_model_tokens: int | None = Field(default=None, alias="maxModelTokens", ge=1)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
     max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
     max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
     max_subagent_depth: Literal[1] = Field(default=1, alias="maxSubagentDepth")
     max_subagent_usage_units: int | None = Field(
-        default=200_000, alias="maxSubagentUsageUnits", gt=0
+        default=None, alias="maxSubagentUsageUnits", gt=0
     )
 
 
@@ -220,10 +221,26 @@ class SkillSnapshot(ManifestModel):
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
+class PythonToolSnapshot(ManifestModel):
+    """Immutable, self-contained Python operator executed in the Run sandbox."""
+
+    reference: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    description: str = Field(min_length=1, max_length=2_000)
+    input_schema: dict[str, Any] = Field(alias="inputSchema")
+    content_base64: str = Field(alias="contentBase64", min_length=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size_bytes: int = Field(alias="sizeBytes", ge=1)
+
+
 class AgentManifestSnapshot(ManifestModel):
     manifest: AgentManifest
     system_prompt: str
     skill_snapshots: tuple[SkillSnapshot, ...] = ()
+    python_tool_snapshots: tuple[PythonToolSnapshot, ...] = Field(
+        default=(), alias="pythonToolSnapshots"
+    )
     tool_directory: ToolDirectorySnapshot | None = None
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -234,6 +251,7 @@ _MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024
 _MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
 TOOL_DIRECTORY_FILENAME = "tool-directory.json"
 _MAX_TOOL_DIRECTORY_BYTES = 2 * 1024 * 1024
+_MAX_PYTHON_TOOL_BYTES = 1024 * 1024
 
 
 def _assert_no_inline_secrets(value: object, path: str = "manifest") -> None:
@@ -358,6 +376,91 @@ def _snapshot_skill(root: Path, relative: str) -> SkillSnapshot:
     )
 
 
+def _snapshot_python_tool(root: Path, reference: str) -> PythonToolSnapshot:
+    prefix = "bundle:"
+    if not reference.startswith(prefix):
+        raise ManifestValidationError(
+            f"Python tool is not a self-contained Bundle reference: {reference}"
+        )
+    relative_text = reference.removeprefix(prefix)
+    relative = PurePosixPath(relative_text)
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or "\\" in relative_text
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or relative.suffix != ".py"
+    ):
+        raise ManifestValidationError(f"unsafe Bundle Python tool path: {relative_text}")
+    path = _resolve_file(root, relative.as_posix(), "Bundle Python tool")
+    if path.is_symlink():
+        raise ManifestValidationError("Bundle Python tool cannot be a symlink")
+    content = path.read_bytes()
+    if not content or len(content) > _MAX_PYTHON_TOOL_BYTES:
+        raise ManifestValidationError(
+            f"Bundle Python tool must be 1-{_MAX_PYTHON_TOOL_BYTES} bytes: {relative_text}"
+        )
+    try:
+        source = content.decode("utf-8")
+        tree = ast.parse(source, filename=relative.as_posix())
+    except (UnicodeDecodeError, SyntaxError) as error:
+        raise ManifestValidationError(
+            f"invalid Bundle Python tool source: {relative_text}: {error}"
+        ) from error
+    metadata_value: object | None = None
+    has_run = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "run":
+            has_run = True
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "TOOL_SPEC"
+            for target in node.targets
+        ):
+            try:
+                metadata_value = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError) as error:
+                raise ManifestValidationError(
+                    f"Bundle Python TOOL_SPEC must be a literal object: {relative_text}"
+                ) from error
+    if not has_run:
+        raise ManifestValidationError(
+            f"Bundle Python tool must define run(arguments): {relative_text}"
+        )
+    if not isinstance(metadata_value, dict):
+        raise ManifestValidationError(
+            f"Bundle Python tool must define literal TOOL_SPEC: {relative_text}"
+        )
+    metadata = cast(dict[str, object], metadata_value)
+    name = metadata.get("name")
+    description = metadata.get("description")
+    input_schema = metadata.get("input_schema")
+    if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+        raise ManifestValidationError(f"invalid Bundle Python tool name: {relative_text}")
+    if not isinstance(description, str) or not description.strip():
+        raise ManifestValidationError(
+            f"Bundle Python tool description is required: {relative_text}"
+        )
+    if not isinstance(input_schema, dict):
+        raise ManifestValidationError(
+            f"Bundle Python tool input_schema must be a JSON object schema: {relative_text}"
+        )
+    typed_input_schema = cast(dict[str, object], input_schema)
+    if typed_input_schema.get("type") != "object":
+        raise ManifestValidationError(
+            f"Bundle Python tool input_schema must be a JSON object schema: {relative_text}"
+        )
+    return PythonToolSnapshot(
+        reference=reference,
+        path=relative.as_posix(),
+        name=name,
+        description=description.strip(),
+        inputSchema=cast(dict[str, Any], typed_input_schema),
+        contentBase64=base64.b64encode(content).decode("ascii"),
+        sha256=hashlib.sha256(content).hexdigest(),
+        sizeBytes=len(content),
+    )
+
+
 def _load_tool_directory(
     root: Path,
     manifest: AgentManifest,
@@ -458,6 +561,47 @@ def materialize_skill_snapshot_set(
     return tuple(names)
 
 
+def materialize_python_tool_snapshot_set(
+    snapshots: Sequence[AgentManifestSnapshot], workspace: str | Path
+) -> dict[str, dict[str, Path]]:
+    """Materialize immutable Bundle Python operators before Sandbox prepare."""
+
+    workspace_root = Path(workspace).resolve()
+    root = workspace_root / ".harness-runtime" / "bundle-tools"
+    if root.exists():
+        if root.is_symlink():
+            raise ManifestValidationError("workspace Bundle tool root cannot be a symlink")
+        shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    materialized: dict[str, dict[str, Path]] = {}
+    for snapshot in snapshots:
+        namespace = snapshot.content_hash[:16]
+        namespace_root = (root / namespace).resolve()
+        if not namespace_root.is_relative_to(root):
+            raise ManifestValidationError("unsafe Bundle tool namespace")
+        references: dict[str, Path] = {}
+        for tool in snapshot.python_tool_snapshots:
+            target = (namespace_root / tool.path).resolve()
+            if not target.is_relative_to(namespace_root):
+                raise ManifestValidationError(f"unsafe Bundle tool path: {tool.path}")
+            try:
+                content = base64.b64decode(tool.content_base64, validate=True)
+            except ValueError as error:
+                raise ManifestValidationError(
+                    f"invalid Bundle tool base64: {tool.reference}"
+                ) from error
+            if (
+                len(content) != tool.size_bytes
+                or hashlib.sha256(content).hexdigest() != tool.sha256
+            ):
+                raise ManifestValidationError(f"corrupt Bundle tool: {tool.reference}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            references[tool.reference] = target.relative_to(workspace_root)
+        materialized[snapshot.content_hash] = references
+    return materialized
+
+
 def load_manifest(
     path: str | Path,
     *,
@@ -510,6 +654,17 @@ def load_manifest(
     for skill in skill_snapshots:
         digest.update(skill.source.encode())
         digest.update(skill.content_hash.encode())
+    python_tool_snapshots = tuple(
+        _snapshot_python_tool(root, reference)
+        for reference in sorted(
+            tool.python_entry
+            for tool in manifest.spec.tools
+            if tool.python_entry is not None and tool.python_entry.startswith("bundle:")
+        )
+    )
+    for tool in python_tool_snapshots:
+        digest.update(tool.reference.encode())
+        digest.update(tool.sha256.encode())
     if tool_directory is not None:
         digest.update(TOOL_DIRECTORY_FILENAME.encode())
         digest.update(tool_directory.content_hash.encode())
@@ -518,6 +673,7 @@ def load_manifest(
         manifest=manifest,
         system_prompt=system_prompt,
         skill_snapshots=skill_snapshots,
+        pythonToolSnapshots=python_tool_snapshots,
         tool_directory=tool_directory,
         content_hash=digest.hexdigest(),
     )

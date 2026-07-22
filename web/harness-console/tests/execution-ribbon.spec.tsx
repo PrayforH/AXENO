@@ -111,28 +111,41 @@ describe("execution ribbon", () => {
       '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open="">',
     );
     expect(html).toContain("正在处理");
-    expect(html).toContain('class="execution-state-mark"');
-    expect(html).toContain("2 个工具");
-    expect(html).toContain("2 个子任务");
+    expect(html).not.toContain('class="execution-state-mark"');
+    expect(html).toContain("运行了 2 个子任务");
+    expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
     expect(html).toContain("6s");
   });
 
-  it("collapses active work when the first real response text arrives", () => {
+  it("keeps active work expanded when the first real response text arrives", () => {
     const html = renderToStaticMarkup(
       <ActivitySummary activity={activity} responseStarted />,
     );
 
-    expect(html).toContain('<details class="execution-ribbon phase-running"');
-    expect(html).not.toContain(
-      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" open',
+    expect(html).toContain(
+      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="true" open="">',
     );
-    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('aria-expanded="true"');
   });
 
-  it("does not collapse a completed run before its response is mounted", () => {
+  it("automatically folds the completed Codex transcript", () => {
     const completed = runActivitySchema.parse({
       ...activity,
       status: "succeeded",
+      items: [
+        ...activity.items,
+        {
+          id: "run-succeeded",
+          event_type: "run.succeeded",
+          kind: "run",
+          status: "completed",
+          title: "运行完成",
+          summary: "运行已完成",
+          timestamp: "2026-07-14T00:00:08Z",
+          sequence: 8,
+          metadata: {},
+        },
+      ],
     });
     const waitingForResponse = renderToStaticMarkup(
       <ActivitySummary activity={completed} />,
@@ -141,7 +154,8 @@ describe("execution ribbon", () => {
       <ActivitySummary activity={completed} responseStarted />,
     );
 
-    expect(waitingForResponse).toContain('data-response-started="false" open');
+    expect(waitingForResponse).toContain('data-response-started="false"');
+    expect(waitingForResponse).not.toContain('data-response-started="false" open');
     expect(responseMounted).toContain('data-response-started="true"');
     expect(responseMounted).not.toContain('data-response-started="true" open');
   });
@@ -184,38 +198,118 @@ describe("execution ribbon", () => {
     expect(html).toContain("我先读取设计文档，再检查发布边界。");
     expect(html).not.toContain("最终结论已经整理完成。");
     expect(html.indexOf("我先读取设计文档")).toBeLessThan(
-      html.indexOf("正在读取 docs/agent-production-platform-design.md"),
+      html.indexOf("搜索了 1 次内容 · 读取了 1 个文件"),
     );
   });
 
-  it("keeps the active task open and completed task collapsed in the task tree", () => {
+  it("shows auditable processing milestones even when no tools are used", () => {
+    const textOnly = runActivitySchema.parse({
+      run_id: "run-text-only",
+      status: "succeeded",
+      started_at: "2026-07-14T00:00:00Z",
+      metrics: { turns: 1 },
+      items: [
+        {
+          id: "provisioning",
+          event_type: "run.provisioning",
+          kind: "run",
+          status: "running",
+          title: "正在准备运行环境",
+          timestamp: "2026-07-14T00:00:01Z",
+          sequence: 1,
+          metadata: {},
+        },
+        {
+          id: "runtime",
+          event_type: "runtime.system",
+          kind: "analysis",
+          status: "running",
+          title: "运行时与工具已连接",
+          summary: "5 项工具可用",
+          timestamp: "2026-07-14T00:00:02Z",
+          sequence: 2,
+          metadata: { subtype: "init", tool_count: 5 },
+        },
+        {
+          id: "requesting",
+          event_type: "runtime.system",
+          kind: "analysis",
+          status: "running",
+          title: "模型正在处理",
+          summary: "正在等待本轮模型结果",
+          timestamp: "2026-07-14T00:00:03Z",
+          sequence: 3,
+          metadata: { subtype: "status" },
+        },
+        {
+          id: "message-start",
+          event_type: "message.start",
+          kind: "analysis",
+          status: "running",
+          title: "正在生成本轮回复",
+          timestamp: "2026-07-14T00:00:04Z",
+          sequence: 4,
+          metadata: {},
+        },
+        {
+          id: "final-answer",
+          event_type: "message.delta",
+          kind: "analysis",
+          status: "succeeded",
+          title: "进展说明",
+          summary: "这是单独渲染的最终回答。",
+          timestamp: "2026-07-14T00:00:05Z",
+          sequence: 5,
+          metadata: {},
+        },
+        {
+          id: "result",
+          event_type: "runtime.result",
+          kind: "result",
+          status: "succeeded",
+          title: "模型执行完成",
+          timestamp: "2026-07-14T00:00:06Z",
+          sequence: 6,
+          metadata: { turns: 1 },
+        },
+        {
+          id: "succeeded",
+          event_type: "run.succeeded",
+          kind: "run",
+          status: "succeeded",
+          title: "运行完成",
+          timestamp: "2026-07-14T00:00:07Z",
+          sequence: 7,
+          metadata: {},
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(<ActivitySummary activity={textOnly} />);
+
+    expect(html).toContain("正在准备运行环境");
+    expect(html).not.toContain("模型正在处理");
+    expect(html).not.toContain("正在生成本轮回复");
+    expect(html).toContain("模型执行完成");
+    expect(html).not.toContain("这是单独渲染的最终回答。");
+  });
+
+  it("renders tasks and tools as flat Codex actions without nested disclosures", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
-    expect(html).toContain(
-      '<details class="execution-task task-completed"><summary>',
-    );
-    expect(html).toContain(
-      '<details class="execution-task task-running" open=""><summary>',
-    );
-    expect(html).toContain("分析依赖关系");
-    expect(html).toContain("检查审批边界");
+    expect(html.match(/<details/g)).toHaveLength(1);
+    expect(html).not.toContain("execution-task");
+    expect(html).not.toContain("execution-tool");
     expect(html).toContain("fact-checker");
     expect(html).toContain("risk-reviewer");
-    expect(html).toContain("fact-checker@1.0.0");
-    expect(html).toContain("2 个工具");
-    expect(html).toContain("正在读取 docs/agent-production-platform-design.md");
-    expect(html).toContain(
-      "正在 web/harness-console 中搜索“publishDraft|promote”",
-    );
-    expect(html).not.toContain("subagent.started");
+    expect(html).toContain("运行了 2 个子任务");
+    expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
   });
 
-  it("uses active wording for a tool that has not produced a result", () => {
+  it("groups adjacent active tools into one quiet action row", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
-    expect(html).toContain("正在读取 docs/agent-production-platform-design.md");
-    expect(html).not.toContain("已读取 docs/agent-production-platform-design.md");
-    expect(html).toContain("进行中");
+    expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
+    expect(html.match(/execution-action action-running/g)?.length).toBeGreaterThan(0);
   });
 
   it("uses one chronological work log for expanded run details", () => {
@@ -238,10 +332,9 @@ describe("execution ribbon", () => {
     });
     const html = renderToStaticMarkup(<ActivitySummary activity={routed} />);
 
-    expect(html).toContain('aria-label="思考与行动"');
-    expect(html).toContain("运行模型");
-    expect(html).not.toContain("<h4>子任务</h4>");
-    expect(html).not.toContain("<h4>使用的工具</h4>");
+    expect(html).toContain('aria-label="处理过程"');
+    expect(html).not.toContain("运行模型");
+    expect(html).not.toContain("<h4>");
   });
 
   it("shows completed discovery tools directly inside the turn disclosure", () => {
@@ -309,13 +402,90 @@ describe("execution ribbon", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={completedTools} />);
 
     expect(html).toContain('data-run-id="run-ribbon"');
-    expect(html).toContain("已读取文件");
-    expect(html).not.toContain('class="execution-tool-batch"');
-    expect(html).toContain("已查找文件 src/**/*.py，范围 src/harness");
+    expect(html).toContain("查找了 1 次文件 · 搜索了 1 次内容 · 读取了 1 个文件");
     expect(html).toContain("已读取 docs/agent-production-platform-design.md");
-    expect(html).toContain(
-      "已在 web/harness-console 中搜索“publishDraft|promote”",
-    );
+    expect(html).toContain("已在 web/harness-console 中搜索“publishDraft|promote”");
+    expect(html).toContain("已查找文件 src/**/*.py，范围 src/harness");
+    expect(html.match(/execution-action-detail action-completed/g)).toHaveLength(3);
+    expect(html).not.toContain('class="execution-tool-batch"');
+    expect(html).not.toContain("execution-tool");
+  });
+
+  it("shows every grouped command and result without another disclosure", () => {
+    const command = "mkdir -p outputs/detection_output outputs/results && python .claude/skills/grid-system/scripts/add_grid.py inputs/original/sample.jpg";
+    const withCommand = runActivitySchema.parse({
+      ...activity,
+      items: [
+        activity.items[0],
+        {
+          id: "glob-request",
+          event_type: "tool.request",
+          kind: "tool",
+          status: "running",
+          title: "调用 Glob",
+          timestamp: "2026-07-14T00:00:02Z",
+          sequence: 2,
+          metadata: {
+            tool_call_id: "glob-1",
+            name: "Glob",
+            arguments: { pattern: "inputs/original/*" },
+          },
+        },
+        {
+          id: "glob-result",
+          event_type: "tool.result",
+          kind: "tool",
+          status: "succeeded",
+          title: "Glob 已完成",
+          timestamp: "2026-07-14T00:00:03Z",
+          sequence: 3,
+          metadata: {
+            tool_call_id: "glob-1",
+            result_summary: "返回 1 个文件",
+            result_preview: "inputs/original/sample.jpg",
+          },
+        },
+        {
+          id: "bash-request",
+          event_type: "tool.request",
+          kind: "tool",
+          status: "running",
+          title: "调用 Bash",
+          timestamp: "2026-07-14T00:00:04Z",
+          sequence: 4,
+          metadata: {
+            tool_call_id: "bash-1",
+            name: "Bash",
+            arguments: { command },
+          },
+        },
+        {
+          id: "bash-result",
+          event_type: "tool.result",
+          kind: "tool",
+          status: "succeeded",
+          title: "Bash 已完成",
+          timestamp: "2026-07-14T00:00:05Z",
+          sequence: 5,
+          metadata: {
+            tool_call_id: "bash-1",
+            result_summary: "退出码 0",
+            result_preview: "grid image ready",
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(<ActivitySummary activity={withCommand} />);
+
+    expect(html).toContain("查找了 1 次文件 · 运行了 1 个命令");
+    expect(html).toContain("已查找文件 inputs/original/*");
+    expect(html).toContain(`已运行 ${command.replace("&&", "&amp;&amp;")}`);
+    expect(html).toContain("返回 1 个文件");
+    expect(html).toContain("退出码 0");
+    expect(html).toContain("inputs/original/sample.jpg");
+    expect(html).toContain("grid image ready");
+    expect(html.match(/<details/g)).toHaveLength(1);
   });
 
   it("keeps each completed run in its own Codex-style turn group", () => {
@@ -398,14 +568,13 @@ describe("execution ribbon", () => {
 
     expect(html).toContain('data-run-id="run-first"');
     expect(html).toContain('data-run-id="run-second"');
-    expect(html).toContain("已读取文件");
-    expect(html).toContain("已运行命令");
+    expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
     expect(html).toContain("已运行 npm test");
   });
 
   it.each([
     ["approval.requested", "tool", "waiting", "等待审批"],
-    ["run.failed", "error", "failed", "执行失败"],
+    ["run.failed", "error", "failed", "处理失败"],
   ] as const)(
     "keeps the %s state explicit in the collapsed line",
     (eventType, kind, status, label) => {
@@ -439,9 +608,10 @@ describe("execution ribbon", () => {
           `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open`,
         );
       } else {
-        expect(html).not.toContain(
-          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" open`,
+        expect(html).toContain(
+          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false">`,
         );
+        expect(html).toContain('aria-expanded="false"');
       }
     },
   );
@@ -467,6 +637,6 @@ describe("execution ribbon", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={completed} />);
 
     expect(html).toContain("phase-completed");
-    expect(html).toContain("已读取文件");
+    expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
   });
 });

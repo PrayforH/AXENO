@@ -12,6 +12,7 @@ from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import AgentVersion, AgentVersionStatus
 from harness.core.ports import AgentRegistry
 from harness.knowledge.service import KnowledgeService
+from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import (
     AgentDraftCompiler,
@@ -25,6 +26,7 @@ from harness.studio.models import (
     CapabilityCatalog,
     CreateAgentDraftRequest,
     DraftValidationResult,
+    ImportedAgentBundle,
     ReplaceAgentDraftRequest,
     ValidationIssue,
     ValidationSeverity,
@@ -161,6 +163,64 @@ class AgentStudioService:
     async def bundle(self, tenant_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id)
         return compiler.compile(await self.get(tenant_id, draft_id))
+
+    async def import_bundle(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        content: bytes,
+    ) -> ImportedAgentBundle:
+        parsed = parse_agent_bundle(content)
+        now = self._clock()
+        draft = AgentDraft(
+            draftId=self._id_generator(),
+            tenantId=tenant_id,
+            revision=1,
+            spec=parsed.spec,
+            createdBy=user_id,
+            updatedBy=user_id,
+            createdAt=now,
+            updatedAt=now,
+        )
+        compiler = await self._compiler_for(tenant_id)
+        round_trip_verified = False
+        try:
+            compiled = compiler.compile(draft)
+            round_trip_verified = compiled.report.package_hash == parsed.package_hash
+        except DraftCompilationError:
+            if parsed.lossless:
+                raise
+        if parsed.lossless and not round_trip_verified:
+            raise AgentBundleImportError(
+                "Studio Bundle 无法按当前编译器无损重建；请检查能力目录或 Bundle 版本"
+            )
+        await self._repository.add(draft)
+        if self._audit is not None:
+            await self._audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.draft.import",
+                resource_type="agent_draft",
+                resource_id=draft.draft_id,
+                outcome="success",
+                details={
+                    "agent_name": draft.spec.name,
+                    "agent_version": draft.spec.version,
+                    "source_content_hash": parsed.content_hash,
+                    "source_package_hash": parsed.package_hash,
+                    "lossless": parsed.lossless,
+                    "round_trip_verified": round_trip_verified,
+                },
+            )
+        return ImportedAgentBundle(
+            draft=draft,
+            sourceContentHash=parsed.content_hash,
+            sourcePackageHash=parsed.package_hash,
+            lossless=parsed.lossless,
+            roundTripVerified=round_trip_verified,
+            warnings=parsed.warnings,
+        )
 
     async def publish(
         self,

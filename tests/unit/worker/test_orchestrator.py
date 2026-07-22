@@ -21,8 +21,10 @@ from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.runs import RunService
 from harness.config import Settings
+from harness.core.events import RunEvent
 from harness.core.models import Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
+from harness.observability.redaction import correlation_hash
 from harness.policy.models import ContextTrust, PolicyDecision, PolicyRule, ToolResultPolicyRule
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.results import ResultPolicyEngine
@@ -46,6 +48,7 @@ from harness.worker.orchestrator import (
     PolicyResolver,
     RunOrchestrator,
     RuntimeAssetStager,
+    final_artifact_paths,
     read_runtime_artifact,
 )
 
@@ -62,9 +65,7 @@ def test_runtime_artifact_reader_is_workspace_scoped_and_bounded(
     outside.write_bytes(b"outside")
     (workspace / "link.txt").symlink_to(outside)
 
-    path, content = read_runtime_artifact(
-        workspace, "valid.txt", max_bytes=5
-    )
+    path, content = read_runtime_artifact(workspace, "valid.txt", max_bytes=5)
 
     assert path == workspace / "valid.txt"
     assert content == b"valid"
@@ -74,6 +75,20 @@ def test_runtime_artifact_reader_is_workspace_scoped_and_bounded(
         read_runtime_artifact(workspace, "link.txt", max_bytes=100)
     with pytest.raises(ValueError, match="size limit"):
         read_runtime_artifact(workspace, "valid.txt", max_bytes=4)
+
+
+def test_final_artifact_paths_accepts_declared_workspace_files_only(tmp_path: Path) -> None:
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports/final.json").write_text("{}")
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "inputs/source.json").write_text("{}")
+
+    paths = final_artifact_paths(
+        tmp_path,
+        "结果：`reports/final.json`；临时：`/tmp/result.json`；输入：`inputs/source.json`",
+    )
+
+    assert paths == ("reports/final.json",)
 
 
 def ids() -> Callable[[str], str]:
@@ -177,9 +192,7 @@ class FencingRefreshRuntime(FakeRuntime):
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         assert self.runs is not None
         current = await self.runs.get(context.run.tenant_id, context.run.run_id)
-        refreshed = current.model_copy(
-            update={"fencing_token": current.fencing_token + 1}
-        )
+        refreshed = current.model_copy(update={"fencing_token": current.fencing_token + 1})
         assert await self.runs.compare_and_set(current.status, refreshed)
         yield RuntimeEvent(type="message.start")
         yield RuntimeEvent(type="message.delta", payload={"text": "approved"})
@@ -191,6 +204,22 @@ class WorkspaceOutputRuntime(FakeRuntime):
         output = context.workspace / "outputs" / "report.md"
         output.parent.mkdir(parents=True)
         output.write_text("verified output")
+        yield RuntimeEvent(type="message.completed")
+
+
+class DeclaredArtifactRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        report = context.workspace / "reports" / "final.json"
+        report.parent.mkdir(parents=True)
+        report.write_text('{"status":"verified"}')
+        internal = context.workspace / "scratch" / "notes.txt"
+        internal.parent.mkdir(parents=True)
+        internal.write_text("intermediate")
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(
+            type="message.delta",
+            payload={"text": "最终产物：`reports/final.json`"},
+        )
         yield RuntimeEvent(type="message.completed")
 
 
@@ -221,9 +250,7 @@ class AssetCheckingSandboxProvider(LocalSandboxProvider):
         self.asset_was_ready = False
 
     async def prepare(self, handle: SandboxHandle) -> None:
-        self.asset_was_ready = (
-            handle.path / ".claude/skills/domain-core/SKILL.md"
-        ).is_file()
+        self.asset_was_ready = (handle.path / ".claude/skills/domain-core/SKILL.md").is_file()
         await super().prepare(handle)
 
 
@@ -366,13 +393,19 @@ async def test_run_completion_revokes_every_run_scoped_credential(
 
 
 @pytest.mark.asyncio
-async def test_daytona_workspace_outputs_are_published_as_artifacts(
+@pytest.mark.parametrize("container_isolation", [False, True])
+async def test_workspace_outputs_are_published_as_artifacts_for_every_sandbox(
     tmp_path: Path,
+    container_isolation: bool,
 ) -> None:
     orchestrator, _, _, events = await arrange(
         tmp_path,
         runtime_override=WorkspaceOutputRuntime(),
-        sandbox_override=ContainerSandboxProvider(root=tmp_path),
+        sandbox_override=(
+            ContainerSandboxProvider(root=tmp_path)
+            if container_isolation
+            else LocalSandboxProvider(root=tmp_path)
+        ),
         enable_artifacts=True,
     )
 
@@ -384,6 +417,60 @@ async def test_daytona_workspace_outputs_are_published_as_artifacts(
     assert len(artifact_events) == 1
     assert artifact_events[0].payload["name"] == "report.md"
     assert artifact_events[0].payload["source"] == "workspace-output"
+
+
+@pytest.mark.asyncio
+async def test_workspace_outputs_skip_paths_already_published_by_runtime(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=WorkspaceOutputRuntime(),
+        enable_artifacts=True,
+    )
+    await events.append(
+        RunEvent(
+            event_id="event-runtime-artifact",
+            tenant_id="tenant-a",
+            run_id="run-1",
+            session_id="session-1",
+            sequence=1,
+            type="artifact.ready",
+            timestamp=NOW,
+            payload={
+                "artifact_id": "artifact-runtime",
+                "name": "report.md",
+                "source_path": "outputs/report.md",
+            },
+        )
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+    artifact_events = [event for event in recorded if event.type == "artifact.ready"]
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert len(artifact_events) == 1
+    assert artifact_events[0].payload["artifact_id"] == "artifact-runtime"
+
+
+@pytest.mark.asyncio
+async def test_final_response_declared_file_is_published_outside_outputs(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=DeclaredArtifactRuntime(),
+        enable_artifacts=True,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+    artifact_events = [event for event in recorded if event.type == "artifact.ready"]
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert [event.payload["name"] for event in artifact_events] == ["reports/final.json"]
+    assert artifact_events[0].payload["source"] == "final-response"
 
 
 @pytest.mark.asyncio
@@ -527,9 +614,7 @@ async def test_terminal_transition_refreshes_fencing_after_inline_approval(
     tmp_path: Path,
 ) -> None:
     runtime = FencingRefreshRuntime()
-    orchestrator, _, runs, events = await arrange(
-        tmp_path, runtime_override=runtime
-    )
+    orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=runtime)
     runtime.runs = runs
 
     result = await orchestrator.execute("tenant-a", "run-1")
@@ -572,9 +657,7 @@ async def test_next_run_receives_bound_claude_session_for_resume(
 
 @pytest.mark.asyncio
 async def test_runtime_timeout_has_a_distinct_terminal_status(tmp_path: Path) -> None:
-    orchestrator, _, runs, events = await arrange(
-        tmp_path, runtime_override=TimedOutRuntime()
-    )
+    orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=TimedOutRuntime())
 
     result = await orchestrator.execute("tenant-a", "run-1")
 
@@ -587,9 +670,7 @@ async def test_runtime_timeout_has_a_distinct_terminal_status(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_sdk_error_result_cannot_be_recorded_as_success(tmp_path: Path) -> None:
-    orchestrator, _, runs, events = await arrange(
-        tmp_path, runtime_override=ErrorResultRuntime()
-    )
+    orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=ErrorResultRuntime())
 
     result = await orchestrator.execute("tenant-a", "run-1")
 
@@ -618,9 +699,7 @@ async def test_provider_content_rejection_keeps_a_safe_recoverable_failure(
 
     assert result.status is RunStatus.FAILED
     assert result.error_code == "provider_content_rejected"
-    assert (await runs.get("tenant-a", "run-1")).error_code == (
-        "provider_content_rejected"
-    )
+    assert (await runs.get("tenant-a", "run-1")).error_code == ("provider_content_rejected")
     emitted = await events.list_after("tenant-a", "run-1", 0)
     assert emitted[-1].payload == {
         "subtype": "api_error_400",
@@ -651,6 +730,23 @@ async def test_passes_provisioned_sandbox_facts_to_runtime(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_local_colima_workspace_exposes_command_executor(
+    tmp_path: Path,
+) -> None:
+    runtime = CapturingRuntime()
+    orchestrator, _, _, _ = await arrange(
+        tmp_path,
+        runtime_override=runtime,
+        sandbox_override=LocalSandboxProvider(root=tmp_path),
+    )
+
+    await orchestrator.execute("tenant-a", "run-1")
+
+    assert runtime.contexts[0].sandbox_provider == "local"
+    assert runtime.contexts[0].sandbox_command_executor is not None
+
+
+@pytest.mark.asyncio
 async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
     exporter = InMemorySpanExporter()
     observability = build_observability(
@@ -658,9 +754,7 @@ async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
         exporter=exporter,
         processor_factory=SimpleSpanProcessor,
     )
-    orchestrator, _, _, _ = await arrange(
-        tmp_path, observability=observability
-    )
+    orchestrator, _, _, _ = await arrange(tmp_path, observability=observability)
 
     await orchestrator.execute("tenant-a", "run-1")
 
@@ -682,6 +776,15 @@ async def test_executes_run_with_stage_level_traces(tmp_path: Path) -> None:
         for span in spans
         if span.name.startswith("harness.")
     )
+    worker_span = next(span for span in spans if span.name == "harness.worker.run")
+    assert worker_span.attributes is not None
+    assert worker_span.attributes["langfuse.observation.type"] == "agent"
+    assert worker_span.attributes["langfuse.trace.name"] == "agent-run"
+    assert worker_span.attributes["langfuse.user.id"] == correlation_hash("user-1")
+    assert worker_span.attributes["langfuse.trace.metadata.agent_name"] == "echo-agent"
+    progress_span = next(span for span in spans if span.name == "assistant-progress")
+    assert progress_span.attributes is not None
+    assert progress_span.attributes["langfuse.observation.type"] == "event"
 
 
 @pytest.mark.asyncio
@@ -912,9 +1015,7 @@ async def test_cancellation_interrupts_background_sub_and_emits_child_terminal(
     await sessions.add(session)
     await runs.add(run)
     metrics = ReliabilityMetrics()
-    event_service = EventService(
-        events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
-    )
+    event_service = EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids())
     orchestrator = RunOrchestrator(
         sessions=sessions,
         runs=runs,
@@ -942,9 +1043,7 @@ async def test_cancellation_interrupts_background_sub_and_emits_child_terminal(
 
     result = await asyncio.wait_for(execution, timeout=1)
     emitted = await events.list_after("tenant-a", "run-1", 0)
-    child_terminal = next(
-        event for event in emitted if event.type == "subagent.failed"
-    )
+    child_terminal = next(event for event in emitted if event.type == "subagent.failed")
 
     assert result.status is RunStatus.CANCELLED
     assert runtime.cancelled is True
@@ -971,9 +1070,7 @@ async def test_parent_failure_emits_terminal_for_every_started_subagent(
 
     result = await orchestrator.execute("tenant-a", "run-1")
     emitted = await events.list_after("tenant-a", "run-1", 0)
-    child_terminal = next(
-        event for event in emitted if event.type == "subagent.failed"
-    )
+    child_terminal = next(event for event in emitted if event.type == "subagent.failed")
 
     assert result.status is RunStatus.FAILED
     assert child_terminal.payload["task_id"] == "failed-child"

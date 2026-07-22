@@ -1,11 +1,13 @@
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    McpServerConfig,
     ResultMessage,
     TextBlock,
 )
@@ -17,13 +19,14 @@ from harness.adapters.memory import InMemoryAgentRegistry
 from harness.cli import main
 from harness.config import Settings
 from harness.core.errors import ConflictError
-from harness.core.manifest import SubagentSpec, load_manifest
+from harness.core.manifest import SubagentSpec, ToolSpec, load_manifest
 from harness.core.models import AgentVersion, AgentVersionStatus, Run, RunStatus, Session
 from harness.execution.credentials import CredentialResourceKind, InMemoryCredentialBroker
 from harness.observability.provider import build_observability
 from harness.runtime.base import RuntimeContext
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
+from harness.runtime.tools import McpServerRegistration, ToolResolver
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.compiler import AgentDraftCompiler
 from harness.studio.factory import create_draft_spec
@@ -106,7 +109,12 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
 
     events = [event async for event in runtime.execute(context)]
 
+    assert captured[0].model == "deepseek-v4-flash"
+    assert captured[0].max_buffer_size == 32 * 1024 * 1024
+    assert "Every final deliverable must exist" in str(captured[0].system_prompt)
     assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == broker_secret
+    selected_event = next(event for event in events if event.type == "model.route.selected")
+    assert selected_event.payload["model"] == "deepseek-v4-flash"
     lease_event = events[0]
     assert lease_event.type == "credential.lease.issued"
     assert lease_event.payload["lease_id"] == "model-lease-one"
@@ -144,6 +152,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
                         ),
                     }
                 ),
+                "mcp_servers": ("tavily-readonly",),
                 "tool_exposure_mode": "on_demand",
             }
         ),
@@ -193,6 +202,18 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
             capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
         ),
         query_factory=fake_query,
+        tool_resolver=ToolResolver(
+            mcp_registry={
+                "tavily-readonly": McpServerRegistration(
+                    server_name="tavily",
+                    config={"type": "http", "url": "https://mcp.example.test"},
+                    allowed_tools=(
+                        "mcp__tavily__tavily_search",
+                        "mcp__tavily__tavily_extract",
+                    ),
+                )
+            }
+        ),
     )
     context = RuntimeContext(
         run=Run(
@@ -225,7 +246,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         "exposure_mode": "on_demand",
         "catalog_revision": 4,
         "content_hash": snapshot.tool_directory.content_hash,
-        "entry_count": 3,
+        "entry_count": 5,
     }
     assert "directory-route-secret" not in repr(events)
     assert "api.anthropic.com" not in repr(directory_event.payload)
@@ -334,6 +355,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     events = [event async for event in runtime.execute(context)]
 
     assert captured[0].env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
+    assert captured[0].model == "claude-sonnet-4-6"
     assert captured[0].env["ANTHROPIC_API_KEY"] == "anthropic-secret"
     assert "ANTHROPIC_AUTH_TOKEN" not in captured[0].env
     assert (
@@ -369,6 +391,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     override_events = [event async for event in runtime.execute(override_context)]
 
     assert captured[1].env["ANTHROPIC_BASE_URL"] == "https://new-api.example"
+    assert captured[1].model == "gateway-model"
     selected = next(event for event in override_events if event.type == "model.route.selected")
     assert selected.payload["route_id"] == "new-api-default"
     assert selected.payload["selection_source"] == "task_override"
@@ -546,7 +569,7 @@ async def test_model_span_has_safe_agent_route_and_policy_dimensions(
     assert model_span.attributes is not None
     assert model_span.attributes["agent.name"] == "helper-agent"
     assert model_span.attributes["gen_ai.provider.name"] == "new-api"
-    assert model_span.attributes["gen_ai.request.model"] == "gateway-model"
+    assert model_span.attributes["gen_ai.request.model"] == "deepseek-v4-flash"
     assert model_span.attributes["harness.policy.profile"] == "production-read-only"
     assert model_span.attributes["agent.package_hash"] == "b" * 64
     assert model_span.attributes["gen_ai.usage.input_tokens"] == 100
@@ -644,7 +667,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     events = [event async for event in runtime.execute(context)]
 
     assert captured[0][0] == "hello registry"
-    assert captured[0][1].model == "cc-switch-model"
+    assert captured[0][1].model == "deepseek-v4-flash"
     assert captured[0][1].env["ANTHROPIC_BASE_URL"] == "https://gateway.example"
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
     assert captured[0][1].env["CLAUDE_CONFIG_DIR"] == str(
@@ -653,7 +676,8 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     assert not (tmp_path / ".harness-runtime").exists()
     assert captured[0][1].agents is not None
     helper = captured[0][1].agents["helper-agent"]
-    assert helper.prompt == helper_snapshot.system_prompt
+    assert helper.prompt.startswith(helper_snapshot.system_prompt)
+    assert "Never quote, reproduce or reveal" in helper.prompt
     assert helper.tools == ["Read", "Glob", "Grep"]
     assert helper.skills == ["delegated-investigation"]
     assert helper.model == "inherit"
@@ -775,7 +799,115 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
     assert captured[0].agents["fact-checker"].description.startswith("Verify claims")
     assert captured[0].agents["fact-checker"].background is True
     assert captured[0].agents["risk-reviewer"].background is False
-    assert captured[0].agents["fact-checker"].prompt == helper_snapshot.system_prompt
+    assert captured[0].agents["fact-checker"].prompt.startswith(
+        helper_snapshot.system_prompt
+    )
+    assert "Never quote, reproduce or reveal" in captured[0].agents[
+        "fact-checker"
+    ].prompt
+
+
+@pytest.mark.asyncio
+async def test_subagent_receives_its_declared_mcp_tools(tmp_path: Path) -> None:
+    root_snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    child_snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    child_manifest = child_snapshot.manifest.model_copy(
+        update={
+            "spec": child_snapshot.manifest.spec.model_copy(
+                update={
+                    "tools": (
+                        *child_snapshot.manifest.spec.tools,
+                        ToolSpec(mcp="crm-readonly"),
+                    )
+                }
+            )
+        }
+    )
+    child_snapshot = child_snapshot.model_copy(update={"manifest": child_manifest})
+    registry = InMemoryAgentRegistry()
+    now = datetime.now(UTC)
+    for name, version, snapshot in (
+        ("echo-agent", "0.1.0", root_snapshot),
+        ("helper", "1.0.0", child_snapshot),
+    ):
+        await registry.add(
+            AgentVersion(
+                tenant_id="tenant-a",
+                name=name,
+                version=version,
+                status=AgentVersionStatus.PUBLISHED,
+                manifest_hash=snapshot.content_hash,
+                snapshot=snapshot.model_dump(mode="json"),
+                created_at=now,
+            )
+        )
+    config = cast(
+        McpServerConfig,
+        {"type": "http", "url": "https://mcp.example.test"},
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(
+        _prompt: str, options: ClaudeAgentOptions
+    ) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            base_url="https://gateway.example",
+            model="gateway-model",
+            provider="new-api",
+            credential=SecretStr("secret"),
+        ),
+        query_factory=fake_query,
+        tool_resolver=ToolResolver(
+            mcp_registry={
+                "crm-readonly": McpServerRegistration(
+                    server_name="crm",
+                    config=config,
+                    allowed_tools=("mcp__crm__search",),
+                )
+            }
+        ),
+    )
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-subagent-mcp",
+            session_id="session-subagent-mcp",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="subagent-mcp",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "delegate crm lookup"},
+        ),
+        session=Session(
+            session_id="session-subagent-mcp",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    _events = [event async for event in runtime.execute(context)]
+
+    options = captured[0]
+    assert options.agents is not None
+    assert "mcp__crm__search" in options.agents["helper"].tools
+    assert options.allowed_tools == ["mcp__crm__search"]
+    assert options.mcp_servers == {"crm": config}
 
 
 @pytest.mark.asyncio

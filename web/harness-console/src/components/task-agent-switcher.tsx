@@ -126,9 +126,10 @@ export function TaskAgentSwitcher({
         <span className="task-agent-switcher-copy">
           <small>当前智能体</small>
           <strong>
-            {selected?.displayName ?? (loading ? "正在读取…" : "暂无可用版本")}
+            {selected
+              ? `${selected.displayName} · ${selected.version}`
+              : (loading ? "正在读取…" : "暂无可用版本")}
           </strong>
-          {selected && <span>{selected.version}</span>}
         </span>
         <span className="task-agent-switcher-chevron" aria-hidden="true" />
       </button>
@@ -159,31 +160,54 @@ export function TaskAgentSwitcher({
             ) : (
               groups.map((group) => (
                 <section className="task-agent-group" key={group.name}>
-                  <div className="task-agent-group-copy">
-                    <strong>{group.displayName}</strong>
-                    <span>{group.name}</span>
-                  </div>
-                  <div className="task-agent-versions">
-                    {group.agents.map((agent) => {
-                      const coordinate = agentCoordinate(agent);
-                      const active =
-                        coordinate ===
-                        (selected ? agentCoordinate(selected) : "");
-                      return (
+                  {(() => {
+                    const selectedCoordinate = selected ? agentCoordinate(selected) : "";
+                    const activeAgent = group.agents.find(
+                      (agent) => agentCoordinate(agent) === selectedCoordinate,
+                    );
+                    const preferred = activeAgent ?? group.agents[0];
+                    const groupActive = Boolean(activeAgent);
+                    return (
+                      <>
                         <button
                           type="button"
                           role="option"
-                          aria-selected={active}
-                          className={active ? "is-active" : undefined}
-                          key={coordinate}
-                          onClick={() => choose(agent)}
+                          aria-selected={groupActive}
+                          className={`task-agent-group-choice${groupActive ? " is-active" : ""}`}
+                          onClick={() => choose(preferred)}
                         >
-                          <span>{agent.version}</span>
-                          {active && <small>当前</small>}
+                          <span className="task-agent-group-copy">
+                            <strong>{group.displayName}</strong>
+                            <span>{group.name} · {group.domain}</span>
+                          </span>
+                          {group.agents.length === 1 && (
+                            <small>{preferred.version}{groupActive ? " · 当前" : ""}</small>
+                          )}
                         </button>
-                      );
-                    })}
-                  </div>
+                        {group.agents.length > 1 && (
+                          <label className="task-agent-version-select">
+                            <select
+                              aria-label={`${group.displayName} 版本`}
+                              value={preferred.version}
+                              onChange={(event) => {
+                                const next = group.agents.find(
+                                  (agent) => agent.version === event.target.value,
+                                );
+                                if (next) choose(next);
+                              }}
+                            >
+                              {group.agents.map((agent) => (
+                                <option key={agentCoordinate(agent)} value={agent.version}>
+                                  {agent.version}
+                                  {agentCoordinate(agent) === selectedCoordinate ? " · 当前" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </>
+                    );
+                  })()}
                 </section>
               ))
             )}

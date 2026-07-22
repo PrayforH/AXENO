@@ -105,6 +105,8 @@ class ToolResolver:
         self,
         manifest: AgentManifest,
         identity: ExecutionIdentity | None = None,
+        *,
+        python_tool_overrides: Mapping[str, SdkMcpTool[Any]] | None = None,
     ) -> ResolvedTools:
         builtins: list[str] = []
         python_tools: list[SdkMcpTool[Any]] = []
@@ -114,9 +116,10 @@ class ToolResolver:
         result_trust: dict[str, ContextTrust] = {}
         sensitive_names: set[str] = set()
         sensitive_values: set[str] = set()
+        has_python_override = False
         mcp_registry = dict(self._mcp_registry)
         requested_mcp = {
-            cast(str, tool.mcp)
+            tool.mcp
             for tool in manifest.spec.tools
             if tool.mcp is not None
         }
@@ -131,13 +134,23 @@ class ToolResolver:
                     await self._mcp_registry_provider(identity.tenant_id)
                 )
 
+        python_tool_overrides = python_tool_overrides or {}
         for tool_spec in manifest.spec.tools:
             if tool_spec.builtin is not None:
                 if tool_spec.builtin not in builtins:
                     builtins.append(tool_spec.builtin)
                 continue
             if tool_spec.python_entry is not None:
-                python_tools.extend(self._load_python_tools(tool_spec.python_entry))
+                override = python_tool_overrides.get(tool_spec.python_entry)
+                if override is not None:
+                    python_tools.append(override)
+                    has_python_override = True
+                elif tool_spec.python_entry.startswith("bundle:"):
+                    raise ToolResolutionError(
+                        f"Bundle Python tool was not staged: {tool_spec.python_entry}"
+                    )
+                else:
+                    python_tools.extend(self._load_python_tools(tool_spec.python_entry))
                 continue
 
             reference = cast(str, tool_spec.mcp)
@@ -237,13 +250,21 @@ class ToolResolver:
 
         self._assert_unique_python_tool_names(python_tools)
         if python_tools:
-            server_name = "harness-python"
+            server_name = (
+                python_server_name(manifest.metadata.name)
+                if has_python_override
+                else "harness-python"
+            )
             if server_name in mcp_servers:
                 raise ToolResolutionError(f"duplicate MCP server name: {server_name}")
             mcp_servers[server_name] = create_sdk_mcp_server(
                 server_name,
                 tools=python_tools,
             )
+            for sdk_tool in python_tools:
+                canonical_name = f"mcp__{server_name}__{sdk_tool.name}"
+                allowed_tools.append(canonical_name)
+                result_trust[canonical_name] = ContextTrust.SAFE
 
         return ResolvedTools(
             builtin_tools=tuple(builtins),
@@ -287,6 +308,10 @@ class ToolResolver:
             names.add(sdk_tool.name)
 
 
+def python_server_name(agent_name: str) -> str:
+    return f"harness-python-{agent_name}"
+
+
 def enforce_published_tool_directory(
     snapshot: AgentManifestSnapshot,
     resolved: ResolvedTools,
@@ -309,7 +334,7 @@ def enforce_published_tool_directory(
         entry.name for entry in directory.entries if entry.source == "builtin"
     }
     expected_mcp = {
-        entry.name for entry in directory.entries if entry.source == "mcp"
+        entry.name for entry in directory.entries if entry.source in {"mcp", "python"}
     }
     actual_builtins = set(resolved.builtin_tools)
     actual_mcp = set(resolved.allowed_tools)

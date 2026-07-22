@@ -67,6 +67,15 @@ class ApprovalService:
                 "harness.approval.status": status,
                 "harness.approval.risk": approval.risk or "unknown",
                 "harness.policy.rule": approval.policy_rule or "unknown",
+                "langfuse.observation.type": "guardrail",
+                "langfuse.observation.level": (
+                    "WARNING" if status == "pending" else "DEFAULT"
+                ),
+                "langfuse.observation.status_message": status,
+                "langfuse.observation.metadata.tool_name": (
+                    approval.tool_name or "unknown"
+                ),
+                "langfuse.observation.metadata.risk": approval.risk or "unknown",
             },
         ):
             self._observability.annotate_current_io(

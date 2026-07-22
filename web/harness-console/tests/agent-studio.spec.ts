@@ -1,25 +1,44 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_STUDIO_DRAFT,
+  MODEL_ROUTES,
   evaluateStudioDraft,
   restoreStudioDraft,
 } from "../src/lib/agent-studio";
 
 describe("Agent Studio effective contract", () => {
+  it("offers both DeepSeek V4 models on the compatible route", () => {
+    const route = MODEL_ROUTES.find((item) => item.id === "new-api-default");
+
+    expect(route?.label).toBe("DeepSeek V4");
+    expect(route?.models).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+  });
+
   it("keeps the full public-opinion prompt, workflow and reference files", () => {
     const skill = DEFAULT_STUDIO_DRAFT.skills[0];
 
-    expect(DEFAULT_STUDIO_DRAFT.version).toBe("0.2.1");
+    expect(DEFAULT_STUDIO_DRAFT.version).toBe("0.3.5");
+    expect(DEFAULT_STUDIO_DRAFT.model).toBe("deepseek-v4-pro");
     expect(DEFAULT_STUDIO_DRAFT.systemPrompt.length).toBeGreaterThan(1_000);
-    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain("外部检索必须由 Lead Agent");
-    expect(skill.instructions.length).toBeGreaterThan(1_000);
-    expect(skill.instructions).toContain("Build an evidence ledger");
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain("专用舆情 MCP");
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain(
+      ".claude/skills/public-opinion-analysis/references/",
+    );
+    expect(skill.instructions.length).toBeGreaterThan(700);
+    expect(skill.instructions).toContain("建立证据台账");
+    expect(skill.instructions).toContain("低风险的隔离沙箱只读 Bash");
+    expect(skill.instructions).not.toContain("读取 `references/");
     expect(skill.files?.map((file) => file.path)).toEqual([
       "references/report-contract.md",
+      "references/query-contract.md",
+      "references/report-rendering.md",
       "references/risk-rubric.md",
     ]);
-    expect(skill.files?.[0].content).toContain("9. **来源清单**");
-    expect(skill.files?.[1].content).toContain("## Level 3 — critical");
+    expect(skill.files?.[0].content).toContain("10. **来源清单**");
+    expect(skill.files?.[1].content).toContain("region_codes");
+    expect(skill.files?.[2].content).toContain("base64");
+    expect(skill.files?.[2].content).toContain("低风险只读 Bash");
+    expect(skill.files?.[3].content).toContain("## Level 3 — critical");
   });
 
   it("models Tavily as controlled MCP egress while keeping sandbox mandatory", () => {
@@ -29,7 +48,7 @@ describe("Agent Studio effective contract", () => {
     expect(contract.network).toBe("external");
     expect(contract.networkLabel).toBe("受控外部 MCP");
     expect(contract.sandboxLabel).toBe("隔离执行 · 平台托管");
-    expect(contract.risk).toBe("medium");
+    expect(contract.risk).toBe("high");
     expect(contract.collaborationLabel).toBe("1 Lead + 3 Sub");
     expect(contract.subagentCount).toBe(3);
     expect(contract.backgroundSubagentCount).toBe(3);
@@ -143,7 +162,7 @@ describe("Agent Studio effective contract", () => {
       "评测 evidence-backed-brief 的必需与禁止工具冲突：Bash",
     );
     expect(contract.issues).toContain(
-      "评测 evidence-backed-brief 要求未启用工具：Bash, UnknownTool",
+      "评测 evidence-backed-brief 要求未启用工具：UnknownTool",
     );
   });
 
@@ -169,7 +188,7 @@ describe("Agent Studio effective contract", () => {
       ref: "helper-agent@1.0.0",
       alias: "fact-researcher",
     });
-    expect(restored?.evalCases[0].expect.requiredTools).toEqual(["Read"]);
+    expect(restored?.evalCases[0].expect.requiredTools).toEqual([]);
     expect(evaluateStudioDraft(restored as typeof DEFAULT_STUDIO_DRAFT).ready).toBe(true);
   });
 });

@@ -204,6 +204,7 @@ describe("run view model", () => {
           metadata: {
             tool_call_id: "tool-1",
             result_summary: "返回 12 行 · 480 字符",
+            result_preview: "first line\nsecond line",
           },
         },
       ]),
@@ -218,6 +219,7 @@ describe("run view model", () => {
         status: "completed",
         arguments: { file_path: "README.md" },
         resultSummary: "返回 12 行 · 480 字符",
+        resultPreview: "first line\nsecond line",
       }),
     ]);
     expect(model.toolCount).toBe(1);

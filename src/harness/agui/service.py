@@ -237,7 +237,19 @@ class AguiRunService:
         async with self._lock:
             run_id = self._run_bindings.get(key)
         if run_id is None:
-            raise NotFoundError(f"AG-UI run is not bound: {thread_id}/{client_run_id}")
+            binding = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
+            run = await self._run_service.find_by_idempotency_key(
+                tenant_id,
+                binding.session_id,
+                client_run_id,
+            )
+            if run is None:
+                raise NotFoundError(
+                    f"AG-UI run is not bound: {thread_id}/{client_run_id}"
+                )
+            run_id = run.run_id
+            async with self._lock:
+                self._run_bindings[key] = run_id
         return await self._run_service.cancel(tenant_id, run_id)
 
     async def _resolve_binding(

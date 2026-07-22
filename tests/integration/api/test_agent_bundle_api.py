@@ -79,11 +79,11 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
     assert catalog.json() == [
         {
             "name": "public-opinion-agent",
-            "version": "0.1.2",
-            "display_name": "public-opinion-agent",
+            "version": "0.3.5",
+            "display_name": "舆情分析",
             "domain": "public-opinion",
             "model_route": "new-api-default",
-            "model": "deepseek-v4-flash",
+            "model": "deepseek-v4-pro",
             "model_capabilities": [],
         }
     ]
