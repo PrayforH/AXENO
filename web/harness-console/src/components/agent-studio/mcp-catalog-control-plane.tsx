@@ -27,6 +27,7 @@ const EMPTY_MCP: McpCapability = {
   risk: "medium",
   networkAccess: "external",
   sendsUserData: true,
+  readOnly: false,
   credentialManaged: true,
   executionLocation: "external-mcp",
   preflightRequired: true,
@@ -85,6 +86,7 @@ export function McpCatalogControlPlane({
     null,
   );
   const [draft, setDraft] = useState<McpCapability>(EMPTY_MCP);
+  const [allowedProfileIds, setAllowedProfileIds] = useState<string[]>([]);
   const [discovery, setDiscovery] =
     useState<StudioMcpDiscoveryResult | null>(null);
   const [toolQuery, setToolQuery] = useState("");
@@ -125,7 +127,23 @@ export function McpCatalogControlPlane({
   );
 
   function startCreate() {
-    setDraft({ ...EMPTY_MCP, category });
+    const networkAccess = knowledgeMode ? "internal" : "external";
+    setDraft({
+      ...EMPTY_MCP,
+      category,
+      networkAccess,
+      readOnly: knowledgeMode,
+    });
+    setAllowedProfileIds(
+      record?.catalog.executionProfiles
+        .filter(
+          (profile) =>
+            profile.enabled
+            && profile.sandboxProvider === "local"
+            && profile.networkAccess.includes(networkAccess),
+        )
+        .map((profile) => profile.profileId) ?? [],
+    );
     setDiscovery(null);
     setToolQuery("");
     setEditingReference(null);
@@ -138,6 +156,13 @@ export function McpCatalogControlPlane({
 
   function startEdit(item: McpCapability) {
     setDraft({ ...item });
+    setAllowedProfileIds(
+      record?.catalog.executionProfiles
+        .filter((profile) =>
+          profile.allowedMcpReferences.includes(item.reference),
+        )
+        .map((profile) => profile.profileId) ?? [],
+    );
     setDiscovery({
       endpointUrl: item.endpointUrl ?? "",
       transport: item.transport,
@@ -185,19 +210,24 @@ export function McpCatalogControlPlane({
       const previous = record.catalog.mcpServers.find(
         (item) => item.reference === reference,
       );
-      const result = await studioClient.upsertMcp(reference, record.revision, {
-        ...draft,
+      const result = await studioClient.upsertMcp(
         reference,
-        serverName: draft.serverName?.trim() || reference,
-        label: draft.label.trim(),
-        description: draft.description.trim(),
-        endpointUrl: draft.endpointUrl.trim(),
-        tools: draft.tools,
-        credentialReference:
-          draft.credentialReference?.trim().toUpperCase() || null,
-        version: editingReference ? draft.version + 1 : draft.version,
-        enabled: true,
-      });
+        record.revision,
+        {
+          ...draft,
+          reference,
+          serverName: draft.serverName?.trim() || reference,
+          label: draft.label.trim(),
+          description: draft.description.trim(),
+          endpointUrl: draft.endpointUrl.trim(),
+          tools: draft.tools,
+          credentialReference:
+            draft.credentialReference?.trim().toUpperCase() || null,
+          version: editingReference ? draft.version + 1 : draft.version,
+          enabled: true,
+        },
+        allowedProfileIds,
+      );
       setRecord(result.record);
       setShowForm(false);
       setEditingReference(null);
@@ -232,7 +262,7 @@ export function McpCatalogControlPlane({
         });
       }
       setNotice(
-        `${draft.label.trim()} 已${editingReference ? "更新" : "注册"}，目录 revision 为 ${result.record.revision}。`,
+        `${draft.label.trim()} 已${editingReference ? "更新" : "注册"}，已授权 ${allowedProfileIds.length} 个 Execution Profile，目录 revision 为 ${result.record.revision}。`,
       );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "MCP 未能保存。");
@@ -243,8 +273,29 @@ export function McpCatalogControlPlane({
 
   function updateConnection(patch: Partial<McpCapability>) {
     setDraft((current) => ({ ...current, ...patch, tools: [] }));
+    if (patch.networkAccess && record) {
+      setAllowedProfileIds((current) =>
+        current.filter((profileId) => {
+          const profile = record.catalog.executionProfiles.find(
+            (item) => item.profileId === profileId,
+          );
+          return Boolean(
+            profile?.enabled
+            && profile.networkAccess.includes(patch.networkAccess!),
+          );
+        }),
+      );
+    }
     setDiscovery(null);
     setToolQuery("");
+  }
+
+  function toggleAllowedProfile(profileId: string) {
+    setAllowedProfileIds((current) =>
+      current.includes(profileId)
+        ? current.filter((item) => item !== profileId)
+        : [...current, profileId],
+    );
   }
 
   async function discover() {
@@ -506,7 +557,13 @@ export function McpCatalogControlPlane({
             </button>
           ) : (
             <div className={styles.cards}>
-              {entries.map((item) => (
+              {entries.map((item) => {
+                const authorizedProfiles = record.catalog.executionProfiles.filter(
+                  (profile) =>
+                    profile.enabled
+                    && profile.allowedMcpReferences.includes(item.reference),
+                );
+                return (
                 <article key={item.reference} data-enabled={item.enabled}>
                   <div className={styles.cardHead}>
                     <span className={styles.capabilityMark} aria-hidden="true">
@@ -526,6 +583,11 @@ export function McpCatalogControlPlane({
                     <span>{TRANSPORT_LABELS[item.transport]}</span>
                     <span data-risk={item.risk}>{RISK_LABELS[item.risk]}</span>
                     <span>{NETWORK_LABELS[item.networkAccess]}</span>
+                    <span>
+                      {authorizedProfiles.length > 0
+                        ? `${authorizedProfiles.length} 个 Profile 已授权`
+                        : "尚未授权 Profile"}
+                    </span>
                     <span>{item.sendsUserData ? "发送用户数据" : "不发送用户数据"}</span>
                     <span>v{item.version}</span>
                   </div>
@@ -587,7 +649,8 @@ export function McpCatalogControlPlane({
                     </div>
                   )}
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
@@ -785,6 +848,55 @@ export function McpCatalogControlPlane({
                   <small>对应服务端引用 JSON 中的键。</small>
                 </label>
               )}
+              <section className={styles.profileAuthorization}>
+                <header>
+                  <div>
+                    <strong>允许在哪些 Execution Profile 中使用</strong>
+                    <span>
+                      与 MCP 定义原子保存；未勾选的 Profile 会继续拒绝该连接。
+                    </span>
+                  </div>
+                  <span>{allowedProfileIds.length} 个已授权</span>
+                </header>
+                <div>
+                  {(record?.catalog.executionProfiles ?? []).map((profile) => {
+                    const networkCompatible = profile.networkAccess.includes(
+                      draft.networkAccess,
+                    );
+                    const needsPrivateRouteConfirmation =
+                      draft.networkAccess === "internal"
+                      && profile.sandboxProvider !== "local";
+                    return (
+                      <label
+                        data-compatible={networkCompatible && profile.enabled}
+                        key={profile.profileId}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allowedProfileIds.includes(profile.profileId)}
+                          disabled={!networkCompatible || !profile.enabled}
+                          onChange={() => toggleAllowedProfile(profile.profileId)}
+                        />
+                        <span>
+                          <strong>{profile.label}</strong>
+                          <code>{profile.profileId}</code>
+                          <small>
+                            {!profile.enabled
+                              ? "Profile 已停用"
+                              : !networkCompatible
+                                ? `不支持${NETWORK_LABELS[draft.networkAccess]}`
+                                : profile.sandboxProvider === "local"
+                                  ? "本地 Preview；内网连接的安全默认项"
+                                  : needsPrivateRouteConfirmation
+                                    ? "生产授权前，请确认该 Sandbox 能访问此内网地址"
+                                    : "显式授权后可在此隔离环境调用"}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
               <div className={styles.discoveryAction}>
                 <div>
                   <strong>检测连接并识别工具</strong>
@@ -856,6 +968,19 @@ export function McpCatalogControlPlane({
                 </section>
               )}
               <div className={styles.checks}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={draft.readOnly}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        readOnly: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span>只读能力（允许 Worker 懒加载直连）</span>
+                </label>
                 <label>
                   <input
                     type="checkbox"

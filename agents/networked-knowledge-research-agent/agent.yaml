@@ -2,13 +2,13 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: networked-knowledge-research-agent
-  version: 0.1.3
+  version: 0.1.17
   labels:
     domain: networked-research
     template: analyst
     display-name: 联网知识研究
     description: 综合外部知识库、OpenAI 官方文档和公网搜索，生成带来源与不确定性说明的研究答复。
-    execution-profile: local-development
+    execution-profile: isolated-default
 spec:
   runtime: claude-agent-sdk
   model:
@@ -24,7 +24,7 @@ spec:
     - builtin: Glob
     - builtin: Grep
     - mcp: tavily-readonly
-    - mcp: novel-search
+    - mcp: knowledge-search
   subagents: []
   hooks: []
   permissions:

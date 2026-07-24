@@ -266,7 +266,9 @@ class ClaudeSdkRuntime:
                         self._observability.mark_current_span_error(subtype)
                 yield message
                 if isinstance(message, ResultMessage) and message.is_error:
-                    provider_result = message.result if isinstance(message.result, str) else ""
+                    provider_result = (
+                        message.result if isinstance(message.result, str) else ""
+                    )
                     error_code = provider_result_error_code(
                         provider_result,
                         message.api_error_status,
@@ -353,6 +355,7 @@ class ClaudeSdkRuntime:
             manifest,
             context.identity,
             python_tool_overrides=cast(Any, python_overrides(self._snapshot)),
+            tolerate_unavailable_mcp=True,
         )
         resolved_tools = enforce_published_tool_directory(
             self._snapshot,
@@ -404,6 +407,7 @@ class ClaudeSdkRuntime:
                     snapshot.manifest,
                     context.identity,
                     python_tool_overrides=cast(Any, python_overrides(snapshot)),
+                    tolerate_unavailable_mcp=True,
                 )
                 child_resolved = enforce_published_tool_directory(
                     snapshot,
@@ -617,6 +621,10 @@ class ClaudeSdkRuntime:
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         timeout_seconds = self._snapshot.manifest.spec.limits.timeout_seconds
+        if timeout_seconds is None:
+            async for event in self._execute(context):
+                yield event
+            return
         timeout = asyncio.timeout(timeout_seconds)
         try:
             async with timeout:
@@ -720,6 +728,18 @@ class ClaudeSdkRuntime:
                     "entry_count": len(self._snapshot.tool_directory.entries),
                 },
             )
+        if resolved_tools.unavailable_mcp:
+            yield RuntimeEvent(
+                type="tool.directory.degraded",
+                payload={
+                    "references": sorted(resolved_tools.unavailable_mcp),
+                    "tool_count": sum(
+                        len(tools)
+                        for tools in resolved_tools.unavailable_mcp.values()
+                    ),
+                    "reason": "credential_unavailable",
+                },
+            )
         subagent_governor = SubagentRuntimeGovernor(
             root=self._snapshot,
             subagent_versions=self._subagent_versions,
@@ -777,12 +797,16 @@ class ClaudeSdkRuntime:
                 prompt=prompt,
             ):
                 mapped = [
-                    self._redact_event(event, resolved_tools) for event in map_sdk_message(message)
+                    self._redact_event(event, resolved_tools)
+                    for event in map_sdk_message(message)
                 ]
                 if isinstance(message, TaskUpdatedMessage):
                     immediate: list[RuntimeEvent] = []
                     for event in mapped:
-                        if event.type in {"subagent.completed", "subagent.failed"}:
+                        if event.type in {
+                            "runtime.task.completed",
+                            "runtime.task.failed",
+                        }:
                             task_id = str(event.payload.get("task_id", ""))
                             if task_id:
                                 pending_task_terminals[task_id] = event
@@ -791,7 +815,10 @@ class ClaudeSdkRuntime:
                     mapped = immediate
                 else:
                     for event in mapped:
-                        if event.type in {"subagent.completed", "subagent.failed"}:
+                        if event.type in {
+                            "runtime.task.completed",
+                            "runtime.task.failed",
+                        }:
                             task_id = str(event.payload.get("task_id", ""))
                             if task_id:
                                 pending_task_terminals.pop(task_id, None)

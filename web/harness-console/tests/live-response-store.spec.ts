@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  RESPONSE_CANDIDATE_HOLD_MS,
-  liveResponseStore,
-} from "../src/lib/live-response-store";
+import { liveResponseStore } from "../src/lib/live-response-store";
 
 describe("liveResponseStore", () => {
   beforeEach(() => {
@@ -80,7 +77,7 @@ describe("liveResponseStore", () => {
     unsubscribe();
   });
 
-  it("promotes a stable candidate and then coalesces browser deltas", () => {
+  it("keeps a stable candidate provisional until the run finishes", () => {
     let paint: FrameRequestCallback | undefined;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
       paint = callback;
@@ -105,35 +102,34 @@ describe("liveResponseStore", () => {
       visible: false,
     });
 
-    vi.advanceTimersByTime(RESPONSE_CANDIDATE_HOLD_MS);
-    expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "平滑",
-      status: "streaming",
-      visible: true,
-    });
-
     liveResponseStore.append("message-smooth", "完成");
     liveResponseStore.completeMessage("message-smooth");
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "平滑完成",
       status: "complete",
+      visible: false,
     });
 
     const notification = vi.fn();
     const unsubscribe = liveResponseStore.subscribe(notification);
     liveResponseStore.completeRun();
-    expect(notification).not.toHaveBeenCalled();
+    expect(notification).toHaveBeenCalledTimes(1);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "平滑完成",
+      status: "complete",
+      visible: true,
+    });
     unsubscribe();
   });
 
-  it("releases a substantial answer early without waiting for the hold timer", () => {
+  it("keeps a substantial active message in the processing projection", () => {
     liveResponseStore.startRun("run-long-answer");
     liveResponseStore.startMessage("answer");
     liveResponseStore.append("answer", "正文".repeat(120));
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       messageId: "answer",
-      visible: true,
+      visible: false,
       status: "streaming",
     });
   });

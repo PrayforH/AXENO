@@ -122,6 +122,40 @@ def test_content_rejection_projects_an_actionable_failure() -> None:
     assert item["metadata"] == {"error_code": "provider_content_rejected"}
 
 
+def test_max_turns_projects_a_specific_failure_diagnostic() -> None:
+    result = activity_projection(
+        event(
+            "runtime.result",
+            {
+                "subtype": "error_max_turns",
+                "is_error": True,
+                "num_turns": 19,
+                "stop_reason": "tool_use",
+            },
+        )
+    )[0].model_dump(by_alias=True)["patch"][0]["value"]
+    failed = activity_projection(
+        event(
+            "run.failed",
+            {
+                "subtype": "error_max_turns",
+                "error_code": "runtime_result_error",
+            },
+            sequence=2,
+        )
+    )[0].model_dump(by_alias=True)["patch"][0]["value"]
+
+    assert result["title"] == "达到最大模型回合数"
+    assert result["summary"] == "已用完 19 个模型回合，任务尚未完成"
+    assert result["metadata"] == {
+        "subtype": "error_max_turns",
+        "turns": 19,
+        "stop_reason": "tool_use",
+    }
+    assert failed["title"] == "达到最大执行回合数"
+    assert failed["summary"] == ("Agent 多次调用工具后仍未完成任务，请查看处理过程中的失败动作。")
+
+
 def test_stale_mcp_directory_projects_an_actionable_agent_upgrade() -> None:
     projected = activity_projection(
         event(
@@ -140,8 +174,7 @@ def test_stale_mcp_directory_projects_an_actionable_agent_upgrade() -> None:
     item = projected["patch"][0]["value"]
     assert item["title"] == "Agent 工具配置需要更新"
     assert item["summary"] == (
-        "当前版本绑定的 MCP 工具已变化，请切换到最新版本，"
-        "或在 Studio 中重新检查并发布。"
+        "当前版本绑定的 MCP 工具已变化，请切换到最新版本，或在 Studio 中重新检查并发布。"
     )
     assert item["metadata"] == {
         "error_code": "runtime_error",
@@ -162,18 +195,9 @@ def test_projects_visible_progress_text_but_suppresses_hidden_thinking_noise() -
     )[0].model_dump(by_alias=True)
 
     assert commentary["patch"][0]["value"]["kind"] == "analysis"
-    assert commentary["patch"][0]["value"]["summary"] == (
-        "我先读取配置，再验证运行结果。"
-    )
-    assert commentary["patch"][0]["value"]["metadata"] == {
-        "message_id": "assistant-1"
-    }
-    assert (
-        activity_projection(
-            event("runtime.system", {"subtype": "thinking_tokens"})
-        )
-        == []
-    )
+    assert commentary["patch"][0]["value"]["summary"] == ("我先读取配置，再验证运行结果。")
+    assert commentary["patch"][0]["value"]["metadata"] == {"message_id": "assistant-1"}
+    assert activity_projection(event("runtime.system", {"subtype": "thinking_tokens"})) == []
 
 
 def test_projects_safe_runtime_milestones_without_internal_identifiers() -> None:
@@ -224,8 +248,7 @@ def test_historical_provider_diagnostic_is_sanitized_in_activity_replay() -> Non
 
     summary = projected["patch"][0]["value"]["summary"]
     assert summary == (
-        "模型服务拒绝了本轮上下文，可能由输入或外部检索内容触发。"
-        "请重新运行，或缩小主题与时间范围。"
+        "模型服务拒绝了本轮上下文，可能由输入或外部检索内容触发。请重新运行，或缩小主题与时间范围。"
     )
     assert "Content Exists Risk" not in repr(projected)
 
@@ -274,6 +297,29 @@ def test_tool_activity_keeps_redacted_arguments_and_compact_result_facts() -> No
     }
     assert "never-show" not in repr(request)
     assert "first match" in repr(result)
+
+
+def test_tool_activity_previews_structured_sdk_result_content() -> None:
+    result = activity_projection(
+        event(
+            "tool.result",
+            {
+                "tool_call_id": "tool-structured",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "first line\nsecond line",
+                    }
+                ],
+                "is_error": False,
+            },
+            3,
+        )
+    )[0].model_dump(by_alias=True)
+
+    metadata = result["patch"][0]["value"]["metadata"]
+    assert metadata["result_summary"] == "返回 1 项"
+    assert '"text": "first line\\nsecond line"' in metadata["result_preview"]
 
 
 def test_policy_denied_tool_result_explains_the_permission_mismatch() -> None:
@@ -346,6 +392,29 @@ def test_subagent_activity_keeps_parent_and_summary() -> None:
     assert "never-show" not in repr(projected)
 
 
+def test_degraded_tool_directory_names_only_the_unavailable_capability() -> None:
+    projected = activity_projection(
+        event(
+            "tool.directory.degraded",
+            {
+                "references": ["tavily-readonly"],
+                "tool_count": 2,
+                "reason": "credential_unavailable",
+            },
+            4,
+        )
+    )[0].model_dump(by_alias=True)
+
+    item = projected["patch"][0]["value"]
+    assert item["title"] == "部分工具暂不可用"
+    assert item["summary"] == ("tavily-readonly 缺少运行凭据；其余能力继续执行")
+    assert item["metadata"] == {
+        "references": ["tavily-readonly"],
+        "reason": "credential_unavailable",
+        "tool_count": 2,
+    }
+
+
 def test_build_run_activity_folds_each_turn_for_history_replay() -> None:
     activity = build_run_activity(
         [
@@ -388,9 +457,7 @@ def test_history_replay_hides_internal_skill_read_content() -> None:
                 {
                     "tool_call_id": "skill-read-1",
                     "name": "Read",
-                    "arguments": {
-                        "file_path": "/workspace/.claude/skills/domain/SKILL.md"
-                    },
+                    "arguments": {"file_path": "/workspace/.claude/skills/domain/SKILL.md"},
                 },
                 sequence=2,
             ),

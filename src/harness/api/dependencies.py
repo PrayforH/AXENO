@@ -396,7 +396,11 @@ def build_memory_container(
         return RunQuotaPlan(
             max_budget_usd=limits.max_budget_usd,
             max_model_tokens=limits.max_model_tokens,
-            ttl_seconds=limits.timeout_seconds + 300,
+            ttl_seconds=(
+                limits.timeout_seconds + 300
+                if limits.timeout_seconds is not None
+                else resolved_settings.run_reservation_ttl_seconds
+            ),
         )
 
     run_service = RunService(
@@ -689,6 +693,7 @@ def build_memory_container(
         sandbox = DeferredToolSandboxProvider(
             preflight_sandbox,
             provider_name=resolved_settings.sandbox_provider,
+            max_active_runs=resolved_settings.worker_deferred_max_active_runs,
         )
     skill_conversation: SkillConversationService | None = None
     if resolved_settings.runtime == "fake":

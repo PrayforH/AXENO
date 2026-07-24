@@ -14,7 +14,10 @@ from sqlalchemy import func, select
 from harness.agui.service import AguiRunService
 from harness.agui.task_title import AnthropicCompatibleTaskTitleGenerator
 from harness.api.dependencies import ApiContainer
-from harness.application.agent_assets import stage_published_agent_assets
+from harness.application.agent_assets import (
+    resolve_published_agent_versions,
+    stage_published_agent_assets,
+)
 from harness.application.agents import AgentService
 from harness.application.approvals import ApprovalService
 from harness.application.artifacts import ArtifactService
@@ -29,7 +32,7 @@ from harness.auth.audit import AuditService
 from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepository
 from harness.auth.service import AuthService, OAuthProviderConfig
 from harness.config import Settings
-from harness.core.manifest import AgentManifestSnapshot
+from harness.core.manifest import AgentManifest, AgentManifestSnapshot
 from harness.core.models import ModelCompatibility, RunStatus, Session
 from harness.core.ports import ArtifactStore, TaskQueue
 from harness.deployments.controller import DeploymentController
@@ -82,6 +85,7 @@ from harness.reliability.probes import CapacityProbe, QueueStats
 from harness.reliability.service import ReliabilityService
 from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
+    TAVILY_REFERENCE,
     default_tool_resolver,
     server_secret_credential_provider,
 )
@@ -239,6 +243,38 @@ def _gateways(
     )
 
 
+def _configured_model_gateways(
+    settings: Settings,
+    primary: CcSwitchClaudeConfig,
+    fallback: CcSwitchClaudeConfig | None,
+) -> tuple[CcSwitchClaudeConfig, ...]:
+    """Build executable model-specific routes plus the legacy default alias."""
+
+    gateways: list[CcSwitchClaudeConfig] = [primary]
+    if primary.route_id == "new-api-default":
+        for route_id, model in (
+            ("deepseek-v4-flash", settings.new_api_flash_model),
+            ("deepseek-v4-pro", settings.new_api_pro_model),
+        ):
+            if not model:
+                continue
+            gateways.append(
+                CcSwitchClaudeConfig(
+                    route_id=route_id,
+                    base_url=primary.base_url,
+                    model=model,
+                    provider=primary.provider,
+                    credential=primary.credential,
+                    auth_scheme=primary.auth_scheme,
+                    compatibility=primary.compatibility,
+                    capabilities=primary.capabilities,
+                )
+            )
+    if fallback is not None:
+        gateways.append(fallback)
+    return tuple({gateway.route_id: gateway for gateway in gateways}.values())
+
+
 def _sandbox(settings: Settings) -> SandboxProvider:
     if settings.sandbox_provider == "local":
         if not settings.allow_unsafe_local_sandbox:
@@ -327,6 +363,7 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         session_reuse_enabled=settings.daytona_session_reuse_enabled,
         session_idle_timeout_seconds=settings.daytona_session_idle_timeout_seconds,
         warm_pool_max_sessions=settings.daytona_warm_pool_max_sessions,
+        recovery_retention_seconds=settings.daytona_recovery_retention_seconds,
         max_collect_bytes=settings.workspace_archive_max_bytes,
         max_collect_members=settings.workspace_archive_max_members,
     )
@@ -346,7 +383,27 @@ def _runtime_sandbox(
     return DeferredToolSandboxProvider(
         backend,
         provider_name=settings.sandbox_provider,
+        max_active_runs=settings.worker_deferred_max_active_runs,
     )
+
+
+def _manifests_require_remote_cli(
+    manifests: tuple[AgentManifest, ...],
+    *,
+    read_only_mcp_references: frozenset[str],
+) -> bool:
+    """Keep executable Python and non-read-only external MCP away from the Worker."""
+
+    for manifest in manifests:
+        for tool in manifest.spec.tools:
+            if tool.python_entry is not None:
+                return True
+            if (
+                tool.mcp is not None
+                and tool.mcp not in read_only_mcp_references
+            ):
+                return True
+    return False
 
 
 def build_production_container(
@@ -364,6 +421,7 @@ def build_production_container(
         tuple[
             CcSwitchClaudeConfig,
             CcSwitchClaudeConfig | None,
+            tuple[CcSwitchClaudeConfig, ...],
             SandboxProvider,
             SandboxProvider,
             DynamicMcpCredentialProvider,
@@ -376,11 +434,18 @@ def build_production_container(
     credential_broker: InMemoryCredentialBroker | None = None
     try:
         title_gateway, title_fallback_gateway = _gateways(settings)
+        configured_gateways = _configured_model_gateways(
+            settings, title_gateway, title_fallback_gateway
+        )
     except ValueError:
         title_gateway = None
         title_fallback_gateway = None
+        configured_gateways = ()
     if execution_enabled:
         primary_gateway, fallback_gateway = _gateways(settings)
+        configured_gateways = _configured_model_gateways(
+            settings, primary_gateway, fallback_gateway
+        )
         sandbox_backend = _sandbox(settings)
         preflight_sandbox = sandbox_backend
         if isinstance(sandbox_backend, KubernetesSandboxProvider):
@@ -393,22 +458,12 @@ def build_production_container(
         if not isinstance(references_raw, dict) or not isinstance(secrets_raw, dict):
             raise ValueError("MCP credential settings must be JSON objects")
         typed_secrets = cast(dict[object, object], secrets_raw)
-        sources: dict[CredentialSourceKey, tuple[str, dict[str, SecretStr]]] = {
-            ("*", CredentialResourceKind.MODEL, primary_gateway.route_id or "new-api-default"): (
-                f"settings://{primary_gateway.provider}/primary",
-                {"api_key": primary_gateway.credential},
-            ),
-        }
-        if fallback_gateway is not None:
-            sources[
-                (
-                    "*",
-                    CredentialResourceKind.MODEL,
-                    fallback_gateway.route_id or "anthropic-official",
-                )
-            ] = (
-                f"settings://{fallback_gateway.provider}/fallback",
-                {"api_key": fallback_gateway.credential},
+        sources: dict[CredentialSourceKey, tuple[str, dict[str, SecretStr]]] = {}
+        for gateway in configured_gateways:
+            route_id = gateway.route_id or "new-api-default"
+            sources[("*", CredentialResourceKind.MODEL, route_id)] = (
+                f"settings://{gateway.provider}/{route_id}",
+                {"api_key": gateway.credential},
             )
         for server, raw_references in cast(dict[object, object], references_raw).items():
             if not isinstance(raw_references, dict):
@@ -430,6 +485,7 @@ def build_production_container(
         execution_config = (
             primary_gateway,
             fallback_gateway,
+            configured_gateways,
             sandbox,
             sandbox_backend,
             credential_provider,
@@ -650,7 +706,11 @@ def build_production_container(
         return RunQuotaPlan(
             max_budget_usd=limits.max_budget_usd,
             max_model_tokens=limits.max_model_tokens,
-            ttl_seconds=limits.timeout_seconds + 300,
+            ttl_seconds=(
+                limits.timeout_seconds + 300
+                if limits.timeout_seconds is not None
+                else settings.run_reservation_ttl_seconds
+            ),
         )
 
     run_service = RunService(
@@ -842,6 +902,7 @@ def build_production_container(
         (
             primary_gateway,
             fallback_gateway,
+            configured_gateways,
             runtime_sandbox,
             runtime_sandbox_backend,
             credential_provider,
@@ -855,6 +916,7 @@ def build_production_container(
             registry=registry,
             config=primary_gateway,
             fallback_config=fallback_gateway,
+            route_configs=configured_gateways,
             tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
                 profiles=policy_profiles,
@@ -876,37 +938,66 @@ def build_production_container(
             observability=observability,
             credential_broker=credential_broker,
         )
-        model_probe = AnthropicSandboxModelProbe(primary_gateway)
+        model_probe = AnthropicSandboxModelProbe(configured_gateways)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
 
         async def resolve_runtime_sandbox(tenant_id: str, session: Session) -> SandboxProvider:
-            if session.deployment_snapshot_id is None:
-                return runtime_sandbox
-            snapshot = await deployment_repository.get_snapshot(
-                tenant_id, session.deployment_snapshot_id
+            if session.deployment_snapshot_id is not None:
+                snapshot = await deployment_repository.get_snapshot(
+                    tenant_id, session.deployment_snapshot_id
+                )
+                profile = next(
+                    (
+                        item
+                        for item in default_capability_catalog().execution_profiles
+                        if item.profile_id == snapshot.execution_profile
+                        and item.version == snapshot.execution_profile_version
+                    ),
+                    None,
+                )
+                if profile is None:
+                    raise RuntimeError("deployment_execution_profile_unavailable")
+                actual = (
+                    "gvisor"
+                    if isinstance(runtime_sandbox_backend, KubernetesSandboxProvider)
+                    else "e2b"
+                    if isinstance(runtime_sandbox_backend, E2BSandboxProvider)
+                    else "daytona"
+                    if isinstance(runtime_sandbox_backend, DaytonaSandboxProvider)
+                    else "local"
+                )
+                if profile.sandbox_provider != actual:
+                    raise RuntimeError("execution_profile_sandbox_provider_mismatch")
+
+            if settings.sandbox_execution_mode != "worker_cli_deferred":
+                return runtime_sandbox_backend
+
+            root, children = await resolve_published_agent_versions(
+                registry,
+                tenant_id=tenant_id,
+                agent_name=session.agent_name,
+                agent_version=session.agent_version,
             )
-            profile = next(
-                (
-                    item
-                    for item in default_capability_catalog().execution_profiles
-                    if item.profile_id == snapshot.execution_profile
-                    and item.version == snapshot.execution_profile_version
-                ),
-                None,
+            manifests = tuple(
+                AgentManifestSnapshot.model_validate(version.snapshot).manifest
+                for version in (root, *children.values())
             )
-            if profile is None:
-                raise RuntimeError("deployment_execution_profile_unavailable")
-            actual = (
-                "gvisor"
-                if isinstance(runtime_sandbox_backend, KubernetesSandboxProvider)
-                else "e2b"
-                if isinstance(runtime_sandbox_backend, E2BSandboxProvider)
-                else "daytona"
-                if isinstance(runtime_sandbox_backend, DaytonaSandboxProvider)
-                else "local"
+            catalog = (await capability_catalogs.get(tenant_id)).catalog
+            read_only_mcp_references = frozenset(
+                {
+                    TAVILY_REFERENCE,
+                    *(
+                        capability.reference
+                        for capability in catalog.mcp_servers
+                        if capability.enabled and capability.read_only
+                    ),
+                }
             )
-            if profile.sandbox_provider != actual:
-                raise RuntimeError("execution_profile_sandbox_provider_mismatch")
+            if _manifests_require_remote_cli(
+                manifests,
+                read_only_mcp_references=read_only_mcp_references,
+            ):
+                return runtime_sandbox_backend
             return runtime_sandbox
 
         sandbox_resolver = resolve_runtime_sandbox
@@ -1138,13 +1229,7 @@ def build_production_container(
         agui=agui,
         auto_execute=False,
         skill_conversation=(
-            AnthropicCompatibleSkillConversationService(
-                tuple(
-                    gateway
-                    for gateway in (title_gateway, title_fallback_gateway)
-                    if gateway is not None
-                )
-            )
+            AnthropicCompatibleSkillConversationService(configured_gateways)
             if title_gateway is not None
             else None
         ),

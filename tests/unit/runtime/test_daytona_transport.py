@@ -97,6 +97,26 @@ def test_command_uses_native_cli_and_contains_required_streaming_flags() -> None
     assert "--strict-mcp-config" in command
 
 
+@pytest.mark.asyncio
+async def test_transport_marks_remote_cli_as_an_sdk_child() -> None:
+    session = FakeRemoteSession([None])
+    transport = DaytonaClaudeTransport(
+        session=session,
+        options=options(),
+        remote_workspace="/workspace/run-a",
+        cli_path="/home/daytona/.local/bin/claude",
+    )
+
+    await transport.connect()
+
+    assert session.started is not None
+    environment = session.started[2]
+    assert environment["CLAUDE_CODE_ENTRYPOINT"] == "sdk-py"
+    assert environment["CLAUDE_AGENT_SDK_VERSION"]
+    assert environment["HARNESS_DAYTONA_STDOUT_FLUSH_PADDING"] == "1"
+    await transport.close()
+
+
 def test_command_enables_transcript_mirror_for_external_session_store() -> None:
     configured = replace(options(), session_store=cast(Any, object()))
 
@@ -249,6 +269,34 @@ async def test_transport_frames_fragmented_ndjson_and_skips_diagnostics() -> Non
     assert session.started[1] == "/workspace/run-a"
     assert session.writes == ['{"type":"user"}\n']
     assert session.ended is True
+
+
+@pytest.mark.asyncio
+async def test_transport_parses_complete_fragmented_json_without_newline() -> None:
+    session = FakeRemoteSession(
+        [
+            b'{"type":"control_response","response":{"request_id":"req_1",',
+            b'"subtype":"success"}}',
+            None,
+        ]
+    )
+    transport = DaytonaClaudeTransport(
+        session=session,
+        options=options(),
+        remote_workspace="/workspace/run-a",
+        cli_path="/home/daytona/.local/bin/claude",
+    )
+
+    await transport.connect()
+    messages = [message async for message in transport.read_messages()]
+    await transport.close()
+
+    assert messages == [
+        {
+            "type": "control_response",
+            "response": {"request_id": "req_1", "subtype": "success"},
+        }
+    ]
 
 
 @pytest.mark.asyncio

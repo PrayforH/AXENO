@@ -73,6 +73,7 @@ from harness.studio.models import (
     CreateAgentDraftRequest,
     DraftValidationResult,
     ImportedAgentBundle,
+    ImportedSkill,
     McpDiscoveryRequest,
     McpDiscoveryResult,
     PublishAgentDraftRequest,
@@ -96,6 +97,11 @@ from harness.studio.skill_builder import (
     SkillConversationService,
     SkillConversationUnavailableError,
     SkillConversationUpstreamError,
+)
+from harness.studio.skill_import import (
+    MAX_SKILL_UPLOAD_BYTES,
+    SkillImportError,
+    import_skill,
 )
 
 
@@ -878,6 +884,60 @@ async def continue_skill_conversation(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"code": "skill_model_failed", "message": str(error)},
+        ) from error
+
+
+@router.post("/skills/import", response_model=ImportedSkill)
+async def import_skill_file(
+    request: Request,
+    _actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    filename: str = "skill.zip",
+) -> ImportedSkill:
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type not in {
+        "application/zip",
+        "application/x-zip-compressed",
+        "text/markdown",
+        "text/plain",
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "skill_import_media_type_invalid",
+                "message": "Skill 导入支持 ZIP 或 UTF-8 SKILL.md",
+            },
+        )
+    raw_length = request.headers.get("content-length")
+    if raw_length is not None:
+        try:
+            content_length = int(raw_length)
+        except ValueError:
+            content_length = -1
+        if content_length < 0 or content_length > MAX_SKILL_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={
+                    "code": "skill_import_too_large",
+                    "message": "Skill 上传文件不能超过 100 MiB",
+                },
+            )
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_SKILL_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail={
+                    "code": "skill_import_too_large",
+                    "message": "Skill 上传文件不能超过 100 MiB",
+                },
+            )
+    try:
+        return import_skill(bytes(content), filename=filename)
+    except SkillImportError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "skill_import_invalid", "message": str(error)},
         ) from error
 
 

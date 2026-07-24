@@ -1,3 +1,4 @@
+from dataclasses import replace
 from types import MappingProxyType
 from typing import cast
 
@@ -12,7 +13,7 @@ from harness.core.manifest import (
 )
 from harness.core.models import ExecutionIdentity
 from harness.policy.models import ContextTrust
-from harness.runtime.mcp_credentials import CredentialValues
+from harness.runtime.mcp_credentials import CredentialValues, McpCredentialError
 from harness.runtime.tools import (
     McpServerRegistration,
     ResolvedTools,
@@ -31,6 +32,17 @@ class UnexpectedCredentialProvider:
     ) -> CredentialValues:
         del server_reference, identity, required_keys
         raise AssertionError("credential provider must not run for an unauthenticated MCP")
+
+
+class MissingCredentialProvider:
+    async def resolve(
+        self,
+        server_reference: str,
+        identity: ExecutionIdentity,
+        required_keys: frozenset[str],
+    ) -> CredentialValues:
+        del identity, required_keys
+        raise McpCredentialError(f"missing MCP credentials: {server_reference}.api_key")
 
 
 def manifest_fixture(*tools: dict[str, str]) -> AgentManifest:
@@ -123,6 +135,47 @@ async def test_unauthenticated_mcp_does_not_request_a_credential_lease() -> None
     assert resolved.mcp_servers == {"public-docs": config}
 
 
+@pytest.mark.asyncio
+async def test_runtime_can_degrade_only_an_mcp_with_unavailable_credentials() -> None:
+    resolver = ToolResolver(
+        mcp_registry={
+            "search": McpServerRegistration(
+                server_name="search",
+                config={"type": "http", "url": "https://mcp.example.test"},
+                allowed_tools=("mcp__search__query",),
+                credential_headers=(("Authorization", "api_key"),),
+            )
+        },
+        credential_provider=MissingCredentialProvider(),
+    )
+    manifest = manifest_fixture({"builtin": "Read"}, {"mcp": "search"})
+    identity = ExecutionIdentity(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        project_id="project-a",
+        session_id="session-a",
+        run_id="run-a",
+        agent_name="domain-agent",
+        agent_version="0.1.0",
+    )
+
+    with pytest.raises(McpCredentialError, match="search.api_key"):
+        await resolver.resolve(manifest, identity)
+
+    resolved = await resolver.resolve(
+        manifest,
+        identity,
+        tolerate_unavailable_mcp=True,
+    )
+
+    assert resolved.builtin_tools == ("Read",)
+    assert resolved.mcp_servers == {}
+    assert resolved.allowed_tools == ()
+    assert resolved.unavailable_mcp == {
+        "search": ("mcp__search__query",),
+    }
+
+
 @pytest.mark.parametrize(
     ("reference", "message"),
     [
@@ -169,6 +222,27 @@ async def test_rejects_inline_registry_secrets() -> None:
 
     assert str(captured.value) == "MCP registrations cannot contain inline headers or environment"
     assert secret not in repr(captured.value)
+
+
+@pytest.mark.parametrize(
+    "config",
+    (
+        {"type": "stdio", "command": "arbitrary-server"},
+        {"type": "http", "url": "file:///tmp/server.sock"},
+        {"type": "http", "url": "https://user:secret@mcp.example.test"},
+    ),
+)
+def test_rejects_non_http_or_credentialed_mcp_registration(
+    config: dict[str, object],
+) -> None:
+    with pytest.raises(
+        ToolResolutionError,
+        match=r"must use a registered HTTP\(S\) endpoint",
+    ):
+        McpServerRegistration(
+            server_name="unsafe",
+            config=cast(McpServerConfig, config),
+        )
 
 
 def test_published_tool_directory_filters_additions_and_rejects_missing_tools() -> None:
@@ -232,6 +306,16 @@ def test_published_tool_directory_filters_additions_and_rejects_missing_tools() 
         match="published MCP tools are no longer available.*mcp__crm-prod__search",
     ):
         enforce_published_tool_directory(snapshot, resolved(allowed=()))
+    degraded = enforce_published_tool_directory(
+        snapshot,
+        replace(
+            resolved(allowed=()),
+            unavailable_mcp=MappingProxyType(
+                {"crm": ("mcp__crm-prod__search",)}
+            ),
+        ),
+    )
+    assert degraded.allowed_tools == ()
     filtered = enforce_published_tool_directory(
         snapshot,
         resolved(

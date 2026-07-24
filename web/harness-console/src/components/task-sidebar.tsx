@@ -10,7 +10,11 @@ import {
 } from "./workspace-navigation";
 import { useRunViewModel } from "../lib/activity-store";
 import { approvalStore } from "../lib/approval-store";
-import { loadTasks, type TaskSummary } from "../lib/task-history";
+import {
+  loadTasks,
+  setTaskArchived,
+  type TaskSummary,
+} from "../lib/task-history";
 
 const statusLabels: Record<string, string> = {
   idle: "新任务",
@@ -44,6 +48,18 @@ function NewTaskIcon() {
   );
 }
 
+function ArchiveIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M3.5 6.5h13v9a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z" />
+      <path d="M2.5 3.5h15v3h-15Z" />
+      <path d="M7.5 10h5" />
+    </svg>
+  );
+}
+
+const activeStatuses = new Set(["queued", "running", "waiting_approval", "cancelling"]);
+
 export function TaskSidebar({
   currentThreadId,
   collapsed,
@@ -59,10 +75,11 @@ export function TaskSidebar({
 }) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [error, setError] = useState("");
+  const [updatingThreadId, setUpdatingThreadId] = useState("");
   const runView = useRunViewModel();
 
   useEffect(() => {
-    approvalStore.reset();
+    approvalStore.reset(currentThreadId);
   }, [currentThreadId]);
 
   useEffect(() => {
@@ -86,6 +103,23 @@ export function TaskSidebar({
     };
   }, [runView?.phase]);
 
+  async function updateArchived(task: TaskSummary) {
+    if (activeStatuses.has(task.status)) return;
+    setUpdatingThreadId(task.thread_id);
+    try {
+      await setTaskArchived(task.thread_id, true);
+      setTasks((current) =>
+        current.filter((item) => item.thread_id !== task.thread_id),
+      );
+      setError("");
+      if (task.thread_id === currentThreadId) onNewTask();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setUpdatingThreadId("");
+    }
+  }
+
   const selected = useMemo(
     () => tasks.find((task) => task.thread_id === currentThreadId),
     [currentThreadId, tasks],
@@ -94,9 +128,9 @@ export function TaskSidebar({
   useEffect(() => {
     if (!selected) return;
     if (selected.pending_approval) {
-      approvalStore.show(selected.pending_approval);
+      approvalStore.show(selected.pending_approval, selected.thread_id);
     } else if (runView?.phase !== "waiting_approval") {
-      approvalStore.clear();
+      approvalStore.clear(undefined, selected.thread_id);
     }
   }, [runView?.phase, selected]);
 
@@ -166,21 +200,42 @@ export function TaskSidebar({
           </div>
           <div className="task-list" role="list">
             {tasks.map((task) => (
-              <button
-                type="button"
+              <div
                 role="listitem"
                 key={task.thread_id}
-                className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
-                onClick={() => onSelect(task)}
+                className="task-list-row"
               >
-                <span className="task-list-title">{task.title}</span>
-                <span className="task-list-meta">
-                  <span className={`task-status status-${task.status}`}>
-                    {statusLabels[task.status] ?? task.status}
+                <button
+                  type="button"
+                  className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
+                  onClick={() => onSelect(task)}
+                >
+                  <span className="task-list-title">{task.title}</span>
+                  <span className="task-list-meta">
+                    <span className={`task-status status-${task.status}`}>
+                      {statusLabels[task.status] ?? task.status}
+                    </span>
+                    <time dateTime={task.updated_at}>{relativeTime(task.updated_at)}</time>
                   </span>
-                  <time dateTime={task.updated_at}>{relativeTime(task.updated_at)}</time>
-                </span>
-              </button>
+                </button>
+                <button
+                  type="button"
+                  className="task-list-archive"
+                  onClick={() => void updateArchived(task)}
+                  disabled={
+                    updatingThreadId === task.thread_id
+                    || activeStatuses.has(task.status)
+                  }
+                  aria-label={`归档 ${task.title}`}
+                  title={
+                    activeStatuses.has(task.status)
+                      ? "任务结束后可归档"
+                      : "归档任务"
+                  }
+                >
+                  <ArchiveIcon />
+                </button>
+              </div>
             ))}
             {tasks.length === 0 && !error && (
               <p className="task-list-empty">暂无历史任务</p>

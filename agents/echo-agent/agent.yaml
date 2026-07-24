@@ -2,15 +2,15 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: echo-agent
-  version: 0.4.0
+  version: 0.4.1
   labels:
     domain: harness-validation
     purpose: local-validation
 spec:
   runtime: claude-agent-sdk
   model:
-    route: new-api-default
-    model: deepseek-v4-flash
+    route: deepseek-v4-pro
+    model: deepseek-v4-pro
     requiredCapabilities: [streaming, tool_use]
   prompt:
     system: prompts/system.md
@@ -34,6 +34,6 @@ spec:
     restoreSession: true
     archiveOnComplete: true
   limits:
-    maxTurns: 5
+    maxTurns: 12
     timeoutSeconds: 300
     maxBudgetUsd: 1

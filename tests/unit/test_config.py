@@ -9,6 +9,7 @@ def test_local_defaults_disable_external_model_and_otel() -> None:
     assert settings.environment == "local"
     assert settings.runtime == "fake"
     assert settings.sandbox_execution_mode == "remote_cli"
+    assert settings.worker_deferred_max_active_runs == 2
     assert settings.otel_enabled is False
     assert settings.otel_content_capture == "off"
     assert settings.otel_content_max_chars == 12_000
@@ -24,6 +25,7 @@ def test_local_defaults_disable_external_model_and_otel() -> None:
     assert settings.e2b_template == "base"
     assert settings.e2b_timeout_seconds == 3600
     assert settings.e2b_allow_internet_access is True
+    assert settings.run_reservation_ttl_seconds == 86_400
     assert settings.preflight_timeout_seconds == 180
     assert settings.new_api_auth_scheme == "bearer"
 
@@ -35,6 +37,8 @@ def test_observability_content_capture_rejects_implicit_or_unbounded_modes() -> 
         Settings(otel_content_max_chars=128)
     with pytest.raises(ValueError):
         Settings(sandbox_execution_mode="implicit")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        Settings(worker_deferred_max_active_runs=0)
 
 
 def test_daytona_cleanup_intervals_must_be_positive() -> None:

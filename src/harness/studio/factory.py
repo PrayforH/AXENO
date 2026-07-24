@@ -125,11 +125,11 @@ def create_draft_spec(
     if template is AgentTemplate.OPERATOR:
         tools = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
         policy = "production-standard"
-        limits = DraftLimits(timeoutSeconds=1800)
+        limits = DraftLimits(maxTurns=64)
     elif template is AgentTemplate.ORCHESTRATOR:
         tools = ("Read", "Glob", "Grep", "Task")
         policy = "production-orchestrator"
-        limits = DraftLimits(timeoutSeconds=1800)
+        limits = DraftLimits(maxTurns=64)
         subagents = (
             DraftSubagent(
                 alias="evidence-researcher",
@@ -152,7 +152,7 @@ def create_draft_spec(
     else:
         tools = ("Read", "Glob", "Grep")
         policy = "production-read-only"
-        limits = DraftLimits(timeoutSeconds=900)
+        limits = DraftLimits(maxTurns=64)
 
     return AgentDraftSpec(
         name=name,
@@ -162,8 +162,8 @@ def create_draft_spec(
         domain=domain,
         template=template,
         model=DraftModelSelection(
-            routeId="new-api-default",
-            model="deepseek-v4-flash",
+            routeId="deepseek-v4-pro",
+            model="deepseek-v4-pro",
         ),
         systemPrompt=_system_prompt(display_name, domain),
         skills=(_skill(name, domain),),

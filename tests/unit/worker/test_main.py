@@ -8,9 +8,7 @@ from harness.worker.main import maintenance_loop, worker_loop
 
 
 class Queue:
-    def __init__(
-        self, tasks: list[RunTask], *, fail_lease_renewal: bool = False
-    ) -> None:
+    def __init__(self, tasks: list[RunTask], *, fail_lease_renewal: bool = False) -> None:
         self.tasks = tasks
         self.fail_lease_renewal = fail_lease_renewal
         self.acknowledged: list[RunTask] = []
@@ -64,6 +62,52 @@ class SlowExecutor:
         return Run.model_construct()
 
 
+class ParallelExecutor:
+    def __init__(self, stop: asyncio.Event, total: int) -> None:
+        self.stop = stop
+        self.total = total
+        self.active = 0
+        self.maximum_active = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.completed = 0
+
+    async def execute(self, tenant_id: str, run_id: str) -> Run:
+        del tenant_id, run_id
+        self.active += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        if self.active == self.total:
+            self.started.set()
+        await self.release.wait()
+        self.active -= 1
+        self.completed += 1
+        if self.completed == self.total:
+            self.stop.set()
+        return Run.model_construct()
+
+
+class SessionSerialExecutor:
+    def __init__(self, stop: asyncio.Event) -> None:
+        self.stop = stop
+        self.first_started = asyncio.Event()
+        self.second_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+        self.order: list[str] = []
+
+    async def execute(self, tenant_id: str, run_id: str) -> Run:
+        del tenant_id
+        self.order.append(f"start:{run_id}")
+        if run_id == "run-1":
+            self.first_started.set()
+            await self.release_first.wait()
+        else:
+            self.second_started.set()
+        self.order.append(f"end:{run_id}")
+        if run_id == "run-2":
+            self.stop.set()
+        return Run.model_construct()
+
+
 @pytest.mark.asyncio
 async def test_worker_loop_executes_scoped_task_and_stops() -> None:
     stop = asyncio.Event()
@@ -95,15 +139,70 @@ async def test_worker_loop_can_stop_while_queue_is_empty() -> None:
     stop = asyncio.Event()
     queue = Queue([])
     executor = Executor(stop)
-    task = asyncio.create_task(
-        worker_loop(queue, executor, stop=stop, poll_interval=60)
-    )
+    task = asyncio.create_task(worker_loop(queue, executor, stop=stop, poll_interval=60))
 
     await asyncio.sleep(0)
     stop.set()
     await asyncio.wait_for(task, timeout=0.1)
 
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_runs_different_sessions_concurrently() -> None:
+    stop = asyncio.Event()
+    tasks = [
+        RunTask(tenant_id="tenant-a", run_id="run-1", session_id="session-1"),
+        RunTask(tenant_id="tenant-a", run_id="run-2", session_id="session-2"),
+    ]
+    queue = Queue(tasks.copy())
+    executor = ParallelExecutor(stop, total=2)
+    worker = asyncio.create_task(
+        worker_loop(
+            queue,
+            executor,
+            stop=stop,
+            poll_interval=0.001,
+            concurrency=2,
+        )
+    )
+
+    await asyncio.wait_for(executor.started.wait(), timeout=0.1)
+    assert executor.maximum_active == 2
+    executor.release.set()
+    await asyncio.wait_for(worker, timeout=0.2)
+
+    assert queue.acknowledged == tasks
+
+
+@pytest.mark.asyncio
+async def test_worker_loop_serializes_runs_from_the_same_session() -> None:
+    stop = asyncio.Event()
+    tasks = [
+        RunTask(tenant_id="tenant-a", run_id="run-1", session_id="session-1"),
+        RunTask(tenant_id="tenant-a", run_id="run-2", session_id="session-1"),
+    ]
+    queue = Queue(tasks.copy())
+    executor = SessionSerialExecutor(stop)
+    worker = asyncio.create_task(
+        worker_loop(
+            queue,
+            executor,
+            stop=stop,
+            poll_interval=0.001,
+            concurrency=2,
+        )
+    )
+
+    await asyncio.wait_for(executor.first_started.wait(), timeout=0.1)
+    await asyncio.sleep(0)
+    assert not executor.second_started.is_set()
+    executor.release_first.set()
+    await asyncio.wait_for(executor.second_started.wait(), timeout=0.1)
+    await asyncio.wait_for(worker, timeout=0.2)
+
+    assert executor.order == ["start:run-1", "end:run-1", "start:run-2", "end:run-2"]
+    assert queue.acknowledged == tasks
 
 
 @pytest.mark.asyncio
@@ -191,9 +290,7 @@ async def test_control_plane_maintenance_runs_while_a_child_run_is_active() -> N
         reconciled.set()
         return 0
 
-    worker = asyncio.create_task(
-        worker_loop(queue, executor, stop=stop, poll_interval=0.001)
-    )
+    worker = asyncio.create_task(worker_loop(queue, executor, stop=stop, poll_interval=0.001))
     controller = asyncio.create_task(
         maintenance_loop(
             reconcile,

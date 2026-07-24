@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -41,6 +43,11 @@ class ValidationSeverity(StrEnum):
     WARNING = "warning"
 
 
+class ValidationStage(StrEnum):
+    PUBLISH = "publish"
+    PRODUCTION = "production"
+
+
 class DraftModelSelection(StudioModel):
     route_id: str = Field(alias="routeId", min_length=1)
     model: str = Field(min_length=1)
@@ -53,7 +60,12 @@ class DraftModelSelection(StudioModel):
 
 class DraftSkillFile(StudioModel):
     path: str = Field(min_length=1, max_length=512)
-    content: str = Field(max_length=2 * 1024 * 1024)
+    content: str | None = Field(default=None, max_length=64 * 1024 * 1024)
+    content_base64: str | None = Field(
+        default=None,
+        alias="contentBase64",
+        max_length=90 * 1024 * 1024,
+    )
 
     @model_validator(mode="after")
     def safe_relative_path(self) -> DraftSkillFile:
@@ -65,6 +77,15 @@ class DraftSkillFile(StudioModel):
             or path.as_posix() == "SKILL.md"
         ):
             raise ValueError("Skill file path must be safe and cannot replace SKILL.md")
+        if (self.content is None) == (self.content_base64 is None):
+            raise ValueError("Skill file must contain exactly one of content or contentBase64")
+        if self.content_base64 is not None:
+            try:
+                decoded = base64.b64decode(self.content_base64, validate=True)
+            except (ValueError, binascii.Error) as error:
+                raise ValueError("Skill binary file contentBase64 is invalid") from error
+            if len(decoded) > 64 * 1024 * 1024:
+                raise ValueError("Skill file exceeds 64 MiB")
         return self
 
 
@@ -81,6 +102,14 @@ class DraftSkill(StudioModel):
         if duplicates:
             raise ValueError(f"duplicate Skill file path: {', '.join(duplicates)}")
         return self
+
+
+class ImportedSkill(StudioModel):
+    skill: DraftSkill
+    source_content_hash: str = Field(alias="sourceContentHash", min_length=64, max_length=64)
+    risk_level: Literal["low", "review"] = Field(alias="riskLevel")
+    findings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 class DraftPythonTool(StudioModel):
@@ -107,7 +136,12 @@ class DraftWorkspace(StudioModel):
 
 class DraftLimits(StudioModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
-    timeout_seconds: int = Field(default=900, alias="timeoutSeconds", ge=1, le=86_400)
+    timeout_seconds: int | None = Field(
+        default=None,
+        alias="timeoutSeconds",
+        ge=1,
+        le=86_400,
+    )
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
     max_model_tokens: int | None = Field(default=None, alias="maxModelTokens", ge=1)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
@@ -312,6 +346,7 @@ class McpCapability(StudioModel):
     risk: CapabilityRisk
     network_access: NetworkAccess = Field(alias="networkAccess")
     sends_user_data: bool = Field(alias="sendsUserData")
+    read_only: bool = Field(default=False, alias="readOnly")
     credential_managed: bool = Field(default=True, alias="credentialManaged")
     execution_location: str = Field(alias="executionLocation")
     preflight_required: bool = Field(default=True, alias="preflightRequired")
@@ -497,6 +532,17 @@ CatalogManagedResource = (
 class UpsertCatalogResourceRequest(StudioModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     resource: CatalogManagedResource
+    allowed_execution_profile_ids: tuple[str, ...] | None = Field(
+        default=None,
+        alias="allowedExecutionProfileIds",
+    )
+
+    @model_validator(mode="after")
+    def unique_allowed_execution_profiles(self) -> UpsertCatalogResourceRequest:
+        profile_ids = self.allowed_execution_profile_ids
+        if profile_ids is not None and len(profile_ids) != len(set(profile_ids)):
+            raise ValueError("allowed Execution Profile IDs must be unique")
+        return self
 
 
 class ValidationIssue(StudioModel):
@@ -504,6 +550,13 @@ class ValidationIssue(StudioModel):
     message: str
     severity: ValidationSeverity
     path: str | None = None
+    stage: ValidationStage = ValidationStage.PUBLISH
+    related_references: tuple[str, ...] = Field(
+        default=(), alias="relatedReferences"
+    )
+    suggested_profile_ids: tuple[str, ...] = Field(
+        default=(), alias="suggestedProfileIds"
+    )
 
 
 class EffectiveAgentContract(StudioModel):
@@ -525,6 +578,7 @@ class EffectiveAgentContract(StudioModel):
 
 class DraftValidationResult(StudioModel):
     ready: bool
+    production_eligible: bool = Field(alias="productionEligible")
     issues: tuple[ValidationIssue, ...]
     contract: EffectiveAgentContract
     manifest_yaml: str = Field(alias="manifestYaml")

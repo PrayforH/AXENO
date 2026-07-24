@@ -120,6 +120,112 @@ async def test_create_run_is_idempotent_and_queues_once() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_run_reuses_same_active_prompt_and_attachments() -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    queue = InMemoryTaskQueue()
+    events = InMemoryEventRepository()
+    ids = id_generator()
+    await sessions.add(
+        Session(
+            session_id="session-1",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="1.0.0",
+            created_at=NOW,
+        )
+    )
+    service = RunService(
+        sessions,
+        runs,
+        queue,
+        EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids),
+        clock=lambda: NOW,
+        id_generator=ids,
+    )
+
+    first = await service.create_with_result(
+        "tenant-a",
+        "session-1",
+        "client-1",
+        input={"prompt": "生成 PPT", "input_artifact_ids": ["b", "a"]},
+        deduplicate_active_input=True,
+    )
+    duplicate = await service.create_with_result(
+        "tenant-a",
+        "session-1",
+        "client-2",
+        input={"prompt": "生成 PPT", "input_artifact_ids": ["a", "b"]},
+        deduplicate_active_input=True,
+    )
+
+    assert first.created is True
+    assert duplicate.created is False
+    assert duplicate.deduplicated is True
+    assert duplicate.run == first.run
+    assert (await queue.dequeue()).run_id == first.run.run_id  # type: ignore[union-attr]
+    assert await queue.dequeue() is None
+
+
+@pytest.mark.asyncio
+async def test_queued_run_records_waiting_approval_predecessor() -> None:
+    sessions = InMemorySessionRepository()
+    runs = InMemoryRunRepository()
+    queue = InMemoryTaskQueue()
+    events = InMemoryEventRepository()
+    ids = id_generator()
+    await sessions.add(
+        Session(
+            session_id="session-1",
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="1.0.0",
+            created_at=NOW,
+        )
+    )
+    service = RunService(
+        sessions,
+        runs,
+        queue,
+        EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids),
+        clock=lambda: NOW,
+        id_generator=ids,
+    )
+    predecessor = await service.create(
+        "tenant-a",
+        "session-1",
+        "client-1",
+        input={"prompt": "先处理", "input_artifact_ids": []},
+        deduplicate_active_input=True,
+    )
+    waiting = predecessor.model_copy(
+        update={
+            "status": RunStatus.WAITING_APPROVAL,
+            "fencing_token": predecessor.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.QUEUED, waiting)
+
+    queued = await service.create(
+        "tenant-a",
+        "session-1",
+        "client-2",
+        input={"prompt": "另一个任务", "input_artifact_ids": []},
+        deduplicate_active_input=True,
+    )
+
+    queued_events = await events.list_after("tenant-a", queued.run_id, 0)
+    assert queued_events[0].payload == {
+        "reason_code": "predecessor_waiting_approval",
+        "reason": "前序任务等待审批",
+        "blocked_by_run_id": predecessor.run_id,
+        "blocked_by_status": "waiting_approval",
+    }
+
+
+@pytest.mark.asyncio
 async def test_create_run_annotates_the_api_trace_with_session_identity() -> None:
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()

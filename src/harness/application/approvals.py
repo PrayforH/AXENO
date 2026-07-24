@@ -68,13 +68,9 @@ class ApprovalService:
                 "harness.approval.risk": approval.risk or "unknown",
                 "harness.policy.rule": approval.policy_rule or "unknown",
                 "langfuse.observation.type": "guardrail",
-                "langfuse.observation.level": (
-                    "WARNING" if status == "pending" else "DEFAULT"
-                ),
+                "langfuse.observation.level": ("WARNING" if status == "pending" else "DEFAULT"),
                 "langfuse.observation.status_message": status,
-                "langfuse.observation.metadata.tool_name": (
-                    approval.tool_name or "unknown"
-                ),
+                "langfuse.observation.metadata.tool_name": (approval.tool_name or "unknown"),
                 "langfuse.observation.metadata.risk": approval.risk or "unknown",
             },
         ):
@@ -92,16 +88,12 @@ class ApprovalService:
     async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
         return await self._approvals.get(tenant_id, approval_id)
 
-    async def list_for_runs(
-        self, tenant_id: str, run_ids: list[str]
-    ) -> list[ApprovalRequest]:
+    async def list_for_runs(self, tenant_id: str, run_ids: list[str]) -> list[ApprovalRequest]:
         return await self._approvals.list_for_runs(tenant_id, run_ids)
 
     def _register_inline_waiter(self, tenant_id: str, approval_id: str) -> None:
         if approval_id not in self._inline_waiters:
-            self._inline_waiters[approval_id] = (
-                asyncio.get_running_loop().create_future()
-            )
+            self._inline_waiters[approval_id] = asyncio.get_running_loop().create_future()
             self._inline_tenants[approval_id] = tenant_id
 
     async def wait_for_decision(self, approval_id: str) -> ApprovalStatus:
@@ -123,9 +115,7 @@ class ApprovalService:
                 if self._clock() >= current.expires_at:
                     expired = await self._expire(current)
                     return expired.status
-                completed, _ = await asyncio.wait(
-                    {future}, timeout=self._decision_poll_interval
-                )
+                completed, _ = await asyncio.wait({future}, timeout=self._decision_poll_interval)
                 if completed:
                     return future.result()
         finally:
@@ -140,13 +130,9 @@ class ApprovalService:
         reason: str = "run cancellation requested",
     ) -> ApprovalRequest:
         cancelled = current.model_copy(update={"status": ApprovalStatus.CANCELLED})
-        changed = await self._approvals.compare_and_set(
-            ApprovalStatus.PENDING, cancelled
-        )
+        changed = await self._approvals.compare_and_set(ApprovalStatus.PENDING, cancelled)
         if not changed:
-            return await self._approvals.get(
-                current.tenant_id, current.approval_id
-            )
+            return await self._approvals.get(current.tenant_id, current.approval_id)
         await self._events.append(
             tenant_id=current.tenant_id,
             run_id=run.run_id,
@@ -191,19 +177,20 @@ class ApprovalService:
     async def _enqueue_resumed_run(self, approval: ApprovalRequest) -> None:
         if self._queue is None:
             return
+        run = await self._runs.get(approval.tenant_id, approval.run_id)
         await self._queue.enqueue(
-            RunTask(tenant_id=approval.tenant_id, run_id=approval.run_id)
+            RunTask(
+                tenant_id=approval.tenant_id,
+                run_id=approval.run_id,
+                session_id=run.session_id,
+            )
         )
 
     async def _expire(self, current: ApprovalRequest) -> ApprovalRequest:
         expired = current.model_copy(update={"status": ApprovalStatus.EXPIRED})
-        changed = await self._approvals.compare_and_set(
-            ApprovalStatus.PENDING, expired
-        )
+        changed = await self._approvals.compare_and_set(ApprovalStatus.PENDING, expired)
         if not changed:
-            return await self._approvals.get(
-                current.tenant_id, current.approval_id
-            )
+            return await self._approvals.get(current.tenant_id, current.approval_id)
         run = await self._runs.get(current.tenant_id, current.run_id)
         await self._events.append(
             tenant_id=current.tenant_id,
@@ -242,18 +229,11 @@ class ApprovalService:
         """Expire orphaned approvals even when no SDK waiter is alive."""
         if limit < 1:
             raise ValueError("approval reaper limit must be positive")
-        due = await self._approvals.list_expired_pending(
-            self._clock(), limit=limit
-        )
+        due = await self._approvals.list_expired_pending(self._clock(), limit=limit)
         expired_count = 0
         for approval in due:
-            current = await self._approvals.get(
-                approval.tenant_id, approval.approval_id
-            )
-            if (
-                current.status is not ApprovalStatus.PENDING
-                or self._clock() < current.expires_at
-            ):
+            current = await self._approvals.get(approval.tenant_id, approval.approval_id)
+            if current.status is not ApprovalStatus.PENDING or self._clock() < current.expires_at:
                 continue
             result = await self._expire(current)
             if result.status is ApprovalStatus.EXPIRED:
@@ -355,7 +335,7 @@ class ApprovalService:
         if current.status is decision:
             if current.inline:
                 await self._ensure_inline_run_resumed(current)
-            if decision is ApprovalStatus.APPROVED:
+            if decision is ApprovalStatus.APPROVED and not current.inline:
                 await self._enqueue_resumed_run(current)
             return current
         if current.status is not ApprovalStatus.PENDING:
@@ -383,7 +363,12 @@ class ApprovalService:
         inline = current.inline
         if decision is ApprovalStatus.APPROVED or inline:
             await self._move(run, RunStatus.RUNNING)
-            if decision is ApprovalStatus.APPROVED:
+            # An inline SDK hook keeps the original worker task and polls the
+            # durable decision. Enqueuing a second copy here races that live
+            # executor and can leave the Run fenced in RUNNING after outputs
+            # were already archived. Non-inline approvals still need a fresh
+            # worker handoff.
+            if decision is ApprovalStatus.APPROVED and not inline:
                 await self._enqueue_resumed_run(updated)
         else:
             await self._events.append(

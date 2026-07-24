@@ -130,6 +130,50 @@ async def test_post_agui_reuses_harness_session_for_same_thread() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_agui_deduplicates_active_request_and_returns_original_run() -> None:
+    app = create_memory_app(auto_execute=True)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post("/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS)
+        original_request = RunAgentInput.model_validate(
+            _request(
+                thread_id="thread-deduplicate",
+                run_id="client-original",
+                prompt="生成 PPT",
+            )
+        )
+        original = await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=original_request,
+        )
+        worker_task = asyncio.create_task(
+            app.state.container.worker.execute("tenant-a", original.run_id)
+        )
+        response = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json=_request(
+                thread_id="thread-deduplicate",
+                run_id="client-duplicate",
+                prompt="生成 PPT",
+            ),
+            headers=HEADERS,
+        )
+        await worker_task
+
+    assert response.status_code == 200
+    assert response.headers["X-Harness-Run-Reused"] == "true"
+    assert response.headers["X-Harness-Run-Deduplicated"] == "true"
+    assert response.headers["X-Harness-Run-ID"] == original.run_id
+    assert response.headers["X-Harness-Canonical-Client-Run-ID"] == "client-original"
+    runs = await app.state.container.runs.list_for_sessions(
+        "tenant-a", [original.session_id], limit=10
+    )
+    assert [item.run_id for item in runs] == [original.run_id]
+
+
+@pytest.mark.asyncio
 async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
     app = create_memory_app(auto_execute=True)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -190,6 +234,55 @@ async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
         f"harness-artifact-{artifact.artifact_id}",
     ]
     assert hidden.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_agui_thread_can_be_archived_restored_and_keeps_history() -> None:
+    app = create_memory_app(auto_execute=True)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
+        )
+        run = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json=_request(
+                thread_id="thread-archive",
+                run_id="client-run-archive",
+                prompt="archive me",
+            ),
+            headers=HEADERS,
+        )
+        archived = await client.patch(
+            "/v1/agui/threads/thread-archive",
+            json={"archived": True},
+            headers=HEADERS,
+        )
+        active_list = await client.get("/v1/agui/threads", headers=HEADERS)
+        archive_list = await client.get(
+            "/v1/agui/threads?archived=true", headers=HEADERS
+        )
+        history = await client.get(
+            "/v1/agui/threads/thread-archive/history", headers=HEADERS
+        )
+        restored = await client.patch(
+            "/v1/agui/threads/thread-archive",
+            json={"archived": False},
+            headers=HEADERS,
+        )
+        restored_list = await client.get("/v1/agui/threads", headers=HEADERS)
+
+    assert run.status_code == 200
+    assert archived.status_code == 200
+    assert archived.json()["archived"] is True
+    assert active_list.json() == []
+    assert [item["thread_id"] for item in archive_list.json()] == ["thread-archive"]
+    assert history.status_code == 200
+    assert history.json()["messages"]
+    assert restored.status_code == 200
+    assert restored.json()["archived"] is False
+    assert [item["thread_id"] for item in restored_list.json()] == ["thread-archive"]
 
 
 @pytest.mark.asyncio

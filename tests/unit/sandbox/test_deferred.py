@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -90,6 +91,41 @@ async def test_pure_model_run_never_allocates_remote_sandbox(tmp_path: Path) -> 
     assert backend.prepares == 0
     assert backend.collections == 0
     assert backend.destroys == 0
+
+
+@pytest.mark.asyncio
+async def test_active_run_limit_blocks_until_a_deferred_lease_is_destroyed(
+    tmp_path: Path,
+) -> None:
+    backend = RecordingSandbox(tmp_path)
+    provider = DeferredToolSandboxProvider(
+        backend,
+        provider_name="daytona",
+        local_root=tmp_path,
+        max_active_runs=1,
+    )
+    first = await provider.provision(run())
+    second_run = run().model_copy(
+        update={"run_id": "run-deferred-second", "idempotency_key": "second"}
+    )
+    second_task = asyncio.create_task(provider.provision(second_run))
+    await asyncio.sleep(0)
+
+    assert second_task.done() is False
+
+    await provider.destroy(first)
+    second = await asyncio.wait_for(second_task, timeout=1)
+    await provider.destroy(second)
+
+
+def test_active_run_limit_must_be_positive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="max_active_runs must be positive"):
+        DeferredToolSandboxProvider(
+            RecordingSandbox(tmp_path),
+            provider_name="daytona",
+            local_root=tmp_path,
+            max_active_runs=0,
+        )
 
 
 @pytest.mark.asyncio

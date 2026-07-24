@@ -37,6 +37,7 @@ async def decide_approval(
         container.auto_execute
         and body.decision.value == "approved"
         and not inline_waiting
+        and not approval.inline
     ):
         background_tasks.add_task(container.worker.execute, identity.tenant_id, approval.run_id)
     return approval

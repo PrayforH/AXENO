@@ -60,7 +60,7 @@ def _agui_request(
     content: str | list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     response = client.post(
-        "/v1/agui?agent_name=echo-agent&agent_version=0.4.0",
+        "/v1/agui?agent_name=echo-agent&agent_version=0.4.1",
         json={
             "threadId": thread_id,
             "runId": run_id,

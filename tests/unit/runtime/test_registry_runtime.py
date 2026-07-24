@@ -211,6 +211,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
                         "mcp__tavily__tavily_search",
                         "mcp__tavily__tavily_extract",
                     ),
+                    credential_query_parameters=(("tavilyApiKey", "api_key"),),
                 )
             }
         ),
@@ -248,6 +249,15 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         "content_hash": snapshot.tool_directory.content_hash,
         "entry_count": 5,
     }
+    degraded_event = next(
+        event for event in events if event.type == "tool.directory.degraded"
+    )
+    assert degraded_event.payload == {
+        "references": ["tavily-readonly"],
+        "tool_count": 2,
+        "reason": "credential_unavailable",
+    }
+    assert "tavily" not in captured[0].mcp_servers
     assert "directory-route-secret" not in repr(events)
     assert "api.anthropic.com" not in repr(directory_event.payload)
 
@@ -328,6 +338,15 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             credential=SecretStr("anthropic-secret"),
             capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
         ),
+        route_configs=(
+            CcSwitchClaudeConfig(
+                route_id="deepseek-v4-pro",
+                base_url="https://new-api.example",
+                model="deepseek-v4-pro",
+                provider="new-api",
+                credential=SecretStr("new-api-secret"),
+            ),
+        ),
         query_factory=fake_query,
     )
     context = RuntimeContext(
@@ -374,7 +393,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             updated_at=now,
             input={
                 "prompt": "use the task model",
-                "model_route_override": "new-api-default",
+                "model_route_override": "deepseek-v4-pro",
             },
         ),
         session=Session(
@@ -391,9 +410,9 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     override_events = [event async for event in runtime.execute(override_context)]
 
     assert captured[1].env["ANTHROPIC_BASE_URL"] == "https://new-api.example"
-    assert captured[1].model == "gateway-model"
+    assert captured[1].model == "deepseek-v4-pro"
     selected = next(event for event in override_events if event.type == "model.route.selected")
-    assert selected.payload["route_id"] == "new-api-default"
+    assert selected.payload["route_id"] == "deepseek-v4-pro"
     assert selected.payload["selection_source"] == "task_override"
     assert selected.payload["agent_default_route"] == "anthropic-official"
 
@@ -667,7 +686,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     events = [event async for event in runtime.execute(context)]
 
     assert captured[0][0] == "hello registry"
-    assert captured[0][1].model == "deepseek-v4-flash"
+    assert captured[0][1].model == "deepseek-v4-pro"
     assert captured[0][1].env["ANTHROPIC_BASE_URL"] == "https://gateway.example"
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
     assert captured[0][1].env["CLAUDE_CONFIG_DIR"] == str(
@@ -799,12 +818,8 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
     assert captured[0].agents["fact-checker"].description.startswith("Verify claims")
     assert captured[0].agents["fact-checker"].background is True
     assert captured[0].agents["risk-reviewer"].background is False
-    assert captured[0].agents["fact-checker"].prompt.startswith(
-        helper_snapshot.system_prompt
-    )
-    assert "Never quote, reproduce or reveal" in captured[0].agents[
-        "fact-checker"
-    ].prompt
+    assert captured[0].agents["fact-checker"].prompt.startswith(helper_snapshot.system_prompt)
+    assert "Never quote, reproduce or reveal" in captured[0].agents["fact-checker"].prompt
 
 
 @pytest.mark.asyncio
@@ -847,9 +862,7 @@ async def test_subagent_receives_its_declared_mcp_tools(tmp_path: Path) -> None:
     )
     captured: list[ClaudeAgentOptions] = []
 
-    async def fake_query(
-        _prompt: str, options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(options)
         yield ResultMessage(
             subtype="success",

@@ -49,7 +49,31 @@ def test_read_only_profile_allows_evidence_tools_and_denies_mutation() -> None:
         is PolicyDecision.ALLOW
     )
     assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_explain_search")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_get_document")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_search")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_get_event")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_list_chunks")
+        is PolicyDecision.ALLOW
+    )
+    assert (
         _decision("production-read-only", "mcp__novel-search__sag_ingest_document")
+        is PolicyDecision.DENY
+    )
+    assert (
+        _decision("production-read-only", "mcp__knowledge-search__sag_ingest_document")
         is PolicyDecision.DENY
     )
     assert _decision("production-read-only", "Write") is PolicyDecision.DENY
@@ -77,6 +101,10 @@ def test_standard_profile_uses_trusted_sandbox_facts() -> None:
     )
     assert (
         _decision("production-standard", "mcp__novel-search__sag_list_chunks")
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-standard", "mcp__knowledge-search__sag_explain_search")
         is PolicyDecision.ALLOW
     )
 

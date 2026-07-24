@@ -40,9 +40,15 @@ async def test_publish_create_run_query_and_cancel_are_tenant_scoped() -> None:
             json={"prompt": "ignored on replay"},
             headers={**IDENTITY_HEADERS, "Idempotency-Key": "request-1"},
         )
+        duplicate = await client.post(
+            f"/v1/sessions/{session_id}/runs",
+            json={"prompt": "hello"},
+            headers={**IDENTITY_HEADERS, "Idempotency-Key": "request-2"},
+        )
         assert first.status_code == 202
         assert repeated.status_code == 202
         assert repeated.json()["run_id"] == first.json()["run_id"]
+        assert duplicate.json()["run_id"] == first.json()["run_id"]
         assert first.json()["input"] == {"prompt": "hello"}
 
         run_id = first.json()["run_id"]

@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  loadTaskModelRoutes,
   loadTaskModelOverride,
   saveTaskModelOverride,
 } from "../src/lib/task-model-catalog";
+
+afterEach(() => vi.unstubAllGlobals());
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -14,6 +17,42 @@ function memoryStorage() {
 }
 
 describe("task model selection", () => {
+  it("exposes DeepSeek Pro and Flash as separate task routes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      modelRoutes: [
+        {
+          routeId: "new-api-default",
+          label: "DeepSeek V4（兼容路由）",
+          provider: "deepseek",
+          models: ["deepseek-v4-pro"],
+          capabilities: ["streaming", "tool_use"],
+          enabled: false,
+        },
+        {
+          routeId: "deepseek-v4-flash",
+          label: "DeepSeek V4 Flash",
+          provider: "deepseek",
+          models: ["deepseek-v4-flash"],
+          capabilities: ["streaming", "tool_use"],
+          enabled: true,
+        },
+        {
+          routeId: "deepseek-v4-pro",
+          label: "DeepSeek V4 Pro",
+          provider: "deepseek",
+          models: ["deepseek-v4-pro"],
+          capabilities: ["streaming", "tool_use"],
+          enabled: true,
+        },
+      ],
+    }), { status: 200 })));
+
+    await expect(loadTaskModelRoutes()).resolves.toEqual([
+      expect.objectContaining({ id: "deepseek-v4-flash", model: "deepseek-v4-flash" }),
+      expect.objectContaining({ id: "deepseek-v4-pro", model: "deepseek-v4-pro" }),
+    ]);
+  });
+
   it("persists a task-scoped route without changing the Agent", () => {
     const storage = memoryStorage();
 

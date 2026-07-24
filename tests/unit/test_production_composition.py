@@ -11,7 +11,10 @@ from pydantic import SecretStr
 
 from harness.api.app import create_app, create_configured_app
 from harness.api.dependencies import build_memory_container
-from harness.composition import build_production_container
+from harness.composition import (
+    _manifests_require_remote_cli,
+    build_production_container,
+)
 from harness.config import Settings
 from harness.core.manifest import AgentManifest
 from harness.core.models import ExecutionIdentity
@@ -62,6 +65,12 @@ def tavily_manifest() -> AgentManifest:
     )
 
 
+def manifest_with_tools(*tools: dict[str, str]) -> AgentManifest:
+    payload = tavily_manifest().model_dump(by_alias=True)
+    payload["spec"]["tools"] = list(tools)
+    return AgentManifest.model_validate(payload)
+
+
 def execution_identity() -> ExecutionIdentity:
     return ExecutionIdentity(
         tenant_id="tenant-a",
@@ -71,6 +80,54 @@ def execution_identity() -> ExecutionIdentity:
         run_id="run-a",
         agent_name="web-agent",
         agent_version="1.0.0",
+    )
+
+
+def test_deferred_lane_accepts_chat_files_and_registered_read_only_mcp() -> None:
+    assert (
+        _manifests_require_remote_cli(
+            (
+                manifest_with_tools(
+                    {"builtin": "Read"},
+                    {"builtin": "Bash"},
+                    {"mcp": "company-search"},
+                ),
+            ),
+            read_only_mcp_references=frozenset({"company-search"}),
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "tools",
+    (
+        ({"python": "bundle:tools/report.py:TOOLS"},),
+        ({"mcp": "company-write"},),
+    ),
+)
+def test_python_and_non_read_only_mcp_force_remote_cli(
+    tools: tuple[dict[str, str], ...],
+) -> None:
+    assert (
+        _manifests_require_remote_cli(
+            (manifest_with_tools(*tools),),
+            read_only_mcp_references=frozenset({"company-search"}),
+        )
+        is True
+    )
+
+
+def test_python_tool_in_subagent_forces_whole_run_to_remote_cli() -> None:
+    assert (
+        _manifests_require_remote_cli(
+            (
+                manifest_with_tools({"mcp": "company-search"}),
+                manifest_with_tools({"python": "bundle:tools/report.py:TOOLS"}),
+            ),
+            read_only_mcp_references=frozenset({"company-search"}),
+        )
+        is True
     )
 
 
@@ -262,7 +319,10 @@ async def test_production_composition_registers_minimax_m3_as_selectable_route()
         runtime = cast(RegistryClaudeRuntime, container.runtime)
         primary = vars(runtime)["_config"]
         selectable = vars(runtime)["_fallback_config"]
+        routes = {item.route_id: item for item in vars(runtime)["_route_configs"]}
         assert primary.route_id == "new-api-default"
+        assert routes["deepseek-v4-flash"].model == "deepseek-v4-flash"
+        assert routes["deepseek-v4-pro"].model == "deepseek-v4-pro"
         assert selectable is not None
         assert selectable.route_id == "minimax-m3"
         assert selectable.provider == "anthropic"

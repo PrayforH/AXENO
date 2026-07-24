@@ -240,6 +240,7 @@ class AguiThreadBinding(FrozenModel):
     title: str | None = None
     title_source: Literal["fallback", "model"] | None = None
     title_updated_at: datetime | None = None
+    archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

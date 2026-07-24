@@ -13,6 +13,7 @@ import {
 } from "./activity-store";
 import { liveResponseStore } from "./live-response-store";
 import { runStreamStore } from "./run-stream-store";
+import { runReuseStore } from "./run-reuse-store";
 import { redirectOnUnauthorized } from "./client-auth";
 
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
@@ -39,6 +40,17 @@ export class HarnessHttpAgent extends HttpAgent {
     const sessionAwareFetch: typeof transportFetch = async (url, init) => {
       const response = await transportFetch(url, init);
       redirectOnUnauthorized(response);
+      if (response.headers.get("X-Harness-Run-Reused") === "true") {
+        const runId = response.headers.get("X-Harness-Run-ID");
+        const canonicalClientRunId = response.headers.get(
+          "X-Harness-Canonical-Client-Run-ID",
+        );
+        if (runId && canonicalClientRunId) {
+          runReuseStore.show({ runId, canonicalClientRunId });
+        }
+      } else {
+        runReuseStore.clear();
+      }
       return response;
     };
     super({ ...httpConfig, fetch: sessionAwareFetch });
@@ -82,47 +94,53 @@ export class HarnessHttpAgent extends HttpAgent {
       };
       this.activeInput = activeInput;
     }
+    const runtimeThreadId = activeInput?.threadId ?? this.threadId;
     const wrapped: AgentSubscriber = {
       ...subscriber,
       onRunStartedEvent: async (params) => {
-        liveResponseStore.startRun(params.event.runId);
-        runStreamStore.startRun(params.event.runId);
+        liveResponseStore.startRun(params.event.runId, runtimeThreadId);
+        runStreamStore.startRun(params.event.runId, runtimeThreadId);
         return subscriber?.onRunStartedEvent?.(params);
       },
       onTextMessageStartEvent: async (params) => {
-        liveResponseStore.startMessage(params.event.messageId);
+        liveResponseStore.startMessage(params.event.messageId, runtimeThreadId);
         return subscriber?.onTextMessageStartEvent?.(params);
       },
       onTextMessageContentEvent: async (params) => {
-        liveResponseStore.append(params.event.messageId, params.event.delta);
+        liveResponseStore.append(
+          params.event.messageId,
+          params.event.delta,
+          runtimeThreadId,
+        );
         return subscriber?.onTextMessageContentEvent?.(params);
       },
       onTextMessageEndEvent: async (params) => {
-        liveResponseStore.completeMessage(params.event.messageId);
+        liveResponseStore.completeMessage(params.event.messageId, runtimeThreadId);
         return subscriber?.onTextMessageEndEvent?.(params);
       },
       onToolCallStartEvent: async (params) => {
-        liveResponseStore.hideForTool();
+        liveResponseStore.hideForTool(runtimeThreadId);
         return subscriber?.onToolCallStartEvent?.(params);
       },
       onRunFinishedEvent: async (params) => {
-        liveResponseStore.completeRun();
-        runStreamStore.completeRun(params.event.runId);
+        liveResponseStore.completeRun(runtimeThreadId);
+        runStreamStore.completeRun(params.event.runId, runtimeThreadId);
         return subscriber?.onRunFinishedEvent?.(params);
       },
       onRunErrorEvent: async (params) => {
-        liveResponseStore.failRun();
+        liveResponseStore.failRun(runtimeThreadId);
         runStreamStore.failRun(
           typeof params.event.runId === "string"
             ? params.event.runId
             : undefined,
+          runtimeThreadId,
         );
         return subscriber?.onRunErrorEvent?.(params);
       },
       onActivitySnapshotEvent: async (params) => {
         if (params.event.activityType === "harness.run.v1") {
           const parsed = runActivitySchema.safeParse(params.event.content);
-          if (parsed.success) activityStore.publish(parsed.data);
+          if (parsed.success) activityStore.publish(parsed.data, runtimeThreadId);
         }
         return subscriber?.onActivitySnapshotEvent?.(params);
       },
@@ -130,6 +148,7 @@ export class HarnessHttpAgent extends HttpAgent {
         if (params.event.activityType === "harness.run.v1") {
           activityStore.patch(
             params.event.patch as readonly ActivityPatchOperation[],
+            runtimeThreadId,
           );
         }
         return subscriber?.onActivityDeltaEvent?.(params);
@@ -145,8 +164,8 @@ export class HarnessHttpAgent extends HttpAgent {
       : parameters;
     return super.runAgent(routedParameters, wrapped)
       .catch((error: unknown) => {
-        liveResponseStore.failRun();
-        runStreamStore.failRun(activeInput?.runId);
+        liveResponseStore.failRun(runtimeThreadId);
+        runStreamStore.failRun(activeInput?.runId, runtimeThreadId);
         throw error;
       })
       .finally(() => {
@@ -163,8 +182,8 @@ export class HarnessHttpAgent extends HttpAgent {
 
   cancelActiveRun(): void {
     const activeInput = this.activeInput;
-    liveResponseStore.completeRun();
-    runStreamStore.completeRun(activeInput?.runId);
+    liveResponseStore.completeRun(activeInput?.threadId);
+    runStreamStore.completeRun(activeInput?.runId, activeInput?.threadId);
     this.activeInput = undefined;
     if (!activeInput) return;
     const relative = this.url.startsWith("/");

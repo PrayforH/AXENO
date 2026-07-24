@@ -162,6 +162,23 @@ describe("Harness same-origin proxies", () => {
     );
   });
 
+  it("preserves thread-list filters across the same-origin proxy", async () => {
+    let upstreamUrl = "";
+    await proxyAguiRequest(
+      new Request("http://console.test/api/agui/threads?archived=true"),
+      config,
+      async (input) => {
+        upstreamUrl = String(input);
+        return new Response("[]", { status: 200 });
+      },
+      "threads",
+    );
+
+    expect(upstreamUrl).toBe(
+      "http://harness.internal:8000/v1/agui/threads?archived=true",
+    );
+  });
+
   it("forwards a validated per-thread agent coordinate for task switching", async () => {
     let upstreamUrl = "";
     await proxyAguiRequest(

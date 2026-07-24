@@ -60,8 +60,13 @@ export function TaskModelControl({
     setOverrideRouteId,
   } = useTaskModel();
   if (routes.length === 0) return null;
-  const selected = routes.find((route) => route.id === overrideRouteId);
+  const effectiveOverrideRouteId =
+    overrideRouteId === agentDefaultRouteId ? null : overrideRouteId;
+  const selected = routes.find((route) => route.id === effectiveOverrideRouteId);
   const agentDefault = routes.find((route) => route.id === agentDefaultRouteId);
+  const overrideRoutes = routes.filter(
+    (route) => route.id !== agentDefaultRouteId,
+  );
   return (
     <div
       className="task-model-control"
@@ -73,7 +78,7 @@ export function TaskModelControl({
           <i />
         </span>
         <select
-          value={overrideRouteId ?? ""}
+          value={effectiveOverrideRouteId ?? ""}
           disabled={disabled}
           aria-label="选择本次任务使用的模型"
           onChange={(event) => setOverrideRouteId(event.target.value || null)}
@@ -81,7 +86,7 @@ export function TaskModelControl({
           <option value="">
             {agentDefault?.label ?? "Agent 默认模型"}
           </option>
-          {routes.map((route) => (
+          {overrideRoutes.map((route) => (
             <option key={route.id} value={route.id}>
               {route.label}{route.capabilities.includes("vision") ? " · Vision" : ""}
             </option>

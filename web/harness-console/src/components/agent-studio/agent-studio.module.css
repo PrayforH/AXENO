@@ -16,9 +16,11 @@
   --studio-amber-soft: #f7eee4;
   --studio-red: #a34d47;
   --studio-red-soft: #f6e9e7;
+  --studio-control-height: var(--codex-control-height, 40px);
+  --studio-control-radius: var(--codex-control-radius, 8px);
   min-height: 100dvh;
   display: grid;
-  grid-template-columns: 248px minmax(680px, 1fr) 318px;
+  grid-template-columns: 248px minmax(680px, 1fr);
   color: var(--studio-ink);
   background: var(--studio-paper);
   font-family: "Aptos", "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
@@ -26,7 +28,7 @@
 }
 
 .studioShell:has(> [data-studio-sidebar="collapsed"]) {
-  grid-template-columns: 52px minmax(680px, 1fr) 318px;
+  grid-template-columns: 52px minmax(680px, 1fr);
 }
 
 .studioShell *,
@@ -201,12 +203,12 @@
 
 .agentSearch input {
   width: 100%;
-  min-height: 35px;
+  min-height: var(--studio-control-height);
   padding: 0 38px 0 10px;
   color: var(--studio-ink);
   background: rgb(255 255 255 / 72%);
   border: 1px solid var(--studio-line);
-  border-radius: 9px;
+  border-radius: var(--studio-control-radius);
   font-size: 11px;
 }
 
@@ -409,12 +411,54 @@
 
 .headerActions {
   position: relative;
-  display: grid;
-  grid-template-columns: auto auto auto auto;
+  display: flex;
   align-items: center;
   flex-shrink: 0;
   gap: 7px;
   padding-top: 5px;
+}
+
+.contractToggleButton {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 7px;
+  color: var(--studio-muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 620;
+  white-space: nowrap;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, transform 150ms ease;
+}
+
+.contractToggleButton:hover {
+  color: var(--studio-ink);
+  background: var(--studio-panel-subtle);
+}
+
+.contractToggleButton:active {
+  transform: scale(.97);
+}
+
+.contractToggleButton > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--studio-red);
+  box-shadow: 0 0 0 3px var(--studio-red-soft);
+}
+
+.contractToggleButton[data-ready="true"] > i {
+  background: var(--studio-green);
+  box-shadow: 0 0 0 3px var(--studio-green-soft);
+}
+
+.contractToggleButton small {
+  color: var(--studio-faint);
+  font: 600 8px/1 var(--codex-font-mono, ui-monospace, monospace);
 }
 
 .syncState {
@@ -979,6 +1023,10 @@
   background: var(--studio-panel);
 }
 
+.releaseIssues li[data-stage="production"] {
+  border-color: color-mix(in srgb, var(--studio-amber) 36%, transparent);
+}
+
 .releaseIssues li > span {
   width: 22px;
   height: 22px;
@@ -988,6 +1036,11 @@
   color: var(--studio-red);
   background: var(--studio-red-soft);
   font: 750 11px/1 var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.releaseIssues li[data-stage="production"] > span {
+  color: var(--studio-amber);
+  background: var(--studio-amber-soft);
 }
 
 .releaseIssues li > div {
@@ -1328,6 +1381,96 @@
   font: 10px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+.executionProfileAdvisor {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-left: 2px solid var(--studio-amber);
+  background: var(--studio-panel-subtle);
+}
+
+.executionProfileAdvisor > i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--studio-amber);
+}
+
+.executionProfileAdvisor > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.executionProfileAdvisor span {
+  color: var(--studio-faint);
+  font: 700 8px/1.4 var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.06em;
+}
+
+.executionProfileAdvisor strong {
+  color: var(--studio-ink);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.executionProfileAdvisor small {
+  color: var(--studio-muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.executionProfileAdvisor[data-state="ready"] {
+  border-left-color: var(--studio-green);
+}
+
+.executionProfileAdvisor[data-state="ready"] > i {
+  background: var(--studio-green);
+}
+
+.executionProfileAdvisor[data-state="blocked"] {
+  border-left-color: var(--studio-red);
+}
+
+.executionProfileAdvisor[data-state="blocked"] > i {
+  background: var(--studio-red);
+}
+
+.executionProfileAdvisor button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 7px;
+  color: var(--studio-ink);
+  background: var(--studio-panel);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 650;
+  transition: border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.executionProfileAdvisor button:hover:not(:disabled) {
+  border-color: var(--studio-green);
+  color: var(--studio-green);
+}
+
+.executionProfileAdvisor button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.executionProfileAdvisor button:focus-visible {
+  outline: 2px solid var(--studio-green);
+  outline-offset: 2px;
+}
+
+.executionProfileAdvisor button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .field > span,
 .fieldWide > span {
   display: flex;
@@ -1349,18 +1492,19 @@
 .fieldWide select {
   width: 100%;
   border: 1px solid var(--studio-line-strong);
-  border-radius: 9px;
+  border-radius: var(--studio-control-radius);
   color: var(--studio-ink);
   background: #fff;
   font-size: 13px;
   font-weight: 450;
+  transition: var(--codex-control-transition, border-color 140ms ease, box-shadow 140ms ease);
 }
 
 .field input,
 .field select,
 .fieldWide input,
 .fieldWide select {
-  min-height: 42px;
+  min-height: var(--studio-control-height);
   padding: 0 11px;
 }
 
@@ -2110,6 +2254,14 @@
   margin-top: 14px;
 }
 
+.pythonToolWorkspace {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, .38fr) minmax(420px, .62fr);
+  gap: 10px;
+}
+
 .catalogBinding {
   min-width: 0;
   display: grid;
@@ -2255,6 +2407,165 @@
   border-radius: 11px;
 }
 
+.skillInstallBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.skillTabs {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.skillTabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--panel-subtle);
+  font: 650 11px/1 var(--codex-font-ui, sans-serif);
+  cursor: pointer;
+}
+
+.skillTabs button span {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--studio-violet, #ad7bf9);
+  background: var(--studio-violet-soft, rgb(173 123 249 / 14%));
+  font: 800 9px/1 ui-monospace, monospace;
+}
+
+.skillTabs button[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--studio-violet, #ad7bf9) 58%, var(--line));
+  color: var(--ink);
+  background: var(--studio-violet-soft, rgb(173 123 249 / 14%));
+}
+
+.skillInstallButton {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--studio-violet, #ad7bf9);
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.skillInstallButton:hover:not(:disabled) {
+  background: var(--studio-violet-soft, rgb(173 123 249 / 14%));
+}
+
+.skillInstallButton:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.skillUninstallButton {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--danger, #fa423e) 48%, var(--studio-line));
+  border-radius: 8px;
+  color: var(--danger, #fa423e);
+  background: transparent;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.skillUninstallButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #fa423e) 9%, transparent);
+}
+
+.skillUninstallButton:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.skillEmpty {
+  min-height: 112px;
+  margin-top: 18px;
+  padding: 22px;
+  display: grid;
+  place-content: center;
+  gap: 7px;
+  border: 1px dashed var(--studio-line);
+  border-radius: 11px;
+  color: var(--studio-muted);
+  text-align: center;
+}
+
+.skillEmpty strong {
+  color: var(--studio-ink);
+  font-size: 12px;
+}
+
+.skillEmpty span {
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.skillImportFindings {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-subtle);
+}
+
+.skillImportFindings summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 0 13px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.skillImportFindings summary span {
+  color: var(--faint);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.skillImportFindings p {
+  margin: 0;
+  padding: 10px 13px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.skillImportFindings ul {
+  max-height: 280px;
+  margin: 0;
+  padding: 8px 13px 12px 30px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font: 9px/1.6 ui-monospace, monospace;
+}
+
 .skillGlyph {
   width: 40px;
   height: 40px;
@@ -2331,6 +2642,44 @@
   color: var(--studio-ink);
   background: #fff;
   font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.skillBinaryFile {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 72px;
+  padding: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel-subtle) 80%, transparent);
+}
+
+.skillBinaryFile > span {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--studio-violet, #ad7bf9);
+  background: var(--studio-violet-soft, rgb(173 123 249 / 14%));
+  font: 800 9px/1 ui-monospace, monospace;
+}
+
+.skillBinaryFile div {
+  display: grid;
+  gap: 5px;
+}
+
+.skillBinaryFile strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.skillBinaryFile small {
+  color: var(--faint);
+  font-size: 10px;
 }
 
 .skillFilesEmpty {
@@ -3837,21 +4186,58 @@
   font-size: 10px;
 }
 
+.editorFooter > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editorFooter code {
+  flex: 0 0 auto;
   margin-left: auto;
   color: var(--studio-faint);
   font: 500 9px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .contractRail {
-  position: sticky;
+  position: fixed;
+  z-index: 61;
   top: 0;
+  right: 0;
+  width: min(420px, calc(100vw - 24px));
   height: 100dvh;
   min-width: 0;
   overflow: auto;
-  padding: 22px 20px;
+  padding: 24px 22px 36px;
   background: #f1f3f0;
   border-left: 1px solid var(--studio-line-strong);
+  box-shadow: -24px 0 70px rgb(0 0 0 / 30%);
+  transform: translateX(102%);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 220ms cubic-bezier(.2,.8,.2,1), visibility 220ms;
+}
+
+.contractRail[data-open="true"] {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.contractBackdrop {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  border: 0;
+  background: rgb(0 0 0 / 44%);
+  backdrop-filter: blur(2px);
+  animation: contractBackdropIn 180ms ease-out;
+}
+
+@keyframes contractBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .contractHeader {
@@ -3876,6 +4262,30 @@
 .contractHeader strong {
   font-size: 15px;
   letter-spacing: -0.025em;
+}
+
+.contractHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.contractHeaderActions > button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--studio-line);
+  border-radius: 7px;
+  color: var(--studio-muted);
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.contractHeaderActions > button:hover {
+  color: var(--studio-ink);
+  background: var(--studio-panel-subtle);
 }
 
 .riskBadge {
@@ -4181,14 +4591,6 @@
     grid-template-columns: 52px minmax(640px, 1fr);
   }
 
-  .contractRail {
-    position: relative;
-    grid-column: 2;
-    height: auto;
-    border-top: 1px solid var(--studio-line-strong);
-    border-left: 0;
-  }
-
   .capabilitySpine {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px 18px;
@@ -4207,8 +4609,7 @@
     min-width: 0;
   }
 
-  .editorShell,
-  .contractRail {
+  .editorShell {
     grid-column: 2;
   }
 
@@ -4255,12 +4656,12 @@
     padding: 24px 18px 42px;
   }
 
-  .contractRail {
-    grid-column: 2;
-  }
-
   .subagentTopology {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pythonToolWorkspace {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -4338,7 +4739,7 @@
 @media (max-width: 620px) {
   .headerActions {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
   }
 
   .syncState {
@@ -4394,6 +4795,15 @@
   .releaseNextActions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .executionProfileAdvisor {
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
+  .executionProfileAdvisor button {
+    grid-column: 2;
+    justify-self: start;
   }
 
   .lifecycleSummary small {
@@ -4919,6 +5329,17 @@
 .previewBanner[data-status="failed"],
 .preflightDisclosure li[data-status="timed_out"] {
   color: var(--studio-red);
+}
+
+.previewBanner[data-stale="true"] {
+  border-color: var(--studio-line);
+  color: var(--studio-muted);
+  background: var(--studio-panel-subtle);
+  box-shadow: inset 3px 0 0 var(--studio-faint);
+}
+
+.previewBanner[data-stale="true"] .preflightDisclosure {
+  color: var(--studio-muted);
 }
 
 .warningStrip {

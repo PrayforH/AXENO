@@ -66,7 +66,6 @@ class RuntimeContext(BaseModel):
     resolved_policy: ResolvedPolicy | None = Field(
         default=None, exclude=True, repr=False
     )
-
     @model_validator(mode="after")
     def derive_identity(self) -> "RuntimeContext":
         if not self.assistant_message_id:

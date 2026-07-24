@@ -23,6 +23,7 @@ class SandboxHandle(BaseModel):
     provider: str = "local"
     isolation_level: SandboxIsolation = SandboxIsolation.WORKSPACE
     remote_workspace: str | None = None
+    preserve_remote_workspace: bool = Field(default=False, exclude=True)
     runtime_transport_factory: Callable[[object], object] | None = Field(
         default=None, exclude=True, repr=False
     )

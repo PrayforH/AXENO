@@ -12,7 +12,11 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from harness.core.models import ExecutionIdentity
-from harness.runtime.mcp_credentials import CredentialValues, DynamicMcpCredentialProvider
+from harness.runtime.mcp_credentials import (
+    CredentialValues,
+    DynamicMcpCredentialProvider,
+    McpCredentialError,
+)
 
 
 class CredentialLeaseError(RuntimeError):
@@ -287,12 +291,17 @@ class BrokerMcpCredentialProvider(DynamicMcpCredentialProvider):
         identity: ExecutionIdentity,
         required_keys: frozenset[str],
     ) -> CredentialValues:
-        lease = await self._broker.issue(
-            identity=identity,
-            resource_kind=CredentialResourceKind.MCP,
-            resource_reference=server_reference,
-            required_keys=required_keys,
-            ttl_seconds=self._ttl_seconds,
-        )
-        self.issued_lease_ids[(identity.run_id, server_reference)] = lease.lease_id
-        return await self._broker.resolve(lease.lease_id, identity)
+        try:
+            lease = await self._broker.issue(
+                identity=identity,
+                resource_kind=CredentialResourceKind.MCP,
+                resource_reference=server_reference,
+                required_keys=required_keys,
+                ttl_seconds=self._ttl_seconds,
+            )
+            self.issued_lease_ids[(identity.run_id, server_reference)] = lease.lease_id
+            return await self._broker.resolve(lease.lease_id, identity)
+        except CredentialLeaseError as error:
+            raise McpCredentialError(
+                f"MCP credential unavailable for {server_reference}: {error}"
+            ) from None

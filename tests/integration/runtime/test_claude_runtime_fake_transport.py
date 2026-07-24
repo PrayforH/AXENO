@@ -659,7 +659,7 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
         "message.delta",
         "message.delta",
         "message.completed",
-        "subagent.completed",
+        "runtime.task.completed",
         "runtime.result",
     ]
     text_deltas = [
@@ -668,7 +668,7 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
         if event.type == "message.delta"
     ]
     assert text_deltas == ["s", "treamed", "a", "gain"]
-    terminal = next(event for event in events if event.type == "subagent.completed")
+    terminal = next(event for event in events if event.type == "runtime.task.completed")
     assert terminal.payload["summary"] == "Safe final summary"
     assert "never-show" not in repr(events)
 

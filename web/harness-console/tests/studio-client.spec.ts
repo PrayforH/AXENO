@@ -112,6 +112,39 @@ describe("Studio typed API mapping", () => {
     expect(imported.roundTripVerified).toBe(true);
   });
 
+  it("uploads a Skill archive directly and preserves its filename", async () => {
+    let captured: { url: string; contentType: string | null; body: BodyInit | null } | null = null;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured = {
+        url: String(input),
+        contentType: new Headers(init?.headers).get("Content-Type"),
+        body: init?.body ?? null,
+      };
+      return Response.json({
+        skill: {
+          name: "ppt-master",
+          description: "Build presentations.",
+          instructions: "Create the deck.",
+          files: [],
+        },
+        sourceContentHash: "a".repeat(64),
+        riskLevel: "low",
+        findings: [],
+        warnings: [],
+      });
+    });
+    const skill = new File(["skill"], "ppt master.zip", { type: "application/zip" });
+
+    const imported = await studioClient.importSkill(skill);
+
+    expect(captured).toEqual({
+      url: "/api/studio/skills/import?filename=ppt%20master.zip",
+      contentType: "application/zip",
+      body: skill,
+    });
+    expect(imported.skill.name).toBe("ppt-master");
+  });
+
   it("reads usage and replaces quota policy with revision CAS", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -201,6 +234,7 @@ describe("Studio typed API mapping", () => {
       risk: "medium" as const,
       networkAccess: "internal" as const,
       sendsUserData: true,
+      readOnly: true,
       credentialManaged: true,
       executionLocation: "external-mcp",
       preflightRequired: true,
@@ -211,14 +245,23 @@ describe("Studio typed API mapping", () => {
       version: 1,
       enabled: true,
     };
-    await studioClient.upsertMcp(resource.reference, 7, resource);
+    await studioClient.upsertMcp(
+      resource.reference,
+      7,
+      resource,
+      ["local-development"],
+    );
     await studioClient.disableMcp(resource.reference, 8);
 
     expect(calls).toEqual([
       {
         url: "/api/studio/catalog/mcp/company-search",
         method: "PUT",
-        body: { expectedRevision: 7, resource },
+        body: {
+          expectedRevision: 7,
+          resource,
+          allowedExecutionProfileIds: ["local-development"],
+        },
       },
       {
         url: "/api/studio/catalog/mcp/company-search?expected_revision=8",

@@ -1,3 +1,4 @@
+import base64
 import json
 from datetime import UTC, datetime
 from io import BytesIO
@@ -20,6 +21,7 @@ from harness.studio.models import (
     AgentTemplate,
     CapabilityRisk,
     DraftPythonTool,
+    DraftSkillFile,
     NetworkAccess,
     ValidationSeverity,
 )
@@ -70,7 +72,7 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         manifest = bundle.read("agent.yaml").decode()
         directory = ToolDirectorySnapshot.model_validate_json(bundle.read("tool-directory.json"))
         studio_metadata = StudioBundleMetadata.model_validate_json(bundle.read("studio.json"))
-    assert "route: new-api-default" in manifest
+    assert "route: deepseek-v4-pro" in manifest
     assert "mode: isolated" in manifest
     assert directory.exposure_mode == "eager"
     assert directory.catalog_revision == 1
@@ -81,6 +83,34 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         "Glob",
         "Grep",
     }
+
+
+def test_binary_skill_asset_survives_compile_and_studio_round_trip() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    source = draft()
+    payload = b"\x89PNG\r\n\x1a\n\x00\xff"
+    skill = source.spec.skills[0].model_copy(
+        update={
+            "files": (
+                DraftSkillFile(
+                    path="assets/template.png",
+                    contentBase64=base64.b64encode(payload).decode("ascii"),
+                ),
+            )
+        }
+    )
+    source = source.model_copy(
+        update={"spec": source.spec.model_copy(update={"skills": (skill,)})}
+    )
+
+    compiled = compiler.compile(source)
+    imported = parse_agent_bundle(compiled.bundle)
+
+    with ZipFile(BytesIO(compiled.bundle)) as bundle:
+        assert bundle.read("skills/invoice-reviewer-core/assets/template.png") == payload
+    imported_asset = imported.spec.skills[0].files[0]
+    assert imported_asset.content is None
+    assert imported_asset.content_base64 == base64.b64encode(payload).decode("ascii")
 
 
 def test_studio_bundle_round_trips_into_an_editable_spec() -> None:
@@ -123,11 +153,7 @@ def test_bundle_python_tool_round_trips_with_source_and_directory_contract() -> 
         ),
     )
     source = source.model_copy(
-        update={
-            "spec": source.spec.model_copy(
-                update={"python_tools": (python_tool,)}
-            )
-        }
+        update={"spec": source.spec.model_copy(update={"python_tools": (python_tool,)})}
     )
 
     compiled = compiler.compile(source)
@@ -139,13 +165,9 @@ def test_bundle_python_tool_round_trips_with_source_and_directory_contract() -> 
     assert rebuilt_bundle.report.package_hash == compiled.report.package_hash
     with ZipFile(BytesIO(compiled.bundle)) as bundle:
         assert "tools/normalize_score.py" in bundle.namelist()
-        directory = ToolDirectorySnapshot.model_validate_json(
-            bundle.read("tool-directory.json")
-        )
+        directory = ToolDirectorySnapshot.model_validate_json(bundle.read("tool-directory.json"))
     python_entry = next(entry for entry in directory.entries if entry.source == "python")
-    assert python_entry.name == (
-        "mcp__harness-python-invoice-reviewer__normalize_score"
-    )
+    assert python_entry.name == ("mcp__harness-python-invoice-reviewer__normalize_score")
     assert python_entry.logical_reference == "bundle:tools/normalize_score.py"
 
 
@@ -234,16 +256,18 @@ def test_nexau_export_imports_python_bindings_skills_and_unlimited_runtime() -> 
         bundle.writestr("systemprompt.md", "# Mission\n\nDo the work.\n")
         bundle.writestr(
             "tools/score.tool.yaml",
-            yaml.safe_dump({
-                "type": "tool",
-                "name": "score_detections",
-                "description": "Score detections.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"value": {"type": "number"}},
-                    "required": ["value"],
-                },
-            }),
+            yaml.safe_dump(
+                {
+                    "type": "tool",
+                    "name": "score_detections",
+                    "description": "Score detections.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"value": {"type": "number"}},
+                        "required": ["value"],
+                    },
+                }
+            ),
         )
         bundle.writestr(
             "custom_tools/detection.py",
@@ -520,6 +544,19 @@ def test_local_development_profile_is_explicitly_preview_only() -> None:
     validation = AgentDraftCompiler(catalog).validate(local_draft)
 
     assert validation.ready is True
+    assert validation.production_eligible is False
+    preview_issue = next(
+        issue for issue in validation.issues if issue.code == "execution_profile_preview_only"
+    )
+    assert preview_issue.stage.value == "production"
+    assert "isolated-default" in preview_issue.suggested_profile_ids
+    serialized = validation.model_dump(mode="json", by_alias=True)
+    assert serialized["productionEligible"] is False
+    serialized_issue = next(
+        issue for issue in serialized["issues"] if issue["code"] == "execution_profile_preview_only"
+    )
+    assert serialized_issue["stage"] == "production"
+    assert "isolated-default" in serialized_issue["suggestedProfileIds"]
     assert profile.sandbox_provider == "local"
     assert profile.production_allowed is False
     assert profile.risk is CapabilityRisk.HIGH
@@ -545,7 +582,7 @@ def test_disabled_catalog_resources_fail_closed() -> None:
         update={
             "model_routes": tuple(
                 item.model_copy(update={"enabled": False})
-                if item.route_id == "new-api-default"
+                if item.route_id == "deepseek-v4-pro"
                 else item
                 for item in catalog.model_routes
             ),
@@ -577,7 +614,7 @@ def test_model_and_execution_profile_capabilities_must_be_compatible() -> None:
         update={
             "model_routes": tuple(
                 item.model_copy(update={"capabilities": ("streaming",)})
-                if item.route_id == "new-api-default"
+                if item.route_id == "deepseek-v4-pro"
                 else item
                 for item in catalog.model_routes
             ),
@@ -619,3 +656,45 @@ def test_execution_profile_egress_allows_only_registered_mcp_associations() -> N
     validation = AgentDraftCompiler(restricted).validate(with_mcp)
 
     assert "execution_profile_egress_incompatible" in {issue.code for issue in validation.issues}
+    issue = next(
+        issue
+        for issue in validation.issues
+        if issue.code == "execution_profile_egress_incompatible"
+    )
+    assert issue.related_references == ("tavily-readonly",)
+    assert "tavily-readonly" in issue.message
+
+
+def test_execution_profile_reports_network_and_egress_mismatches_together() -> None:
+    catalog = default_capability_catalog()
+    restricted = catalog.model_copy(
+        update={
+            "execution_profiles": tuple(
+                item.model_copy(
+                    update={
+                        "network_access": (NetworkAccess.NONE,),
+                        "allowed_mcp_references": (),
+                    }
+                )
+                if item.profile_id == "isolated-default"
+                else item
+                for item in catalog.execution_profiles
+            )
+        }
+    )
+    current = draft()
+    with_mcp = current.model_copy(
+        update={"spec": current.spec.model_copy(update={"mcp_servers": ("tavily-readonly",)})}
+    )
+
+    validation = AgentDraftCompiler(restricted).validate(with_mcp)
+
+    issues = {issue.code: issue for issue in validation.issues}
+    assert validation.ready is False
+    assert {
+        "execution_profile_network_incompatible",
+        "execution_profile_egress_incompatible",
+    }.issubset(issues)
+    assert issues["execution_profile_network_incompatible"].related_references == (
+        "tavily-readonly",
+    )

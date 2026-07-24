@@ -39,15 +39,19 @@ async def create_run(
     run_input: dict[str, object] = {"prompt": body.prompt}
     if body.input_artifact_ids:
         run_input["input_artifact_ids"] = list(body.input_artifact_ids)
-    run = await container.runs.create(
+    creation = await container.runs.create_with_result(
         identity.tenant_id,
         session_id,
         idempotency_key,
         input=run_input,
     )
-    if container.auto_execute:
-        background_tasks.add_task(container.worker.execute, identity.tenant_id, run.run_id)
-    return run
+    if container.auto_execute and creation.created:
+        background_tasks.add_task(
+            container.worker.execute,
+            identity.tenant_id,
+            creation.run.run_id,
+        )
+    return creation.run
 
 
 @router.get("/runs/{run_id}", response_model=Run)

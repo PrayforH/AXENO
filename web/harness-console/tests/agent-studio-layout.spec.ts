@@ -17,6 +17,20 @@ const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
 );
+const codeEditor = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/studio-code-editor.tsx",
+  ),
+  "utf8",
+);
+const codeEditorStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/studio-code-editor.module.css",
+  ),
+  "utf8",
+);
 const skillConversationBuilder = readFileSync(
   join(
     process.cwd(),
@@ -115,10 +129,15 @@ const loadingBoundary = readFileSync(
 );
 
 describe("Agent Studio management page", () => {
-  it("keeps the desktop release controls on one row", () => {
+  it("keeps release controls on one row and moves the read-only contract into a drawer", () => {
+    expect(styles).toMatch(/\.headerActions\s*\{[^}]*display:\s*flex;/s);
     expect(styles).toMatch(
-      /\.headerActions\s*\{[^}]*grid-template-columns:\s*auto auto auto auto;/s,
+      /\.studioShell\s*\{[^}]*grid-template-columns:\s*248px minmax\(680px, 1fr\);/s,
     );
+    expect(styles).toMatch(/\.contractRail\s*\{[^}]*position:\s*fixed;/s);
+    expect(styles).toContain('.contractRail[data-open="true"]');
+    expect(workbench).toContain('aria-controls="effective-contract-drawer"');
+    expect(workbench).toContain("className={styles.contractBackdrop}");
   });
 
   it("is an independent control-plane route", () => {
@@ -174,7 +193,7 @@ describe("Agent Studio management page", () => {
       /@media \(max-width: 900px\)[\s\S]*?\.studioShell:has\(> \[data-studio-sidebar="collapsed"\]\)[\s\S]*?grid-template-columns: 52px minmax\(0, 1fr\)/,
     );
     expect(styles).toMatch(
-      /@media \(max-width: 620px\)[\s\S]*?\.headerActions[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto auto/,
+      /@media \(max-width: 620px\)[\s\S]*?\.headerActions[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto auto auto/,
     );
   });
 
@@ -214,6 +233,40 @@ describe("Agent Studio management page", () => {
     expect(styles).toContain(".promptWorkspace");
     expect(styles).toContain(".promptEditorToolbar");
     expect(styles).toContain(".promptEditorFooter");
+  });
+
+  it("uses one rich code workbench for Python and JSON authoring", () => {
+    expect(workbench).toContain("function PythonCodeEditor");
+    expect(workbench).toContain("function JsonSchemaCodeEditor");
+    expect(workbench).toContain("<StudioCodeEditor");
+    expect(workbench).toContain('ariaLabel="Python 源码"');
+    expect(workbench).toContain('ariaLabel="JSON Schema"');
+    expect(codeEditor).toContain("Spaces: 4");
+    expect(workbench).toContain("Python 3.12 · Sandbox");
+    expect(workbench).toContain("JSON 有效");
+    expect(codeEditor).toContain("lineNumbers()");
+    expect(codeEditor).toContain("highlightActiveLine()");
+    expect(codeEditor).toContain("bracketMatching()");
+    expect(codeEditor).toContain("highlightSelectionMatches()");
+    expect(codeEditor).toContain("indentWithTab");
+    expect(codeEditor).toContain('language === "python" ? python() : json()');
+    expect(codeEditor).toContain('".cm-activeLine"');
+    expect(codeEditorStyles).toContain(".cm-search");
+    expect(styles).toContain(".pythonToolWorkspace");
+    expect(workbench).not.toContain("schemaCodeEditor");
+    expect(workbench).not.toContain("pythonSourceEditor");
+  });
+
+  it("uses one control height and radius across the authoring workbench", () => {
+    expect(styles).toContain(
+      "--studio-control-height: var(--codex-control-height, 40px)",
+    );
+    expect(styles).toContain(
+      "--studio-control-radius: var(--codex-control-radius, 8px)",
+    );
+    expect(styles).toMatch(
+      /\.field input,[\s\S]*?min-height: var\(--studio-control-height\);/,
+    );
   });
 
   it("opens a review-before-apply model conversation for Skill authoring", () => {
@@ -296,6 +349,16 @@ describe("Agent Studio management page", () => {
     );
   });
 
+  it("can uninstall an embedded Skill without hiding the empty Skills workspace", () => {
+    expect(workbench).toContain("async function uninstallSkill");
+    expect(workbench).toContain("卸载当前 Skill");
+    expect(workbench).toContain("已发布的不可变历史版本不会被修改");
+    expect(workbench).toContain('activeSection === "skills" && (');
+    expect(workbench).toContain("当前草稿尚未安装 Skill");
+    expect(styles).toContain(".skillUninstallButton");
+    expect(styles).toContain(".skillEmpty");
+  });
+
   it("keeps publication permissioned while making every disabled reason actionable", () => {
     expect(workbench).toContain("membership.role");
     expect(workbench).toContain("studioClient.publishDraft");
@@ -308,8 +371,18 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("validationIssueSection");
     expect(workbench).toContain("去处理");
     expect(workbench).toContain("移除不兼容 MCP");
+    expect(workbench).toContain("productionValidationErrors");
+    expect(workbench).toContain("生产配置兼容");
+    expect(workbench).toContain("suggestedProfileIds");
+    expect(workbench).toContain("切换至 ${suggestedProfile.label}");
+    expect(workbench).toContain("PROFILE COMPATIBILITY");
+    expect(workbench).toContain("compatibleExecutionProfiles");
+    expect(workbench).toContain("applyRecommendedExecutionProfile");
+    expect(workbench).toContain("切换、保存并检查");
     expect(styles).toContain(".releaseAssistant");
     expect(styles).toContain(".releaseIssues");
+    expect(styles).toContain(".executionProfileAdvisor");
+    expect(styles).toContain('.releaseIssues li[data-stage="production"]');
     expect(styles).toContain(".publicationBadge");
   });
 
@@ -400,7 +473,9 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("本地开发 Preview");
     expect(workbench).toContain("禁止生产发布");
     expect(workbench).toContain("workspace_artifact");
-    expect(workbench).toContain("Preview · {activePreview.status}");
+    expect(workbench).toContain('activePreview.stale ? "历史 Preview" : "Preview"');
+    expect(workbench).toContain(`重新测试 Draft r\${draft.revision}`);
+    expect(workbench).toContain("读取刷新不会按当前 Draft 重跑");
     expect(styles).toContain(".previewBanner");
     expect(styles).toContain(".preflightDisclosure");
     expect(styles).toContain(

@@ -50,8 +50,13 @@ export interface RunViewModel {
   toolCount: number;
   totalTokens?: number;
   totalCostUsd?: number;
+  turns?: number;
+  stopReason?: string;
   failureCode?: string;
   pendingApprovalId?: string;
+  queueReason?: string;
+  queueReasonCode?: string;
+  blockedByRunId?: string;
 }
 
 const terminalPhases = new Set<RunPhase>([
@@ -270,6 +275,7 @@ export function reduceRunViewModel(
   const runFailure = [...items]
     .reverse()
     .find((item) => item.status === "failed");
+  const queued = items.find((item) => item.event_type === "run.queued");
   const usage = runtimeResult?.metadata.usage;
   const totalTokens =
     typeof usage === "object" &&
@@ -297,11 +303,29 @@ export function reduceRunViewModel(
       typeof runtimeResult?.metadata.cost_usd === "number"
         ? runtimeResult.metadata.cost_usd
         : undefined,
+    turns:
+      typeof runtimeResult?.metadata.turns === "number"
+        ? runtimeResult.metadata.turns
+        : undefined,
+    stopReason:
+      typeof runtimeResult?.metadata.stop_reason === "string"
+        ? runtimeResult.metadata.stop_reason
+        : undefined,
     failureCode:
       typeof runFailure?.metadata.error_code === "string"
         ? runFailure.metadata.error_code
         : undefined,
     pendingApprovalId: pendingApproval(items),
+    queueReason:
+      typeof queued?.summary === "string" ? queued.summary : undefined,
+    queueReasonCode:
+      typeof queued?.metadata.reason_code === "string"
+        ? queued.metadata.reason_code
+        : undefined,
+    blockedByRunId:
+      typeof queued?.metadata.blocked_by_run_id === "string"
+        ? queued.metadata.blocked_by_run_id
+        : undefined,
   };
 }
 

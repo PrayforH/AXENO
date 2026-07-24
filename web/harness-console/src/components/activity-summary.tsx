@@ -17,11 +17,44 @@ const phaseLabels: Record<RunPhase, string> = {
   queued: "等待处理",
   running: "正在处理",
   waiting_approval: "等待审批",
-  completed: "已处理",
+  completed: "处理完成",
   failed: "处理失败",
   rejected: "已拒绝",
   cancelled: "已停止",
 };
+
+const disclosureMemory = new Map<string, boolean>();
+const DISCLOSURE_STORAGE_PREFIX = "agent-studio:run-disclosure:v1:";
+
+function storedDisclosure(runId: string): boolean | null {
+  const remembered = disclosureMemory.get(runId);
+  if (remembered !== undefined) return remembered;
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = window.localStorage.getItem(
+      `${DISCLOSURE_STORAGE_PREFIX}${runId}`,
+    );
+    if (stored !== "open" && stored !== "closed") return null;
+    const open = stored === "open";
+    disclosureMemory.set(runId, open);
+    return open;
+  } catch {
+    return null;
+  }
+}
+
+function rememberDisclosure(runId: string, open: boolean) {
+  disclosureMemory.set(runId, open);
+  try {
+    window.localStorage.setItem(
+      `${DISCLOSURE_STORAGE_PREFIX}${runId}`,
+      open ? "open" : "closed",
+    );
+  } catch {
+    // Browser storage may be unavailable in hardened/private contexts. The
+    // module cache still preserves the choice while this page remains open.
+  }
+}
 
 function durationLabel(elapsedMs: number) {
   if (elapsedMs < 1_000) return `${elapsedMs}ms`;
@@ -88,8 +121,10 @@ const visibleProcessEvents = new Set([
   "policy.resolved",
   "credential.lease.issued",
   "tool.directory.loaded",
+  "tool.directory.degraded",
   "runtime.result",
   "workspace.archived",
+  "workspace.recovery_retained",
   "artifact.ready",
 ]);
 
@@ -129,6 +164,10 @@ function processNodes(view: RunViewModel): ProcessNode[] {
 }
 
 function commentaryNodes(view: RunViewModel): CommentaryNode[] {
+  const active =
+    view.phase === "queued" ||
+    view.phase === "running" ||
+    view.phase === "waiting_approval";
   const actionSequences = view.items
     .filter(
       (item) =>
@@ -142,9 +181,14 @@ function commentaryNodes(view: RunViewModel): CommentaryNode[] {
   for (const item of view.items) {
     if (item.event_type !== "message.delta" || !item.summary?.trim()) continue;
     const nextAction = actionSequences.find((sequence) => sequence > item.sequence);
-    if (nextAction === undefined) continue;
-    const existing = grouped.get(nextAction);
-    grouped.set(nextAction, {
+    // While the provider has not revealed whether this message ends in a tool
+    // call, keep its trailing text in the processing area. Once the Run
+    // completes, only text that actually preceded an action stays here and
+    // the terminal message is rendered as the answer.
+    if (nextAction === undefined && !active) continue;
+    const groupKey = nextAction ?? Number.MAX_SAFE_INTEGER;
+    const existing = grouped.get(groupKey);
+    grouped.set(groupKey, {
       id: existing?.id ?? item.id,
       sequence: existing?.sequence ?? item.sequence,
       text: `${existing?.text ?? ""}${item.summary}`,
@@ -339,6 +383,36 @@ function taskAction(tasks: readonly RunTaskNode[]): ActionNode {
   };
 }
 
+function activityHeading(view: RunViewModel) {
+  if (view.phase !== "completed") return phaseLabels[view.phase];
+  if (view.tools.length > 0) return toolGroupLabel(view.tools);
+  if (view.tasks.length === 1) {
+    return `完成子任务 ${view.tasks[0].alias ?? view.tasks[0].title}`;
+  }
+  if (view.tasks.length > 1) return `完成 ${view.tasks.length} 个子任务`;
+  return phaseLabels.completed;
+}
+
+function failureDetails(view: RunViewModel) {
+  const failure = [...view.items]
+    .reverse()
+    .find(
+      (item) =>
+        item.event_type === "run.failed" ||
+        item.event_type === "run.timed_out" ||
+        item.event_type === "run.rejected",
+    );
+  const failedActions = view.tools.filter((tool) => tool.status === "failed").length +
+    view.tasks.filter((task) => task.status === "failed").length;
+  return {
+    title: failure?.title || "本次处理未完成",
+    summary:
+      failure?.summary?.trim() ||
+      "请检查下方最后一个失败动作及其返回结果后重试。",
+    failedActions,
+  };
+}
+
 function displayTimeline(view: RunViewModel): DisplayTimelineNode[] {
   const raw = rawTimeline(view);
   const display: DisplayTimelineNode[] = [];
@@ -418,37 +492,74 @@ function ActionIcon({ kind }: { kind: ActionIconKind }) {
 }
 
 function ActionRow({ action }: { action: ActionNode }) {
-  return (
-    <div className={`execution-action action-${action.status}`}>
+  const hasResult = Boolean(action.resultPreview || action.entries?.length);
+  const heading = (
+    <>
       <span className="execution-action-icon"><ActionIcon kind={action.icon} /></span>
       <span className="execution-action-copy">
         <span className="execution-action-heading">
           <strong>{action.label}</strong>
           {action.detail && <small>{action.detail}</small>}
         </span>
-        {action.resultPreview && (
-          <span className="execution-action-result">{action.resultPreview}</span>
-        )}
-        {action.entries && (
-          <span className="execution-action-details">
-            {action.entries.map((entry) => (
-              <span
-                className={`execution-action-detail action-${entry.status}`}
-                key={entry.id}
-              >
-                <span className="execution-action-detail-heading">
-                  <span>{entry.label}</span>
-                  <small>{entry.result}</small>
-                </span>
-                {entry.preview && (
-                  <span className="execution-action-result">{entry.preview}</span>
-                )}
-              </span>
-            ))}
-          </span>
-        )}
       </span>
+    </>
+  );
+  const result = (
+    <div className="execution-action-body">
+      {action.resultPreview && (
+        <span
+          className="execution-action-result"
+          role="region"
+          aria-label="处理结果预览"
+          tabIndex={0}
+        >
+          {action.resultPreview}
+        </span>
+      )}
+      {action.entries && (
+        <span className="execution-action-details">
+          {action.entries.map((entry) => (
+            <span
+              className={`execution-action-detail action-${entry.status}`}
+              key={entry.id}
+            >
+              <span className="execution-action-detail-heading">
+                <span>{entry.label}</span>
+                <small>{entry.result}</small>
+              </span>
+              {entry.preview && (
+                <span
+                  className="execution-action-result"
+                  role="region"
+                  aria-label={`${entry.label} 结果预览`}
+                  tabIndex={0}
+                >
+                  {entry.preview}
+                </span>
+              )}
+            </span>
+          ))}
+        </span>
+      )}
     </div>
+  );
+
+  if (!hasResult) {
+    return (
+      <div className={`execution-action action-${action.status}`}>
+        <span className="execution-action-static">{heading}</span>
+      </div>
+    );
+  }
+
+  return (
+    <details className={`execution-action action-${action.status}`}>
+      <summary className="execution-action-summary">
+        {heading}
+        <span className="execution-action-chevron" aria-hidden="true" />
+      </summary>
+      {result}
+    </details>
   );
 }
 
@@ -475,7 +586,20 @@ export function ActivitySummary({
   const [manualDisclosure, setManualDisclosure] = useState<{
     runId: string;
     open: boolean;
-  } | null>(null);
+  } | null>(() => {
+    const remembered = storedDisclosure(view.runId);
+    return remembered === null
+      ? null
+      : { runId: view.runId, open: remembered };
+  });
+  useEffect(() => {
+    const remembered = storedDisclosure(view.runId);
+    setManualDisclosure(
+      remembered === null
+        ? null
+        : { runId: view.runId, open: remembered },
+    );
+  }, [view.runId]);
   const manuallyOpen =
     manualDisclosure?.runId === view.runId ? manualDisclosure.open : null;
   const active =
@@ -493,31 +617,56 @@ export function ActivitySummary({
     const timer = window.setInterval(tick, 1_000);
     return () => window.clearInterval(timer);
   }, [active, view.runId]);
-  // Match Codex's disclosure lifecycle: keep a live Run visible, then fold it
-  // once it reaches a terminal phase. A deliberate user choice always wins.
-  const open = manuallyOpen ?? active;
+  // Successful work folds into the answer. Failed work stays open so the
+  // action trail and the final diagnostic are visible without another click.
+  const open = manuallyOpen ?? (active || view.phase === "failed");
   const elapsed = activeElapsedMs(view, now);
   const timeline = displayTimeline(view);
+  const heading = activityHeading(view);
+  const failure = view.phase === "failed" ? failureDetails(view) : null;
 
-  function toggleDisclosure(event: MouseEvent<HTMLElement>) {
-    event.preventDefault();
-    setManualDisclosure({ runId: view.runId, open: !open });
+  function toggleDisclosure(_event: MouseEvent<HTMLButtonElement>) {
+    const nextOpen = !open;
+    rememberDisclosure(view.runId, nextOpen);
+    setManualDisclosure({ runId: view.runId, open: nextOpen });
   }
 
   return (
-    <details
+    <section
       className={`execution-ribbon phase-${view.phase}`}
       aria-label={`执行进度 ${view.runId}`}
       data-run-id={view.runId}
       data-response-started={responseStarted ? "true" : "false"}
-      open={open}
+      data-open={open ? "true" : "false"}
     >
-      <summary onClick={toggleDisclosure} aria-expanded={open}>
-        <span className="execution-phase">{phaseLabels[view.phase]}</span>
+      <button
+        type="button"
+        className="execution-disclosure"
+        onClick={toggleDisclosure}
+        aria-expanded={open}
+      >
+        <span className="execution-phase">{heading}</span>
         <span className="execution-duration">{durationLabel(elapsed)}</span>
         <span className="execution-chevron" aria-hidden="true" />
-      </summary>
-      <div className="execution-tree">
+      </button>
+      <div className="execution-tree" hidden={!open}>
+        {failure ? (
+          <section className="execution-failure-diagnostic" aria-label="失败定位">
+            <span>失败定位</span>
+            <strong>{failure.title}</strong>
+            <p>{failure.summary}</p>
+            <small>
+              {[
+                view.turns !== undefined ? `${view.turns} 个模型回合` : null,
+                view.toolCount > 0 ? `${view.toolCount} 个工具动作` : null,
+                view.taskCount > 0 ? `${view.taskCount} 个子任务` : null,
+                failure.failedActions > 0
+                  ? `${failure.failedActions} 个动作失败`
+                  : null,
+              ].filter(Boolean).join(" · ")}
+            </small>
+          </section>
+        ) : null}
         {timeline.length > 0 ? (
           <section className="execution-log" aria-label="处理过程">
             {timeline.map((entry) =>
@@ -534,6 +683,6 @@ export function ActivitySummary({
           <p className="execution-empty">{view.summary}</p>
         )}
       </div>
-    </details>
+    </section>
   );
 }

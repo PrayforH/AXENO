@@ -561,7 +561,7 @@ class PostgresAguiThreadBindingRepository:
             return AguiThreadBinding.model_validate(payload)
 
     async def list_for_user(
-        self, tenant_id: str, user_id: str, *, limit: int
+        self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]:
         statement = (
             select(AguiThreadBindingRow.payload)
@@ -572,8 +572,15 @@ class PostgresAguiThreadBindingRepository:
         )
         async with self._sessions() as session:
             payloads = (await session.execute(statement)).scalars().all()
+            bindings = (
+                AguiThreadBinding.model_validate(payload) for payload in payloads
+            )
             return sorted(
-                (AguiThreadBinding.model_validate(payload) for payload in payloads),
+                (
+                    binding
+                    for binding in bindings
+                    if (binding.archived_at is not None) is archived
+                ),
                 key=lambda binding: (binding.updated_at, binding.thread_id),
                 reverse=True,
             )[:limit]
@@ -603,6 +610,33 @@ class PostgresAguiThreadBindingRepository:
                     "title_source": source,
                     "title_updated_at": generated_at,
                     "updated_at": max(binding.updated_at, generated_at),
+                }
+            )
+            row.payload = updated.model_dump(mode="json")
+            await session.commit()
+            return updated
+
+    async def set_archived(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        archived_at: datetime | None,
+    ) -> AguiThreadBinding:
+        async with self._sessions() as session:
+            row = await session.get(
+                AguiThreadBindingRow, (tenant_id, user_id, thread_id)
+            )
+            if row is None:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
+            binding = AguiThreadBinding.model_validate(row.payload)
+            updated = binding.model_copy(
+                update={
+                    "archived_at": archived_at,
+                    "updated_at": max(binding.updated_at, archived_at)
+                    if archived_at is not None
+                    else binding.updated_at,
                 }
             )
             row.payload = updated.model_dump(mode="json")

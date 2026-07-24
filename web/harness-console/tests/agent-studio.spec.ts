@@ -7,11 +7,12 @@ import {
 } from "../src/lib/agent-studio";
 
 describe("Agent Studio effective contract", () => {
-  it("offers both DeepSeek V4 models on the compatible route", () => {
-    const route = MODEL_ROUTES.find((item) => item.id === "new-api-default");
+  it("offers DeepSeek V4 models as distinct executable routes", () => {
+    const flash = MODEL_ROUTES.find((item) => item.id === "deepseek-v4-flash");
+    const pro = MODEL_ROUTES.find((item) => item.id === "deepseek-v4-pro");
 
-    expect(route?.label).toBe("DeepSeek V4");
-    expect(route?.models).toEqual(["deepseek-v4-flash", "deepseek-v4-pro"]);
+    expect(flash?.models).toEqual(["deepseek-v4-flash"]);
+    expect(pro?.models).toEqual(["deepseek-v4-pro"]);
   });
 
   it("keeps the full public-opinion prompt, workflow and reference files", () => {

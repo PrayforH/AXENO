@@ -88,8 +88,8 @@ metadata:
 spec:
   runtime: claude-agent-sdk
   model:
-    route: new-api-default
-    model: claude-sonnet-4-6
+    route: deepseek-v4-pro
+    model: deepseek-v4-pro
     requiredCapabilities:
       - streaming
       - tool_use

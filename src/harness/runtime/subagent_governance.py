@@ -13,6 +13,12 @@ from harness.runtime.base import RuntimeEvent
 
 SUBAGENT_EVENT_SCHEMA = "harness.subagent.v1"
 _TERMINAL_TYPES = frozenset({"subagent.completed", "subagent.failed"})
+_RUNTIME_TASK_TYPES = {
+    "runtime.task.started": "subagent.started",
+    "runtime.task.updated": "subagent.updated",
+    "runtime.task.completed": "subagent.completed",
+    "runtime.task.failed": "subagent.failed",
+}
 
 
 class SubagentGovernanceError(RuntimeError):
@@ -25,7 +31,7 @@ class SubagentBinding:
     agent_name: str
     agent_version: str
     policy: str
-    timeout_seconds: int
+    timeout_seconds: int | None
 
 
 @dataclass
@@ -121,8 +127,41 @@ class SubagentRuntimeGovernor:
             "",
         )
         tool_call_id = event.payload.get("tool_call_id")
-        if alias and isinstance(tool_call_id, str):
+        if isinstance(tool_call_id, str):
             self._tool_aliases[tool_call_id] = alias
+
+    def _promote_runtime_task(self, event: RuntimeEvent) -> RuntimeEvent | None:
+        """Promote only lifecycle events tied to an actual declared delegation.
+
+        Recent SDK versions also emit Task* system messages for ordinary background
+        tools such as Bash. Those are runtime task telemetry, not subagents, and must
+        not be forced through the fail-closed Lead/Sub contract.
+        """
+        subagent_type = _RUNTIME_TASK_TYPES.get(event.type)
+        if subagent_type is None:
+            return None
+        task_id = str(event.payload.get("task_id", ""))
+        if event.type == "runtime.task.started":
+            parent_tool_use_id = str(
+                event.payload.get("parent_tool_use_id", "")
+            )
+            declared_alias = any(
+                isinstance(candidate, str) and candidate in self._bindings
+                for candidate in (
+                    event.payload.get("alias"),
+                    event.payload.get("task_type"),
+                )
+            )
+            linked_delegation = parent_tool_use_id in self._tool_aliases
+            if not declared_alias and not linked_delegation:
+                return None
+        elif task_id not in self._tasks:
+            parent_tool_use_id = str(
+                event.payload.get("parent_tool_use_id", "")
+            )
+            if parent_tool_use_id not in self._tool_aliases:
+                return None
+        return event.model_copy(update={"type": subagent_type})
 
     def _resolve_alias(self, event: RuntimeEvent) -> str:
         payload = event.payload
@@ -173,7 +212,10 @@ class SubagentRuntimeGovernor:
         duration_ms = usage.get(
             "duration_ms", max(0, round((now - state.started_at) * 1000))
         )
-        if duration_ms > state.binding.timeout_seconds * 1000:
+        if (
+            state.binding.timeout_seconds is not None
+            and duration_ms > state.binding.timeout_seconds * 1000
+        ):
             raise SubagentGovernanceError(
                 f"subagent duration exceeded for alias {state.binding.alias}"
             )
@@ -229,6 +271,11 @@ class SubagentRuntimeGovernor:
 
     def process(self, event: RuntimeEvent, *, run_id: str) -> list[RuntimeEvent]:
         self._alias_from_tool_request(event)
+        if event.type in _RUNTIME_TASK_TYPES:
+            promoted = self._promote_runtime_task(event)
+            if promoted is None:
+                return [event]
+            event = promoted
         if not event.type.startswith("subagent.") or event.type == "subagent.delta":
             return [event]
         task_id = str(event.payload.get("task_id", ""))

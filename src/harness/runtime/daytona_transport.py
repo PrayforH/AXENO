@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
@@ -11,7 +13,13 @@ from typing import Any, Protocol, cast
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, Transport
+from claude_agent_sdk._version import __version__ as CLAUDE_AGENT_SDK_VERSION
 from claude_agent_sdk._internal.session_resume import materialize_resume_session
+
+from harness.runtime.audit_redaction import redact_text
+
+logger = logging.getLogger(__name__)
+_DIAGNOSTIC_TAIL_BYTES = 16 * 1024
 
 
 class DaytonaTransportError(RuntimeError):
@@ -110,6 +118,25 @@ class DaytonaClaudeTransport(Transport):
         self._close_timeout = close_timeout
         self._ready = False
         self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_tail = bytearray()
+        self._stdout_tail = bytearray()
+        self._stdout_chunk_count = 0
+        self._stdout_message_count = 0
+
+    def _diagnostic_text(self, raw: bytes) -> str:
+        text = raw.decode("utf-8", errors="replace")
+        for key, value in self._options.env.items():
+            upper = key.upper()
+            if value and any(
+                marker in upper
+                for marker in ("TOKEN", "KEY", "SECRET", "PASSWORD", "AUTH")
+            ):
+                text = text.replace(value, "[REDACTED]")
+                text = text.replace(
+                    base64.b64encode(value.encode("utf-8")).decode("ascii"),
+                    "[REDACTED]",
+                )
+        return redact_text(text, limit=4_000)
 
     async def _stage_resume_config(self) -> None:
         if self._options.session_store is None or self._options.resume is None:
@@ -141,6 +168,12 @@ class DaytonaClaudeTransport(Transport):
         environment = {
             **self._options.env,
             "CLAUDE_CODE_ENTRYPOINT": "sdk-py",
+            "CLAUDE_AGENT_SDK_VERSION": CLAUDE_AGENT_SDK_VERSION,
+            # Daytona's stdout demultiplexer retains a short suffix while it
+            # waits to rule out a stream marker. The remote wrapper adds a
+            # harmless padding line after each CLI protocol line so the JSON
+            # newline is delivered immediately instead of after process exit.
+            "HARNESS_DAYTONA_STDOUT_FLUSH_PADDING": "1",
         }
         mcp_config = _mcp_config(self._options)
         if mcp_config is not None:
@@ -156,8 +189,10 @@ class DaytonaClaudeTransport(Transport):
         self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def _drain_stderr(self) -> None:
-        while await self._session.read_stderr() is not None:
-            pass
+        while (chunk := await self._session.read_stderr()) is not None:
+            self._stderr_tail.extend(chunk)
+            if len(self._stderr_tail) > _DIAGNOSTIC_TAIL_BYTES:
+                del self._stderr_tail[:-_DIAGNOSTIC_TAIL_BYTES]
 
     async def write(self, data: str) -> None:
         if not self._ready:
@@ -174,14 +209,33 @@ class DaytonaClaudeTransport(Transport):
             chunk = await self._session.read_stdout()
             if chunk is None:
                 break
+            self._stdout_chunk_count += 1
+            self._stdout_tail.extend(chunk)
+            if len(self._stdout_tail) > _DIAGNOSTIC_TAIL_BYTES:
+                del self._stdout_tail[:-_DIAGNOSTIC_TAIL_BYTES]
             buffer += chunk.decode("utf-8", errors="replace")
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
                 parsed = self._parse_line(line)
                 if parsed is not None:
+                    self._stdout_message_count += 1
                     yield parsed
+            # Daytona can split one long stdout line across log callbacks and
+            # withhold its trailing newline while the process remains active.
+            # Control responses are self-delimiting JSON objects, so consume
+            # complete prefixes without waiting for a newline that may arrive
+            # only after the CLI exits.
+            parsed_prefixes, buffer = self._parse_complete_prefixes(buffer)
+            for parsed in parsed_prefixes:
+                self._stdout_message_count += 1
+                yield parsed
+        parsed_prefixes, buffer = self._parse_complete_prefixes(buffer)
+        for parsed in parsed_prefixes:
+            self._stdout_message_count += 1
+            yield parsed
         parsed = self._parse_line(buffer)
         if parsed is not None:
+            self._stdout_message_count += 1
             yield parsed
         exit_code = await self._session.wait()
         if exit_code != 0:
@@ -202,6 +256,27 @@ class DaytonaClaudeTransport(Transport):
             return None
         return cast(dict[str, Any], value)
 
+    @staticmethod
+    def _parse_complete_prefixes(
+        buffer: str,
+    ) -> tuple[list[dict[str, Any]], str]:
+        decoder = json.JSONDecoder()
+        parsed: list[dict[str, Any]] = []
+        remaining = buffer
+        while remaining:
+            leading = len(remaining) - len(remaining.lstrip())
+            candidate = remaining[leading:]
+            if not candidate:
+                return parsed, ""
+            try:
+                value, end = decoder.raw_decode(candidate)
+            except json.JSONDecodeError:
+                break
+            if isinstance(value, dict):
+                parsed.append(cast(dict[str, Any], value))
+            remaining = candidate[end:]
+        return parsed, remaining
+
     async def close(self) -> None:
         self._ready = False
         with anyio.move_on_after(self._close_timeout):
@@ -214,6 +289,18 @@ class DaytonaClaudeTransport(Transport):
                 except asyncio.CancelledError:
                     pass
             self._stderr_task = None
+        if self._stderr_tail:
+            logger.warning(
+                "remote Claude CLI stderr before close: %s",
+                self._diagnostic_text(bytes(self._stderr_tail)),
+            )
+        if self._stdout_message_count == 0:
+            logger.warning(
+                "remote Claude CLI closed without parsed stdout messages "
+                "(stdout_chunks=%s, stdout_tail=%s)",
+                self._stdout_chunk_count,
+                self._diagnostic_text(bytes(self._stdout_tail)),
+            )
 
     def is_ready(self) -> bool:
         return self._ready

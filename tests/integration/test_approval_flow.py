@@ -155,9 +155,7 @@ async def test_orphaned_expired_approval_is_reaped_and_run_is_rejected() -> None
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
     events = InMemoryEventRepository()
-    event_service = EventService(
-        events, InMemoryEventBus(), clock=clock, id_generator=ids()
-    )
+    event_service = EventService(events, InMemoryEventBus(), clock=clock, id_generator=ids())
     await runs.add(
         Run(
             run_id="run-orphan",
@@ -224,12 +222,17 @@ async def test_approved_handoff_enqueues_a_fresh_worker_task() -> None:
         decision=ApprovalStatus.APPROVED,
     )
 
-    assert await queue.dequeue() == RunTask(tenant_id="tenant-a", run_id="run-1")
+    assert await queue.dequeue() == RunTask(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        session_id="session-1",
+    )
 
 
 @pytest.mark.asyncio
 async def test_inline_approval_wakes_the_waiting_sdk_call_and_cleans_up() -> None:
-    service, runs, events = await arrange()
+    queue = InMemoryTaskQueue()
+    service, runs, events = await arrange(queue=queue)
 
     approval = await service.request(
         tenant_id="tenant-a",
@@ -252,6 +255,7 @@ async def test_inline_approval_wakes_the_waiting_sdk_call_and_cleans_up() -> Non
     assert await waiting is ApprovalStatus.APPROVED
     assert not service.has_inline_waiter(approval.approval_id)
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.RUNNING
+    assert await queue.dequeue() is None
 
 
 @pytest.mark.asyncio
@@ -291,9 +295,7 @@ async def test_inline_decision_crosses_api_and_worker_service_instances() -> Non
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
     events = InMemoryEventRepository()
-    event_service = EventService(
-        events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids()
-    )
+    event_service = EventService(events, InMemoryEventBus(), clock=lambda: NOW, id_generator=ids())
     await runs.add(
         Run(
             run_id="run-cross-process",
@@ -328,9 +330,7 @@ async def test_inline_decision_crosses_api_and_worker_service_instances() -> Non
         reason="Bash requires review",
         inline=True,
     )
-    waiting = asyncio.create_task(
-        worker_service.wait_for_decision(approval.approval_id)
-    )
+    waiting = asyncio.create_task(worker_service.wait_for_decision(approval.approval_id))
 
     assert not api_service.has_inline_waiter(approval.approval_id)
     await api_service.decide(
@@ -340,9 +340,69 @@ async def test_inline_decision_crosses_api_and_worker_service_instances() -> Non
     )
 
     assert await asyncio.wait_for(waiting, timeout=0.2) is ApprovalStatus.REJECTED
-    assert (
-        await runs.get("tenant-a", "run-cross-process")
-    ).status is RunStatus.RUNNING
+    assert (await runs.get("tenant-a", "run-cross-process")).status is RunStatus.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_cross_process_inline_approval_does_not_duplicate_live_worker_task() -> None:
+    runs = InMemoryRunRepository()
+    approvals = InMemoryApprovalRepository()
+    events = InMemoryEventRepository()
+    queue = InMemoryTaskQueue()
+    event_service = EventService(
+        events,
+        InMemoryEventBus(),
+        clock=lambda: NOW,
+        id_generator=ids(),
+    )
+    await runs.add(
+        Run(
+            run_id="run-cross-process-approved",
+            session_id="session-1",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="cross-process-approved",
+            created_at=NOW,
+            updated_at=NOW,
+        )
+    )
+    worker_service = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=lambda: NOW,
+        id_generator=ids(),
+        queue=queue,
+        decision_poll_interval_seconds=0.001,
+    )
+    api_service = ApprovalService(
+        runs=runs,
+        approvals=approvals,
+        events=event_service,
+        clock=lambda: NOW,
+        id_generator=ids(),
+        queue=queue,
+        decision_poll_interval_seconds=0.001,
+    )
+    approval = await worker_service.request(
+        tenant_id="tenant-a",
+        run_id="run-cross-process-approved",
+        tool_call_id="tool-cross-process-approved",
+        reason="Bash requires review",
+        inline=True,
+    )
+    waiting = asyncio.create_task(
+        worker_service.wait_for_decision(approval.approval_id)
+    )
+
+    await api_service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+
+    assert await asyncio.wait_for(waiting, timeout=0.2) is ApprovalStatus.APPROVED
+    assert await queue.dequeue() is None
 
 
 @pytest.mark.asyncio

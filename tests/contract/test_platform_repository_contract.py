@@ -132,5 +132,25 @@ async def test_agui_binding_round_trips_in_both_directions() -> None:
     assert await repository.get_by_session(
         "tenant-a", "user-a", "session-a"
     ) == titled
+    archived = await repository.set_archived(
+        "tenant-a",
+        "user-a",
+        "thread-a",
+        archived_at=NOW + timedelta(seconds=2),
+    )
+    assert archived.archived_at == NOW + timedelta(seconds=2)
+    assert await repository.list_for_user(
+        "tenant-a", "user-a", limit=10
+    ) == []
+    assert await repository.list_for_user(
+        "tenant-a", "user-a", limit=10, archived=True
+    ) == [archived]
+    restored = await repository.set_archived(
+        "tenant-a", "user-a", "thread-a", archived_at=None
+    )
+    assert restored.archived_at is None
+    assert await repository.list_for_user(
+        "tenant-a", "user-a", limit=10
+    ) == [restored]
     with pytest.raises(NotFoundError):
         await repository.get_by_thread("tenant-a", "user-b", "thread-a")

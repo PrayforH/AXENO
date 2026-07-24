@@ -24,7 +24,14 @@ cp deploy/docker-compose/.env.docker.example deploy/docker-compose/.env.docker
 - `HARNESS_SANDBOX_PROVIDER`（`daytona`、`e2b`、`kubernetes` 或显式不安全的 `local`）
 - `HARNESS_SANDBOX_EXECUTION_MODE`：`remote_cli` 让 Claude CLI 在沙箱中运行；
   `worker_cli_deferred` 让 CLI 常驻 Worker，首次文件或 Bash 工具调用时才创建远端沙箱，
-  可显著降低纯对话首 Token 延迟
+  可显著降低纯对话首 Token 延迟。带 Python Tool 或未显式标记为只读的外部 MCP
+  会按整次 Run 自动回退到 `remote_cli`
+- `HARNESS_WORKER_DEFERRED_MAX_ACTIVE_RUNS`：限制每个 Worker 同时运行的 deferred
+  模型进程数；文件与 Shell 仍由代理在隔离 Sandbox 内执行
+
+外部 MCP 只能从能力目录按逻辑引用装载；目录项必须使用 HTTP(S) 地址，不能下发
+任意 stdio 命令。只有管理员显式设置 `readOnly=true` 的 MCP 才允许由 Worker
+直接调用，其余 MCP 会随 Run 回退到远端 Sandbox CLI。
 
 `HARNESS_NEW_API_*` 直接连接 Anthropic-compatible 网关，包括 new-api；生产链路不依赖 cc-switch。凭据只通过容器环境注入，不应写进镜像或提交到 Git。`HARNESS_API_BEARER_TOKEN` 用于 Web BFF、seed、E2E 与 API 之间的服务认证，不进入浏览器 bundle。`COMPATIBILITY` 可取 `full/degraded/unsupported`，`CAPABILITIES` 是逗号分隔的已验证能力（例如 `streaming,tool_use`）。只声明实际通过 `uv run python scripts/smoke_new_api.py` 黑盒验证的能力；Manifest 要求的能力不在该集合时，Run 会在模型请求前 fail closed。
 
@@ -211,6 +218,16 @@ Daytona 隔离宿主机，但同一 Claude CLI 进程内的 `Bash` 仍可能读�
 Claude SDK 的 `create_sdk_mcp_server()` 保存的是 worker 进程内 Python 对象，不能穿过自定义 Transport 搬到 Daytona。Daytona 模式会拒绝 Manifest 的 `python_entry`，并不注入 worker 本地的 artifact SDK MCP；业务工具应部署为带租户身份认证、可从 sandbox 访问的 HTTP MCP。内置 Memory Bank 是该模式的参考实现：Worker 用独立密钥签发绑定完整 Run 身份、5 分钟有效的令牌，Sandbox 通过 `HARNESS_MEMORY_MCP_PUBLIC_URL` 访问 API 的 `/mcp/memory/mcp`，且只能提议、不能直接写入永久记忆。该密钥不能复用登录 JWT 密钥，公网入口必须使用 TLS 并限制到所需 MCP 路径。内置文件工具仍在 Daytona 内执行，Run 结束时 workspace 会同步回受信控制面；Agent 写入 `outputs/` 的普通文件会在大小、数量和路径复核后自动发布为可下载 Artifact。
 
 从 Daytona 同步回来的 workspace 仍是不可信输入。控制面在归档前重新拒绝 symlink/特殊文件，并限制解压大小、文件总量和归档大小；不要绕过 WorkspaceService 直接把 sandbox 目录挂载或解包到宿主机。
+
+### Workspace 存储与保留
+
+Workspace 使用分层存储，不把 Worker 本地目录或 Daytona 沙箱当作持久真源：
+
+- Worker 本地目录只存在于 Run 生命周期内；完成收集后删除。
+- Daytona 的 Run 目录在 Workspace Snapshot 成功写入对象存储后删除。若收集或归档失败，目录默认保留 3600 秒用于人工恢复，配置项为 `HARNESS_DAYTONA_RECOVERY_RETENTION_SECONDS`。
+- Workspace Snapshot、输入文件和 Artifact 写入 MinIO/S3 兼容对象存储，元数据写入 PostgreSQL。本地 Compose 使用持久化 MinIO volume；生产可把同一接口指向远程 MinIO/S3。
+
+应用当前不主动删除 Workspace Snapshot，因此实际保留期由对象存储 bucket lifecycle、数据生命周期任务或显式删除决定。生产建议对普通 Session Snapshot 设置 30 天滑动保留、至少保留最近 20 个版本；已发布或被用户固定的 Artifact 应采用项目级保留策略，不随 Session Snapshot 自动删除。
 
 ### gVisor / runsc
 

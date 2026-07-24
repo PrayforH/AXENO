@@ -149,7 +149,7 @@ class WorkspaceSpec(ManifestModel):
 
 class LimitSpec(ManifestModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
-    timeout_seconds: int = Field(default=1800, alias="timeoutSeconds", ge=1)
+    timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds", ge=1)
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
     max_model_tokens: int | None = Field(default=None, alias="maxModelTokens", ge=1)
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
@@ -247,8 +247,8 @@ class AgentManifestSnapshot(ManifestModel):
 
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|token|password|secret)", re.IGNORECASE)
 _NON_SECRET_TOKEN_FIELDS = {"maxmodeltokens"}
-_MAX_SKILL_FILE_BYTES = 2 * 1024 * 1024
-_MAX_SKILL_TOTAL_BYTES = 10 * 1024 * 1024
+_MAX_SKILL_FILE_BYTES = 64 * 1024 * 1024
+_MAX_SKILL_TOTAL_BYTES = 256 * 1024 * 1024
 TOOL_DIRECTORY_FILENAME = "tool-directory.json"
 _MAX_TOOL_DIRECTORY_BYTES = 2 * 1024 * 1024
 _MAX_PYTHON_TOOL_BYTES = 1024 * 1024

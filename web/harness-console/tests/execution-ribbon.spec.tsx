@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivitySummary } from "../src/components/activity-summary";
 import { runActivitySchema } from "../src/lib/activity-schema";
 
@@ -103,12 +103,16 @@ const activity = runActivitySchema.parse({
   ],
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("execution ribbon", () => {
   it("expands active work before the assistant starts responding", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
     expect(html).toContain(
-      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open="">',
+      '<section class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" data-open="true">',
     );
     expect(html).toContain("正在处理");
     expect(html).not.toContain('class="execution-state-mark"');
@@ -123,9 +127,45 @@ describe("execution ribbon", () => {
     );
 
     expect(html).toContain(
-      '<details class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="true" open="">',
+      '<section class="execution-ribbon phase-running" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="true" data-open="true">',
     );
     expect(html).toContain('aria-expanded="true"');
+  });
+
+  it("restores a manually collapsed failed run by run id", () => {
+    const failed = runActivitySchema.parse({
+      ...activity,
+      run_id: "run-persisted-failure",
+      status: "failed",
+      items: [
+        ...activity.items,
+        {
+          id: "run-failed-persisted",
+          event_type: "run.failed",
+          kind: "run",
+          status: "failed",
+          title: "运行失败",
+          summary: "测试失败",
+          timestamp: "2026-07-14T00:00:08Z",
+          sequence: 8,
+          metadata: {},
+        },
+      ],
+    });
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem(key: string) {
+          return key.endsWith("run-persisted-failure") ? "closed" : null;
+        },
+        setItem() {},
+      },
+    });
+
+    const html = renderToStaticMarkup(<ActivitySummary activity={failed} />);
+
+    expect(html).toContain('data-open="false"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('<div class="execution-tree" hidden="">');
   });
 
   it("automatically folds the completed Codex transcript", () => {
@@ -155,12 +195,12 @@ describe("execution ribbon", () => {
     );
 
     expect(waitingForResponse).toContain('data-response-started="false"');
-    expect(waitingForResponse).not.toContain('data-response-started="false" open');
+    expect(waitingForResponse).toContain('data-open="false"');
     expect(responseMounted).toContain('data-response-started="true"');
-    expect(responseMounted).not.toContain('data-response-started="true" open');
+    expect(responseMounted).toContain('data-open="false"');
   });
 
-  it("interleaves visible model commentary with actions but excludes the final answer", () => {
+  it("streams trailing model text in processing and removes it after completion", () => {
     const narrated = runActivitySchema.parse({
       ...activity,
       items: [
@@ -194,9 +234,31 @@ describe("execution ribbon", () => {
       ],
     });
     const html = renderToStaticMarkup(<ActivitySummary activity={narrated} />);
+    const completedHtml = renderToStaticMarkup(
+      <ActivitySummary
+        activity={runActivitySchema.parse({
+          ...narrated,
+          status: "succeeded",
+          items: [
+            ...narrated.items,
+            {
+              id: "run-succeeded-after-answer",
+              event_type: "run.succeeded",
+              kind: "run",
+              status: "succeeded",
+              title: "运行完成",
+              timestamp: "2026-07-14T00:00:09Z",
+              sequence: 9,
+              metadata: {},
+            },
+          ],
+        })}
+      />,
+    );
 
     expect(html).toContain("我先读取设计文档，再检查发布边界。");
-    expect(html).not.toContain("最终结论已经整理完成。");
+    expect(html).toContain("最终结论已经整理完成。");
+    expect(completedHtml).not.toContain("最终结论已经整理完成。");
     expect(html.indexOf("我先读取设计文档")).toBeLessThan(
       html.indexOf("搜索了 1 次内容 · 读取了 1 个文件"),
     );
@@ -296,7 +358,7 @@ describe("execution ribbon", () => {
   it("renders tasks and tools as flat Codex actions without nested disclosures", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
-    expect(html.match(/<details/g)).toHaveLength(1);
+    expect(html.match(/<section class="execution-ribbon/g)).toHaveLength(1);
     expect(html).not.toContain("execution-task");
     expect(html).not.toContain("execution-tool");
     expect(html).toContain("fact-checker");
@@ -411,7 +473,7 @@ describe("execution ribbon", () => {
     expect(html).not.toContain("execution-tool");
   });
 
-  it("shows every grouped command and result without another disclosure", () => {
+  it("keeps grouped command results collapsed until their action is opened", () => {
     const command = "mkdir -p outputs/detection_output outputs/results && python .claude/skills/grid-system/scripts/add_grid.py inputs/original/sample.jpg";
     const withCommand = runActivitySchema.parse({
       ...activity,
@@ -485,7 +547,18 @@ describe("execution ribbon", () => {
     expect(html).toContain("退出码 0");
     expect(html).toContain("inputs/original/sample.jpg");
     expect(html).toContain("grid image ready");
-    expect(html.match(/<details/g)).toHaveLength(1);
+    expect(html).toContain('<details class="execution-action action-completed">');
+    expect(html).not.toContain(
+      '<details class="execution-action action-completed" open',
+    );
+    expect(html).toContain(
+      '<summary class="execution-action-summary">',
+    );
+    expect(html).toContain('<div class="execution-action-body">');
+    expect(html).toContain('role="region"');
+    expect(html).toContain('aria-label="已运行 ');
+    expect(html).toContain('结果预览"');
+    expect(html.match(/<section class="execution-ribbon/g)).toHaveLength(1);
   });
 
   it("keeps each completed run in its own Codex-style turn group", () => {
@@ -605,13 +678,16 @@ describe("execution ribbon", () => {
       expect(html).toContain(label);
       if (phase === "waiting_approval") {
         expect(html).toContain(
-          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" open`,
+          `<section class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" data-open="true"`,
         );
       } else {
         expect(html).toContain(
-          `<details class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false">`,
+          `<section class="execution-ribbon phase-${phase}" aria-label="执行进度 run-ribbon" data-run-id="run-ribbon" data-response-started="false" data-open="true"`,
         );
-        expect(html).toContain('aria-expanded="false"');
+        expect(html).toContain('aria-expanded="true"');
+        expect(html).toContain('aria-label="失败定位"');
+        expect(html).toContain("2 个工具动作");
+        expect(html).toContain("搜索了 1 次内容 · 读取了 1 个文件");
       }
     },
   );

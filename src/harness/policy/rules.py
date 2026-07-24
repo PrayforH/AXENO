@@ -96,6 +96,27 @@ class PolicyEngine:
         return self._rules
 
 
+def knowledge_search_read_rules() -> list[PolicyRule]:
+    """Allow the reviewed read-only knowledge tools under legacy and current names."""
+
+    tools = (
+        "sag_search",
+        "sag_explain_search",
+        "sag_get_event",
+        "sag_get_document",
+        "sag_list_chunks",
+    )
+    return [
+        PolicyRule(
+            name=f"{server_name}-{tool_name}",
+            tool=f"mcp__{server_name}__{tool_name}",
+            decision=PolicyDecision.ALLOW,
+        )
+        for server_name in ("novel-search", "knowledge-search")
+        for tool_name in tools
+    ]
+
+
 def default_policy_rules() -> list[PolicyRule]:
     return [
         PolicyRule(
@@ -147,31 +168,7 @@ def default_policy_rules() -> list[PolicyRule]:
             tool="mcp__tavily__tavily_extract",
             decision=PolicyDecision.ALLOW,
         ),
-        PolicyRule(
-            name="novel-knowledge-search",
-            tool="mcp__novel-search__sag_search",
-            decision=PolicyDecision.ALLOW,
-        ),
-        PolicyRule(
-            name="novel-knowledge-explain-search",
-            tool="mcp__novel-search__sag_explain_search",
-            decision=PolicyDecision.ALLOW,
-        ),
-        PolicyRule(
-            name="novel-knowledge-get-event",
-            tool="mcp__novel-search__sag_get_event",
-            decision=PolicyDecision.ALLOW,
-        ),
-        PolicyRule(
-            name="novel-knowledge-get-document",
-            tool="mcp__novel-search__sag_get_document",
-            decision=PolicyDecision.ALLOW,
-        ),
-        PolicyRule(
-            name="novel-knowledge-list-chunks",
-            tool="mcp__novel-search__sag_list_chunks",
-            decision=PolicyDecision.ALLOW,
-        ),
+        *knowledge_search_read_rules(),
         PolicyRule(name="workspace-write", tool="Write", decision=PolicyDecision.ALLOW),
         PolicyRule(name="workspace-edit", tool="Edit", decision=PolicyDecision.ALLOW),
         PolicyRule(

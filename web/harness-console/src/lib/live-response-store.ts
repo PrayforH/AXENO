@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { isActiveRuntimeThread } from "./runtime-thread-scope";
 
 export type LiveResponseStatus =
   | "idle"
@@ -9,6 +10,7 @@ export type LiveResponseStatus =
   | "error";
 
 export interface LiveResponseSnapshot {
+  threadId?: string;
   runId?: string;
   messageId?: string;
   text: string;
@@ -22,12 +24,10 @@ const emptySnapshot: LiveResponseSnapshot = Object.freeze({
   visible: false,
 });
 
-// The provider does not label text as "commentary" or "final" up front. In
-// practice, a short tool preface is followed by TOOL_CALL_START within a
-// fraction of a second. Hold that ambiguous opening briefly so it can move
-// directly into Activity without first flashing in the answer slot.
-export const RESPONSE_CANDIDATE_HOLD_MS = 1_000;
-const RESPONSE_EARLY_RELEASE_CHARS = 240;
+// The provider does not label text as "commentary" or "final" up front. Keep
+// active text provisional until RUN_FINISHED: Activity renders it while work
+// is in progress, and only the terminal message is promoted into the answer
+// slot. Time/length heuristics make slow tool prefaces flash as answers.
 
 type MessageDisposition = "idle" | "candidate" | "response" | "activity";
 
@@ -36,7 +36,6 @@ const listeners = new Set<() => void>();
 let pendingMessageId: string | undefined;
 let pendingDelta = "";
 let scheduledFrame: number | undefined;
-let candidateTimer: ReturnType<typeof setTimeout> | undefined;
 let disposition: MessageDisposition = "idle";
 
 function publish(next: LiveResponseSnapshot) {
@@ -64,6 +63,7 @@ function flushPendingDelta(visible = true) {
   pendingDelta = "";
   const sameMessage = snapshot.messageId === messageId;
   publish({
+    threadId: snapshot.threadId,
     runId: snapshot.runId,
     messageId,
     text: `${sameMessage ? snapshot.text : ""}${delta}`,
@@ -72,15 +72,8 @@ function flushPendingDelta(visible = true) {
   });
 }
 
-function cancelCandidateTimer() {
-  if (candidateTimer === undefined) return;
-  globalThis.clearTimeout(candidateTimer);
-  candidateTimer = undefined;
-}
-
 function promoteCandidate() {
   if (disposition !== "candidate") return;
-  cancelCandidateTimer();
   disposition = "response";
   flushPendingDelta(true);
   if (!snapshot.visible && snapshot.text.trim()) {
@@ -105,42 +98,36 @@ function schedulePendingDelta() {
   );
 }
 
-function scheduleCandidatePromotion() {
-  if (candidateTimer !== undefined || disposition !== "candidate") return;
-  candidateTimer = globalThis.setTimeout(
-    promoteCandidate,
-    RESPONSE_CANDIDATE_HOLD_MS,
-  );
-}
-
 export const liveResponseStore = {
-  clear() {
+  clear(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     cancelScheduledFrame();
-    cancelCandidateTimer();
     pendingMessageId = undefined;
     pendingDelta = "";
     disposition = "idle";
     if (snapshot === emptySnapshot) return;
     publish(emptySnapshot);
   },
-  startRun(runId: string) {
+  startRun(runId: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     cancelScheduledFrame();
-    cancelCandidateTimer();
     pendingMessageId = undefined;
     pendingDelta = "";
     disposition = "idle";
     publish({
+      threadId,
       runId,
       text: "",
       status: "streaming",
       visible: false,
     });
   },
-  startMessage(messageId: string) {
+  startMessage(messageId: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     flushPendingDelta(false);
-    cancelCandidateTimer();
     disposition = "candidate";
     publish({
+      threadId: snapshot.threadId ?? threadId,
       runId: snapshot.runId,
       messageId,
       text: "",
@@ -148,7 +135,8 @@ export const liveResponseStore = {
       visible: false,
     });
   },
-  append(messageId: string, delta: string) {
+  append(messageId: string, delta: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     if (!delta) return;
     if (pendingMessageId && pendingMessageId !== messageId) {
       flushPendingDelta(disposition === "response");
@@ -156,28 +144,22 @@ export const liveResponseStore = {
     pendingMessageId = messageId;
     pendingDelta += delta;
     schedulePendingDelta();
-    if (
-      disposition === "candidate" &&
-      snapshot.text.length + pendingDelta.length >= RESPONSE_EARLY_RELEASE_CHARS
-    ) {
-      promoteCandidate();
-      return;
-    }
-    scheduleCandidatePromotion();
   },
-  hideForTool() {
-    cancelCandidateTimer();
+  hideForTool(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     disposition = "activity";
     flushPendingDelta(false);
     if (!snapshot.text) return;
     publish({ ...snapshot, visible: false });
   },
-  completeMessage(messageId: string) {
+  completeMessage(messageId: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     flushPendingDelta(disposition === "response");
     if (snapshot.messageId !== messageId) return;
     publish({ ...snapshot, status: "complete" });
   },
-  completeRun() {
+  completeRun(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     cancelScheduledFrame();
     if (disposition === "candidate") promoteCandidate();
     else flushPendingDelta(disposition === "response");
@@ -188,9 +170,9 @@ export const liveResponseStore = {
         disposition === "response" && Boolean(snapshot.text.trim()),
     });
   },
-  failRun() {
+  failRun(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     cancelScheduledFrame();
-    cancelCandidateTimer();
     flushPendingDelta(disposition === "response");
     publish({
       ...snapshot,

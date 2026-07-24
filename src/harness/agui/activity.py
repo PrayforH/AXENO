@@ -1,5 +1,6 @@
 """Project durable Harness facts into one replayable AG-UI ActivityMessage."""
 
+import json
 from collections.abc import Sequence
 from typing import Any, cast
 
@@ -53,9 +54,7 @@ def _tool_result_summary(payload: dict[str, Any]) -> str | None:
             return "无输出"
         lines = len(stripped.splitlines())
         return (
-            f"返回 {lines} 行 · {len(stripped)} 字符"
-            if lines > 1
-            else f"返回 {len(stripped)} 字符"
+            f"返回 {lines} 行 · {len(stripped)} 字符" if lines > 1 else f"返回 {len(stripped)} 字符"
         )
     if isinstance(content, list):
         values = cast(list[Any], content)
@@ -70,9 +69,21 @@ def _tool_result_preview(payload: dict[str, Any]) -> str | None:
     if payload.get("redacted") is True:
         return None
     content = payload.get("content")
-    if not isinstance(content, str):
+    if isinstance(content, str):
+        rendered = content
+    elif isinstance(content, (list, dict)):
+        # Claude SDK tool results commonly arrive as structured content blocks.
+        # Keep a bounded, redacted preview instead of silently dropping the
+        # result panel just because the provider did not flatten it to text.
+        rendered = json.dumps(
+            content,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    else:
         return None
-    stripped = content.strip()
+    stripped = rendered.strip()
     if not stripped:
         return None
     return redact_text(stripped, limit=1_200)
@@ -107,7 +118,13 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             event,
             kind="run",
             status="queued",
-            title="任务已加入队列",
+            title=str(payload.get("reason") or "任务已加入队列"),
+            summary=(str(payload["reason"]) if isinstance(payload.get("reason"), str) else None),
+            metadata=_metadata(
+                reason_code=payload.get("reason_code"),
+                blocked_by_run_id=payload.get("blocked_by_run_id"),
+                blocked_by_status=payload.get("blocked_by_status"),
+            ),
         )
     if event.type == "workspace.restored":
         return _item(
@@ -152,12 +169,31 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             kind="analysis",
             status="succeeded",
             title="工具能力已加载",
-            summary=(
-                f"已加载 {entry_count} 项工具能力"
-                if isinstance(entry_count, int)
-                else None
-            ),
+            summary=(f"已加载 {entry_count} 项工具能力" if isinstance(entry_count, int) else None),
             metadata=_metadata(entry_count=entry_count),
+        )
+    if event.type == "tool.directory.degraded":
+        references = payload.get("references")
+        safe_references = (
+            [str(item) for item in references if isinstance(item, str)]
+            if isinstance(references, list)
+            else []
+        )
+        return _item(
+            event,
+            kind="analysis",
+            status="succeeded",
+            title="部分工具暂不可用",
+            summary=(
+                f"{'、'.join(safe_references)} 缺少运行凭据；其余能力继续执行"
+                if safe_references
+                else "部分 MCP 缺少运行凭据；其余能力继续执行"
+            ),
+            metadata=_metadata(
+                references=safe_references or None,
+                reason=payload.get("reason"),
+                tool_count=payload.get("tool_count"),
+            ),
         )
     if event.type == "workspace.archived":
         return _item(
@@ -165,6 +201,20 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             kind="analysis",
             status="succeeded",
             title="工作区状态已保存",
+        )
+    if event.type == "workspace.recovery_retained":
+        retention_seconds = payload.get("retention_seconds")
+        return _item(
+            event,
+            kind="analysis",
+            status="waiting",
+            title="工作区已保留用于恢复",
+            summary=(
+                f"持久化失败，远程工作区将临时保留 {retention_seconds // 60} 分钟"
+                if isinstance(retention_seconds, int)
+                else "持久化失败，远程工作区已临时保留"
+            ),
+            metadata=_metadata(retention_seconds=retention_seconds),
         )
     run_titles = {
         "run.provisioning": ("running", "正在准备运行环境"),
@@ -181,14 +231,20 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
         status, title = run_titles[event.type]
         error_code = payload.get("error_code")
         error_type = payload.get("error_type")
-        raw_message = (
-            str(payload["message"])
-            if isinstance(payload.get("message"), str)
-            else None
-        )
+        subtype = payload.get("subtype")
+        raw_message = str(payload["message"]) if isinstance(payload.get("message"), str) else None
         summary = raw_message
         if error_code == "provider_content_rejected":
             title = "模型服务拒绝了本轮上下文"
+        elif error_type in {"CredentialLeaseError", "McpCredentialError"}:
+            title = "运行凭据不可用"
+            summary = (
+                "当前 Agent 的模型或 MCP 凭据未配置、已过期或不在当前身份范围内。"
+                "请在 Studio 检查能力连接后重试。"
+            )
+        elif subtype == "error_max_turns":
+            title = "达到最大执行回合数"
+            summary = "Agent 多次调用工具后仍未完成任务，请查看处理过程中的失败动作。"
         elif (
             error_type == "ToolResolutionError"
             and raw_message is not None
@@ -196,8 +252,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
         ):
             title = "Agent 工具配置需要更新"
             summary = (
-                "当前版本绑定的 MCP 工具已变化，请切换到最新版本，"
-                "或在 Studio 中重新检查并发布。"
+                "当前版本绑定的 MCP 工具已变化，请切换到最新版本，或在 Studio 中重新检查并发布。"
             )
         return _item(
             event,
@@ -208,6 +263,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             metadata=_metadata(
                 error_code=error_code,
                 error_type=error_type,
+                subtype=subtype,
                 diagnostic=(
                     redact_text(raw_message, limit=400)
                     if summary != raw_message and raw_message is not None
@@ -241,9 +297,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
             if status == "requesting"
             else "运行时状态更新"
         )
-        tool_count = (
-            len(payload["tools"]) if isinstance(payload.get("tools"), list) else None
-        )
+        tool_count = len(payload["tools"]) if isinstance(payload.get("tools"), list) else None
         return _item(
             event,
             kind="analysis",
@@ -349,8 +403,7 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
                 if completed
                 else "子 Agent 正在执行"
             ),
-            summary=str(payload.get("summary") or payload.get("description") or "")
-            or None,
+            summary=str(payload.get("summary") or payload.get("description") or "") or None,
             metadata=_metadata(
                 task_id=payload.get("task_id"),
                 parent_tool_use_id=payload.get("parent_tool_use_id"),
@@ -383,13 +436,30 @@ def _activity_item(event: RunEvent) -> dict[str, Any] | None:
         )
     if event.type == "runtime.result":
         failed = bool(payload.get("is_error"))
+        subtype = payload.get("subtype")
+        turns = payload.get("num_turns")
+        summary = None
+        if failed and subtype == "error_max_turns":
+            summary = (
+                f"已用完 {turns} 个模型回合，任务尚未完成"
+                if isinstance(turns, int)
+                else "已达到最大模型回合数，任务尚未完成"
+            )
         return _item(
             event,
             kind="result",
             status="failed" if failed else "succeeded",
-            title="模型执行失败" if failed else "模型执行完成",
+            title=(
+                "达到最大模型回合数"
+                if failed and subtype == "error_max_turns"
+                else "模型执行失败"
+                if failed
+                else "模型执行完成"
+            ),
+            summary=summary,
             metadata=_metadata(
-                turns=payload.get("num_turns"),
+                subtype=subtype,
+                turns=turns,
                 cost_usd=payload.get("total_cost_usd"),
                 usage=payload.get("usage"),
                 stop_reason=payload.get("stop_reason"),
@@ -417,9 +487,7 @@ def build_run_activity(events: Sequence[RunEvent]) -> dict[str, Any] | None:
             metrics.update(item["metadata"])
     if not items:
         return None
-    first = next(
-        (event for event in events if event.type == "run.queued"), events[0]
-    )
+    first = next((event for event in events if event.type == "run.queued"), events[0])
     return {
         "run_id": first.run_id,
         "trace_id": first.trace_id,
@@ -451,21 +519,13 @@ def activity_projection(event: RunEvent) -> list[BaseEvent]:
             )
         ]
 
-    patch: list[dict[str, Any]] = [
-        {"op": "add", "path": "/items/-", "value": item}
-    ]
+    patch: list[dict[str, Any]] = [{"op": "add", "path": "/items/-", "value": item}]
     if event.type.startswith("run."):
-        patch.append(
-            {"op": "replace", "path": "/status", "value": item["status"]}
-        )
+        patch.append({"op": "replace", "path": "/status", "value": item["status"]})
     if event.type == "runtime.result":
-        patch.append(
-            {"op": "replace", "path": "/status", "value": item["status"]}
-        )
+        patch.append({"op": "replace", "path": "/status", "value": item["status"]})
         for key, value in item["metadata"].items():
-            patch.append(
-                {"op": "add", "path": f"/metrics/{key}", "value": value}
-            )
+            patch.append({"op": "add", "path": f"/metrics/{key}", "value": value})
     return [
         ActivityDeltaEvent(
             message_id=message_id,

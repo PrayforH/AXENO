@@ -58,6 +58,7 @@ vi.mock("@assistant-ui/react-ui", async (importOriginal) => {
 
 import {
   AgentThread,
+  incompleteRunGuidance,
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
   shouldShowComposerStop,
@@ -75,6 +76,8 @@ it("registers the approval renderer through the assistant-ui Thread config", () 
   expect(agentThreadSource).toContain("<ApprovalToolBridge");
   expect(agentThreadSource).toContain('className="composer-approval-slot"');
   expect(agentThreadSource).toContain("<ApprovalCard");
+  expect(agentThreadSource).toContain("runView.queueReason");
+  expect(agentThreadSource).toContain("直达审批");
 });
 
 it("presents task-first guidance through a custom assistant-ui welcome", () => {
@@ -95,16 +98,26 @@ it("uses the current run control name in incomplete-run guidance", () => {
   expect(agentThreadSource).not.toContain("请查看运行详情");
 });
 
+it("distinguishes a historical failed turn from the current run", () => {
+  expect(incompleteRunGuidance(true)).toBe(
+    "本次运行未完整结束，可打开“运行详情”查看原因。",
+  );
+  expect(incompleteRunGuidance(false)).toBe(
+    "该条历史运行未完整结束，可打开“运行详情”查看原因。",
+  );
+});
+
 it("keeps sandbox and keyboard guidance adjacent to the composer", () => {
   expect(agentThreadSource).toContain('className="composer-meta"');
   expect(agentThreadSource).toContain("隔离工作区");
   expect(agentThreadSource).toContain("Enter 发送 · Shift + Enter 换行");
   expect(agentThreadSource).toContain("处理审批后，Agent 会从当前步骤继续");
+  expect(agentThreadSource).toContain("Agent 正在执行，可随时停止");
   expect(agentThreadSource).not.toContain('className="composer-stop-button"');
   expect(agentThreadSource).toContain('cancel: { tooltip: "停止运行" }');
 });
 
-it("switches the single composer action to stop for either active run signal", () => {
+it("switches the composer action to stop for an active run", () => {
   expect(shouldShowComposerStop(true, "idle")).toBe(true);
   expect(shouldShowComposerStop(false, "running")).toBe(true);
   expect(shouldShowComposerStop(false, "complete")).toBe(false);
@@ -152,10 +165,8 @@ it("only edits the latest user turn and allows unchanged text to start a new run
 });
 
 it("places each run activity before its assistant answer", () => {
-  const assistantRoot = agentThreadSource.indexOf(
-    '<AssistantMessage.Root className="harness-assistant-message">',
-  );
-  const activity = agentThreadSource.indexOf("<LatestActivity />", assistantRoot);
+  const assistantRoot = agentThreadSource.indexOf("<AssistantMessage.Root");
+  const activity = agentThreadSource.indexOf("<TurnActivity ", assistantRoot);
   const content = agentThreadSource.indexOf("<AssistantMessage.Content", assistantRoot);
   expect(activity).toBeGreaterThan(assistantRoot);
   expect(content).toBeGreaterThan(activity);
@@ -165,12 +176,11 @@ it("places each run activity before its assistant answer", () => {
     "shouldKeepActivityInLatestSlot(",
   );
   expect(agentThreadSource).toContain(
-    'data-activity-source="current-run"',
+    'data-activity-source={isLast ? "current-run" : "captured-turn"}',
   );
   expect(agentThreadSource).not.toContain("stream.runId,");
-  expect(agentThreadSource).toContain("nativeResponseStarted ||");
   expect(agentThreadSource).toContain(
-    "(Boolean(live.text.trim()) && live.visible)",
+    "responseStarted={!isLast || responseStarted}",
   );
   expect(agentThreadSource).not.toContain("live.runId === runView?.runId");
   expect(agentThreadSource).not.toContain("MessagesFooter: LatestActivity");

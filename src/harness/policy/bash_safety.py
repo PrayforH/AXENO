@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import re
 import shlex
+from collections.abc import Collection
 from pathlib import PurePosixPath
 
 _LOW_RISK_COMMANDS = frozenset(
@@ -303,6 +304,7 @@ def sandboxed_bash_is_low_risk(
     *,
     workspace: str,
     remote_workspace: str | None = None,
+    generated_python_files: Collection[str] = (),
 ) -> bool:
     """Return true for bounded inspection or trusted workspace transformation commands."""
 
@@ -318,6 +320,7 @@ def sandboxed_bash_is_low_risk(
             heredoc_tail,
             workspace=workspace,
             remote_workspace=remote_workspace,
+            generated_python_files=generated_python_files,
         )
     if _read_only_python_heredoc_is_low_risk(
         command,
@@ -363,8 +366,13 @@ def sandboxed_bash_is_low_risk(
                 (".claude", "skills"),
                 (".harness-runtime", "bundle-tools"),
             )
-            if script.is_absolute() or not any(
-                script.parts[: len(root)] == root for root in trusted_roots
+            trusted_generated = token in generated_python_files or (
+                not script.is_absolute()
+                and script.as_posix().removeprefix("./") in generated_python_files
+            )
+            if not trusted_generated and (
+                script.is_absolute()
+                or not any(script.parts[: len(root)] == root for root in trusted_roots)
             ):
                 return False
         if active_command == "rg" and (

@@ -42,7 +42,7 @@ async def test_stages_main_and_pinned_subagent_skills(tmp_path: Path) -> None:
         registry,
         tenant_id="tenant-a",
         agent_name="echo-agent",
-        agent_version="0.4.0",
+        agent_version="0.4.1",
         workspace=tmp_path,
     )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -129,8 +129,15 @@ def _stream_events(payload: str) -> list[dict[str, object]]:
 class AnthropicSandboxModelProbe:
     """Force a harmless tool call through the model endpoint from the target Sandbox."""
 
-    def __init__(self, config: CcSwitchClaudeConfig, *, timeout_seconds: float = 45) -> None:
-        self._config = config
+    def __init__(
+        self,
+        config: CcSwitchClaudeConfig | Sequence[CcSwitchClaudeConfig],
+        *,
+        timeout_seconds: float = 45,
+    ) -> None:
+        self._configs = (config,) if isinstance(config, CcSwitchClaudeConfig) else tuple(config)
+        if not self._configs:
+            raise ValueError("At least one model route is required")
         self._timeout_seconds = timeout_seconds
 
     async def verify(
@@ -139,19 +146,23 @@ class AnthropicSandboxModelProbe:
         sandbox: SandboxProvider,
         handle: SandboxHandle,
     ) -> PreflightEvidence:
-        if self._config.compatibility is ModelCompatibility.UNSUPPORTED:
+        config = next(
+            (item for item in self._configs if item.route_id == manifest.spec.model.route),
+            self._configs[0],
+        )
+        if config.compatibility is ModelCompatibility.UNSUPPORTED:
             raise PreflightCheckError(
                 "model_incompatible", "Configured model route is not SDK compatible"
             )
         required = {"streaming", "tool_use"}
-        if not required.issubset(self._config.capabilities):
+        if not required.issubset(config.capabilities):
             raise PreflightCheckError(
                 "model_capability_mismatch",
                 "Configured model route does not declare streaming and tool_use",
             )
         request = json.dumps(
             {
-                "model": self._config.model,
+                "model": config.model,
                 "max_tokens": 64,
                 "stream": True,
                 # Forced tool selection is a deterministic baseline probe. DeepSeek V4
@@ -178,32 +189,30 @@ class AnthropicSandboxModelProbe:
             },
             separators=(",", ":"),
         )
-        credential = self._config.credential.get_secret_value()
+        credential = config.credential.get_secret_value()
         authorization = (
-            f"Bearer {credential}"
-            if self._config.resolved_auth_scheme == "bearer"
-            else credential
+            f"Bearer {credential}" if config.resolved_auth_scheme == "bearer" else credential
         )
         command = (
             "set -eu; "
             "curl --no-progress-meter --fail-with-body --no-buffer "
-            "--max-time \"$HARNESS_PREFLIGHT_TIMEOUT\" "
-            "--request POST \"$HARNESS_PREFLIGHT_MODEL_URL\" "
+            '--max-time "$HARNESS_PREFLIGHT_TIMEOUT" '
+            '--request POST "$HARNESS_PREFLIGHT_MODEL_URL" '
             "--header 'content-type: application/json' "
             "--header 'anthropic-version: 2023-06-01' "
-            "--header \"$HARNESS_PREFLIGHT_AUTH_HEADER\" "
-            "--data-binary \"$HARNESS_PREFLIGHT_REQUEST\""
+            '--header "$HARNESS_PREFLIGHT_AUTH_HEADER" '
+            '--data-binary "$HARNESS_PREFLIGHT_REQUEST"'
         )
         header = (
             f"authorization: {authorization}"
-            if self._config.resolved_auth_scheme == "bearer"
+            if config.resolved_auth_scheme == "bearer"
             else f"x-api-key: {authorization}"
         )
         result = await sandbox.execute(
             handle,
             ("bash", "-lc", command),
             environment={
-                "HARNESS_PREFLIGHT_MODEL_URL": _messages_endpoint(self._config.base_url),
+                "HARNESS_PREFLIGHT_MODEL_URL": _messages_endpoint(config.base_url),
                 "HARNESS_PREFLIGHT_AUTH_HEADER": header,
                 "HARNESS_PREFLIGHT_REQUEST": request,
                 "HARNESS_PREFLIGHT_TIMEOUT": str(int(self._timeout_seconds)),
@@ -243,7 +252,7 @@ class AnthropicSandboxModelProbe:
             summary="Model streaming and forced tool use passed",
             details={
                 "route": manifest.spec.model.route,
-                "provider": self._config.provider,
+                "provider": config.provider,
                 "streaming": True,
                 "toolUse": True,
             },
@@ -308,9 +317,7 @@ class StreamableHttpMcpProbe:
             headers = (
                 {
                     str(key): str(value)
-                    for key, value in cast(
-                        dict[object, object], raw_headers
-                    ).items()
+                    for key, value in cast(dict[object, object], raw_headers).items()
                 }
                 if isinstance(raw_headers, dict)
                 else {}
@@ -325,9 +332,7 @@ class StreamableHttpMcpProbe:
                     async with ClientSession(
                         read_stream,
                         write_stream,
-                        read_timeout_seconds=timedelta(
-                            seconds=self._timeout_seconds
-                        ),
+                        read_timeout_seconds=timedelta(seconds=self._timeout_seconds),
                     ) as session:
                         await session.initialize()
                         listed = await session.list_tools()
@@ -376,7 +381,7 @@ class StreamableHttpMcpProbe:
         transport: Literal["http", "sse"],
         url: str,
         headers: Mapping[str, str],
-    ) -> AsyncIterator[tuple[Any, Any]]:
+    ) -> AsyncGenerator[tuple[Any, Any]]:
         if transport == "sse":
             async with sse_client(
                 url,
@@ -416,12 +421,12 @@ class StreamableHttpMcpProbe:
             "set -eu; umask 077; mkdir -p .harness-preflight; "
             "config=.harness-preflight/mcp-curl.conf; "
             "trap 'rm -f -- \"$config\"' EXIT; "
-            "printf '%s' \"$HARNESS_PREFLIGHT_CURL_CONFIG\" > \"$config\"; "
-            "curl --config \"$config\" --no-progress-meter --silent --show-error "
-            "--max-time \"$HARNESS_PREFLIGHT_TIMEOUT\" --request POST "
+            'printf \'%s\' "$HARNESS_PREFLIGHT_CURL_CONFIG" > "$config"; '
+            'curl --config "$config" --no-progress-meter --silent --show-error '
+            '--max-time "$HARNESS_PREFLIGHT_TIMEOUT" --request POST '
             "--header 'content-type: application/json' "
             "--header 'accept: application/json, text/event-stream' "
-            "--data-binary \"$HARNESS_PREFLIGHT_MCP_REQUEST\" "
+            '--data-binary "$HARNESS_PREFLIGHT_MCP_REQUEST" '
             "--output /dev/null --write-out '%{http_code}'"
         )
         result = await sandbox.execute(
@@ -452,9 +457,7 @@ class StreamableHttpMcpProbe:
                 "MCP endpoint rejected the injected target credential",
             )
         if status == 404:
-            raise PreflightCheckError(
-                "mcp_endpoint_not_found", "MCP endpoint path was not found"
-            )
+            raise PreflightCheckError("mcp_endpoint_not_found", "MCP endpoint path was not found")
         if status == 0 or status >= 500:
             raise PreflightCheckError(
                 "mcp_target_unavailable",

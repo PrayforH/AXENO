@@ -95,3 +95,20 @@ def test_allows_current_remote_workspace_but_not_other_absolute_paths() -> None:
         workspace="/tmp/local-run",
         remote_workspace="/home/user/run",
     )
+
+
+def test_allows_only_recorded_generated_python_file_execution() -> None:
+    assert sandboxed_bash_is_low_risk(
+        "python3 generate_ppt.py",
+        workspace="/workspace",
+        generated_python_files={"generate_ppt.py"},
+    )
+    assert not sandboxed_bash_is_low_risk(
+        "python3 generate_ppt.py",
+        workspace="/workspace",
+    )
+    assert not sandboxed_bash_is_low_risk(
+        "pip install python-pptx",
+        workspace="/workspace",
+        generated_python_files={"generate_ppt.py"},
+    )

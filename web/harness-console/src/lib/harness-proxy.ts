@@ -221,7 +221,7 @@ export async function proxyAguiRequest(
   const url = new URL(config.aguiUrl);
   if (path) {
     url.pathname = `${url.pathname.replace(/\/$/, "")}/${path.replace(/^\//, "")}`;
-    url.search = "";
+    url.search = new URL(request.url).search;
   } else {
     const requested = new URL(request.url).searchParams;
     const agentName = requested.get("agent_name");

@@ -63,7 +63,7 @@ def test_snapshots_and_materializes_self_contained_bundle_python_tool(
 def test_validation_agent_exposes_workspace_tools_with_safe_prompt() -> None:
     snapshot = load_manifest(VALIDATION_AGENT)
 
-    assert snapshot.manifest.metadata.version == "0.4.0"
+    assert snapshot.manifest.metadata.version == "0.4.1"
     assert tuple(tool.builtin for tool in snapshot.manifest.spec.tools) == (
         "Read",
         "Glob",

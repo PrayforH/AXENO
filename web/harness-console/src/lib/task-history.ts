@@ -44,8 +44,24 @@ async function json<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function loadTasks(): Promise<TaskSummary[]> {
-  return json<TaskSummary[]>("/api/agui/threads");
+export function loadTasks(archived = false): Promise<TaskSummary[]> {
+  return json<TaskSummary[]>(`/api/agui/threads?archived=${archived}`);
+}
+
+export async function setTaskArchived(
+  threadId: string,
+  archived: boolean,
+): Promise<void> {
+  const response = requireAuthenticatedResponse(
+    await fetch(`/api/agui/threads/${encodeURIComponent(threadId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived }),
+    }),
+  );
+  if (!response.ok) {
+    throw new Error((await response.text()) || `HTTP ${response.status}`);
+  }
 }
 
 export function createThreadHistoryAdapter(threadId: string): ThreadHistoryAdapter {
@@ -65,7 +81,7 @@ export function createThreadHistoryAdapter(threadId: string): ThreadHistoryAdapt
       }
       const history = (await response.json()) as ThreadHistoryResponse;
       const restoredActivity = latestHistoryRunActivity(history.messages);
-      if (restoredActivity) activityStore.publish(restoredActivity);
+      if (restoredActivity) activityStore.publish(restoredActivity, threadId);
       return ExportedMessageRepository.fromArray(
         fromAgUiMessages(history.messages, { showThinking: true }),
       );

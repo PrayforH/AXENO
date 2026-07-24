@@ -134,7 +134,7 @@ def test_maps_stream_message_lifecycle() -> None:
     assert [event.type for event in map_sdk_message(stopped)] == ["message.completed"]
 
 
-def test_maps_task_lifecycle_to_safe_subagent_events() -> None:
+def test_maps_sdk_task_lifecycle_to_neutral_runtime_events() -> None:
     started = TaskStartedMessage(
         subtype="task_started",
         data={},
@@ -185,10 +185,10 @@ def test_maps_task_lifecycle_to_safe_subagent_events() -> None:
     ]
 
     assert [event.type for event in events] == [
-        "subagent.started",
-        "subagent.updated",
-        "subagent.completed",
-        "subagent.failed",
+        "runtime.task.started",
+        "runtime.task.updated",
+        "runtime.task.completed",
+        "runtime.task.failed",
     ]
     assert events[0].payload == {
         "task_id": "task-1",

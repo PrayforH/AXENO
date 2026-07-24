@@ -1,6 +1,6 @@
 """Resolve a published AgentVersion before delegating to Claude Agent SDK."""
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.memory import UserMemoryService
@@ -34,6 +34,7 @@ class RegistryClaudeRuntime:
         registry: AgentRegistry,
         config: CcSwitchClaudeConfig,
         fallback_config: CcSwitchClaudeConfig | None = None,
+        route_configs: Sequence[CcSwitchClaudeConfig] = (),
         query_factory: QueryFactory | None = None,
         tool_resolver: ToolResolver | None = None,
         mcp_credential_provider: DynamicMcpCredentialProvider | None = None,
@@ -50,6 +51,16 @@ class RegistryClaudeRuntime:
         self._registry = registry
         self._config = config
         self._fallback_config = fallback_config
+        ordered_configs = (
+            config,
+            *(item for item in route_configs if item.route_id != config.route_id),
+            *(
+                (fallback_config,)
+                if fallback_config is not None and fallback_config.route_id != config.route_id
+                else ()
+            ),
+        )
+        self._route_configs = tuple({item.route_id: item for item in ordered_configs}.values())
         self._query_factory = query_factory
         self._tool_resolver = tool_resolver or ToolResolver(
             credential_provider=mcp_credential_provider
@@ -71,9 +82,7 @@ class RegistryClaudeRuntime:
         legacy_fallback: bool = False,
         strict: bool = False,
     ) -> CcSwitchClaudeConfig:
-        candidates = tuple(
-            config for config in (self._config, self._fallback_config) if config is not None
-        )
+        candidates = self._route_configs
         exact = next(
             (config for config in candidates if config.route_id == route_id),
             None,
@@ -141,23 +150,23 @@ class RegistryClaudeRuntime:
         fallback_route_id = (
             None if route_override is not None else snapshot.manifest.spec.model.fallback_route
         )
-        if (
-            fallback_route_id is not None
-            and self._fallback_config is not None
-            and self._fallback_config.route_id in {None, fallback_route_id}
-        ):
-            selected_fallback = self._config_for_route(
-                fallback_route_id,
-                legacy_fallback=True,
-            )
+        selected_fallback: CcSwitchClaudeConfig | None = None
+        if fallback_route_id is not None:
+            try:
+                selected_fallback = self._config_for_route(
+                    fallback_route_id,
+                    legacy_fallback=True,
+                    strict=True,
+                )
+            except ConflictError:
+                pass
+        if selected_fallback is not None:
+            assert fallback_route_id is not None
             fallback_route = ModelRoute(
                 route_id=fallback_route_id,
                 provider=selected_fallback.provider,
                 base_url=selected_fallback.base_url,
-                model=(
-                    snapshot.manifest.spec.model.fallback_model
-                    or selected_fallback.model
-                ),
+                model=(snapshot.manifest.spec.model.fallback_model or selected_fallback.model),
                 compatibility=selected_fallback.compatibility,
                 capabilities=selected_fallback.capabilities,
                 auth_scheme=selected_fallback.resolved_auth_scheme,

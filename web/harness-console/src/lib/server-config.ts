@@ -21,7 +21,7 @@ export function getHarnessServerConfig(
     "",
   );
   const agentName = environment.HARNESS_AGENT_NAME ?? "echo-agent";
-  const agentVersion = environment.HARNESS_AGENT_VERSION ?? "0.4.0";
+  const agentVersion = environment.HARNESS_AGENT_VERSION ?? "0.4.1";
   const query = new URLSearchParams({
     agent_name: agentName,
     agent_version: agentVersion,

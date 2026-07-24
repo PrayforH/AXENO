@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 import re
 from collections.abc import (
@@ -38,6 +39,7 @@ from harness.core.models import ExecutionIdentity, Run, RunStatus, Session
 from harness.core.ports import RunRepository, SessionRepository
 from harness.core.state_machine import transition
 from harness.deployments.boundaries import session_environment_policy
+from harness.execution.credentials import CredentialLeaseError
 from harness.observability.provider import Observability
 from harness.observability.redaction import correlation_hash
 from harness.policy.models import PolicyContext, PolicyDecision
@@ -47,7 +49,7 @@ from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
 from harness.reliability.metrics import ReliabilityMetrics
 from harness.runtime.artifact_tools import ArtifactPublisher
-from harness.runtime.audit_redaction import redact_tool_arguments
+from harness.runtime.audit_redaction import redact_text, redact_tool_arguments
 from harness.runtime.base import (
     AgentRuntime,
     RuntimeContext,
@@ -64,6 +66,8 @@ from harness.runtime.input_redaction import (
     staged_input_paths,
     staged_read_path,
 )
+from harness.runtime.mcp_credentials import McpCredentialError
+from harness.runtime.subagent_governance import SubagentGovernanceError
 from harness.runtime.tools import ToolResolutionError
 from harness.sandbox.base import (
     SandboxCommandResult,
@@ -81,13 +85,13 @@ RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
 RunCredentialRevoker = Callable[[str, str], Awaitable[None]]
 SandboxResolver = Callable[[str, Session], Awaitable[SandboxProvider]]
 T = TypeVar("T")
+logger = logging.getLogger(__name__)
 _MARKDOWN_ARTIFACT_PATH = re.compile(r"`([^`\r\n]+)`|\]\(([^)\r\n]+)\)")
 _PLAIN_ARTIFACT_PATH = re.compile(
     r"(?<![\w/])((?:\.?/?[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.@+-]+\.[A-Za-z0-9]{1,12})"
 )
-_NON_DELIVERABLE_ROOTS = frozenset(
-    {".claude", ".git", ".harness-runtime", ".tmp", "inputs"}
-)
+_NON_DELIVERABLE_ROOTS = frozenset({".claude", ".git", ".harness-runtime", ".tmp", "inputs"})
+_DEPENDENCY_ROOTS = frozenset({".cache", ".venv", "__pycache__", "node_modules", "vendor", "venv"})
 
 
 class _RunCancellationRequestedError(RuntimeExecutionTimeoutError):
@@ -141,10 +145,7 @@ def read_runtime_artifact(
 def final_artifact_paths(workspace: Path, response: str) -> tuple[str, ...]:
     """Resolve files explicitly declared by the final answer inside the workspace."""
 
-    raw_candidates = [
-        left or right
-        for left, right in _MARKDOWN_ARTIFACT_PATH.findall(response)
-    ]
+    raw_candidates = [left or right for left, right in _MARKDOWN_ARTIFACT_PATH.findall(response)]
     raw_candidates.extend(_PLAIN_ARTIFACT_PATH.findall(response))
     resolved: list[str] = []
     root = workspace.resolve()
@@ -170,6 +171,20 @@ def final_artifact_paths(workspace: Path, response: str) -> tuple[str, ...]:
         if artifact.is_relative_to(root) and artifact.is_file() and not candidate.is_symlink():
             resolved.append(path.as_posix())
     return tuple(resolved)
+
+
+def terminal_runtime_result(event: Any) -> bool:
+    """Recognize an SDK result that cannot be followed by more model work."""
+    if getattr(event, "type", None) != "runtime.result":
+        return False
+    payload = getattr(event, "payload", None)
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        payload.get("subtype") == "success"
+        and payload.get("is_error") is not True
+        and payload.get("stop_reason") == "end_turn"
+    )
 
 
 class RunOrchestrator:
@@ -310,6 +325,13 @@ class RunOrchestrator:
                         raise RuntimeError("runtime producer returned an invalid error")
                     raise value
                 yield value
+                # Some compatible Claude endpoints emit the final ResultMessage
+                # but keep the transport open. Waiting for another item leaves a
+                # fully answered Run in RUNNING forever. An explicit successful
+                # end_turn is the protocol boundary; cumulative/intermediate
+                # results and provider errors continue through the normal path.
+                if terminal_runtime_result(value):
+                    return
         finally:
             if not producer.done():
                 producer.cancel()
@@ -365,16 +387,44 @@ class RunOrchestrator:
 
     def _workspace_output_fingerprints(self, workspace: Path) -> dict[str, str]:
         output_root = workspace / "outputs"
-        if not output_root.is_dir():
-            return {}
         fingerprints: dict[str, str] = {}
+        if output_root.is_dir():
+            remaining = self._output_artifact_max_bytes
+            for path in sorted(output_root.rglob("*")):
+                if not (path.is_symlink() or path.is_file()):
+                    continue
+                if len(fingerprints) >= 100:
+                    raise ValueError("workspace outputs exceed the artifact count limit")
+                relative = path.relative_to(workspace).as_posix()
+                _, content = read_runtime_artifact(
+                    workspace,
+                    relative,
+                    max_bytes=remaining,
+                )
+                remaining -= len(content)
+                fingerprints[relative] = hashlib.sha256(content).hexdigest()
+
+        # Final prose may explicitly link a deliverable outside outputs/.
+        # Snapshot existing files too, so mentioning an unchanged file from a
+        # previous turn cannot republish it as a new Run artifact. This is a
+        # bounded attribution scan, not a full workspace integrity pass.
         remaining = self._output_artifact_max_bytes
-        for path in sorted(output_root.rglob("*")):
-            if not (path.is_symlink() or path.is_file()):
+        for path in sorted(workspace.rglob("*")):
+            if path.is_symlink() or not path.is_file():
                 continue
-            if len(fingerprints) >= 100:
-                raise ValueError("workspace outputs exceed the artifact count limit")
-            relative = path.relative_to(workspace).as_posix()
+            relative_path = path.relative_to(workspace)
+            if (
+                relative_path.parts[0] == "outputs"
+                or any(part in _NON_DELIVERABLE_ROOTS for part in relative_path.parts)
+                or any(part in _DEPENDENCY_ROOTS for part in relative_path.parts)
+            ):
+                continue
+            if len(fingerprints) >= 1_000 or remaining <= 0:
+                break
+            size = path.stat().st_size
+            if size > remaining:
+                continue
+            relative = relative_path.as_posix()
             _, content = read_runtime_artifact(
                 workspace,
                 relative,
@@ -392,6 +442,7 @@ class RunOrchestrator:
         workspace: Path,
         baseline: Mapping[str, str],
         final_response: str,
+        message_id: str | None = None,
     ) -> None:
         if self._artifacts is None:
             return
@@ -409,8 +460,7 @@ class RunOrchestrator:
         published_paths = {
             str(event.payload["source_path"])
             for event in prior_events
-            if event.type == "artifact.ready"
-            and isinstance(event.payload.get("source_path"), str)
+            if event.type == "artifact.ready" and isinstance(event.payload.get("source_path"), str)
         }
         remaining = self._output_artifact_max_bytes
         for relative, source in sorted(candidates.items()):
@@ -421,12 +471,9 @@ class RunOrchestrator:
                 relative,
                 max_bytes=remaining,
             )
-            remaining -= len(content)
-            if (
-                source == "workspace-output"
-                and baseline.get(relative) == hashlib.sha256(content).hexdigest()
-            ):
+            if baseline.get(relative) == hashlib.sha256(content).hexdigest():
                 continue
+            remaining -= len(content)
             artifact = await self._artifacts.upload(
                 tenant_id=tenant_id,
                 run_id=run.run_id,
@@ -436,6 +483,9 @@ class RunOrchestrator:
             )
             payload = artifact.model_dump(mode="json")
             payload["source"] = source
+            payload["source_path"] = relative
+            if message_id is not None:
+                payload["message_id"] = message_id
             await self._events.append(
                 tenant_id=tenant_id,
                 run_id=run.run_id,
@@ -443,6 +493,68 @@ class RunOrchestrator:
                 event_type="artifact.ready",
                 payload=payload,
             )
+
+    async def _recover_failed_workspace(
+        self,
+        *,
+        tenant_id: str,
+        run: Run,
+        sandbox: SandboxProvider,
+        handle: SandboxHandle | None,
+        baseline: Mapping[str, str] | None,
+        final_response: str,
+        message_id: str | None,
+        archive_on_complete: bool,
+    ) -> bool:
+        """Preserve artifacts and session state created before a runtime failure."""
+        if handle is None or baseline is None:
+            return True
+        try:
+            with self._stage("harness.sandbox.collect", {"run.id": run.run_id}):
+                await sandbox.collect(handle)
+        except Exception:  # noqa: BLE001 - preserve the primary runtime failure
+            return False
+        try:
+            with self._stage(
+                "harness.artifact.publish_outputs",
+                {"run.id": run.run_id, "recovered": True},
+            ):
+                await self._publish_workspace_outputs(
+                    tenant_id=tenant_id,
+                    run=run,
+                    workspace=handle.path,
+                    baseline=baseline,
+                    final_response=final_response,
+                    message_id=message_id,
+                )
+        except Exception:  # noqa: BLE001 - preserve the primary runtime failure
+            # A failed upload must not prevent the workspace snapshot below.
+            pass
+        if self._workspaces is None or not archive_on_complete:
+            return True
+        try:
+            with self._stage(
+                "harness.workspace.archive",
+                {"run.id": run.run_id, "recovered": True},
+            ):
+                snapshot = await self._workspaces.archive(
+                    tenant_id=tenant_id,
+                    session_id=run.session_id,
+                    workspace=handle.path,
+                )
+            await self._events.append(
+                tenant_id=tenant_id,
+                run_id=run.run_id,
+                session_id=run.session_id,
+                event_type="workspace.archived",
+                payload={
+                    **snapshot.model_dump(mode="json"),
+                    "recovered_from_failure": True,
+                },
+            )
+        except Exception:  # noqa: BLE001 - preserve the primary runtime failure
+            return False
+        return True
 
     async def _await_cancellable(
         self,
@@ -524,7 +636,19 @@ class RunOrchestrator:
         if latest.status is RunStatus.CANCELLED:
             return latest
         if isinstance(error, ConflictError) and not isinstance(error, QuotaExceededError):
-            return latest
+            # Only ownership/fencing conflicts prove that another executor now
+            # owns the Run. Other domain conflicts (quota finalization,
+            # artifacts, approval state, etc.) are real failures; silently
+            # returning a non-terminal Run leaves the UI spinning forever.
+            ownership_conflict = str(error).startswith(
+                (
+                    "stale worker attempted to update run:",
+                    "run ownership changed while reclaiming:",
+                    "run is already owned or paused:",
+                )
+            )
+            if ownership_conflict:
+                return latest
         if latest.status.is_terminal:
             return latest
         await self._fail_active_subagents(
@@ -532,8 +656,23 @@ class RunOrchestrator:
             run=latest,
             error_code="parent_failed",
         )
+        logger.error(
+            "run execution failed run_id=%s error_type=%s message=%s",
+            run_id,
+            type(error).__name__,
+            redact_text(str(error), limit=400),
+        )
         payload = {"error_type": type(error).__name__}
-        if isinstance(error, ToolResolutionError):
+        if isinstance(
+            error,
+            (
+                ConflictError,
+                ToolResolutionError,
+                SubagentGovernanceError,
+                CredentialLeaseError,
+                McpCredentialError,
+            ),
+        ):
             payload["message"] = str(error)
         return await self._move(
             latest,
@@ -568,9 +707,7 @@ class RunOrchestrator:
         if self._quotas is None:
             return
         plan = (
-            await self._quota_plan_resolver(
-                tenant_id, session.agent_name, session.agent_version
-            )
+            await self._quota_plan_resolver(tenant_id, session.agent_name, session.agent_version)
             if self._quota_plan_resolver is not None
             else RunQuotaPlan(None, None, 3600)
         )
@@ -636,14 +773,10 @@ class RunOrchestrator:
             correlation_attributes["deployment.snapshot.id"] = session.deployment_snapshot_id
         if session.environment:
             correlation_attributes["deployment.environment"] = session.environment
-            correlation_attributes["langfuse.trace.metadata.environment"] = (
-                session.environment
-            )
+            correlation_attributes["langfuse.trace.metadata.environment"] = session.environment
         environment_policy = session_environment_policy(session)
         if environment_policy is not None:
-            correlation_attributes["environment.policy.hash"] = (
-                environment_policy.policy_hash
-            )
+            correlation_attributes["environment.policy.hash"] = environment_policy.policy_hash
             correlation_attributes["environment.policy.revision"] = str(
                 environment_policy.policy_revision
             )
@@ -695,9 +828,9 @@ class RunOrchestrator:
         if run.status is RunStatus.CANCELLING:
             return await self._move(run, RunStatus.CANCELLED)
         if run.status is RunStatus.WAITING_APPROVAL:
-            # The worker may receive a lease recovered from a process that was
-            # waiting inline. A later approval decision enqueues a fresh task;
-            # acknowledge this delivery instead of retrying it forever.
+            # A recovered lease can observe a Run whose original SDK hook is
+            # still waiting inline. Leave the durable approval owner in place;
+            # the queue lease can be acknowledged without starting a duplicate.
             return run
         is_resume = run.status is RunStatus.RUNNING
         is_provision_recovery = run.status is RunStatus.PROVISIONING
@@ -706,6 +839,13 @@ class RunOrchestrator:
 
         handle: SandboxHandle | None = None
         active_sandbox = self._sandbox
+        output_baseline: Mapping[str, str] | None = None
+        final_response_text = ""
+        final_response_message_id: str | None = None
+        workspace_policy = WorkspacePolicy()
+        workspace_durable = True
+        latest_runtime_result_payload: Mapping[str, Any] | None = None
+
         try:
             if not is_resume:
                 if is_provision_recovery:
@@ -730,9 +870,7 @@ class RunOrchestrator:
                 else self._policy
             )
             resolved_policy = (
-                policy_resolution
-                if isinstance(policy_resolution, ResolvedPolicy)
-                else None
+                policy_resolution if isinstance(policy_resolution, ResolvedPolicy) else None
             )
             active_policy = (
                 policy_resolution.call_policy
@@ -833,6 +971,7 @@ class RunOrchestrator:
                     run_id,
                     active_sandbox.prepare(handle),
                 )
+            workspace_durable = False
             staged_read_tool_calls: set[str] = set()
             internal_asset_tool_calls: set[str] = set()
             if not is_resume:
@@ -863,6 +1002,7 @@ class RunOrchestrator:
                 if self._artifacts is not None
                 else None
             )
+
             context = RuntimeContext(
                 run=run,
                 session=session,
@@ -902,8 +1042,8 @@ class RunOrchestrator:
                 )
             output_baseline = self._workspace_output_fingerprints(handle.path)
             active_message_id: str | None = context.assistant_message_id
+            last_completed_message_id: str | None = None
             active_message_text = ""
-            final_response_text = ""
             runtime_events = self._cancellable_runtime_events(context)
             async for runtime_event in runtime_events:
                 latest = await self._runs.get(tenant_id, run_id)
@@ -929,7 +1069,12 @@ class RunOrchestrator:
                 run = latest
                 payload = dict(runtime_event.payload)
                 if runtime_event.type == "runtime.result":
-                    await self._record_quota_result(tenant_id, run_id, session, payload)
+                    # The SDK can emit more than one cumulative ResultMessage
+                    # around an inline approval/background-task continuation.
+                    # Charging each snapshot reuses the same quota idempotency
+                    # key with a different amount. Keep the latest cumulative
+                    # result and settle it once when the SDK stream closes.
+                    latest_runtime_result_payload = payload
                 if runtime_event.type in {"runtime.system", "runtime.result"}:
                     sdk_session_id = payload.get("session_id")
                     if isinstance(sdk_session_id, str) and sdk_session_id:
@@ -987,12 +1132,8 @@ class RunOrchestrator:
                         redact_internal_asset = bool(
                             matching_request
                             and (
-                                matching_request.payload.get(
-                                    INTERNAL_AGENT_ASSET_MARKER
-                                )
-                                or internal_agent_asset_access(
-                                    matching_request.payload
-                                )
+                                matching_request.payload.get(INTERNAL_AGENT_ASSET_MARKER)
+                                or internal_agent_asset_access(matching_request.payload)
                             )
                         )
                     if redact_result:
@@ -1025,13 +1166,17 @@ class RunOrchestrator:
                         active_message_text += str(payload.get("text", ""))
                     else:
                         final_response_text = active_message_text
+                        final_response_message_id = active_message_id
+                        last_completed_message_id = active_message_id
                         self._record_visible_assistant_message(
                             run_id=run_id,
                             message_id=active_message_id,
                             text=active_message_text,
                         )
-                elif runtime_event.type == "tool.request" and active_message_id is not None:
-                    payload["message_id"] = active_message_id
+                elif runtime_event.type == "tool.request":
+                    parent_message_id = active_message_id or last_completed_message_id
+                    if parent_message_id is not None:
+                        payload["message_id"] = parent_message_id
                 if runtime_event.type == "tool.request":
                     audit_arguments = payload.get("arguments")
                     if isinstance(audit_arguments, dict):
@@ -1058,8 +1203,9 @@ class RunOrchestrator:
                         )
                     artifact_payload = artifact.model_dump(mode="json")
                     artifact_payload["source_path"] = relative_path
-                    if active_message_id is not None:
-                        artifact_payload["message_id"] = active_message_id
+                    artifact_message_id = active_message_id or last_completed_message_id
+                    if artifact_message_id is not None:
+                        artifact_payload["message_id"] = artifact_message_id
                     await self._events.append(
                         tenant_id=tenant_id,
                         run_id=run_id,
@@ -1119,7 +1265,7 @@ class RunOrchestrator:
                             run_id=run_id,
                             tool_call_id=tool_call_id,
                             reason=result.reason,
-                            message_id=active_message_id,
+                            message_id=active_message_id or last_completed_message_id,
                             tool_name=tool_name,
                             argument_summary=cast(
                                 dict[str, Any],
@@ -1161,6 +1307,15 @@ class RunOrchestrator:
                 )
                 if runtime_event.type == "message.completed":
                     active_message_id = None
+            if latest_runtime_result_payload is not None:
+                quota_payload = latest_runtime_result_payload
+                latest_runtime_result_payload = None
+                await self._record_quota_result(
+                    tenant_id,
+                    run_id,
+                    session,
+                    quota_payload,
+                )
             with self._stage("harness.sandbox.collect", {"run.id": run_id}):
                 await active_sandbox.collect(handle)
             with self._stage("harness.artifact.publish_outputs", {"run.id": run_id}):
@@ -1170,6 +1325,7 @@ class RunOrchestrator:
                     workspace=handle.path,
                     baseline=output_baseline,
                     final_response=final_response_text,
+                    message_id=final_response_message_id,
                 )
             if self._workspaces is not None and workspace_policy.archive_on_complete:
                 with self._stage("harness.workspace.archive", {"run.id": run_id}):
@@ -1185,21 +1341,30 @@ class RunOrchestrator:
                     event_type="workspace.archived",
                     payload=snapshot.model_dump(mode="json"),
                 )
+            workspace_durable = True
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:
                 return await self._move(latest, RunStatus.CANCELLED)
             if latest.status.is_terminal:
                 return latest
             if self._observability is not None:
-                self._observability.annotate_current_io(
-                    output_value=final_response_text
-                )
+                self._observability.annotate_current_io(output_value=final_response_text)
                 self._observability.annotate_current_io(
                     output_value=final_response_text,
                     trace_level=True,
                 )
             return await self._move(latest, RunStatus.SUCCEEDED)
         except RuntimeExecutionTimeoutError:
+            workspace_durable = await self._recover_failed_workspace(
+                tenant_id=tenant_id,
+                run=run,
+                sandbox=active_sandbox,
+                handle=handle,
+                baseline=output_baseline,
+                final_response=final_response_text,
+                message_id=final_response_message_id,
+                archive_on_complete=workspace_policy.archive_on_complete,
+            )
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:
                 await self._fail_active_subagents(
@@ -1222,6 +1387,30 @@ class RunOrchestrator:
                 payload={"timeout": "manifest runtime limit exceeded"},
             )
         except RuntimeResultError as error:
+            if latest_runtime_result_payload is not None:
+                try:
+                    await self._record_quota_result(
+                        tenant_id,
+                        run_id,
+                        session,
+                        latest_runtime_result_payload,
+                    )
+                except Exception:
+                    # Preserve the provider failure as the primary terminal
+                    # reason; quota reconciliation remains independently
+                    # recoverable from durable result events.
+                    pass
+                latest_runtime_result_payload = None
+            workspace_durable = await self._recover_failed_workspace(
+                tenant_id=tenant_id,
+                run=run,
+                sandbox=active_sandbox,
+                handle=handle,
+                baseline=output_baseline,
+                final_response=final_response_text,
+                message_id=final_response_message_id,
+                archive_on_complete=workspace_policy.archive_on_complete,
+            )
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:
                 return await self._move(latest, RunStatus.CANCELLED)
@@ -1239,10 +1428,35 @@ class RunOrchestrator:
                 payload=payload,
             )
         except Exception as error:  # noqa: BLE001 - boundary converts failures to Run state
+            workspace_durable = await self._recover_failed_workspace(
+                tenant_id=tenant_id,
+                run=run,
+                sandbox=active_sandbox,
+                handle=handle,
+                baseline=output_baseline,
+                final_response=final_response_text,
+                message_id=final_response_message_id,
+                archive_on_complete=workspace_policy.archive_on_complete,
+            )
             return await self._handle_unexpected_error(tenant_id, run_id, error)
         finally:
             if self._credential_revoker is not None:
                 await self._credential_revoker(tenant_id, run_id)
             if handle is not None:
+                if not workspace_durable and handle.provider == "daytona":
+                    handle = handle.model_copy(update={"preserve_remote_workspace": True})
+                    try:
+                        await self._events.append(
+                            tenant_id=tenant_id,
+                            run_id=run_id,
+                            session_id=run.session_id,
+                            event_type="workspace.recovery_retained",
+                            payload={
+                                "retention_seconds": 3600,
+                                "reason": "durable_workspace_commit_failed",
+                            },
+                        )
+                    except Exception:  # noqa: BLE001 - cleanup must still run
+                        pass
                 with self._stage("harness.sandbox.destroy", {"run.id": run_id}):
                     await active_sandbox.destroy(handle)

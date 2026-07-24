@@ -1,5 +1,7 @@
 import asyncio
+import io
 import subprocess
+import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -174,7 +176,10 @@ async def test_remote_session_stdin_frames_reconstruct_environment_and_argv(
             "argument with spaces",
         ],
         str(tmp_path),
-        {"PRIVATE_VALUE": "secret value"},
+        {
+            "PRIVATE_VALUE": "secret value",
+            "HARNESS_DAYTONA_STDOUT_FLUSH_PADDING": "1",
+        },
     )
     await session.end_input()
 
@@ -187,7 +192,7 @@ async def test_remote_session_stdin_frames_reconstruct_environment_and_argv(
         input="".join(process.inputs),
     )
 
-    assert completed.stdout == "secret value|argument with spaces"
+    assert completed.stdout == "secret value|argument with spaces\n                \n"
     assert "secret value" not in process.command
     assert "argument with spaces" not in process.command
 
@@ -259,6 +264,21 @@ class FakeSandbox:
 
     async def download(self, remote_path: str) -> bytes:
         return self.remote_files[remote_path]
+
+    async def download_archive(self, remote_path: str, *, max_bytes: int) -> bytes:
+        prefix = remote_path.rstrip("/") + "/"
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as archive:
+            for path, content in self.remote_files.items():
+                if not path.startswith(prefix):
+                    continue
+                info = tarfile.TarInfo(path.removeprefix(prefix))
+                info.size = len(content)
+                archive.addfile(info, io.BytesIO(content))
+        payload = buffer.getvalue()
+        if len(payload) > max_bytes:
+            raise ValueError("Daytona workspace archive exceeds collection size limit")
+        return payload
 
     def remote_session(self) -> Any:
         return self.command_session
@@ -651,3 +671,71 @@ async def test_provider_rejects_remote_workspace_over_collection_limit(
         await provider.collect(handle)
 
     await provider.destroy(handle)
+
+
+@pytest.mark.asyncio
+async def test_provider_collects_unicode_paths_through_one_archive(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    provider = DaytonaSandboxProvider(client=client, local_root=tmp_path)
+    handle = await provider.provision(run())
+    client.sandbox.remote_files[
+        "/home/daytona/harness/run-a/outputs/人工智能部半年总结.html"
+    ] = "完成".encode()
+
+    await provider.collect(handle)
+
+    assert (
+        handle.path / "outputs" / "人工智能部半年总结.html"
+    ).read_text() == "完成"
+    await provider.destroy(handle)
+
+
+@pytest.mark.asyncio
+async def test_provider_collect_overwrites_read_only_staged_input(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    provider = DaytonaSandboxProvider(client=client, local_root=tmp_path)
+    handle = await provider.provision(run())
+    staged_input = handle.path / "inputs" / "original" / "工作簿1.xlsx"
+    staged_input.parent.mkdir(parents=True)
+    staged_input.write_bytes(b"staged")
+    staged_input.chmod(0o444)
+    remote_path = "/home/daytona/harness/run-a/inputs/original/工作簿1.xlsx"
+    client.sandbox.remote_files[remote_path] = b"remote"
+
+    await provider.collect(handle)
+
+    assert staged_input.read_bytes() == b"remote"
+    assert staged_input.stat().st_mode & 0o400
+    await provider.destroy(handle)
+
+
+@pytest.mark.asyncio
+async def test_provider_retains_failed_workspace_for_recovery_window(
+    tmp_path: Path,
+) -> None:
+    client = WarmFakeClient()
+    now = [100.0]
+    provider = DaytonaSandboxProvider(
+        client=client,
+        local_root=tmp_path,
+        delete_on_destroy=True,
+        session_reuse_enabled=True,
+        session_idle_timeout_seconds=30,
+        recovery_retention_seconds=3600,
+        monotonic=lambda: now[0],
+    )
+    handle = await provider.provision(run())
+
+    await provider.destroy(
+        handle.model_copy(update={"preserve_remote_workspace": True})
+    )
+    sandbox = next(iter(client.by_name.values()))
+    now[0] = 200.0
+
+    assert sandbox.removed == []
+    assert await provider.reap_expired() == 0
+    assert client.deleted == []

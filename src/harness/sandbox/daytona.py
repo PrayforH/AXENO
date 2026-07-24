@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import io
 import logging
 import os
 import re
 import shlex
 import shutil
 import ssl
+import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -74,6 +76,8 @@ class DaytonaRemoteSandbox(Protocol):
     ) -> list[tuple[str, bool, int | None]]: ...
 
     async def download(self, remote_path: str) -> bytes: ...
+
+    async def download_archive(self, remote_path: str, *, max_bytes: int) -> bytes: ...
 
     def remote_session(self) -> RemoteClaudeSession: ...
 
@@ -161,10 +165,23 @@ class SdkDaytonaRemoteSession:
             "fi; "
             "trap '[ -z \"$mcp_config_path\" ] || "
             "rm -f -- \"$mcp_config_path\"' EXIT; "
+            "unset CLAUDECODE; "
+            'stdout_flush_padding="${HARNESS_DAYTONA_STDOUT_FLUSH_PADDING:-}"; '
+            "unset HARNESS_DAYTONA_STDOUT_FLUSH_PADDING; "
+            "forward_stdin() { "
             "while IFS= read -r line; do "
             'if [ "$line" = "$input_marker" ]; then break; fi; '
             'printf "%s\\n" "$line"; '
-            'done | "$@"'
+            "done; "
+            "}; "
+            'if [ "$stdout_flush_padding" = "1" ]; then '
+            "forward_stdin | \"$@\" | "
+            "while IFS= read -r output_line || [ -n \"$output_line\" ]; do "
+            'printf "%s\\n                \\n" "$output_line"; '
+            "done; "
+            "else "
+            "forward_stdin | \"$@\"; "
+            "fi"
         )
         wrapped_argv = [
             "bash",
@@ -315,6 +332,22 @@ class SdkDaytonaRemoteSandbox:
     async def download(self, remote_path: str) -> bytes:
         return await self._sandbox.fs.download_file(remote_path)
 
+    async def download_archive(self, remote_path: str, *, max_bytes: int) -> bytes:
+        archive_path = f"/tmp/harness-workspace-{uuid4().hex}.tar"
+        try:
+            response = await self._sandbox.process.exec(
+                "tar -C "
+                f"{shlex.quote(remote_path)} -cf {shlex.quote(archive_path)} ."
+            )
+            if response.exit_code != 0:
+                raise RuntimeError("failed to archive Daytona workspace")
+            content = await self._sandbox.fs.download_file(archive_path)
+            if len(content) > max_bytes:
+                raise ValueError("Daytona workspace archive exceeds collection size limit")
+            return content
+        finally:
+            await self._sandbox.process.exec(f"rm -f -- {shlex.quote(archive_path)}")
+
     def remote_session(self) -> RemoteClaudeSession:
         return SdkDaytonaRemoteSession(self._sandbox)
 
@@ -360,6 +393,61 @@ class SdkDaytonaClient:
         await self._sdk.delete(cast(SdkDaytonaRemoteSandbox, sandbox).sdk_sandbox)
 
 
+def _extract_daytona_workspace_archive(
+    content: bytes,
+    root: Path,
+    *,
+    max_bytes: int,
+    max_members: int,
+) -> None:
+    try:
+        archive = tarfile.open(fileobj=io.BytesIO(content), mode="r:*")
+    except tarfile.TarError:
+        raise ValueError("invalid Daytona workspace archive") from None
+    total = 0
+    with archive:
+        members = archive.getmembers()
+        if len(members) > max_members:
+            raise ValueError("Daytona workspace exceeds collection member limit")
+        for member in members:
+            relative = PurePosixPath(member.name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("unsafe Daytona workspace archive member")
+            parts = tuple(part for part in relative.parts if part not in {"", "."})
+            if not parts:
+                continue
+            target = root.joinpath(*parts)
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise ValueError("unsafe Daytona workspace archive member")
+            total += member.size
+            if total > max_bytes:
+                raise ValueError("Daytona workspace exceeds collection size limit")
+            source = archive.extractfile(member)
+            if source is None:
+                raise ValueError("invalid Daytona workspace archive")
+            data = source.read(max_bytes + 1)
+            if len(data) != member.size:
+                raise ValueError("invalid Daytona workspace archive")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_symlink():
+                raise ValueError("unsafe Daytona workspace archive member")
+            if target.exists():
+                if not target.is_file():
+                    raise ValueError("unsafe Daytona workspace archive member")
+                # Inputs are intentionally staged read-only. Collection replaces
+                # the local mirror with the remote copy, so make an existing
+                # worker-owned file writable before truncating it.
+                target.chmod(0o600)
+            target.write_bytes(data)
+            # A remote archive may report mode 000. Keep the local control-plane
+            # mirror owner-readable so snapshotting cannot fail after a
+            # successful model response.
+            target.chmod((member.mode & 0o755) | 0o400)
+
+
 SessionKey = tuple[str, str]
 
 
@@ -369,6 +457,7 @@ class _SandboxEntry:
     owned: bool
     session_key: SessionKey | None
     released_at: float | None = None
+    recovery_until: float | None = None
     prepared_cli: tuple[str, str] | None = None
 
 
@@ -397,6 +486,7 @@ class DaytonaSandboxProvider:
         warm_pool_max_sessions: int = 3,
         max_collect_bytes: int = 512 * 1024 * 1024,
         max_collect_members: int = 10_000,
+        recovery_retention_seconds: float = 3600,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if (
@@ -404,6 +494,7 @@ class DaytonaSandboxProvider:
             or max_collect_members <= 0
             or session_idle_timeout_seconds <= 0
             or warm_pool_max_sessions <= 0
+            or recovery_retention_seconds <= 0
         ):
             raise ValueError("Daytona lifecycle and collection limits must be positive")
         self._client = client
@@ -420,6 +511,7 @@ class DaytonaSandboxProvider:
         self._warm_pool_max_sessions = warm_pool_max_sessions
         self._max_collect_bytes = max_collect_bytes
         self._max_collect_members = max_collect_members
+        self._recovery_retention_seconds = recovery_retention_seconds
         self._monotonic = monotonic
         self._sandboxes: dict[str, _SandboxEntry] = {}
         self._leases: dict[str, _SandboxLease] = {}
@@ -633,23 +725,20 @@ class DaytonaSandboxProvider:
         )
         if declared_size > self._max_collect_bytes:
             raise ValueError("Daytona workspace exceeds collection size limit")
-        collected_size = 0
-        for remote_path, is_dir, _ in remote_files:
-            relative = PurePosixPath(remote_path).relative_to(
-                PurePosixPath(handle.remote_workspace)
-            )
-            if ".." in relative.parts:
-                raise ValueError("Daytona workspace path escaped local collection root")
-            local = handle.path.joinpath(*relative.parts)
-            if is_dir:
-                local.mkdir(parents=True, exist_ok=True)
-            else:
-                content = await sandbox.download(remote_path)
-                collected_size += len(content)
-                if collected_size > self._max_collect_bytes:
-                    raise ValueError("Daytona workspace exceeds collection size limit")
-                local.parent.mkdir(parents=True, exist_ok=True)
-                local.write_bytes(content)
+        content = await sandbox.download_archive(
+            handle.remote_workspace,
+            max_bytes=(
+                self._max_collect_bytes
+                + self._max_collect_members * 1024
+                + 10_240
+            ),
+        )
+        _extract_daytona_workspace_archive(
+            content,
+            handle.path,
+            max_bytes=self._max_collect_bytes,
+            max_members=self._max_collect_members,
+        )
 
     async def execute(
         self,
@@ -699,6 +788,15 @@ class DaytonaSandboxProvider:
             if lease is None:
                 return
             if lease.reusable:
+                if handle.preserve_remote_workspace:
+                    now = self._monotonic()
+                    lease.entry.released_at = now
+                    lease.entry.recovery_until = max(
+                        lease.entry.recovery_until or now,
+                        now + self._recovery_retention_seconds,
+                    )
+                    should_evict = True
+                    return
                 try:
                     assert handle.remote_workspace is not None
                     await lease.entry.sandbox.remove_tree(handle.remote_workspace)
@@ -721,7 +819,11 @@ class DaytonaSandboxProvider:
             else:
                 self._drop_entry(lease.entry)
                 await self._client.stop(lease.entry.sandbox)
-                if self._delete_on_destroy and lease.entry.owned:
+                if (
+                    self._delete_on_destroy
+                    and lease.entry.owned
+                    and not handle.preserve_remote_workspace
+                ):
                     await self._client.delete(lease.entry.sandbox)
         finally:
             shutil.rmtree(handle.path, ignore_errors=True)
@@ -750,6 +852,11 @@ class DaytonaSandboxProvider:
             current = self._sandboxes.get(entry.sandbox.id)
             if current is not entry or entry.released_at is None:
                 return False
+            if (
+                entry.recovery_until is not None
+                and entry.recovery_until > self._monotonic()
+            ):
+                return False
             if released_before is not None and entry.released_at > released_before:
                 return False
             await self._retire(entry)
@@ -765,6 +872,10 @@ class DaytonaSandboxProvider:
                 entry
                 for entry in self._sandboxes.values()
                 if entry.released_at is not None
+                and (
+                    entry.recovery_until is None
+                    or entry.recovery_until <= self._monotonic()
+                )
             ),
             key=lambda entry: cast(float, entry.released_at),
         )
@@ -790,6 +901,10 @@ class DaytonaSandboxProvider:
             entry
             for entry in tuple(self._sandboxes.values())
             if entry.released_at is not None and entry.released_at <= cutoff
+            and (
+                entry.recovery_until is None
+                or entry.recovery_until <= self._monotonic()
+            )
         ]
         reaped = 0
         for entry in expired:

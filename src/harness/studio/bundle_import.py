@@ -95,8 +95,7 @@ def _python_tool_code(source: str, *, label: str) -> str:
             for node in tree.body
             if isinstance(node, ast.Assign)
             and any(
-                isinstance(target, ast.Name) and target.id == "TOOL_SPEC"
-                for target in node.targets
+                isinstance(target, ast.Name) and target.id == "TOOL_SPEC" for target in node.targets
             )
         ),
         None,
@@ -209,9 +208,9 @@ def _nexau_skill(
     elif re.fullmatch(r"[a-z][a-z0-9-]*", raw_name):
         safe_name = raw_name
     else:
-        safe_name = "imported-skill-" + hashlib.sha256(
-            f"{index}:{raw_name}".encode()
-        ).hexdigest()[:8]
+        safe_name = (
+            "imported-skill-" + hashlib.sha256(f"{index}:{raw_name}".encode()).hexdigest()[:8]
+        )
     warning = None
     if safe_name != raw_name:
         warning = f"Skill {raw_name} 已转换为兼容标识 {safe_name}"
@@ -360,7 +359,8 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
                 DraftPythonTool(
                     name=_safe_name(tool_name or function_name, separator="_"),
                     description=str(metadata.get("description") or tool_name)[:2_000],
-                    inputSchema=metadata.get("input_schema") or {
+                    inputSchema=metadata.get("input_schema")
+                    or {
                         "type": "object",
                         "properties": {},
                         "additionalProperties": True,
@@ -394,19 +394,23 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
         # selects a governed route after import.
         llm = config.get("llm_config") if isinstance(config.get("llm_config"), dict) else {}
         raw_model = str(llm.get("model") or "")
-        model = raw_model if raw_model and "${" not in raw_model else (
-            "MiniMax-M3" if has_visual_input else "deepseek-v4-flash"
+        model = (
+            raw_model
+            if raw_model and "${" not in raw_model
+            else ("MiniMax-M3" if has_visual_input else "deepseek-v4-pro")
         )
-        route_id = "minimax-m3" if has_visual_input else "new-api-default"
+        route_id = "minimax-m3" if has_visual_input else "deepseek-v4-pro"
         if model != raw_model:
             route_label = "MiniMax 视觉" if has_visual_input else "DeepSeek"
             warnings.append(f"环境变量模型已替换为平台 {route_label} 默认路由；凭据未导入")
 
         from harness.studio.factory import create_draft_spec
 
-        template = AgentTemplate.OPERATOR if any(
-            item in builtin_tools for item in ("Write", "Bash")
-        ) or python_tools else AgentTemplate.ANALYST
+        template = (
+            AgentTemplate.OPERATOR
+            if any(item in builtin_tools for item in ("Write", "Bash")) or python_tools
+            else AgentTemplate.ANALYST
+        )
         defaults = create_draft_spec(
             name=name,
             domain="imported-nexau",
@@ -414,24 +418,26 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
             description=description,
             template=template,
         )
-        spec = defaults.model_copy(update={
-            "system_prompt": system_prompt,
-            "skills": tuple(skills),
-            "builtin_tools": tuple(builtin_tools),
-            "python_tools": tuple(python_tools),
-            "model": DraftModelSelection(
-                routeId=route_id,
-                model=model,
-                requiredCapabilities=(
-                    ("streaming", "tool_use", "vision")
-                    if has_visual_input
-                    else ("streaming", "tool_use")
+        spec = defaults.model_copy(
+            update={
+                "system_prompt": system_prompt,
+                "skills": tuple(skills),
+                "builtin_tools": tuple(builtin_tools),
+                "python_tools": tuple(python_tools),
+                "model": DraftModelSelection(
+                    routeId=route_id,
+                    model=model,
+                    requiredCapabilities=(
+                        ("streaming", "tool_use", "vision")
+                        if has_visual_input
+                        else ("streaming", "tool_use")
+                    ),
                 ),
-            ),
-            "limits": DraftLimits(
-                timeoutSeconds=1800,
-            ),
-        })
+                "limits": DraftLimits(
+                    timeoutSeconds=1800,
+                ),
+            }
+        )
         digest = hashlib.sha256(content).hexdigest()
         return ParsedAgentBundle(
             spec=spec,
@@ -485,8 +491,9 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
         )
         mcp_servers = tuple(tool.mcp for tool in manifest_spec.tools if tool.mcp is not None)
         unsupported_python = tuple(
-            tool.python_entry for tool in manifest_spec.tools if tool.python_entry is not None
-            and not tool.python_entry.startswith("bundle:")
+            tool.python_entry
+            for tool in manifest_spec.tools
+            if tool.python_entry is not None and not tool.python_entry.startswith("bundle:")
         )
         if unsupported_python:
             raise AgentBundleImportError(
@@ -504,14 +511,27 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             skill_md: str | None = None
             files: list[DraftSkillFile] = []
             for file in skill.files:
-                text = _decode_text(
-                    file.content_base64,
-                    label=f"{skill.name}/{file.path}",
-                )
                 if file.path == "SKILL.md":
+                    text = _decode_text(
+                        file.content_base64,
+                        label=f"{skill.name}/{file.path}",
+                    )
                     skill_md = text
                 else:
-                    files.append(DraftSkillFile(path=file.path, content=text))
+                    try:
+                        text = base64.b64decode(
+                            file.content_base64,
+                            validate=True,
+                        ).decode("utf-8")
+                    except UnicodeDecodeError:
+                        files.append(
+                            DraftSkillFile(
+                                path=file.path,
+                                contentBase64=file.content_base64,
+                            )
+                        )
+                    else:
+                        files.append(DraftSkillFile(path=file.path, content=text))
             if skill_md is None:
                 raise AgentBundleImportError(f"Skill 缺少 SKILL.md：{skill.name}")
             skills.append(
@@ -523,9 +543,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
                 )
             )
 
-        python_snapshots = {
-            item.reference: item for item in snapshot.python_tool_snapshots
-        }
+        python_snapshots = {item.reference: item for item in snapshot.python_tool_snapshots}
         python_tools: list[DraftPythonTool] = []
         for tool_ref in (
             tool.python_entry
@@ -534,9 +552,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
         ):
             tool_snapshot = python_snapshots.get(tool_ref)
             if tool_snapshot is None:
-                raise AgentBundleImportError(
-                    f"自定义算子缺少不可变快照：{tool_ref}"
-                )
+                raise AgentBundleImportError(f"自定义算子缺少不可变快照：{tool_ref}")
             source = _decode_text(
                 tool_snapshot.content_base64,
                 label=tool_snapshot.path,

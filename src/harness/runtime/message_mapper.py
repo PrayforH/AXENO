@@ -201,7 +201,7 @@ def result_usage(message: ResultMessage) -> dict[str, int]:
 def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
     if isinstance(message, TaskStartedMessage):
         return RuntimeEvent(
-            type="subagent.started",
+            type="runtime.task.started",
             payload={
                 "task_id": message.task_id,
                 "description": message.description,
@@ -212,7 +212,7 @@ def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
         )
     if isinstance(message, TaskProgressMessage):
         return RuntimeEvent(
-            type="subagent.updated",
+            type="runtime.task.updated",
             payload={
                 "task_id": message.task_id,
                 "description": message.description,
@@ -225,9 +225,9 @@ def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
     if isinstance(message, TaskNotificationMessage):
         return RuntimeEvent(
             type=(
-                "subagent.completed"
+                "runtime.task.completed"
                 if message.status == "completed"
-                else "subagent.failed"
+                else "runtime.task.failed"
             ),
             payload={
                 "task_id": message.task_id,
@@ -244,11 +244,11 @@ def _map_task_message(message: SystemMessage) -> RuntimeEvent | None:
         terminal = status in {"completed", "failed", "killed"}
         return RuntimeEvent(
             type=(
-                "subagent.completed"
+                "runtime.task.completed"
                 if status == "completed"
-                else "subagent.failed"
+                else "runtime.task.failed"
                 if terminal
-                else "subagent.updated"
+                else "runtime.task.updated"
             ),
             payload={"task_id": message.task_id, "status": status or "running"},
         )

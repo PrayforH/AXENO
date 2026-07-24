@@ -6,14 +6,16 @@ import {
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import type { ReactNode } from "react";
-import { useEffect, useMemo } from "react";
+import { useLayoutEffect, useMemo } from "react";
 import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
 import { liveResponseStore } from "../lib/live-response-store";
 import { runStreamStore } from "../lib/run-stream-store";
+import { runReuseStore } from "../lib/run-reuse-store";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
 import { createThreadHistoryAdapter } from "../lib/task-history";
+import { activateRuntimeThread } from "../lib/runtime-thread-scope";
 import type { TaskModelRoute } from "../lib/task-model-catalog";
 import { TaskModelProvider } from "./task-model-context";
 
@@ -52,10 +54,12 @@ export function AssistantRuntimeShell({
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activateRuntimeThread(threadId);
     activityStore.clear();
     liveResponseStore.clear();
     runStreamStore.clear();
+    runReuseStore.clear();
     uploadFeedbackStore.clear();
   }, [threadId]);
   const runtime = useAgUiRuntime({

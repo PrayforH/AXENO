@@ -507,12 +507,13 @@ class InMemoryAguiThreadBindingRepository:
             raise NotFoundError(f"AG-UI session binding not found: {session_id}") from error
 
     async def list_for_user(
-        self, tenant_id: str, user_id: str, *, limit: int
+        self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]:
         matches = [
             binding
             for (item_tenant, item_user, _), binding in self._by_thread.items()
             if item_tenant == tenant_id and item_user == user_id
+            and (binding.archived_at is not None) is archived
         ]
         return sorted(
             matches,
@@ -546,6 +547,34 @@ class InMemoryAguiThreadBindingRepository:
                     "title_source": source,
                     "title_updated_at": generated_at,
                     "updated_at": max(binding.updated_at, generated_at),
+                }
+            )
+            self._by_thread[thread_key] = updated
+            self._by_session[(tenant_id, user_id, binding.session_id)] = updated
+            return updated
+
+    async def set_archived(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        archived_at: datetime | None,
+    ) -> AguiThreadBinding:
+        thread_key = (tenant_id, user_id, thread_id)
+        async with self._lock:
+            try:
+                binding = self._by_thread[thread_key]
+            except KeyError as error:
+                raise NotFoundError(
+                    f"AG-UI thread binding not found: {thread_id}"
+                ) from error
+            updated = binding.model_copy(
+                update={
+                    "archived_at": archived_at,
+                    "updated_at": max(binding.updated_at, archived_at)
+                    if archived_at is not None
+                    else binding.updated_at,
                 }
             )
             self._by_thread[thread_key] = updated

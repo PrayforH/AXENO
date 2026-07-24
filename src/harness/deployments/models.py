@@ -87,7 +87,13 @@ class EnvironmentResourcePolicy(StudioModel):
         alias="networkAccess",
     )
     allowed_model_routes: tuple[str, ...] = Field(
-        default=("new-api-default", "minimax-m3", "anthropic-official"),
+        default=(
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "new-api-default",
+            "minimax-m3",
+            "anthropic-official",
+        ),
         alias="allowedModelRoutes",
     )
     capability_catalog_revision: int = Field(

@@ -1,5 +1,6 @@
 """Run creation, lookup and cancellation use cases."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -22,6 +23,13 @@ class RunQuotaPlan:
     ttl_seconds: int
 
 
+@dataclass(frozen=True)
+class RunCreation:
+    run: Run
+    created: bool
+    deduplicated: bool
+
+
 class RunAdmission(Protocol):
     async def admit_run(
         self,
@@ -42,6 +50,39 @@ class RunAdmission(Protocol):
 
 
 RunQuotaPlanResolver = Callable[[str, str, str], Awaitable[RunQuotaPlan]]
+
+
+def _request_attachment_ids(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return tuple(sorted(value))
+
+
+def _same_user_request(left: dict[str, object], right: dict[str, object]) -> bool:
+    """Match only the user-owned request identity, not derived routing metadata."""
+
+    left_prompt = left.get("prompt")
+    right_prompt = right.get("prompt")
+    if not isinstance(left_prompt, str) or not isinstance(right_prompt, str):
+        return False
+    return (
+        left_prompt == right_prompt
+        and _request_attachment_ids(left.get("input_artifact_ids", []))
+        == _request_attachment_ids(right.get("input_artifact_ids", []))
+    )
+
+
+def _blocking_predecessor(active_runs: list[Run]) -> Run | None:
+    if not active_runs:
+        return None
+    ordered = sorted(
+        active_runs,
+        key=lambda item: (item.created_at, item.run_id),
+    )
+    return next(
+        (item for item in ordered if item.status is RunStatus.WAITING_APPROVAL),
+        ordered[0],
+    )
 
 
 def apply_environment_quota(plan: RunQuotaPlan, session: Session) -> RunQuotaPlan:
@@ -94,6 +135,7 @@ class RunService:
         self._metrics = metrics
         self._admission = admission
         self._quota_plan_resolver = quota_plan_resolver
+        self._creation_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     async def create(
         self,
@@ -102,7 +144,46 @@ class RunService:
         idempotency_key: str,
         *,
         input: dict[str, object] | None = None,
+        deduplicate_active_input: bool = True,
     ) -> Run:
+        return (
+            await self.create_with_result(
+                tenant_id,
+                session_id,
+                idempotency_key,
+                input=input,
+                deduplicate_active_input=deduplicate_active_input,
+            )
+        ).run
+
+    async def create_with_result(
+        self,
+        tenant_id: str,
+        session_id: str,
+        idempotency_key: str,
+        *,
+        input: dict[str, object] | None = None,
+        deduplicate_active_input: bool = True,
+    ) -> RunCreation:
+        lock = self._creation_locks.setdefault((tenant_id, session_id), asyncio.Lock())
+        async with lock:
+            return await self._create_locked(
+                tenant_id,
+                session_id,
+                idempotency_key,
+                input=input,
+                deduplicate_active_input=deduplicate_active_input,
+            )
+
+    async def _create_locked(
+        self,
+        tenant_id: str,
+        session_id: str,
+        idempotency_key: str,
+        *,
+        input: dict[str, object] | None,
+        deduplicate_active_input: bool,
+    ) -> RunCreation:
         session = await self._sessions.get(tenant_id, session_id)
         existing = await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
         if existing is not None:
@@ -111,10 +192,33 @@ class RunService:
                 existing.run_id,
                 existing.input.get("prompt"),
             )
-            return existing
+            return RunCreation(run=existing, created=False, deduplicated=False)
+        run_input = input or {}
+        active_runs = [
+            item
+            for item in await self._runs.list_for_sessions(
+                tenant_id, [session_id], limit=200
+            )
+            if not item.status.is_terminal
+        ]
+        if deduplicate_active_input:
+            duplicate = next(
+                (
+                    item
+                    for item in active_runs
+                    if _same_user_request(item.input, run_input)
+                ),
+                None,
+            )
+            if duplicate is not None:
+                self._annotate_trace(
+                    session_id,
+                    duplicate.run_id,
+                    duplicate.input.get("prompt"),
+                )
+                return RunCreation(run=duplicate, created=False, deduplicated=True)
         timestamp = self._clock()
         run_id = self._id_generator("run")
-        run_input = input or {}
         self._annotate_trace(session_id, run_id, run_input.get("prompt"))
         run = Run(
             run_id=run_id,
@@ -156,14 +260,35 @@ class RunService:
             if admitted and self._admission is not None:
                 await self._admission.release_subject(tenant_id, run_id)
             raise
+        predecessor = _blocking_predecessor(active_runs)
+        queue_payload: dict[str, object] = {}
+        if predecessor is not None:
+            waiting_for_approval = predecessor.status is RunStatus.WAITING_APPROVAL
+            queue_payload = {
+                "reason_code": (
+                    "predecessor_waiting_approval"
+                    if waiting_for_approval
+                    else "predecessor_active"
+                ),
+                "reason": (
+                    "前序任务等待审批"
+                    if waiting_for_approval
+                    else "前序任务仍在执行"
+                ),
+                "blocked_by_run_id": predecessor.run_id,
+                "blocked_by_status": predecessor.status.value,
+            }
         await self._events.append(
             tenant_id=tenant_id,
             run_id=run.run_id,
             session_id=session_id,
             event_type="run.queued",
+            payload=queue_payload,
         )
-        await self._queue.enqueue(RunTask(tenant_id=tenant_id, run_id=run.run_id))
-        return run
+        await self._queue.enqueue(
+            RunTask(tenant_id=tenant_id, run_id=run.run_id, session_id=session_id)
+        )
+        return RunCreation(run=run, created=True, deduplicated=False)
 
     def _annotate_trace(
         self,
@@ -192,9 +317,7 @@ class RunService:
     async def find_by_idempotency_key(
         self, tenant_id: str, session_id: str, idempotency_key: str
     ) -> Run | None:
-        return await self._runs.find_by_idempotency_key(
-            tenant_id, session_id, idempotency_key
-        )
+        return await self._runs.find_by_idempotency_key(tenant_id, session_id, idempotency_key)
 
     async def list_for_sessions(
         self, tenant_id: str, session_ids: list[str], *, limit: int = 200

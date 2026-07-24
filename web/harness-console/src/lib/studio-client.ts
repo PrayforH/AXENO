@@ -157,6 +157,14 @@ export type StudioSkillConversationReply = {
   followUpQuestions: string[];
 };
 
+export type StudioImportedSkill = {
+  skill: StudioSkill;
+  sourceContentHash: string;
+  riskLevel: "low" | "review";
+  findings: string[];
+  warnings: string[];
+};
+
 type ApiEvalCase = {
   id: string;
   tags: string[];
@@ -184,7 +192,11 @@ type ApiDraftSpec = {
     name: string;
     description: string;
     instructions: string;
-    files: Array<{ path: string; content: string }>;
+    files: Array<{
+      path: string;
+      content?: string | null;
+      contentBase64?: string | null;
+    }>;
   }>;
   builtinTools: string[];
   pythonTools: StudioDraft["pythonTools"];
@@ -197,7 +209,7 @@ type ApiDraftSpec = {
   workspace: { restoreSession: boolean; archiveOnComplete: boolean };
   limits: {
     maxTurns: number | null;
-    timeoutSeconds: number;
+    timeoutSeconds: number | null;
     maxBudgetUsd: number | null;
     maxModelTokens: number | null;
     maxSubagents: number;
@@ -445,7 +457,16 @@ export type StudioPolicyPublication = {
 
 export type StudioValidation = {
   ready: boolean;
-  issues: Array<{ code: string; message: string; severity: "error" | "warning"; path: string | null }>;
+  productionEligible: boolean;
+  issues: Array<{
+    code: string;
+    message: string;
+    severity: "error" | "warning";
+    path: string | null;
+    stage: "publish" | "production";
+    relatedReferences: string[];
+    suggestedProfileIds: string[];
+  }>;
   contentHash: string | null;
   packageHash: string | null;
 };
@@ -790,6 +811,7 @@ export type StudioCapabilities = {
     risk: StudioRisk;
     networkAccess: McpOption["network"];
     sendsUserData: boolean;
+    readOnly: boolean;
     credentialManaged: boolean;
     executionLocation: string;
     preflightRequired: boolean;
@@ -1265,12 +1287,19 @@ export const studioClient = {
     reference: string,
     expectedRevision: number,
     resource: StudioCapabilities["mcpServers"][number],
+    allowedExecutionProfileIds?: string[],
   ) =>
     request<StudioCatalogMutationResult>(
       `catalog/mcp/${encodeURIComponent(reference)}`,
       {
         method: "PUT",
-        body: JSON.stringify({ expectedRevision, resource }),
+        body: JSON.stringify({
+          expectedRevision,
+          resource,
+          ...(allowedExecutionProfileIds
+            ? { allowedExecutionProfileIds }
+            : {}),
+        }),
       },
     ),
   disableMcp: (reference: string, expectedRevision: number) =>
@@ -1300,6 +1329,24 @@ export const studioClient = {
     );
     if (!response.ok) throw await errorFrom(response);
     return response.json() as Promise<StudioImportedAgentBundle>;
+  },
+  async importSkill(file: File): Promise<StudioImportedSkill> {
+    const markdown = file.name.toLowerCase().endsWith(".md");
+    const response = requireAuthenticatedResponse(
+      await fetch(
+        `/api/studio/skills/import?filename=${encodeURIComponent(file.name)}`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": markdown ? "text/markdown" : "application/zip",
+          },
+          body: file,
+        },
+      ),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    return response.json() as Promise<StudioImportedSkill>;
   },
   replaceDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draft.id)}`, {

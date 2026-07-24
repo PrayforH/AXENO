@@ -65,7 +65,7 @@ if [[ ! -f work/web.pid ]] || ! kill -0 "$(cat work/web.pid)" 2>/dev/null; then
     NEXT_PUBLIC_HARNESS_RUNTIME="$HARNESS_RUNTIME" \
       HARNESS_API_URL=http://127.0.0.1:8000 \
       HARNESS_AGENT_NAME=echo-agent \
-      HARNESS_AGENT_VERSION=0.4.0 \
+      HARNESS_AGENT_VERSION=0.4.1 \
       HARNESS_TENANT_ID=local \
       HARNESS_USER_ID=developer \
       nohup npm run dev -- --hostname 127.0.0.1 \
@@ -91,6 +91,6 @@ fi
 
 echo "Harness API: http://127.0.0.1:8000/docs"
 echo "Harness Console: http://127.0.0.1:3000"
-echo "Local Agent: echo-agent@0.4.0"
+echo "Local Agent: echo-agent@0.4.1"
 echo "Runtime: $HARNESS_RUNTIME"
 echo "Langfuse/OTLP: disabled"

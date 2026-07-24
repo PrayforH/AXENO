@@ -721,6 +721,60 @@ async def test_successful_workspace_write_and_edit_do_not_require_approval(
 
 
 @pytest.mark.asyncio
+async def test_successful_generated_python_file_executes_without_approval(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    hooks = gate.hooks(context)
+    pre_tool_use = hooks["PreToolUse"][0].hooks[0]
+    write_input = _input(
+        "Write",
+        {"file_path": "generate_ppt.py", "content": "print('ok')"},
+        "tool-create-python",
+    )
+    assert _decision(
+        cast(
+            SyncHookJSONOutput,
+            await pre_tool_use(
+                write_input,
+                write_input["tool_use_id"],
+                {"signal": None},
+            ),
+        )
+    ) == "allow"
+    post_input = cast(
+        PostToolUseHookInput,
+        {
+            **write_input,
+            "hook_event_name": "PostToolUse",
+            "tool_response": {"ok": True},
+        },
+    )
+    await hooks["PostToolUse"][0].hooks[0](
+        post_input,
+        post_input["tool_use_id"],
+        {"signal": None},
+    )
+
+    bash_output = await asyncio.wait_for(
+        pre_tool_use(
+            _input(
+                "Bash",
+                {"command": "python3 generate_ppt.py"},
+                "tool-run-python",
+            ),
+            "tool-run-python",
+            {"signal": None},
+        ),
+        timeout=0.1,
+    )
+
+    assert _decision(cast(SyncHookJSONOutput, bash_output)) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert not any(event.type == "approval.requested" for event in emitted)
+
+
+@pytest.mark.asyncio
 async def test_low_risk_sandbox_bash_is_allowed_without_approval(
     tmp_path: Path,
 ) -> None:

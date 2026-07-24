@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunAgentInput } from "@ag-ui/client";
 import { HarnessHttpAgent } from "../src/lib/harness-agent";
-import {
-  RESPONSE_CANDIDATE_HOLD_MS,
-  liveResponseStore,
-} from "../src/lib/live-response-store";
+import { liveResponseStore } from "../src/lib/live-response-store";
 import { runStreamStore } from "../src/lib/run-stream-store";
 
 describe("HarnessHttpAgent", () => {
@@ -290,11 +287,10 @@ describe("HarnessHttpAgent", () => {
       visible: false,
     });
 
-    vi.advanceTimersByTime(RESPONSE_CANDIDATE_HOLD_MS);
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "第一段",
       status: "streaming",
-      visible: true,
+      visible: false,
     });
 
     controller?.enqueue(

@@ -16,10 +16,12 @@ from harness.adapters.memory import (
     InMemoryRunRepository,
     InMemorySessionRepository,
     InMemoryTaskQueue,
+    InMemoryWorkspaceSnapshotRepository,
 )
 from harness.application.artifacts import ArtifactService
 from harness.application.events import EventService
 from harness.application.runs import RunService
+from harness.application.workspaces import WorkspaceService
 from harness.config import Settings
 from harness.core.events import RunEvent
 from harness.core.models import Run, RunStatus, Session
@@ -41,6 +43,7 @@ from harness.runtime.base import (
     RuntimeResultError,
 )
 from harness.runtime.fake import FakeRuntime
+from harness.runtime.subagent_governance import SubagentGovernanceError
 from harness.runtime.tools import ToolResolutionError
 from harness.sandbox.base import SandboxHandle, SandboxIsolation, SandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
@@ -50,6 +53,7 @@ from harness.worker.orchestrator import (
     RuntimeAssetStager,
     final_artifact_paths,
     read_runtime_artifact,
+    terminal_runtime_result,
 )
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
@@ -137,6 +141,44 @@ class ErrorResultRuntime(FakeRuntime):
         raise RuntimeResultError("error_max_budget_usd", api_error_status=429)
 
 
+class MultipleResultRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"usage": {"input_tokens": 6, "output_tokens": 4}},
+        )
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"usage": {"input_tokens": 9, "output_tokens": 6}},
+        )
+
+
+class HangingAfterEndTurnRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = asyncio.Event()
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        try:
+            yield RuntimeEvent(type="message.start")
+            yield RuntimeEvent(type="message.delta", payload={"text": "done"})
+            yield RuntimeEvent(type="message.completed")
+            yield RuntimeEvent(
+                type="runtime.result",
+                payload={
+                    "subtype": "success",
+                    "is_error": False,
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 6, "output_tokens": 4},
+                },
+            )
+            await asyncio.Event().wait()
+        finally:
+            self.closed.set()
+
+
 class ContentRejectedRuntime(FakeRuntime):
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         del context
@@ -207,6 +249,23 @@ class WorkspaceOutputRuntime(FakeRuntime):
         yield RuntimeEvent(type="message.completed")
 
 
+class WorkspaceOutputThenModelFailureRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        output = context.workspace / "outputs" / "generated.pptx"
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"generated presentation")
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"is_error": True, "subtype": "api_error_500"},
+        )
+        raise RuntimeResultError(
+            "api_error_500",
+            api_error_status=500,
+            error_code="provider_error",
+            user_message="模型执行失败",
+        )
+
+
 class DeclaredArtifactRuntime(FakeRuntime):
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         report = context.workspace / "reports" / "final.json"
@@ -223,6 +282,49 @@ class DeclaredArtifactRuntime(FakeRuntime):
         yield RuntimeEvent(type="message.completed")
 
 
+class CommentaryToolFinalRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        report = context.workspace / "outputs" / "final.md"
+        report.parent.mkdir(parents=True)
+        report.write_text("final")
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(type="message.delta", payload={"text": "先检查工作区。"})
+        yield RuntimeEvent(type="message.completed")
+        yield RuntimeEvent(
+            type="tool.request",
+            payload={
+                "tool_call_id": "tool-after-commentary",
+                "name": "Read",
+                "arguments": {"file_path": "brief.md"},
+            },
+        )
+        yield RuntimeEvent(
+            type="tool.result",
+            payload={
+                "tool_call_id": "tool-after-commentary",
+                "content": "brief",
+                "is_error": False,
+            },
+        )
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(
+            type="message.delta",
+            payload={"text": "最终产物：`outputs/final.md`"},
+        )
+        yield RuntimeEvent(type="message.completed")
+
+
+class ExistingDeclaredArtifactRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        assert (context.workspace / "reports/previous.html").is_file()
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(
+            type="message.delta",
+            payload={"text": "上一轮文件仍是 `reports/previous.html`"},
+        )
+        yield RuntimeEvent(type="message.completed")
+
+
 class ToolResolutionFailureRuntime(FakeRuntime):
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         del context
@@ -230,6 +332,22 @@ class ToolResolutionFailureRuntime(FakeRuntime):
             "published MCP tools are no longer available; "
             "recheck and publish the Agent: mcp__knowledge__search"
         )
+        yield
+
+
+class SubagentGovernanceFailureRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        raise SubagentGovernanceError("subagent event references an undeclared role alias")
+        yield
+
+
+class DomainConflictFailureRuntime(FakeRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        del context
+        from harness.core.errors import ConflictError
+
+        raise ConflictError("quota reservation is not active")
         yield
 
 
@@ -251,6 +369,14 @@ class AssetCheckingSandboxProvider(LocalSandboxProvider):
 
     async def prepare(self, handle: SandboxHandle) -> None:
         self.asset_was_ready = (handle.path / ".claude/skills/domain-core/SKILL.md").is_file()
+        await super().prepare(handle)
+
+
+class PreloadedDeliverableSandboxProvider(LocalSandboxProvider):
+    async def prepare(self, handle: SandboxHandle) -> None:
+        previous = handle.path / "reports/previous.html"
+        previous.parent.mkdir(parents=True, exist_ok=True)
+        previous.write_text("previous turn")
         await super().prepare(handle)
 
 
@@ -282,6 +408,7 @@ async def arrange(
     enable_artifacts: bool = False,
     credential_revoker: Callable[[str, str], Awaitable[None]] | None = None,
     quotas: QuotaService | None = None,
+    workspaces: WorkspaceService | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -337,6 +464,7 @@ async def arrange(
         artifacts=artifact_service,
         credential_revoker=credential_revoker,
         quotas=quotas,
+        workspaces=workspaces,
     )
     return orchestrator, runtime, runs, event_repository
 
@@ -370,6 +498,79 @@ async def test_worker_admission_rejects_unadmitted_run_before_sandbox_and_conver
     assert result.error_code == "quota_exceeded_concurrent_runs"
     emitted = await events.list_after("tenant-a", "run-1", 0)
     assert [event.type for event in emitted] == ["run.provisioning", "run.failed"]
+
+
+@pytest.mark.asyncio
+async def test_multiple_cumulative_runtime_results_settle_quota_once(
+    tmp_path: Path,
+) -> None:
+    repository = InMemoryQuotaRepository()
+    quotas = QuotaService(repository)
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=MultipleResultRuntime(),
+        quotas=quotas,
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert [event.type for event in emitted].count("runtime.result") == 2
+    reservation = await repository.get_reservation(
+        "tenant-a",
+        "run:run-1:actual-tokens",
+    )
+    assert reservation is not None
+    assert reservation.amount == 15
+
+
+def test_only_successful_end_turn_result_is_a_terminal_stream_boundary() -> None:
+    assert terminal_runtime_result(
+        RuntimeEvent(
+            type="runtime.result",
+            payload={
+                "subtype": "success",
+                "is_error": False,
+                "stop_reason": "end_turn",
+            },
+        )
+    )
+    assert not terminal_runtime_result(
+        RuntimeEvent(
+            type="runtime.result",
+            payload={"subtype": "success", "usage": {"input_tokens": 1}},
+        )
+    )
+    assert not terminal_runtime_result(
+        RuntimeEvent(
+            type="runtime.result",
+            payload={
+                "subtype": "api_error_500",
+                "is_error": True,
+                "stop_reason": "end_turn",
+            },
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_end_turn_completes_when_provider_stream_stays_open(
+    tmp_path: Path,
+) -> None:
+    runtime = HangingAfterEndTurnRuntime()
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=runtime,
+    )
+
+    result = await asyncio.wait_for(orchestrator.execute("tenant-a", "run-1"), timeout=1)
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert runtime.closed.is_set()
+    emitted = await events.list_after("tenant-a", "run-1", 0)
+    assert emitted[-2].type == "runtime.result"
+    assert emitted[-1].type == "run.succeeded"
 
 
 @pytest.mark.asyncio
@@ -417,6 +618,41 @@ async def test_workspace_outputs_are_published_as_artifacts_for_every_sandbox(
     assert len(artifact_events) == 1
     assert artifact_events[0].payload["name"] == "report.md"
     assert artifact_events[0].payload["source"] == "workspace-output"
+    assert artifact_events[0].payload["source_path"] == "outputs/report.md"
+
+
+@pytest.mark.asyncio
+async def test_workspace_outputs_survive_a_model_failure(tmp_path: Path) -> None:
+    artifact_store = InMemoryArtifactStore()
+    snapshots = InMemoryWorkspaceSnapshotRepository()
+    workspaces = WorkspaceService(artifact_store, snapshots=snapshots)
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=WorkspaceOutputThenModelFailureRuntime(),
+        enable_artifacts=True,
+        workspaces=workspaces,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+    artifact_events = [event for event in recorded if event.type == "artifact.ready"]
+
+    assert completed.status is RunStatus.FAILED
+    assert completed.error_code == "provider_error"
+    assert len(artifact_events) == 1
+    assert artifact_events[0].payload["name"] == "generated.pptx"
+    assert artifact_events[0].payload["source"] == "workspace-output"
+    assert artifact_events[0].payload["source_path"] == "outputs/generated.pptx"
+    assert next(
+        index for index, event in enumerate(recorded) if event.type == "artifact.ready"
+    ) < next(index for index, event in enumerate(recorded) if event.type == "run.failed")
+    archived = next(event for event in recorded if event.type == "workspace.archived")
+    assert archived.payload["recovered_from_failure"] is True
+    snapshot = await snapshots.latest("tenant-a", "session-1")
+    assert snapshot is not None
+    restored = tmp_path / "restored"
+    await workspaces.restore(snapshot, workspace=restored)
+    assert (restored / "outputs/generated.pptx").read_bytes() == b"generated presentation"
 
 
 @pytest.mark.asyncio
@@ -471,6 +707,53 @@ async def test_final_response_declared_file_is_published_outside_outputs(
     assert completed.status is RunStatus.SUCCEEDED
     assert [event.payload["name"] for event in artifact_events] == ["reports/final.json"]
     assert artifact_events[0].payload["source"] == "final-response"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_file_from_previous_turn_is_not_republished(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=ExistingDeclaredArtifactRuntime(),
+        sandbox_override=PreloadedDeliverableSandboxProvider(root=tmp_path),
+        enable_artifacts=True,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert not [event for event in recorded if event.type == "artifact.ready"]
+
+
+@pytest.mark.asyncio
+async def test_tool_and_artifact_keep_their_assistant_message_ownership(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=CommentaryToolFinalRuntime(),
+        enable_artifacts=True,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+    starts = [event for event in recorded if event.type == "message.start"]
+    commentary_message_id = starts[0].payload["message_id"]
+    final_message_id = starts[1].payload["message_id"]
+    tool_request = next(
+        event
+        for event in recorded
+        if event.type == "tool.request"
+        and event.payload.get("tool_call_id") == "tool-after-commentary"
+    )
+    artifact = next(event for event in recorded if event.type == "artifact.ready")
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert commentary_message_id != final_message_id
+    assert tool_request.payload["message_id"] == commentary_message_id
+    assert artifact.payload["message_id"] == final_message_id
 
 
 @pytest.mark.asyncio
@@ -832,6 +1115,46 @@ async def test_tool_resolution_failure_explains_required_agent_sync(
             "published MCP tools are no longer available; "
             "recheck and publish the Agent: mcp__knowledge__search"
         ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_subagent_governance_failure_preserves_actionable_reason(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, event_repository = await arrange(
+        tmp_path,
+        runtime_override=SubagentGovernanceFailureRuntime(),
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    events = await event_repository.list_after("tenant-a", "run-1", 0)
+    assert events[-1].payload == {
+        "error_code": "runtime_error",
+        "error_type": "SubagentGovernanceError",
+        "message": "subagent event references an undeclared role alias",
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_ownership_conflict_cannot_leave_run_spinning(
+    tmp_path: Path,
+) -> None:
+    orchestrator, _, _, event_repository = await arrange(
+        tmp_path,
+        runtime_override=DomainConflictFailureRuntime(),
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.FAILED
+    events = await event_repository.list_after("tenant-a", "run-1", 0)
+    assert events[-1].payload == {
+        "error_code": "runtime_error",
+        "error_type": "ConflictError",
+        "message": "quota reservation is not active",
     }
 
 

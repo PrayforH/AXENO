@@ -7,6 +7,7 @@ import {
   reduceRunViewModel,
   type RunViewModel,
 } from "./run-view-model";
+import { isActiveRuntimeThread } from "./runtime-thread-scope";
 
 export type ActivityPatchOperation = {
   op: string;
@@ -19,18 +20,21 @@ let viewSnapshot: RunViewModel | undefined;
 const listeners = new Set<() => void>();
 
 export const activityStore = {
-  clear() {
+  clear(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     if (snapshot === undefined && viewSnapshot === undefined) return;
     snapshot = undefined;
     viewSnapshot = undefined;
     for (const listener of listeners) listener();
   },
-  publish(activity: RunActivity) {
+  publish(activity: RunActivity, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     snapshot = activity;
     viewSnapshot = reduceRunViewModel(viewSnapshot, activity);
     for (const listener of listeners) listener();
   },
-  patch(operations: readonly ActivityPatchOperation[]) {
+  patch(operations: readonly ActivityPatchOperation[], threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     if (!snapshot) return;
     const next: RunActivity = {
       ...snapshot,
@@ -61,7 +65,7 @@ export const activityStore = {
       }
     }
     const parsed = runActivitySchema.safeParse(next);
-    if (parsed.success) this.publish(parsed.data);
+    if (parsed.success) this.publish(parsed.data, threadId);
   },
   subscribe(listener: () => void) {
     listeners.add(listener);

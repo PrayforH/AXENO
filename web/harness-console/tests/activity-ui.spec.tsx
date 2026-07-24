@@ -9,7 +9,11 @@ import { completedToolBatch } from "../src/components/tool-card";
 import type { RunViewModel } from "../src/lib/run-view-model";
 import {
   hasProjectedTool,
+  selectTurnActivity,
+  shouldCaptureTurnActivity,
   shouldKeepActivityInLatestSlot,
+  shouldShowArtifactForTurn,
+  shouldSuppressRawToolCard,
   UploadFeedbackContent,
 } from "../src/components/agent-thread";
 import {
@@ -142,7 +146,7 @@ describe("Codex-style activity UI", () => {
     expect(html).toContain("正在运行子任务 分析仓库");
     expect(html).not.toContain("运行模型");
     expect(html).not.toContain("claude-sonnet");
-    expect(html.match(/<details/g)).toHaveLength(1);
+    expect(html.match(/<section class="execution-ribbon/g)).toHaveLength(1);
     expect(html).not.toContain("model.route.selected");
   });
 
@@ -183,10 +187,63 @@ describe("Codex-style activity UI", () => {
     expect(hasProjectedTool(view, "read-fallback")).toBe(false);
   });
 
+  it("suppresses stale raw SDK tool cards whenever durable run activity exists", () => {
+    const view = {
+      runId: "run-failed",
+      tools: [],
+    } as RunViewModel;
+
+    expect(shouldSuppressRawToolCard(view, "stale-bash-call")).toBe(true);
+    expect(shouldSuppressRawToolCard(undefined, "standalone-tool")).toBe(false);
+  });
+
   it("keeps activity by durable Harness identity without comparing AG-UI client ids", () => {
     expect(shouldKeepActivityInLatestSlot("run-1", "run-1")).toBe(true);
     expect(shouldKeepActivityInLatestSlot("run-1", "run-2")).toBe(false);
     expect(shouldKeepActivityInLatestSlot("run-1", undefined)).toBe(false);
+  });
+
+  it("does not attach an older run artifact to the latest turn", () => {
+    expect(shouldShowArtifactForTurn("run-1", "run-2", true)).toBe(false);
+    expect(shouldShowArtifactForTurn("run-2", "run-2", true)).toBe(true);
+    expect(shouldShowArtifactForTurn("run-1", "run-2", false)).toBe(true);
+  });
+
+  it("retains a live activity snapshot on its original turn after a newer turn starts", () => {
+    const completed = runActivitySchema.parse({
+      ...activity,
+      status: "succeeded",
+    });
+    const newer = runActivitySchema.parse({
+      ...activity,
+      run_id: "run-2",
+    });
+
+    expect(selectTurnActivity(newer, completed, false, false)?.run_id).toBe(
+      "run-1",
+    );
+    expect(selectTurnActivity(newer, completed, true, false)?.run_id).toBe(
+      "run-2",
+    );
+    expect(selectTurnActivity(newer, completed, false, true)).toBeUndefined();
+    expect(selectTurnActivity(newer, completed, true, true)?.run_id).toBe(
+      "run-2",
+    );
+  });
+
+  it("captures a batched terminal delta after the turn stops being last", () => {
+    expect(
+      shouldCaptureTurnActivity("run-1", "run-1", false, "run-1"),
+    ).toBe(true);
+    expect(
+      shouldCaptureTurnActivity("run-2", "run-1", false, "run-2"),
+    ).toBe(false);
+    expect(
+      shouldCaptureTurnActivity("run-2", "run-1", true, "run-2"),
+    ).toBe(true);
+    expect(
+      shouldCaptureTurnActivity("run-1", "run-1", false, "run-2"),
+    ).toBe(false);
   });
 
   it("selects multiple completed ordinary tools for one collapsed batch", () => {

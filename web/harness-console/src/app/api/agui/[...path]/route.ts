@@ -29,3 +29,10 @@ export async function POST(
 ) {
   return proxy(request, context);
 }
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxy(request, context);
+}

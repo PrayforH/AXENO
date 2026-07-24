@@ -200,6 +200,41 @@ async def test_studio_bundle_import_creates_a_complete_editable_agent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_studio_imports_a_skill_archive_without_executing_its_scripts() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+        "Content-Type": "application/zip",
+    }
+    archive = BytesIO()
+    with ZipFile(archive, "w") as bundle:
+        bundle.writestr(
+            "ppt-master/SKILL.md",
+            (
+                "---\nname: ppt-master\ndescription: Build presentations.\n---\n\n"
+                "Generate and verify a presentation in the workspace.\n"
+            ),
+        )
+        bundle.writestr("ppt-master/scripts/render.py", "print('render')\n")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app()),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/v1/studio/skills/import?filename=ppt-master.zip",
+            headers=headers,
+            content=archive.getvalue(),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["skill"]["name"] == "ppt-master"
+    assert response.json()["riskLevel"] == "review"
+    assert response.json()["findings"] == ["包含可执行脚本：scripts/render.py"]
+
+
+@pytest.mark.asyncio
 async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> None:
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
@@ -1403,7 +1438,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
             },
         )
         disabled = await client.delete(
-            "/v1/studio/catalog/modelRoute/new-api-default",
+            "/v1/studio/catalog/modelRoute/deepseek-v4-pro",
             headers=owner_headers,
             params={"expected_revision": 1},
         )

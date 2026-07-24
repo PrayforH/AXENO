@@ -38,6 +38,14 @@ class AguiThreadBinding:
     agent_version: str
 
 
+@dataclass(frozen=True)
+class AguiRunCreation:
+    run: Run
+    canonical_client_run_id: str
+    reused: bool
+    deduplicated: bool
+
+
 class AguiRunService:
     def __init__(
         self,
@@ -70,9 +78,31 @@ class AguiRunService:
         )
 
     async def list_bindings(
-        self, *, tenant_id: str, user_id: str, limit: int = 50
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 50,
+        archived: bool = False,
     ) -> list[StoredAguiThreadBinding]:
-        return await self._bindings.list_for_user(tenant_id, user_id, limit=limit)
+        return await self._bindings.list_for_user(
+            tenant_id, user_id, limit=limit, archived=archived
+        )
+
+    async def set_archived(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        archived: bool,
+    ) -> StoredAguiThreadBinding:
+        return await self._bindings.set_archived(
+            tenant_id,
+            user_id,
+            thread_id,
+            archived_at=datetime.now(UTC) if archived else None,
+        )
 
     async def create_run(
         self,
@@ -83,6 +113,25 @@ class AguiRunService:
         agent_version: str,
         request: RunAgentInput,
     ) -> Run:
+        return (
+            await self.create_run_with_result(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                agent_name=agent_name,
+                agent_version=agent_version,
+                request=request,
+            )
+        ).run
+
+    async def create_run_with_result(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        agent_name: str,
+        agent_version: str,
+        request: RunAgentInput,
+    ) -> AguiRunCreation:
         prompt, input_artifact_ids = _latest_user_input(request)
         conversation_prompts = _user_prompts(request)
         resolved = await self._input_artifacts.resolve_for_run(
@@ -97,7 +146,7 @@ class AguiRunService:
             agent_name=agent_name,
             agent_version=agent_version,
         )
-        run = await self._run_service.create(
+        creation = await self._run_service.create_with_result(
             tenant_id,
             binding.session_id,
             request.run_id,
@@ -116,7 +165,9 @@ class AguiRunService:
                     else {}
                 ),
             },
+            deduplicate_active_input=True,
         )
+        run = creation.run
         async with self._lock:
             self._run_bindings[(tenant_id, user_id, request.thread_id, request.run_id)] = run.run_id
         title_timestamp = datetime.now(UTC)
@@ -135,7 +186,12 @@ class AguiRunService:
             prompts=conversation_prompts,
             generated_at=title_timestamp,
         )
-        return run
+        return AguiRunCreation(
+            run=run,
+            canonical_client_run_id=run.idempotency_key,
+            reused=not creation.created,
+            deduplicated=creation.deduplicated,
+        )
 
     async def resolve_title(self, binding: StoredAguiThreadBinding, prompts: list[str]) -> str:
         if binding.title and (
@@ -233,6 +289,22 @@ class AguiRunService:
         thread_id: str,
         client_run_id: str,
     ) -> Run:
+        run = await self._resolve_bound_run(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            thread_id=thread_id,
+            client_run_id=client_run_id,
+        )
+        return await self._run_service.cancel(tenant_id, run.run_id)
+
+    async def _resolve_bound_run(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        client_run_id: str,
+    ) -> Run:
         key = (tenant_id, user_id, thread_id, client_run_id)
         async with self._lock:
             run_id = self._run_bindings.get(key)
@@ -250,7 +322,7 @@ class AguiRunService:
             run_id = run.run_id
             async with self._lock:
                 self._run_bindings[key] = run_id
-        return await self._run_service.cancel(tenant_id, run_id)
+        return await self._run_service.get(tenant_id, run_id)
 
     async def _resolve_binding(
         self,
@@ -277,6 +349,13 @@ class AguiRunService:
                     raise ConflictError(
                         f"AG-UI thread {thread_id} is already bound to "
                         f"{existing.agent_name}@{existing.agent_version}"
+                    )
+                if stored.archived_at is not None:
+                    await self._bindings.set_archived(
+                        tenant_id,
+                        user_id,
+                        thread_id,
+                        archived_at=None,
                     )
                 return existing
             session = await self._sessions.create(tenant_id, user_id, agent_name, agent_version)

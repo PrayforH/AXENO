@@ -24,6 +24,60 @@ from harness.studio.repositories import AgentDraftRepository
 CatalogResourceType = Literal["modelRoute", "mcp", "policy", "executionProfile"]
 
 
+def _upgrade_legacy_deepseek_routes(
+    catalog: CapabilityCatalog,
+) -> CapabilityCatalog | None:
+    """Split the former multi-model DeepSeek route without touching other entries."""
+
+    route_ids = {route.route_id for route in catalog.model_routes}
+    if {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
+        return None
+    legacy = next(
+        (route for route in catalog.model_routes if route.route_id == "new-api-default"),
+        None,
+    )
+    if legacy is None or set(legacy.models) != {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    }:
+        return None
+
+    compatibility_route = legacy.model_copy(
+        update={
+            "label": "DeepSeek V4（兼容路由）",
+            "models": ("deepseek-v4-pro",),
+            "version": legacy.version + 1,
+            "enabled": False,
+        }
+    )
+    split_routes = (
+        ModelRouteCapability(
+            routeId="deepseek-v4-flash",
+            label="DeepSeek V4 Flash",
+            provider=legacy.provider,
+            models=("deepseek-v4-flash",),
+            capabilities=legacy.capabilities,
+            credentialManaged=legacy.credential_managed,
+            credentialReference=legacy.credential_reference,
+        ),
+        ModelRouteCapability(
+            routeId="deepseek-v4-pro",
+            label="DeepSeek V4 Pro",
+            provider=legacy.provider,
+            models=("deepseek-v4-pro",),
+            capabilities=legacy.capabilities,
+            credentialManaged=legacy.credential_managed,
+            credentialReference=legacy.credential_reference,
+        ),
+    )
+    routes: list[ModelRouteCapability] = []
+    for route in catalog.model_routes:
+        routes.append(compatibility_route if route is legacy else route)
+        if route is legacy:
+            routes.extend(split_routes)
+    return catalog.model_copy(update={"model_routes": tuple(routes)})
+
+
 class CapabilityCatalogService:
     def __init__(
         self,
@@ -45,13 +99,22 @@ class CapabilityCatalogService:
             updatedAt=self._clock(),
         )
         current = await self._repository.seed(seed)
-        if current.updated_by != "system" or current.catalog == seed.catalog:
+        if current.updated_by == "system":
+            upgraded_catalog = seed.catalog
+            updated_by = "system"
+        elif current.updated_by.startswith("system-"):
+            upgraded_catalog = _upgrade_legacy_deepseek_routes(current.catalog)
+            updated_by = "system-route-migration"
+        else:
+            upgraded_catalog = None
+            updated_by = current.updated_by
+        if upgraded_catalog is None or current.catalog == upgraded_catalog:
             return current
         upgraded = CapabilityCatalogRecord(
             tenantId=tenant_id,
             revision=current.revision + 1,
-            catalog=seed.catalog,
-            updatedBy="system",
+            catalog=upgraded_catalog,
+            updatedBy=updated_by,
             updatedAt=self._clock(),
         )
         try:
@@ -88,21 +151,18 @@ class CapabilityCatalogService:
     ) -> CatalogImpact:
         catalog = (await self.get(tenant_id)).catalog
         if not self._contains(catalog, resource_type, resource_id):
-            raise NotFoundError(
-                f"Catalog resource not found: {resource_type}/{resource_id}"
-            )
+            raise NotFoundError(f"Catalog resource not found: {resource_type}/{resource_id}")
         affected: list[str] = []
         for draft in await self._drafts.list_for_tenant(tenant_id):
             spec = draft.spec
-            referenced = (
-                resource_type == "modelRoute" and spec.model.route_id == resource_id
-            ) or (resource_type == "mcp" and resource_id in spec.mcp_servers)
+            referenced = (resource_type == "modelRoute" and spec.model.route_id == resource_id) or (
+                resource_type == "mcp" and resource_id in spec.mcp_servers
+            )
             referenced = referenced or (
                 resource_type == "policy" and spec.permission_policy == resource_id
             )
             referenced = referenced or (
-                resource_type == "executionProfile"
-                and spec.execution_profile == resource_id
+                resource_type == "executionProfile" and spec.execution_profile == resource_id
             )
             if referenced:
                 affected.append(draft.draft_id)
@@ -137,9 +197,7 @@ class CapabilityCatalogService:
         }[resource_type]
         entries = getattr(current.catalog, field)
         updated_entries = tuple(
-            entry.model_copy(
-                update={"enabled": False, "version": entry.version + 1}
-            )
+            entry.model_copy(update={"enabled": False, "version": entry.version + 1})
             if getattr(entry, identifier) == resource_id
             else entry
             for entry in entries
@@ -165,21 +223,17 @@ class CapabilityCatalogService:
         request: UpsertCatalogResourceRequest,
     ) -> CatalogMutationResult:
         type_matches = (
-            resource_type == "modelRoute"
-            and isinstance(request.resource, ModelRouteCapability)
+            resource_type == "modelRoute" and isinstance(request.resource, ModelRouteCapability)
         ) or (resource_type == "mcp" and isinstance(request.resource, McpCapability))
         type_matches = type_matches or (
-            resource_type == "policy"
-            and isinstance(request.resource, PolicyCapability)
+            resource_type == "policy" and isinstance(request.resource, PolicyCapability)
         )
         type_matches = type_matches or (
             resource_type == "executionProfile"
             and isinstance(request.resource, ExecutionProfileMetadata)
         )
         if not type_matches:
-            raise ConflictError(
-                f"Catalog resource type mismatch: expected {resource_type}"
-            )
+            raise ConflictError(f"Catalog resource type mismatch: expected {resource_type}")
         field = {
             "modelRoute": "model_routes",
             "mcp": "mcp_servers",
@@ -213,12 +267,63 @@ class CapabilityCatalogService:
             update={"version": 1 if existing is None else existing.version + 1}
         )
         updated_entries = tuple(
-            resource if getattr(entry, identifier) == resource_id else entry
-            for entry in entries
+            resource if getattr(entry, identifier) == resource_id else entry for entry in entries
         )
         if existing is None:
             updated_entries = (*updated_entries, resource)
         catalog = current.catalog.model_copy(update={field: updated_entries})
+        if resource_type == "mcp" and request.allowed_execution_profile_ids is not None:
+            assert isinstance(resource, McpCapability)
+            selected_profile_ids = set(request.allowed_execution_profile_ids)
+            profiles_by_id = {
+                profile.profile_id: profile for profile in current.catalog.execution_profiles
+            }
+            unknown_profile_ids = selected_profile_ids.difference(profiles_by_id)
+            if unknown_profile_ids:
+                raise ConflictError(
+                    "Unknown Execution Profiles: " + ", ".join(sorted(unknown_profile_ids))
+                )
+            unavailable_profile_ids = {
+                profile_id
+                for profile_id in selected_profile_ids
+                if not profiles_by_id[profile_id].enabled
+            }
+            if unavailable_profile_ids:
+                raise ConflictError(
+                    "Disabled Execution Profiles cannot be authorized: "
+                    + ", ".join(sorted(unavailable_profile_ids))
+                )
+            incompatible_profile_ids = {
+                profile_id
+                for profile_id in selected_profile_ids
+                if resource.network_access not in profiles_by_id[profile_id].network_access
+            }
+            if incompatible_profile_ids:
+                raise ConflictError(
+                    f"MCP network access {resource.network_access.value} is not supported by "
+                    "Execution Profiles: " + ", ".join(sorted(incompatible_profile_ids))
+                )
+
+            updated_profiles: list[ExecutionProfileMetadata] = []
+            for profile in current.catalog.execution_profiles:
+                allowed_references = tuple(
+                    reference
+                    for reference in profile.allowed_mcp_references
+                    if reference != resource.reference
+                )
+                if profile.profile_id in selected_profile_ids:
+                    allowed_references = (*allowed_references, resource.reference)
+                updated_profiles.append(
+                    profile.model_copy(
+                        update={
+                            "allowed_mcp_references": allowed_references,
+                            "version": profile.version + 1,
+                        }
+                    )
+                    if allowed_references != profile.allowed_mcp_references
+                    else profile
+                )
+            catalog = catalog.model_copy(update={"execution_profiles": tuple(updated_profiles)})
         record = await self.replace(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -239,8 +344,6 @@ class CapabilityCatalogService:
             "modelRoute": {item.route_id for item in catalog.model_routes},
             "mcp": {item.reference for item in catalog.mcp_servers},
             "policy": {item.policy_id for item in catalog.policies},
-            "executionProfile": {
-                item.profile_id for item in catalog.execution_profiles
-            },
+            "executionProfile": {item.profile_id for item in catalog.execution_profiles},
         }
         return resource_id in identifiers[resource_type]

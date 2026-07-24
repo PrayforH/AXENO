@@ -37,6 +37,32 @@ async function moduleUnderTest() {
 }
 
 describe("run view model", () => {
+  it("exposes the predecessor approval queue reason", async () => {
+    const { reduceRunViewModel } = await moduleUnderTest();
+    const view = reduceRunViewModel(
+      undefined,
+      activity("queued", [
+        {
+          id: "queued",
+          event_type: "run.queued",
+          status: "queued",
+          title: "前序任务等待审批",
+          summary: "前序任务等待审批",
+          sequence: 1,
+          metadata: {
+            reason_code: "predecessor_waiting_approval",
+            blocked_by_run_id: "run-original",
+          },
+        },
+      ]),
+    );
+
+    expect(view.phase).toBe("queued");
+    expect(view.queueReason).toBe("前序任务等待审批");
+    expect(view.queueReasonCode).toBe("predecessor_waiting_approval");
+    expect(view.blockedByRunId).toBe("run-original");
+  });
+
   it("shows an actionable failure summary instead of the generic event title", async () => {
     const { reduceRunViewModel } = await moduleUnderTest();
     const view = reduceRunViewModel(
@@ -59,6 +85,38 @@ describe("run view model", () => {
     expect(view.summary).toBe(
       "当前版本绑定的 MCP 工具已变化，请切换到最新版本。",
     );
+  });
+
+  it("retains failure diagnostics and model-turn metrics", async () => {
+    const { reduceRunViewModel } = await moduleUnderTest();
+    const view = reduceRunViewModel(
+      undefined,
+      activity("failed", [
+        {
+          id: "runtime-result",
+          event_type: "runtime.result",
+          kind: "result",
+          status: "failed",
+          title: "达到最大模型回合数",
+          summary: "已用完 19 个模型回合，任务尚未完成",
+          sequence: 1,
+          metadata: { turns: 19, stop_reason: "tool_use" },
+        },
+        {
+          id: "failed",
+          event_type: "run.failed",
+          kind: "error",
+          status: "failed",
+          title: "达到最大执行回合数",
+          sequence: 2,
+          metadata: { error_code: "runtime_result_error" },
+        },
+      ]),
+    );
+
+    expect(view.turns).toBe(19);
+    expect(view.stopReason).toBe("tool_use");
+    expect(view.failureCode).toBe("runtime_result_error");
   });
 
   it("keeps terminal state monotonic when stale running activity arrives", async () => {

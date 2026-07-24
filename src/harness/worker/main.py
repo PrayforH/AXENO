@@ -62,6 +62,7 @@ async def worker_loop(
     stop: asyncio.Event,
     poll_interval: float,
     lease_heartbeat_interval: float = 20,
+    concurrency: int = 1,
     maintenance: Callable[[], Awaitable[object]] | None = None,
 ) -> None:
     """Consume durable run tasks until shutdown is requested.
@@ -70,16 +71,18 @@ async def worker_loop(
     Domain/runtime failures are terminal run results handled by the orchestrator.
     """
 
-    while not stop.is_set():
-        if maintenance is not None:
-            try:
-                await maintenance()
-            except Exception:
-                logger.exception("worker maintenance failed")
-        task: RunTask | None = await queue.dequeue()
-        if task is None:
-            await _wait_for_work(stop, poll_interval)
-            continue
+    if concurrency < 1:
+        raise ValueError("worker concurrency must be at least 1")
+
+    active: set[asyncio.Task[None]] = set()
+    session_locks: dict[tuple[str, str], asyncio.Lock] = {}
+    session_users: dict[tuple[str, str], int] = {}
+
+    async def execute_task(
+        task: RunTask,
+        session_key: tuple[str, str],
+        session_lock: asyncio.Lock,
+    ) -> None:
         heartbeat_stop = asyncio.Event()
         heartbeat = asyncio.create_task(
             _renew_task_lease(
@@ -90,7 +93,11 @@ async def worker_loop(
             )
         )
         try:
-            await executor.execute(task.tenant_id, task.run_id)
+            # Different sessions may use the worker concurrently. Runs belonging
+            # to one session remain ordered so workspace snapshots and the
+            # provider conversation cannot race each other.
+            async with session_lock:
+                await executor.execute(task.tenant_id, task.run_id)
         except Exception:
             logger.exception(
                 "run task execution escaped unexpectedly",
@@ -103,6 +110,36 @@ async def worker_loop(
         finally:
             heartbeat_stop.set()
             await heartbeat
+            remaining = session_users[session_key] - 1
+            if remaining == 0:
+                session_users.pop(session_key, None)
+                session_locks.pop(session_key, None)
+            else:
+                session_users[session_key] = remaining
+
+    while not stop.is_set():
+        if maintenance is not None:
+            try:
+                await maintenance()
+            except Exception:
+                logger.exception("worker maintenance failed")
+        if len(active) >= concurrency:
+            done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+            active.difference_update(done)
+            continue
+        task: RunTask | None = await queue.dequeue()
+        if task is None:
+            done = {child for child in active if child.done()}
+            active.difference_update(done)
+            await _wait_for_work(stop, poll_interval)
+            continue
+        session_key = (task.tenant_id, task.session_id or task.run_id)
+        session_lock = session_locks.setdefault(session_key, asyncio.Lock())
+        session_users[session_key] = session_users.get(session_key, 0) + 1
+        active.add(asyncio.create_task(execute_task(task, session_key, session_lock)))
+
+    if active:
+        await asyncio.gather(*active)
 
 
 async def maintenance_loop(
@@ -252,6 +289,7 @@ async def serve(settings: Settings) -> None:
                 stop=stop,
                 poll_interval=settings.worker_poll_interval_seconds,
                 lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
+                concurrency=settings.worker_concurrency,
             )
         finally:
             stop.set()

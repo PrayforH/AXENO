@@ -40,20 +40,29 @@ class DeferredToolSandboxProvider:
         *,
         provider_name: str,
         local_root: Path | None = None,
+        max_active_runs: int = 2,
     ) -> None:
         if not provider_name.strip():
             raise ValueError("deferred sandbox provider name must be non-empty")
+        if max_active_runs < 1:
+            raise ValueError("deferred sandbox max_active_runs must be positive")
         self._backend = backend
         self._provider_name = provider_name
         self._local_root = local_root
+        self._active_run_slots = asyncio.BoundedSemaphore(max_active_runs)
         if local_root is not None:
             local_root.mkdir(parents=True, exist_ok=True)
         self._leases: dict[str, _DeferredLease] = {}
 
     async def provision(self, run: Run) -> SandboxHandle:
-        path = Path(
-            tempfile.mkdtemp(prefix=f"{run.run_id}-deferred-", dir=self._local_root)
-        )
+        await self._active_run_slots.acquire()
+        try:
+            path = Path(
+                tempfile.mkdtemp(prefix=f"{run.run_id}-deferred-", dir=self._local_root)
+            )
+        except BaseException:
+            self._active_run_slots.release()
+            raise
         sandbox_id = path.name
         self._leases[sandbox_id] = _DeferredLease(run=run)
         return SandboxHandle(
@@ -143,3 +152,5 @@ class DeferredToolSandboxProvider:
                 await self._backend.destroy(lease.remote)
         finally:
             shutil.rmtree(handle.path, ignore_errors=True)
+            if lease is not None:
+                self._active_run_slots.release()

@@ -73,7 +73,13 @@ DEFINITIONS = (
 
 LABEL_VALUE_ALLOWLISTS: dict[tuple[str, str], frozenset[str]] = {
     ("harness_api_request_duration_seconds", "operation"): frozenset(
-        {"run.create", "run.cancel", "approval.decide", "artifact.download", "other"}
+        {
+            "run.create",
+            "run.cancel",
+            "approval.decide",
+            "artifact.download",
+            "other",
+        }
     ),
     ("harness_artifact_download_total", "outcome"): frozenset(
         {"success", "failure"}

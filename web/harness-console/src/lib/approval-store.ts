@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { ApprovalDetails } from "../components/approval-card";
+import { isActiveRuntimeThread } from "./runtime-thread-scope";
 
 export interface PendingApprovalSnapshot {
   details?: ApprovalDetails;
@@ -22,7 +23,8 @@ function publish(next: PendingApprovalSnapshot) {
 }
 
 export const approvalStore = {
-  show(details: ApprovalDetails) {
+  show(details: ApprovalDetails, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     if (settledApprovalIds.has(details.approval_id)) return;
     if (
       snapshot.visible &&
@@ -32,11 +34,13 @@ export const approvalStore = {
     }
     publish({ details, visible: true });
   },
-  settle(approvalId: string) {
+  settle(approvalId: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     settledApprovalIds.add(approvalId);
-    this.clear(approvalId);
+    this.clear(approvalId, threadId);
   },
-  clear(approvalId?: string) {
+  clear(approvalId?: string, threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     if (
       snapshot === emptySnapshot ||
       (approvalId && snapshot.details?.approval_id !== approvalId)
@@ -45,9 +49,10 @@ export const approvalStore = {
     }
     publish(emptySnapshot);
   },
-  reset() {
+  reset(threadId?: string) {
+    if (!isActiveRuntimeThread(threadId)) return;
     settledApprovalIds.clear();
-    this.clear();
+    this.clear(undefined, threadId);
   },
   subscribe(listener: () => void) {
     listeners.add(listener);

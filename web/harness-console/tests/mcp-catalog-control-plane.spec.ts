@@ -33,6 +33,15 @@ describe("MCP capability catalog", () => {
     expect(component).toContain("目录变更采用 revision");
   });
 
+  it("authorizes MCP access to explicit network-compatible execution profiles", () => {
+    expect(component).toContain("allowedProfileIds");
+    expect(component).toContain("允许在哪些 Execution Profile 中使用");
+    expect(component).toContain("与 MCP 定义原子保存");
+    expect(component).toContain("profile.networkAccess.includes");
+    expect(component).toContain("生产授权前，请确认该 Sandbox 能访问此内网地址");
+    expect(component).toContain("尚未授权 Profile");
+  });
+
   it("discovers an address and supports multi-tool selection", () => {
     expect(component).toContain("studioClient.discoverMcp");
     expect(component).toContain("initialize 和 tools/list");

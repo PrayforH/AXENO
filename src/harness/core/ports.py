@@ -35,6 +35,9 @@ class RunTask(BaseModel):
 
     tenant_id: str
     run_id: str
+    # Run queues created before concurrent workers did not include this field.
+    # Keeping it optional preserves wire compatibility with already-enqueued tasks.
+    session_id: str | None = None
 
 
 class AgentRegistry(Protocol):
@@ -177,7 +180,7 @@ class AguiThreadBindingRepository(Protocol):
     ) -> AguiThreadBinding: ...
 
     async def list_for_user(
-        self, tenant_id: str, user_id: str, *, limit: int
+        self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]: ...
 
     async def update_title(
@@ -189,6 +192,15 @@ class AguiThreadBindingRepository(Protocol):
         title: str,
         source: Literal["fallback", "model"],
         generated_at: datetime,
+    ) -> AguiThreadBinding: ...
+
+    async def set_archived(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        archived_at: datetime | None,
     ) -> AguiThreadBinding: ...
 
 

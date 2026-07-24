@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     new_api_base_url: str = ""
     new_api_key: SecretStr = SecretStr("")
     new_api_model: str = ""
+    new_api_flash_model: str = "deepseek-v4-flash"
+    new_api_pro_model: str = "deepseek-v4-pro"
     new_api_auth_scheme: Literal["bearer", "x-api-key"] = "bearer"
     new_api_compatibility: Literal["full", "degraded", "unsupported"] = "full"
     new_api_capabilities: str = "streaming,tool_use"
@@ -72,9 +74,12 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_model: str = ""
     worker_poll_interval_seconds: float = 0.25
+    worker_concurrency: int = Field(default=4, ge=1, le=32)
+    worker_deferred_max_active_runs: int = Field(default=2, ge=1, le=32)
     worker_task_visibility_timeout_seconds: float = Field(default=60, gt=0)
     worker_task_retry_delay_seconds: float = Field(default=1, ge=0)
     worker_task_heartbeat_seconds: float = Field(default=20, gt=0)
+    run_reservation_ttl_seconds: int = Field(default=86_400, ge=300, le=604_800)
     preflight_timeout_seconds: float = Field(default=180, ge=30, le=900)
 
     daytona_api_key: SecretStr = SecretStr("")
@@ -90,6 +95,11 @@ class Settings(BaseSettings):
     daytona_session_reuse_enabled: bool = True
     daytona_session_idle_timeout_seconds: int = Field(default=600, ge=30, le=86_400)
     daytona_warm_pool_max_sessions: int = Field(default=3, ge=1, le=1000)
+    daytona_recovery_retention_seconds: int = Field(
+        default=3600,
+        ge=300,
+        le=86_400,
+    )
     e2b_api_key: SecretStr = SecretStr("")
     e2b_template: str = "base"
     e2b_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)

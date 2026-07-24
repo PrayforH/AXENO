@@ -39,6 +39,7 @@ import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import { GovernanceControlPlane } from "./governance-control-plane";
 import { SkillConversationBuilder } from "./skill-conversation-builder";
+import { StudioCodeEditor } from "./studio-code-editor";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -75,7 +76,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       label: "多智能体编排",
       description: "允许委派并为较长的协同链路预留运行时间。",
       policy: "production-orchestrator",
-      timeoutSeconds: 1800,
+      maxTurns: 64,
     };
   }
   if (writes) {
@@ -83,7 +84,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       label: "文件交付",
       description: "读取自动通过，写入、编辑和命令按生产规则审批。",
       policy: "production-standard",
-      timeoutSeconds: 1200,
+      maxTurns: 64,
     };
   }
   return {
@@ -93,7 +94,7 @@ function runtimeRecommendation(draft: StudioDraft) {
         ? "自动放行已绑定的只读 MCP 工具，其余未声明调用默认拒绝。"
         : "仅允许工作区读取和检索，不产生写入副作用。",
     policy: "production-read-only",
-    timeoutSeconds: 1200,
+    maxTurns: 64,
   };
 }
 
@@ -108,9 +109,20 @@ const preflightStageLabels = {
   cleanup: "Sandbox 清理",
 } as const;
 
+const previewStatusLabels: Record<string, string> = {
+  queued: "排队中",
+  provisioning: "准备中",
+  ready: "已就绪",
+  failed: "失败",
+  cancelled: "已取消",
+  expired: "已过期",
+};
+
 const preflightErrorLabels: Record<string, string> = {
   execution_profile_sandbox_provider_mismatch:
     "当前 Preview Sandbox 与所选执行档位不一致。Local 模式请选择“本地开发 Preview”，保存并重新检查后再试。",
+  approval_policy_mismatch:
+    "当前权限策略没有覆盖已声明工具。请在“权限与治理”中同步缺失的 MCP 工具并发布策略，然后重新运行 Preview。",
 };
 
 function preflightProgress(checks: StudioPreflightCheck[]) {
@@ -247,6 +259,7 @@ export function AgentStudioWorkbench() {
   const [inspecting, setInspecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [importingBundle, setImportingBundle] = useState(false);
+  const [importingSkill, setImportingSkill] = useState(false);
   const [creatingPreview, setCreatingPreview] = useState(false);
   const [previews, setPreviews] = useState<StudioPreview[]>([]);
   const [evalDatasets, setEvalDatasets] = useState<StudioEvalDataset[]>([]);
@@ -271,10 +284,18 @@ export function AgentStudioWorkbench() {
   const [inspected, setInspected] = useState(false);
   const [promptFocusMode, setPromptFocusMode] = useState(false);
   const [skillConversationOpen, setSkillConversationOpen] = useState(false);
+  const [activeSkillName, setActiveSkillName] = useState("");
+  const [skillImportReport, setSkillImportReport] = useState<{
+    skillName: string;
+    findings: string[];
+    warnings: string[];
+  } | null>(null);
+  const [contractOpen, setContractOpen] = useState(false);
   const [notice, setNotice] = useState("正在读取控制面草稿…");
   const promptEditorRef = useRef<HTMLTextAreaElement>(null);
   const releaseAssistantRef = useRef<HTMLElement>(null);
   const bundleInputRef = useRef<HTMLInputElement>(null);
+  const skillInputRef = useRef<HTMLInputElement>(null);
   const canEdit = membership.role !== "viewer";
   const canPublish = membership.role === "owner" || membership.role === "admin";
   const options = useMemo(
@@ -327,7 +348,10 @@ export function AgentStudioWorkbench() {
   );
   const recommendationApplied =
     draft.policy === recommendedRuntime.policy
-    && draft.timeoutSeconds === recommendedRuntime.timeoutSeconds;
+    && draft.maxTurns === recommendedRuntime.maxTurns
+    && draft.timeoutSeconds === null
+    && draft.maxBudgetUsd === null
+    && draft.maxModelTokens === null;
   const subagentCandidates = useMemo(
     () => drafts
       .filter((item) => item.draftId !== draft.id)
@@ -439,6 +463,15 @@ export function AgentStudioWorkbench() {
     setConflict(false);
     setVersionConflict(false);
     setNotice("有尚未保存的修改");
+  }
+
+  function updateSkill(name: string, nextSkill: StudioDraft["skills"][number]) {
+    updateDraft({
+      skills: draft.skills.map((candidate) =>
+        candidate.name === name ? nextSkill : candidate
+      ),
+    });
+    if (name !== nextSkill.name) setActiveSkillName(nextSkill.name);
   }
 
   function updateEvalCase(
@@ -633,7 +666,7 @@ export function AgentStudioWorkbench() {
     });
   }
 
-  async function saveDraft(): Promise<StudioDraft | null> {
+  async function saveDraft(candidate: StudioDraft = draft): Promise<StudioDraft | null> {
     if (!canEdit) {
       setNotice("当前角色只有查看权限");
       return null;
@@ -641,15 +674,15 @@ export function AgentStudioWorkbench() {
     setSaving(true);
     try {
       let saved;
-      if (!draft.id) {
-        const created = await studioClient.createDraft(draft);
+      if (!candidate.id) {
+        const created = await studioClient.createDraft(candidate);
         saved = await studioClient.replaceDraft({
-          ...draft,
+          ...candidate,
           id: created.draftId,
           revision: created.revision,
         });
       } else {
-        saved = await studioClient.replaceDraft(draft);
+        saved = await studioClient.replaceDraft(candidate);
       }
       const next = apiDraftToStudioDraft(saved);
       setDraft(next);
@@ -672,6 +705,26 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function applyRecommendedExecutionProfile(profileId: string) {
+    const saved = await saveDraft({ ...draft, executionProfile: profileId });
+    if (!saved?.id) return;
+    setInspecting(true);
+    try {
+      const validation = await studioClient.validateDraft(saved.id);
+      setServerValidation(validation);
+      setInspected(true);
+      setNotice(
+        validation.productionEligible
+          ? `已切换、保存并检查 · ${profileId} 可用于生产`
+          : `已切换、保存并检查 · ${profileId} 仍有生产限制`,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Profile 已保存，重新检查失败");
+    } finally {
+      setInspecting(false);
+    }
+  }
+
   async function inspectDraft(): Promise<StudioValidation | null> {
     const current = dirty || !draft.id ? await saveDraft() : draft;
     if (!current?.id) return null;
@@ -680,11 +733,18 @@ export function AgentStudioWorkbench() {
       const validation = await studioClient.validateDraft(current.id);
       setServerValidation(validation);
       setInspected(true);
-      const errors = validation.issues.filter((issue) => issue.severity === "error");
+      const errors = validation.issues.filter(
+        (issue) => issue.severity === "error" && issue.stage === "publish",
+      );
+      const productionErrors = validation.issues.filter(
+        (issue) => issue.severity === "error" && issue.stage === "production",
+      );
       const warnings = validation.issues.filter((issue) => issue.severity === "warning");
       setNotice(
         validation.ready
-          ? warnings.length
+          ? productionErrors.length
+            ? `发布检查通过 · ${productionErrors.length} 项生产部署限制`
+            : warnings.length
             ? `检查通过 · ${warnings.length} 项上线前提醒`
             : "检查通过，可以发布"
           : `发布被阻止 · ${errors.length} 项需要处理`,
@@ -788,6 +848,77 @@ export function AgentStudioWorkbench() {
       setImportingBundle(false);
       if (bundleInputRef.current) bundleInputRef.current.value = "";
     }
+  }
+
+  async function installSkill(file: File) {
+    setImportingSkill(true);
+    try {
+      const imported = await studioClient.importSkill(file);
+      const duplicate = draft.skills.some(
+        (candidate) => candidate.name === imported.skill.name,
+      );
+      const skills = duplicate
+        ? draft.skills.map((candidate) =>
+            candidate.name === imported.skill.name ? imported.skill : candidate
+          )
+        : [...draft.skills, imported.skill];
+      const saved = await saveDraft({ ...draft, skills });
+      if (!saved) return;
+      setActiveSkillName(imported.skill.name);
+      setActiveSection("skills");
+      setSkillImportReport({
+        skillName: imported.skill.name,
+        findings: imported.findings,
+        warnings: imported.warnings,
+      });
+      const scriptCount = imported.findings.filter((item) =>
+        item.startsWith("包含可执行脚本：")
+      ).length;
+      const dependencyCount = imported.findings.filter((item) =>
+        item.startsWith("包含依赖声明：")
+      ).length;
+      const binaryCount = imported.skill.files?.filter(
+        (item) => Boolean(item.contentBase64),
+      ).length ?? 0;
+      const summary = [
+        `${(imported.skill.files?.length ?? 0).toLocaleString("zh-CN")} 个文件`,
+        scriptCount ? `${scriptCount} 个脚本` : "",
+        dependencyCount ? `${dependencyCount} 个依赖声明` : "",
+        binaryCount ? `${binaryCount} 个二进制资源` : "",
+      ].filter(Boolean).join(" · ");
+      setNotice(
+        `${duplicate ? "已更新" : "已安装"} Skill：${imported.skill.name} · ${summary}`
+        + (imported.findings.length ? " · 需审阅" : ""),
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Skill 安装失败");
+    } finally {
+      setImportingSkill(false);
+      if (skillInputRef.current) skillInputRef.current.value = "";
+    }
+  }
+
+  async function uninstallSkill(name: string) {
+    const installed = draft.skills.find((candidate) => candidate.name === name);
+    if (!installed || saving || !canEdit) return;
+    const fileCount = installed.files?.length ?? 0;
+    const confirmed = window.confirm(
+      `卸载 Skill“${name}”？\n\n`
+      + `它及其 ${fileCount.toLocaleString("zh-CN")} 个附加文件将从当前草稿中移除。`
+      + "已发布的不可变历史版本不会被修改。",
+    );
+    if (!confirmed) return;
+    const skills = draft.skills.filter((candidate) => candidate.name !== name);
+    const saved = await saveDraft({ ...draft, skills });
+    if (!saved) return;
+    setActiveSkillName(skills[0]?.name ?? "");
+    setSkillConversationOpen(false);
+    setSkillImportReport((current) =>
+      current?.skillName === name ? null : current
+    );
+    setNotice(
+      `已卸载 Skill：${name} · 已从当前草稿移除 ${fileCount.toLocaleString("zh-CN")} 个附加文件`,
+    );
   }
 
   async function publishDraft() {
@@ -1031,7 +1162,8 @@ export function AgentStudioWorkbench() {
   const toolDirectoryEntries = draft.builtinTools.length + options.mcp
     .filter((item) => draft.mcpServers.includes(item.id))
     .reduce((total, item) => total + item.tools.length, 0);
-  const skill = draft.skills[0];
+  const skill = draft.skills.find((candidate) => candidate.name === activeSkillName)
+    ?? draft.skills[0];
   const validationReady = serverValidation?.ready ?? contract.ready;
   const activePreview = previews.find(
     (item) => item.draftId === draft.id
@@ -1080,7 +1212,10 @@ export function AgentStudioWorkbench() {
     (stage) => stage.id === activeLifecycleStage,
   );
   const validationErrors = serverValidation?.issues.filter(
-    (issue) => issue.severity === "error",
+    (issue) => issue.severity === "error" && issue.stage === "publish",
+  ) ?? [];
+  const productionValidationErrors = serverValidation?.issues.filter(
+    (issue) => issue.severity === "error" && issue.stage === "production",
   ) ?? [];
   const validationWarnings = serverValidation?.issues.filter(
     (issue) => issue.severity === "warning",
@@ -1088,10 +1223,40 @@ export function AgentStudioWorkbench() {
   const selectedExecutionProfile = options.profiles.find(
     (profile) => profile.profileId === draft.executionProfile,
   );
+  const selectedMcpCapabilities = options.mcp.filter(
+    (mcp) => draft.mcpServers.includes(mcp.id),
+  );
+  const compatibleExecutionProfiles = options.profiles.filter(
+    (profile) => selectedMcpCapabilities.every(
+      (mcp) => profile.networkAccess.includes(mcp.network)
+        && profile.allowedMcpReferences.includes(mcp.id),
+    ),
+  );
+  const productionExecutionProfiles = compatibleExecutionProfiles.filter(
+    (profile) => profile.productionAllowed,
+  );
+  const selectedProfileSupportsMcp = Boolean(
+    selectedExecutionProfile
+    && compatibleExecutionProfiles.some(
+      (profile) => profile.profileId === selectedExecutionProfile.profileId,
+    ),
+  );
+  const recommendedExecutionProfile =
+    productionExecutionProfiles[0]
+    ?? compatibleExecutionProfiles[0]
+    ?? null;
   const incompatibleMcpReferences = draft.mcpServers.filter(
-    (reference) =>
-      selectedExecutionProfile
-      && !selectedExecutionProfile.allowedMcpReferences.includes(reference),
+    (reference) => {
+      const mcp = options.mcp.find((item) => item.id === reference);
+      return Boolean(
+        selectedExecutionProfile
+        && mcp
+        && (
+          !selectedExecutionProfile.allowedMcpReferences.includes(reference)
+          || !selectedExecutionProfile.networkAccess.includes(mcp.network)
+        ),
+      );
+    },
   );
   const releaseTone = dirty
     ? "pending"
@@ -1121,6 +1286,8 @@ export function AgentStudioWorkbench() {
       ? "配置已保存，尚未检查发布条件"
       : validationErrors.length
         ? `${validationErrors.length} 项配置阻止发布`
+        : productionValidationErrors.length
+          ? `可以发布，生产部署还有 ${productionValidationErrors.length} 项限制`
         : validationWarnings.length
           ? `可以发布，另有 ${validationWarnings.length} 项上线前提醒`
           : publishedCurrent
@@ -1135,6 +1302,8 @@ export function AgentStudioWorkbench() {
         : lifecycleStages[activeLifecycleIndex]?.label;
   const lifecycleDetail = validationErrors.length
     ? `${validationErrors.length} 项需处理`
+    : productionValidationErrors.length && serverValidation?.ready
+      ? `${productionValidationErrors.length} 项生产限制`
     : validationWarnings.length && serverValidation?.ready
       ? `${validationWarnings.length} 项提醒`
       : lifecycleStages[activeLifecycleIndex]?.detail;
@@ -1375,6 +1544,18 @@ export function AgentStudioWorkbench() {
             >
               {releaseActionLabel}
             </button>
+            <button
+              type="button"
+              className={styles.contractToggleButton}
+              data-ready={contract.ready}
+              aria-expanded={contractOpen}
+              aria-controls="effective-contract-drawer"
+              onClick={() => setContractOpen(true)}
+            >
+              <i aria-hidden="true" />
+              <span>运行契约</span>
+              <small>{contract.ready ? "就绪" : contract.issues.length}</small>
+            </button>
             <details className={styles.actionMenu}>
               <summary aria-label="更多智能体操作" title="更多操作">
                 <span aria-hidden="true">•••</span>
@@ -1463,6 +1644,8 @@ export function AgentStudioWorkbench() {
                     ? "检查会验证版本、Prompt、Skills、Tools、执行档位和固定依赖。"
                     : validationErrors.length
                       ? "发布按钮保持可操作，用于回到这里查看原因；每个阻断项都可以直接跳到对应配置。"
+                      : productionValidationErrors.length
+                        ? "当前配置可以生成不可变 Bundle；生产限制不会阻止发布，但必须在部署前处理。"
                       : "发布会创建不可覆盖的 Bundle；Preview 和 Dataset 可按上线要求继续完成。"}
               </p>
             </div>
@@ -1487,6 +1670,21 @@ export function AgentStudioWorkbench() {
                   ? `${validationErrors.length} 项阻断`
                   : "服务端检查通过"}
             </span>
+            <span
+              data-state={
+                !serverValidation
+                  ? "pending"
+                  : serverValidation.productionEligible
+                    ? "complete"
+                    : "blocked"
+              }
+            >
+              {!serverValidation
+                ? "生产资格待检查"
+                : serverValidation.productionEligible
+                  ? "生产配置兼容"
+                  : `${productionValidationErrors.length} 项生产限制`}
+            </span>
             <span data-state={activePreview?.status === "ready" && !activePreview.stale ? "complete" : "optional"}>
               {activePreview?.status === "ready" && !activePreview.stale
                 ? "真实 Preview 已就绪"
@@ -1494,22 +1692,33 @@ export function AgentStudioWorkbench() {
             </span>
           </div>
 
-          {validationErrors.length > 0 && (
+          {validationErrors.length + productionValidationErrors.length > 0 && (
             <ul className={styles.releaseIssues}>
-              {validationErrors.map((issue) => {
+              {[...validationErrors, ...productionValidationErrors].map((issue) => {
                 const section = validationIssueSection(issue);
                 const missingCoverage = missingEvaluationCoverage(issue);
+                const suggestedProfile = options.profiles.find(
+                  (profile) => profile.profileId === issue.suggestedProfileIds[0],
+                );
                 return (
-                  <li key={`${issue.code}:${issue.path ?? ""}`}>
-                    <span aria-hidden="true">!</span>
+                  <li
+                    key={`${issue.stage}:${issue.code}:${issue.path ?? ""}`}
+                    data-stage={issue.stage}
+                  >
+                    <span aria-hidden="true">{issue.stage === "production" ? "P" : "!"}</span>
                     <div>
                       <strong>{validationIssueMessage(issue)}</strong>
-                      <small>{validationSectionLabels[section]}</small>
+                      <small>
+                        {issue.stage === "production" ? "生产部署" : "发布"}
+                        {" · "}{validationSectionLabels[section]}
+                      </small>
                     </div>
                     <button
                       type="button"
                       onClick={() => {
-                        if (missingCoverage) {
+                        if (suggestedProfile) {
+                          updateDraft({ executionProfile: suggestedProfile.profileId });
+                        } else if (missingCoverage) {
                           updateDraft({
                             evalCases: [
                               ...draft.evalCases,
@@ -1520,7 +1729,11 @@ export function AgentStudioWorkbench() {
                         setActiveSection(section);
                       }}
                     >
-                      {missingCoverage ? "一键补齐" : "去处理"}
+                      {suggestedProfile
+                        ? `切换至 ${suggestedProfile.label}`
+                        : missingCoverage
+                          ? "一键补齐"
+                          : "去处理"}
                     </button>
                   </li>
                 );
@@ -1581,17 +1794,48 @@ export function AgentStudioWorkbench() {
         {activePreview && (
           <div className={styles.previewBanner} data-status={activePreview.status} data-stale={activePreview.stale}>
             <div className={styles.previewIdentity}>
-              <strong>Preview · {activePreview.status}{activePreview.stale ? " · stale" : ""}</strong>
+              <strong>
+                {activePreview.stale ? "历史 Preview" : "Preview"} ·{" "}
+                {previewStatusLabels[activePreview.status] ?? activePreview.status}
+                {activePreview.stale ? "（不影响当前 Draft）" : ""}
+              </strong>
               <span>
                 测试身份 · Draft r{activePreview.draftRevision} · 到期 {new Date(activePreview.expiresAt).toLocaleString("zh-CN")}
+                {activePreview.stale ? ` · 当前 Draft r${draft.revision}` : ""}
               </span>
             </div>
             <div className={styles.previewActions}>
-              <button type="button" onClick={() => void refreshPreview(activePreview.previewId)}>刷新</button>
+              <button
+                type="button"
+                disabled={creatingPreview}
+                onClick={() => {
+                  if (
+                    activePreview.stale
+                    || ["cancelled", "failed", "expired"].includes(activePreview.status)
+                  ) {
+                    void createPreview();
+                  } else {
+                    void refreshPreview(activePreview.previewId);
+                  }
+                }}
+              >
+                {creatingPreview
+                  ? "正在重新测试…"
+                  : activePreview.stale
+                    ? `重新测试 Draft r${draft.revision}`
+                    : ["cancelled", "failed", "expired"].includes(activePreview.status)
+                      ? "重新测试"
+                      : "刷新状态"}
+              </button>
               {!(["cancelled", "failed", "expired"] as string[]).includes(activePreview.status) && (
                 <button type="button" onClick={() => void cancelPreview(activePreview.previewId)}>取消</button>
               )}
             </div>
+            {activePreview.stale && (
+              <p role="status">
+                这是 Draft r{activePreview.draftRevision} 的不可变历史结果；读取刷新不会按当前 Draft 重跑。
+              </p>
+            )}
             {activePreview.preflightResult && (
               <details className={styles.preflightDisclosure}>
                 <summary>
@@ -1617,7 +1861,9 @@ export function AgentStudioWorkbench() {
                 </ol>
                 {activePreview.preflightResult.errorCode && (
                   <p role="alert">
-                    {preflightErrorLabels[activePreview.preflightResult.errorCode]
+                    {activePreview.stale
+                      ? `以下失败属于历史 Draft r${activePreview.draftRevision}，不能代表当前 Draft r${draft.revision}。`
+                      : preflightErrorLabels[activePreview.preflightResult.errorCode]
                       ?? "Preflight 未通过。请根据失败阶段检查执行档位、凭据与目标环境。"}
                   </p>
                 )}
@@ -2047,7 +2293,7 @@ export function AgentStudioWorkbench() {
               </section>
             )}
 
-            {activeSection === "skills" && skill && (
+            {activeSection === "skills" && (
               <section className={styles.configPanel} aria-labelledby="skills-title">
                 <PanelHeading
                   id="skills-title"
@@ -2055,6 +2301,81 @@ export function AgentStudioWorkbench() {
                   title="沉淀可复用的领域工作流"
                   description="发布时 Skill 及 references、scripts、assets 会一同进入不可变快照。"
                 />
+                <div className={styles.skillInstallBar}>
+                  <div className={styles.skillTabs} role="tablist" aria-label="已安装 Skills">
+                    {draft.skills.map((candidate) => (
+                      <button
+                        key={candidate.name}
+                        type="button"
+                        role="tab"
+                        aria-selected={candidate.name === skill?.name}
+                        onClick={() => {
+                          setActiveSkillName(candidate.name);
+                          setSkillConversationOpen(false);
+                        }}
+                      >
+                        <span aria-hidden="true">S</span>
+                        {candidate.name}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    ref={skillInputRef}
+                    hidden
+                    type="file"
+                    accept=".zip,.md,application/zip,text/markdown"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0];
+                      if (file) void installSkill(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={styles.skillInstallButton}
+                    disabled={!canEdit || importingSkill || saving}
+                    onClick={() => skillInputRef.current?.click()}
+                  >
+                    {importingSkill ? "正在检查…" : "上传并安装 Skill"}
+                  </button>
+                  {skill && (
+                    <button
+                      type="button"
+                      className={styles.skillUninstallButton}
+                      disabled={!canEdit || importingSkill || saving}
+                      onClick={() => void uninstallSkill(skill.name)}
+                    >
+                      卸载当前 Skill
+                    </button>
+                  )}
+                </div>
+                <InfoStrip tone="neutral">
+                  支持单个 SKILL.md 或 ZIP。声明式内容直接安装到当前草稿；脚本和依赖只进入不可变快照，实际执行与安装仍走 Sandbox 权限门。
+                </InfoStrip>
+                {!skill && (
+                  <div className={styles.skillEmpty}>
+                    <strong>当前草稿尚未安装 Skill</strong>
+                    <span>可上传 SKILL.md 或 ZIP；不安装 Skill 也可以继续配置和发布 Agent。</span>
+                  </div>
+                )}
+                {skill && skillImportReport?.skillName === skill.name
+                  && skillImportReport.findings.length > 0 && (
+                    <details className={styles.skillImportFindings}>
+                      <summary>
+                        安装检查明细
+                        <span>{skillImportReport.findings.length} 项 · 默认收起</span>
+                      </summary>
+                      {skillImportReport.warnings.length > 0 && (
+                        <p>{skillImportReport.warnings.join("；")}</p>
+                      )}
+                      <ul>
+                        {skillImportReport.findings.map((finding) => (
+                          <li key={finding}>{finding}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                {skill && (
+                  <>
                 <div className={styles.skillHeader}>
                   <span className={styles.skillGlyph} aria-hidden="true">S</span>
                   <div>
@@ -2086,7 +2407,7 @@ export function AgentStudioWorkbench() {
                     currentSkill={skill}
                     onClose={() => setSkillConversationOpen(false)}
                     onApply={(generatedSkill) => {
-                      updateDraft({ skills: [generatedSkill] });
+                      updateSkill(skill.name, generatedSkill);
                       setSkillConversationOpen(false);
                       setNotice(`已应用模型生成的 Skill：${generatedSkill.name} · 尚未保存`);
                     }}
@@ -2097,8 +2418,9 @@ export function AgentStudioWorkbench() {
                     <input
                       value={skill.description}
                       onChange={(event) =>
-                        updateDraft({
-                          skills: [{ ...skill, description: event.target.value }],
+                        updateSkill(skill.name, {
+                          ...skill,
+                          description: event.target.value,
                         })
                       }
                     />
@@ -2108,8 +2430,9 @@ export function AgentStudioWorkbench() {
                       rows={10}
                       value={skill.instructions}
                       onChange={(event) =>
-                        updateDraft({
-                          skills: [{ ...skill, instructions: event.target.value }],
+                        updateSkill(skill.name, {
+                          ...skill,
+                          instructions: event.target.value,
                         })
                       }
                     />
@@ -2123,34 +2446,56 @@ export function AgentStudioWorkbench() {
                     </div>
                     <span>{skill.files?.length ?? 0} 个文件</span>
                   </div>
-                  {(skill.files ?? []).map((file, index) => (
+                  {(skill.files ?? []).slice(0, 200).map((file, index) => (
                     <article className={styles.skillFileCard} key={file.path}>
                       <code>{file.path}</code>
-                      <textarea
-                        aria-label={`编辑 ${file.path}`}
-                        rows={8}
-                        value={file.content}
-                        onChange={(event) =>
-                          updateDraft({
-                            skills: [{
+                      {file.content !== null && file.content !== undefined ? (
+                        <textarea
+                          aria-label={`编辑 ${file.path}`}
+                          rows={8}
+                          value={file.content}
+                          onChange={(event) =>
+                            updateSkill(skill.name, {
                               ...skill,
                               files: (skill.files ?? []).map((candidate, fileIndex) =>
                                 fileIndex === index
-                                  ? { ...candidate, content: event.target.value }
+                                  ? {
+                                      path: candidate.path,
+                                      content: event.target.value,
+                                    }
                                   : candidate,
                               ),
-                            }],
-                          })
-                        }
-                      />
+                            })
+                          }
+                        />
+                      ) : (
+                        <div className={styles.skillBinaryFile}>
+                          <span>BIN</span>
+                          <div>
+                            <strong>二进制 asset</strong>
+                            <small>
+                              约 {Math.ceil((file.contentBase64?.length ?? 0) * 0.75 / 1024).toLocaleString("zh-CN")} KiB
+                              · 随 Skill 发布，不在文本编辑器中展开
+                            </small>
+                          </div>
+                        </div>
+                      )}
                     </article>
                   ))}
+                  {(skill.files?.length ?? 0) > 200 && (
+                    <div className={styles.skillFilesEmpty}>
+                      当前 Skill 共 {skill.files?.length.toLocaleString("zh-CN")} 个附加文件；
+                      为保证编辑器流畅，仅展开前 200 个，其余文件仍会完整保存并随版本发布。
+                    </div>
+                  )}
                   {(skill.files?.length ?? 0) === 0 && (
                     <div className={styles.skillFilesEmpty}>
                       当前 Skill 没有 references、scripts 或 assets。
                     </div>
                   )}
                 </div>
+                  </>
+                )}
               </section>
             )}
 
@@ -2310,33 +2655,24 @@ export function AgentStudioWorkbench() {
                             }
                           />
                         </Field>
-                        <Field label="Input Schema" hint="JSON Schema" wide>
-                          <textarea
+                        <div className={styles.pythonToolWorkspace}>
+                          <JsonSchemaCodeEditor
                             key={`${tool.name}-schema-${JSON.stringify(tool.inputSchema)}`}
-                            rows={7}
-                            className={styles.monoInput}
-                            defaultValue={JSON.stringify(tool.inputSchema, null, 2)}
-                            onBlur={(event) => {
-                              try {
-                                const value = JSON.parse(event.target.value) as Record<string, unknown>;
-                                updatePythonTool(index, { inputSchema: value });
-                              } catch {
-                                setNotice(`Input Schema 不是有效 JSON：${tool.name}`);
-                              }
-                            }}
-                          />
-                        </Field>
-                        <Field label="Python 源码" hint="必须定义 run(arguments)" wide>
-                          <textarea
-                            rows={12}
-                            className={styles.codeEditor}
-                            spellCheck={false}
-                            value={tool.code}
-                            onChange={(event) =>
-                              updatePythonTool(index, { code: event.target.value })
+                            value={tool.inputSchema}
+                            onCommit={(inputSchema) =>
+                              updatePythonTool(index, { inputSchema })
+                            }
+                            onInvalid={(message) =>
+                              setNotice(
+                                `Input Schema 不是有效 JSON：${tool.name} · ${message}`,
+                              )
                             }
                           />
-                        </Field>
+                          <PythonCodeEditor
+                            value={tool.code}
+                            onChange={(code) => updatePythonTool(index, { code })}
+                          />
+                        </div>
                       </div>
                     </article>
                   ))}
@@ -2439,7 +2775,7 @@ export function AgentStudioWorkbench() {
                     <strong>{recommendedRuntime.label}</strong>
                     <p>{recommendedRuntime.description}</p>
                     <small>
-                      {recommendedRuntime.policy} · {recommendedRuntime.timeoutSeconds}s · 长程任务不限轮次与 Token
+                      {recommendedRuntime.policy} · 最多 {recommendedRuntime.maxTurns} 轮 · 无硬超时、预算或 Token 中止
                     </small>
                   </div>
                   <button
@@ -2448,7 +2784,10 @@ export function AgentStudioWorkbench() {
                     onClick={() =>
                       updateDraft({
                         policy: recommendedRuntime.policy,
-                        timeoutSeconds: recommendedRuntime.timeoutSeconds,
+                        maxTurns: recommendedRuntime.maxTurns,
+                        timeoutSeconds: null,
+                        maxBudgetUsd: null,
+                        maxModelTokens: null,
                         restoreSession: true,
                         archiveOnComplete: true,
                       })
@@ -2533,6 +2872,56 @@ export function AgentStudioWorkbench() {
                       })()}
                     </div>
                   )}
+                  <div
+                    className={styles.executionProfileAdvisor}
+                    data-state={
+                      selectedProfileSupportsMcp && selectedExecutionProfile?.productionAllowed
+                        ? "ready"
+                        : recommendedExecutionProfile
+                          ? "recommend"
+                          : "blocked"
+                    }
+                  >
+                    <i aria-hidden="true" />
+                    <div>
+                      <span>PROFILE COMPATIBILITY</span>
+                      <strong>
+                        {!selectedProfileSupportsMcp
+                          ? `当前档位不兼容 ${incompatibleMcpReferences.join("、") || "已选能力"}`
+                          : !selectedExecutionProfile?.productionAllowed
+                            ? "当前档位仅限 Preview"
+                            : "当前档位兼容，具备生产资格"}
+                      </strong>
+                      <small>
+                        {productionExecutionProfiles.length
+                          ? `兼容生产档位：${productionExecutionProfiles.map((profile) => profile.label).join("、")}`
+                          : compatibleExecutionProfiles.length
+                            ? `仅 Preview 可用：${compatibleExecutionProfiles.map((profile) => profile.label).join("、")}`
+                            : "没有档位能同时满足当前 MCP；请移除不兼容能力或让管理员更新 Egress 授权。"}
+                      </small>
+                    </div>
+                    {recommendedExecutionProfile
+                      && recommendedExecutionProfile.profileId !== draft.executionProfile ? (
+                        <button
+                          type="button"
+                          disabled={!canEdit || saving || inspecting}
+                          onClick={() => void applyRecommendedExecutionProfile(
+                            recommendedExecutionProfile.profileId,
+                          )}
+                        >
+                          {saving || inspecting
+                            ? "切换并检查中…"
+                            : `切换、保存并检查 ${recommendedExecutionProfile.label}`}
+                        </button>
+                      ) : !recommendedExecutionProfile ? (
+                        <button
+                          type="button"
+                          onClick={() => setActiveSection("capabilities")}
+                        >
+                          调整 MCP
+                        </button>
+                      ) : null}
+                  </div>
                   <Field label="权限 Profile" wide>
                     <select
                       value={draft.policy}
@@ -2558,12 +2947,26 @@ export function AgentStudioWorkbench() {
                       </span>
                     </div>
                   </div>
-                  <Field label="超时（秒）">
+                  <Field label="Agent 最大轮次" hint="建议 64；留空表示不限制">
                     <input
                       type="number"
                       min={1}
-                      value={draft.timeoutSeconds}
-                      onChange={(event) => updateDraft({ timeoutSeconds: Number(event.target.value) })}
+                      value={draft.maxTurns ?? ""}
+                      placeholder="不限制"
+                      onChange={(event) => updateDraft({
+                        maxTurns: event.target.value ? Number(event.target.value) : null,
+                      })}
+                    />
+                  </Field>
+                  <Field label="硬超时（秒）" hint="留空表示不以时长中止">
+                    <input
+                      type="number"
+                      min={1}
+                      value={draft.timeoutSeconds ?? ""}
+                      placeholder="不限制"
+                      onChange={(event) => updateDraft({
+                        timeoutSeconds: event.target.value ? Number(event.target.value) : null,
+                      })}
                     />
                   </Field>
                   <Field label="可绑定 Sub 上限">
@@ -2594,7 +2997,7 @@ export function AgentStudioWorkbench() {
                     />
                   </Field>
                   <p className={styles.fieldHint}>
-                    每个 Sub 使用独立会话，只把结果返回 Lead。当前阶段不限制轮次、模型 Token、预算或单 Sub Usage；委派深度固定为 1，隔离与权限边界仍然生效。
+                    每个 Sub 使用独立会话，只把结果返回 Lead。根 Agent 默认最多 64 轮，不设置时长、模型 Token 或费用硬中止；委派深度固定为 1，隔离与权限边界仍然生效。
                   </p>
                 </div>
                 <GovernanceControlPlane
@@ -3082,20 +3485,43 @@ export function AgentStudioWorkbench() {
 
         <footer className={styles.editorFooter}>
           <span className={conflict || versionConflict || notice.includes("阻塞") ? styles.noticeError : styles.noticeDot} aria-hidden="true" />
-          <span>{notice}</span>
+          <span title={notice}>{notice}</span>
           <code>{draft.id ? `revision ${draft.revision}` : "unsaved"}</code>
         </footer>
       </section>
 
-      <aside className={styles.contractRail} aria-label="有效运行契约">
+      {contractOpen && (
+        <button
+          type="button"
+          className={styles.contractBackdrop}
+          aria-label="关闭有效运行契约"
+          onClick={() => setContractOpen(false)}
+        />
+      )}
+      <aside
+        id="effective-contract-drawer"
+        className={styles.contractRail}
+        aria-label="有效运行契约"
+        aria-hidden={!contractOpen}
+        data-open={contractOpen}
+      >
         <div className={styles.contractHeader}>
           <div>
             <span>有效运行契约</span>
             <strong>{contract.ready ? "结构就绪" : "需要处理"}</strong>
           </div>
-          <span className={styles.riskBadge} data-risk={contract.risk}>
-            风险 {riskLabel(contract.risk)}
-          </span>
+          <div className={styles.contractHeaderActions}>
+            <span className={styles.riskBadge} data-risk={contract.risk}>
+              风险 {riskLabel(contract.risk)}
+            </span>
+            <button
+              type="button"
+              aria-label="关闭有效运行契约"
+              onClick={() => setContractOpen(false)}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         <div className={styles.capabilitySpine}>
@@ -3228,6 +3654,92 @@ function PanelHeading({
       <h2 id={id}>{title}</h2>
       <p>{description}</p>
     </header>
+  );
+}
+
+function PythonCodeEditor({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const exportsRun = /^\s*def\s+run\s*\(\s*arguments\s*\)/m.test(value);
+
+  return (
+    <StudioCodeEditor
+      ariaLabel="Python 源码"
+      filename="tool.py"
+      language="python"
+      runtimeLabel="Python 3.12 · Sandbox"
+      status={exportsRun ? "run(arguments) 已识别" : "缺少 run(arguments)"}
+      statusTone={exportsRun ? "ready" : "error"}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+function validateJsonSchema(source: string): {
+  parsed?: Record<string, unknown>;
+  status: string;
+  tone: "ready" | "error";
+} {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+      return { status: "根节点必须是对象", tone: "error" };
+    }
+    return {
+      parsed: parsed as Record<string, unknown>,
+      status: "JSON 有效",
+      tone: "ready",
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "JSON 语法错误";
+    return {
+      status: message.replace(/^JSON\.parse:\s*/i, "").slice(0, 72),
+      tone: "error",
+    };
+  }
+}
+
+function JsonSchemaCodeEditor({
+  value,
+  onCommit,
+  onInvalid,
+}: {
+  value: Record<string, unknown>;
+  onCommit: (value: Record<string, unknown>) => void;
+  onInvalid: (message: string) => void;
+}) {
+  const [source, setSource] = useState(() => JSON.stringify(value, null, 2));
+  const validation = useMemo(() => validateJsonSchema(source), [source]);
+  const fieldCount = Object.keys(
+    (value.properties as object | undefined) ?? {},
+  ).length;
+
+  function commit(next: string) {
+    const result = validateJsonSchema(next);
+    if (result.parsed) {
+      onCommit(result.parsed);
+      return;
+    }
+    onInvalid(result.status);
+  }
+
+  return (
+    <StudioCodeEditor
+      ariaLabel="JSON Schema"
+      filename="input.schema.json"
+      language="json"
+      runtimeLabel={`JSON Schema · ${fieldCount} fields`}
+      status={validation.status}
+      statusTone={validation.tone}
+      value={source}
+      onChange={setSource}
+      onBlur={commit}
+    />
   );
 }
 

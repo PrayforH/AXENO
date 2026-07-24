@@ -21,6 +21,7 @@ from harness.api.dependencies import (
     require_identity,
     require_owned_run,
 )
+from harness.core.errors import ConflictError
 from harness.core.events import RunEvent
 from harness.core.models import ApprovalRequest, ApprovalStatus, Run
 from harness.runtime.input_redaction import redact_internal_agent_asset_events
@@ -69,7 +70,18 @@ class AguiThreadSummary(BaseModel):
     run_id: str | None = None
     created_at: datetime
     updated_at: datetime
+    archived_at: datetime | None = None
     pending_approval: ApprovalRequest | None = None
+
+
+class AguiThreadArchiveInput(BaseModel):
+    archived: bool
+
+
+class AguiThreadArchiveResult(BaseModel):
+    thread_id: str
+    archived: bool
+    archived_at: datetime | None = None
 
 
 class AguiHistoryFunction(BaseModel):
@@ -154,16 +166,17 @@ async def run_agui_agent(
     agent_version: Annotated[str, Query()],
 ) -> StreamingResponse:
     ensure_permission(identity, "tasks:write")
-    run = await container.agui.create_run(
+    creation = await container.agui.create_run_with_result(
         tenant_id=identity.tenant_id,
         user_id=identity.user_id,
         agent_name=agent_name,
         agent_version=agent_version,
         request=body,
     )
+    run = creation.run
     worker_task = (
         asyncio.create_task(container.worker.execute(identity.tenant_id, run.run_id))
-        if container.auto_execute
+        if container.auto_execute and not creation.reused
         else None
     )
 
@@ -201,10 +214,20 @@ async def run_agui_agent(
         if worker_task is not None:
             await worker_task
 
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "X-Harness-Run-ID": run.run_id,
+        "X-Harness-Canonical-Client-Run-ID": creation.canonical_client_run_id,
+    }
+    if creation.reused:
+        headers["X-Harness-Run-Reused"] = "true"
+    if creation.deduplicated:
+        headers["X-Harness-Run-Deduplicated"] = "true"
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=headers,
     )
 
 
@@ -213,12 +236,14 @@ async def list_agui_threads(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    archived: Annotated[bool, Query()] = False,
 ) -> list[AguiThreadSummary]:
     ensure_permission(identity, "tasks:read")
     bindings = await container.agui.list_bindings(
         tenant_id=identity.tenant_id,
         user_id=identity.user_id,
         limit=limit,
+        archived=archived,
     )
     sessions = {
         binding.session_id: await container.sessions.get(
@@ -284,6 +309,7 @@ async def list_agui_threads(
                 run_id=pending.run_id if pending is not None else latest.run_id if latest else None,
                 created_at=binding.created_at,
                 updated_at=latest.updated_at if latest is not None else binding.updated_at,
+                archived_at=binding.archived_at,
                 pending_approval=pending,
             )
         )
@@ -296,6 +322,45 @@ async def list_agui_threads(
         ),
         reverse=True,
     )[:limit]
+
+
+@router.patch(
+    "/threads/{thread_id}",
+    response_model=AguiThreadArchiveResult,
+)
+async def update_agui_thread(
+    thread_id: str,
+    body: AguiThreadArchiveInput,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> AguiThreadArchiveResult:
+    ensure_permission(identity, "tasks:write")
+    binding = await container.agui.get_binding(
+        tenant_id=identity.tenant_id,
+        user_id=identity.user_id,
+        thread_id=thread_id,
+    )
+    if body.archived:
+        runs = await container.runs.list_for_sessions(
+            identity.tenant_id, [binding.session_id], limit=200
+        )
+        active = next(
+            (run for run in _visible_thread_runs(runs) if not run.status.is_terminal),
+            None,
+        )
+        if active is not None:
+            raise ConflictError("Active tasks cannot be archived")
+    updated = await container.agui.set_archived(
+        tenant_id=identity.tenant_id,
+        user_id=identity.user_id,
+        thread_id=thread_id,
+        archived=body.archived,
+    )
+    return AguiThreadArchiveResult(
+        thread_id=thread_id,
+        archived=updated.archived_at is not None,
+        archived_at=updated.archived_at,
+    )
 
 
 @router.get(

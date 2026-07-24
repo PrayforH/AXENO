@@ -250,6 +250,24 @@ class _RunFileCapabilities:
     def is_generated(self, target: Path) -> bool:
         return target in self._generated
 
+    def generated_python_files(self) -> frozenset[str]:
+        values: set[str] = set()
+        for target in self._generated:
+            if target.suffix.lower() != ".py":
+                continue
+            relative = target.relative_to(self._workspace).as_posix()
+            values.update(
+                {
+                    relative,
+                    f"./{relative}",
+                    target.as_posix(),
+                    f"/workspace/{relative}",
+                }
+            )
+            if self._remote_workspace is not None:
+                values.add((self._remote_workspace / relative).as_posix())
+        return frozenset(values)
+
     def observe(self, target: Path) -> None:
         self._initial_exists.setdefault(target, target.exists())
 
@@ -692,6 +710,7 @@ class SdkToolGate:
                 str(arguments.get("command", "")),
                 workspace=str(context.workspace),
                 remote_workspace=context.remote_workspace,
+                generated_python_files=file_capabilities.generated_python_files(),
             )
         ):
             result = PolicyResult(

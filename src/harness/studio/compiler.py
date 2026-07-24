@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import pprint
 import re
@@ -37,6 +38,7 @@ from harness.studio.models import (
     NetworkAccess,
     ValidationIssue,
     ValidationSeverity,
+    ValidationStage,
 )
 
 
@@ -160,7 +162,11 @@ class AgentDraftCompiler:
         manifest_yaml = self.render_manifest(draft)
         issues = list(self._catalog_issues(draft))
         report: AgentPackageReport | None = None
-        if not any(issue.severity is ValidationSeverity.ERROR for issue in issues):
+        if not any(
+            issue.severity is ValidationSeverity.ERROR
+            and issue.stage is ValidationStage.PUBLISH
+            for issue in issues
+        ):
             with TemporaryDirectory(prefix="harness-agent-studio-check-") as directory:
                 manifest = self._materialize(draft, Path(directory), manifest_yaml)
                 try:
@@ -188,8 +194,19 @@ class AgentDraftCompiler:
                                 )
                             )
         issues.extend(self._deployment_warnings(draft))
+        publish_ready = not any(
+            issue.severity is ValidationSeverity.ERROR
+            and issue.stage is ValidationStage.PUBLISH
+            for issue in issues
+        )
         return DraftValidationResult(
-            ready=not any(issue.severity is ValidationSeverity.ERROR for issue in issues),
+            ready=publish_ready,
+            productionEligible=publish_ready
+            and not any(
+                issue.severity is ValidationSeverity.ERROR
+                and issue.stage is ValidationStage.PRODUCTION
+                for issue in issues
+            ),
             issues=tuple(issues),
             contract=self.effective_contract(draft),
             manifestYaml=manifest_yaml,
@@ -413,30 +430,91 @@ class AgentDraftCompiler:
                     path="executionProfile",
                 )
             )
-        elif any(
-            server.network_access not in profile.network_access
-            for reference in spec.mcp_servers
-            if (server := mcp_servers.get(reference)) is not None
-        ):
-            issues.append(
-                ValidationIssue(
-                    code="execution_profile_network_incompatible",
-                    message="执行 Profile 不允许所选 MCP 的网络访问级别",
-                    severity=ValidationSeverity.ERROR,
-                    path="executionProfile",
+        else:
+            selected_mcp = {
+                reference: server
+                for reference in spec.mcp_servers
+                if (server := mcp_servers.get(reference)) is not None and server.enabled
+            }
+
+            def compatible_profiles(*, production_only: bool) -> tuple[str, ...]:
+                return tuple(
+                    candidate.profile_id
+                    for candidate in self._catalog.execution_profiles
+                    if candidate.enabled
+                    and (not production_only or candidate.production_allowed)
+                    and all(
+                        server.network_access in candidate.network_access
+                        and reference in candidate.allowed_mcp_references
+                        for reference, server in selected_mcp.items()
+                    )
+                )
+
+            incompatible_network = tuple(
+                sorted(
+                    reference
+                    for reference, server in selected_mcp.items()
+                    if server.network_access not in profile.network_access
                 )
             )
-        elif {reference for reference in spec.mcp_servers if reference in mcp_servers}.difference(
-            profile.allowed_mcp_references
-        ):
-            issues.append(
-                ValidationIssue(
-                    code="execution_profile_egress_incompatible",
-                    message="执行 Profile 的 Egress Policy 未关联所选 MCP",
-                    severity=ValidationSeverity.ERROR,
-                    path="executionProfile",
+            if incompatible_network:
+                requirements = ", ".join(
+                    f"{reference}（{selected_mcp[reference].network_access.value}）"
+                    for reference in incompatible_network
                 )
+                issues.append(
+                    ValidationIssue(
+                        code="execution_profile_network_incompatible",
+                        message=(
+                            f"执行 Profile {profile.profile_id} 缺少 MCP 所需网络级别："
+                            f"{requirements}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="executionProfile",
+                        relatedReferences=incompatible_network,
+                        suggestedProfileIds=compatible_profiles(production_only=False),
+                    )
+                )
+
+            incompatible_egress = tuple(
+                sorted(set(selected_mcp).difference(profile.allowed_mcp_references))
             )
+            if incompatible_egress:
+                issues.append(
+                    ValidationIssue(
+                        code="execution_profile_egress_incompatible",
+                        message=(
+                            f"执行 Profile {profile.profile_id} 的 Egress Policy 未授权 MCP："
+                            f"{', '.join(incompatible_egress)}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="executionProfile",
+                        relatedReferences=incompatible_egress,
+                        suggestedProfileIds=compatible_profiles(production_only=False),
+                    )
+                )
+
+            if not profile.production_allowed:
+                production_profiles = compatible_profiles(production_only=True)
+                recommendation = (
+                    f"；可切换至 {', '.join(production_profiles)}"
+                    if production_profiles
+                    else "；当前没有同时满足所选 MCP 的生产 Profile"
+                )
+                issues.append(
+                    ValidationIssue(
+                        code="execution_profile_preview_only",
+                        message=(
+                            f"执行 Profile {profile.profile_id} 仅用于 Preview，不能部署到生产"
+                            f"{recommendation}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="executionProfile",
+                        stage=ValidationStage.PRODUCTION,
+                        relatedReferences=(profile.profile_id,),
+                        suggestedProfileIds=production_profiles,
+                    )
+                )
         return tuple(issues)
 
     def _deployment_warnings(self, draft: AgentDraft) -> tuple[ValidationIssue, ...]:
@@ -450,6 +528,8 @@ class AgentDraftCompiler:
                 ),
                 severity=ValidationSeverity.WARNING,
                 path="mcpServers",
+                stage=ValidationStage.PRODUCTION,
+                relatedReferences=(reference,),
             )
             for reference in draft.spec.mcp_servers
             if (capability := mcp_by_reference.get(reference)) is not None
@@ -538,7 +618,12 @@ class AgentDraftCompiler:
             for file in skill.files:
                 target = skill_root.joinpath(*Path(file.path).parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(file.content, encoding="utf-8")
+                if file.content is not None:
+                    target.write_text(file.content, encoding="utf-8")
+                else:
+                    target.write_bytes(
+                        base64.b64decode(file.content_base64 or "", validate=True)
+                    )
 
         tools_root = root / "tools"
         for tool in spec.python_tools:

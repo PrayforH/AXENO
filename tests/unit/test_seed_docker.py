@@ -32,19 +32,19 @@ def test_downloaded_agent_packages_compile_to_studio_specs(
     assert spec["displayName"] == display_name
     assert spec["template"] == template
     assert len(spec["skills"]) >= 1  # type: ignore[arg-type]
-    expected_cases = 4 if name == "networked-knowledge-research-agent" else 3
+    expected_cases = 5 if name == "networked-knowledge-research-agent" else 3
     assert len(spec["evaluationCases"]) == expected_cases  # type: ignore[arg-type]
 
 
-def test_networked_research_agent_uses_local_network_profile_and_multiple_mcp() -> None:
+def test_networked_research_agent_uses_production_profile_and_multiple_mcp() -> None:
     spec = studio_spec_from_manifest(
         ROOT / "agents" / "networked-knowledge-research-agent" / "agent.yaml"
     )
 
-    assert spec["executionProfile"] == "local-development"
+    assert spec["executionProfile"] == "isolated-default"
     assert spec["mcpServers"] == [
         "tavily-readonly",
-        "novel-search",
+        "knowledge-search",
     ]
     coverage = {
         tag

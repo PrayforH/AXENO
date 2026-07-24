@@ -1,9 +1,14 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
 import { ThemeSelector } from "../../components/theme-toggle";
 import { WorkspaceMembers } from "../../components/workspace-members";
+import {
+  loadTasks,
+  setTaskArchived,
+  type TaskSummary,
+} from "../../lib/task-history";
 
 const ROLE_LABELS = {
   owner: "所有者",
@@ -27,6 +32,76 @@ function errorMessage(payload: unknown, fallback: string): string {
     return payload.error.message;
   }
   return fallback;
+}
+
+function ArchivedTasksSettings() {
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [restoring, setRestoring] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    loadTasks(true)
+      .then((items) => {
+        if (active) setTasks(items);
+      })
+      .catch(() => {
+        if (active) setError("暂时无法读取已归档任务。");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function restore(task: TaskSummary) {
+    setRestoring(task.thread_id);
+    setError("");
+    try {
+      await setTaskArchived(task.thread_id, false);
+      setTasks((current) =>
+        current.filter((item) => item.thread_id !== task.thread_id),
+      );
+    } catch {
+      setError("恢复失败，请稍后重试。");
+    } finally {
+      setRestoring("");
+    }
+  }
+
+  return (
+    <div className="settings-form archived-task-settings">
+      {loading && <p className="archived-task-empty">正在读取…</p>}
+      {!loading && tasks.length === 0 && !error && (
+        <p className="archived-task-empty">暂无已归档任务。</p>
+      )}
+      {tasks.map((task) => (
+        <div className="archived-task-row" key={task.thread_id}>
+          <span>
+            <strong>{task.title}</strong>
+            <small>
+              {new Intl.DateTimeFormat("zh-CN", {
+                year: "numeric",
+                month: "numeric",
+                day: "numeric",
+              }).format(new Date(task.updated_at))}
+            </small>
+          </span>
+          <button
+            type="button"
+            disabled={restoring === task.thread_id}
+            onClick={() => void restore(task)}
+          >
+            {restoring === task.thread_id ? "正在恢复…" : "恢复"}
+          </button>
+        </div>
+      ))}
+      {error && <p className="settings-message error">{error}</p>}
+    </div>
+  );
 }
 
 function SettingsContent() {
@@ -117,6 +192,7 @@ function SettingsContent() {
           <a href="#data">我的数据</a>
           <a href="#memory">长期记忆</a>
           <a href="#session">登录会话</a>
+          <a href="#archived">已归档</a>
         </aside>
 
         <div className="settings-content">
@@ -231,6 +307,14 @@ function SettingsContent() {
               <div><span className="settings-session-dot" aria-hidden="true" /><span><strong>当前浏览器</strong><small>会话有效</small></span></div>
               <a href="/api/auth/logout">退出登录</a>
             </div>
+          </section>
+
+          <section className="settings-section" id="archived">
+            <div className="settings-section-copy">
+              <h2>已归档</h2>
+              <p>归档只从最近任务中移出，不会删除消息、处理过程、附件或产物。</p>
+            </div>
+            <ArchivedTasksSettings />
           </section>
         </div>
       </div>

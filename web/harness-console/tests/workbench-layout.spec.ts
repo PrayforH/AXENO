@@ -92,14 +92,18 @@ describe("full-page agent workbench", () => {
     expect(taskSidebar).toContain("<span>新建任务</span>");
     expect(taskSidebar).toContain('className="task-list-heading"');
     expect(taskSidebar).toContain("<span>最近任务</span>");
+    expect(taskSidebar).toContain('className="task-list-archive"');
+    expect(taskSidebar).toContain("setTaskArchived");
     expect(taskSidebar).toContain('className="task-sidebar-brand"');
     expect(styles).toContain(".task-sidebar-primary");
     expect(styles).toContain(".task-list-heading");
   });
 
   it("projects task approvals into the composer surface", () => {
-    expect(taskSidebar).toContain("approvalStore.reset()");
-    expect(taskSidebar).toContain("approvalStore.show(selected.pending_approval)");
+    expect(taskSidebar).toContain("approvalStore.reset(currentThreadId)");
+    expect(taskSidebar).toContain(
+      "approvalStore.show(selected.pending_approval, selected.thread_id)",
+    );
     expect(taskSidebar).toContain('runView?.phase !== "waiting_approval"');
     expect(taskSidebar).toContain("[runView?.phase]");
     expect(taskSidebar).not.toContain("task-approval-panel");
@@ -112,6 +116,16 @@ describe("full-page agent workbench", () => {
     expect(page).not.toContain("refreshToken");
     expect(taskSidebar).not.toContain("onCurrentTaskStatusChange");
     expect(taskSidebar).not.toContain("currentStatusRef");
+  });
+
+  it("keeps run status disclosures visually inert on hover", () => {
+    expect(codexStyles).toContain(
+      ".execution-disclosure:is(:hover, :active)",
+    );
+    expect(codexStyles).toContain(
+      ".aui-assistant-message-content:hover",
+    );
+    expect(codexStyles).toContain("transition: none");
   });
 
   it("removes the decorative live rail and hard-coded agent coordinate", () => {
@@ -169,7 +183,34 @@ describe("full-page agent workbench", () => {
       /\.execution-ribbon\.phase-completed \.execution-state-mark,[\s\S]*?display:\s*none;/s,
     );
     expect(styles).toMatch(
-      /\.execution-ribbon\s*>\s*summary\s*\{[^}]*border-bottom:\s*1px solid #e2e4e1;/s,
+      /\.execution-disclosure\s*\{[^}]*border-bottom:\s*1px solid #e2e4e1;/s,
+    );
+  });
+
+  it("keeps the work log compact and gives each result a bounded scroll surface", () => {
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-ribbon > \.execution-disclosure\s*\{[\s\S]*?min-height:\s*33px;[\s\S]*?box-sizing:\s*border-box;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.execution-ribbon[\s\S]*?> \.execution-disclosure:is\(:hover, :active\)\s*\{[^}]*border-bottom:\s*1px solid var\(--codex-line\);[^}]*color:\s*var\(--codex-muted\);[^}]*background:\s*transparent;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-phase\s*\{[^}]*font-size:\s*13px;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-log\s*\{[^}]*gap:\s*11px;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-action-summary,[\s\S]*?width:\s*100%;[\s\S]*?grid-template-columns:\s*16px minmax\(0, 1fr\) 8px;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.execution-action:not\(\[open\]\)[\s\S]*?> \.execution-action-body\s*\{[^}]*display:\s*none;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-action-result\s*\{[^}]*max-height:\s*9\.5rem;[^}]*overflow:\s*auto;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.reasoning-card > div\s*\{[^}]*max-height:\s*12rem;[^}]*overflow:\s*auto;/s,
     );
   });
 

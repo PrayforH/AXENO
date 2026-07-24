@@ -3,7 +3,6 @@
 import {
   ActionBarPrimitive,
   AttachmentPrimitive,
-  AuiIf,
   MessagePrimitive,
   TextMessagePartProvider,
   useAttachment,
@@ -43,7 +42,11 @@ import {
   TaskModelControl,
   TaskModelVisionNotice,
 } from "./task-model-context";
-import { runActivitySchema } from "../lib/activity-schema";
+import {
+  hasRunActivityToolCall,
+  runActivitySchema,
+  type RunActivity,
+} from "../lib/activity-schema";
 import { requireAuthenticatedResponse } from "../lib/client-auth";
 import {
   approvalStore,
@@ -57,6 +60,7 @@ import {
   type RunStreamStatus,
   useRunStream,
 } from "../lib/run-stream-store";
+import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -129,6 +133,7 @@ function HarnessComposer() {
   const stream = useRunStream();
   const runView = useRunViewModel();
   const pendingApproval = usePendingApproval();
+  const reuseNotice = useRunReuseNotice();
   const runLocked = selectComposerDisabled(runView);
   useEffect(() => {
     const visibleApprovalId = pendingApproval.details?.approval_id;
@@ -136,7 +141,7 @@ function HarnessComposer() {
       pendingApproval.visible &&
       visibleApprovalId &&
       runView &&
-      runView.phase !== "waiting_approval" &&
+      ["completed", "failed", "rejected", "cancelled"].includes(runView.phase) &&
       runView?.pendingApprovalId !== visibleApprovalId
     ) {
       approvalStore.settle(visibleApprovalId);
@@ -159,6 +164,37 @@ function HarnessComposer() {
       data-run-locked={runLocked ? "true" : "false"}
       aria-busy={runLocked}
     >
+      {reuseNotice ? (
+        <div className="composer-run-reuse-notice" role="status">
+          <span>
+            已返回正在执行的原任务
+            <small>{reuseNotice.runId}</small>
+          </span>
+          <button type="button" onClick={runReuseStore.clear} aria-label="关闭提示">
+            ×
+          </button>
+        </div>
+      ) : null}
+      {runView?.phase === "queued" && runView.queueReason ? (
+        <div className="composer-queue-notice" role="status">
+          <span>
+            <strong>{runView.queueReason}</strong>
+            {runView.blockedByRunId ? ` · ${runView.blockedByRunId}` : ""}
+          </span>
+          {pendingApproval.visible && pendingApproval.details ? (
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .querySelector<HTMLElement>(".composer-approval-slot")
+                  ?.scrollIntoView({ behavior: "smooth", block: "center" })
+              }
+            >
+              直达审批
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {pendingApproval.visible && pendingApproval.details ? (
         <div className="composer-approval-slot">
           <ApprovalCard
@@ -329,6 +365,16 @@ export function hasProjectedTool(
   );
 }
 
+export function shouldSuppressRawToolCard(
+  view: ReturnType<typeof useRunViewModel>,
+  toolCallId: string | undefined,
+) {
+  // A Harness run activity is the canonical, durable projection of ordinary
+  // tools. SDK/assistant-ui tool parts can be incomplete after a failed or
+  // resumed run and otherwise fall back to a permanently-open raw JSON card.
+  return Boolean(view) || hasProjectedTool(view, toolCallId);
+}
+
 export function shouldKeepActivityInLatestSlot(
   activityRunId: string,
   viewRunId: string | undefined,
@@ -336,10 +382,24 @@ export function shouldKeepActivityInLatestSlot(
   return viewRunId === activityRunId;
 }
 
+export function shouldShowArtifactForTurn(
+  artifactRunId: string | undefined,
+  viewRunId: string | undefined,
+  isLast: boolean,
+) {
+  return !(
+    isLast &&
+    artifactRunId &&
+    viewRunId &&
+    artifactRunId !== viewRunId
+  );
+}
+
 function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
   const runView = useRunViewModel();
+  const isLast = useAuiState((state) => state.message.isLast);
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
     if (
@@ -370,9 +430,14 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
     );
   }
   if (part.toolName === "harness_present_artifact") {
+    const artifactRunId =
+      typeof args.run_id === "string" ? args.run_id : undefined;
+    if (!shouldShowArtifactForTurn(artifactRunId, runView?.runId, isLast)) {
+      return null;
+    }
     return <ArtifactCard details={args as unknown as ArtifactDetails} />;
   }
-  if (hasProjectedTool(runView, part.toolCallId)) {
+  if (shouldSuppressRawToolCard(runView, part.toolCallId)) {
     return null;
   }
   return (
@@ -468,9 +533,93 @@ function LiveAssistantResponse({
   );
 }
 
+function TurnActivity({
+  hasDurableProjection,
+}: {
+  hasDurableProjection: boolean;
+}) {
+  const activity = useRunActivity();
+  const runView = useRunViewModel();
+  const isLast = useAuiState((state) => state.message.isLast);
+  const responseStarted = useAssistantResponseStarted();
+  const [capturedActivity, setCapturedActivity] = useState(activity);
+
+  useEffect(() => {
+    if (
+      activity &&
+      shouldCaptureTurnActivity(
+        activity.run_id,
+        capturedActivity?.run_id,
+        isLast,
+        runView?.runId,
+      )
+    ) {
+      setCapturedActivity(activity);
+    }
+  }, [activity, capturedActivity?.run_id, isLast, runView?.runId]);
+
+  // Reloaded history already contains a per-turn tool projection. Live
+  // assistant-ui messages do not, so retain the last snapshot on the turn
+  // when a newer user message makes it stop being the latest message.
+  const displayed = selectTurnActivity(
+    activity,
+    capturedActivity,
+    isLast,
+    hasDurableProjection,
+  );
+  if (!displayed) return null;
+
+  return (
+    <div
+      className={`latest-activity ${displayed.status}`}
+      data-activity-source={isLast ? "current-run" : "captured-turn"}
+    >
+      <ActivitySummary
+        activity={displayed}
+        responseStarted={!isLast || responseStarted}
+      />
+    </div>
+  );
+}
+
+export function selectTurnActivity(
+  current: RunActivity | undefined,
+  captured: RunActivity | undefined,
+  isLast: boolean,
+  hasDurableProjection: boolean,
+) {
+  if (isLast && current) return current;
+  if (hasDurableProjection) return undefined;
+  return captured;
+}
+
+export function shouldCaptureTurnActivity(
+  activityRunId: string,
+  capturedRunId: string | undefined,
+  isLast: boolean,
+  viewRunId: string | undefined,
+) {
+  if (viewRunId !== activityRunId) return false;
+  // The terminal activity delta and AG-UI RUN_FINISHED arrive back-to-back.
+  // React may batch them so the message is no longer "last" before this effect
+  // observes the terminal delta. Keep accepting updates for the Run already
+  // captured by this turn, but never adopt a newer Run into an older turn.
+  return isLast || capturedRunId === activityRunId;
+}
+
+export function incompleteRunGuidance(isLast: boolean) {
+  return isLast
+    ? "本次运行未完整结束，可打开“运行详情”查看原因。"
+    : "该条历史运行未完整结束，可打开“运行详情”查看原因。";
+}
+
 function HarnessAssistantMessage() {
   const live = useLiveResponse();
   const isLast = useAuiState((state) => state.message.isLast);
+  const isIncomplete = useAuiState(
+    (state) => state.message.status?.type === "incomplete",
+  );
+  const content = useAuiState((state) => state.message.content);
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
   // this only on visible text lets assistant-ui paint the same preface once.
@@ -481,9 +630,7 @@ function HarnessAssistantMessage() {
       className="harness-assistant-message"
       data-direct-stream={directStream ? "true" : "false"}
     >
-      <AuiIf condition={(state) => state.message.isLast}>
-        <LatestActivity />
-      </AuiIf>
+      <TurnActivity hasDurableProjection={hasRunActivityToolCall(content)} />
       <AssistantMessage.Content
         components={{
           Text: HarnessAssistantText,
@@ -491,9 +638,9 @@ function HarnessAssistantMessage() {
         }}
       />
       <LiveAssistantResponse live={live} isLast={isLast} />
-      <AuiIf condition={(state) => state.message.status?.type === "incomplete"}>
+      {isIncomplete ? (
         <div className="aui-message-error">
-          <span>本次运行未完整结束，可打开“运行详情”查看原因。</span>
+          <span>{incompleteRunGuidance(isLast)}</span>
           <ActionBarPrimitive.Reload
             className="run-retry-button"
             aria-label="重新运行"
@@ -502,7 +649,7 @@ function HarnessAssistantMessage() {
             重新运行
           </ActionBarPrimitive.Reload>
         </div>
-      </AuiIf>
+      ) : null}
       <div className="assistant-message-controls">
         <BranchPicker />
         <AssistantActionBar />
@@ -800,37 +947,6 @@ function HarnessUserMessage() {
       </MessagePrimitive.If>
       <BranchPicker />
     </UserMessage.Root>
-  );
-}
-
-function LatestActivity() {
-  const activity = useRunActivity();
-  const runView = useRunViewModel();
-  const live = useLiveResponse();
-  const nativeResponseStarted = useAssistantResponseStarted();
-  const finalResponseStarted =
-    nativeResponseStarted ||
-    (Boolean(live.text.trim()) && live.visible);
-  if (
-    !activity ||
-    !runView ||
-    !shouldKeepActivityInLatestSlot(
-      activity.run_id,
-      runView.runId,
-    )
-  ) {
-    return null;
-  }
-  return (
-    <div
-      className={`latest-activity ${runView.phase}`}
-      data-activity-source="current-run"
-    >
-      <ActivitySummary
-        activity={activity}
-        responseStarted={finalResponseStarted}
-      />
-    </div>
   );
 }
 

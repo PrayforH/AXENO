@@ -42,7 +42,11 @@ export interface StudioSkill {
   name: string;
   description: string;
   instructions: string;
-  files?: Array<{ path: string; content: string }>;
+  files?: Array<{
+    path: string;
+    content?: string | null;
+    contentBase64?: string | null;
+  }>;
 }
 
 export interface StudioEvalCase {
@@ -102,7 +106,7 @@ export interface StudioDraft {
   restoreSession: boolean;
   archiveOnComplete: boolean;
   maxTurns: number | null;
-  timeoutSeconds: number;
+  timeoutSeconds: number | null;
   maxBudgetUsd: number | null;
   maxModelTokens: number | null;
   maxSubagents: number;
@@ -133,10 +137,17 @@ export interface StudioContract {
 
 export const MODEL_ROUTES: ModelRouteOption[] = [
   {
-    id: "new-api-default",
-    label: "DeepSeek V4",
+    id: "deepseek-v4-flash",
+    label: "DeepSeek V4 Flash",
     provider: "deepseek",
-    models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+    models: ["deepseek-v4-flash"],
+    capabilities: ["streaming", "tool_use"],
+  },
+  {
+    id: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+    provider: "deepseek",
+    models: ["deepseek-v4-pro"],
     capabilities: ["streaming", "tool_use"],
   },
   {
@@ -379,7 +390,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   domain: "public-opinion",
   version: "0.3.5",
   template: "orchestrator",
-  modelRoute: "new-api-default",
+  modelRoute: "deepseek-v4-pro",
   model: "deepseek-v4-pro",
   requiredCapabilities: ["streaming", "tool_use"],
   systemPrompt: PUBLIC_OPINION_SYSTEM_PROMPT,
@@ -437,8 +448,8 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   executionProfile: "isolated-default",
   restoreSession: true,
   archiveOnComplete: true,
-  maxTurns: null,
-  timeoutSeconds: 2400,
+  maxTurns: 64,
+  timeoutSeconds: null,
   maxBudgetUsd: null,
   maxModelTokens: null,
   maxSubagents: 8,

@@ -66,7 +66,7 @@ make web-build
 
 `make verify` 还会对 `agents/*/agent.yaml` 执行生产门禁；`make agent-pack` 为所有通过门禁的 Agent 生成确定性 ZIP。生产发布 API 只接受 `/v1/agents/bundles`，不会读取客户端提交的服务器本地路径。
 
-Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以一行可展开的执行条呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper-agent@1.0.0` 与正式验证包 `echo-agent@0.4.0`，不会再把 deterministic test fixture 发布给网页。以下审批与产物标记仅用于 Fake Runtime 验收：
+Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markdown primitives，并通过官方 AG-UI runtime adapter 连接 Harness。主对话以一行可展开的执行条呈现工作摘要、工具和子 Agent，JSON/代码/Diff 使用结构化卡片；“运行详情”提供 Harness 事件脊柱与模型、Provider、时长、轮次、成本、停止原因。`make dev-up` 使用 Fake Runtime；`make dev-up-cc-switch` 使用当前 cc-switch Provider。两种模式都会幂等发布 `helper-agent@1.0.0` 与正式验证包 `echo-agent@0.4.1`，不会再把 deterministic test fixture 发布给网页。以下审批与产物标记仅用于 Fake Runtime 验收：
 
 ```text
 [approval] [artifact] 验证完整流程
@@ -82,7 +82,7 @@ Web 首页直接使用 assistant-ui 的 Thread、Composer、Attachment 与 Markd
 在当前工作区创建 outputs/hello.md，写入一段中文说明，然后读取文件确认内容。
 ```
 
-`echo-agent@0.4.0` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task`，只配置模型网关即可运行；需要联网检索的领域包（例如 `public-opinion-agent`）再显式声明 `mcp: tavily-readonly`。`Write/Edit` 仅能操作本次 Run 的 workspace，默认自动允许；`Bash` 因进程环境、模型网关凭据和网络出口风险仍需网页审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
+`echo-agent@0.4.1` 显式声明 `Read/Glob/Grep/Write/Edit/Bash/Task`，只配置模型网关即可运行；需要联网检索的领域包（例如 `public-opinion-agent`）再显式声明 `mcp: tavily-readonly`。`Write/Edit` 仅能操作本次 Run 的 workspace，默认自动允许；`Bash` 因进程环境、模型网关凭据和网络出口风险仍需网页审批。Manifest 始终是工具能力上限，Sandbox 策略不能给 Agent 注入未声明工具。
 
 输入 `[slow] 验证停止` 并在消息开始后点击停止按钮，可以验证浏览器流中止、同源 AG-UI BFF 取消映射及 Harness Run 最终进入 `cancelled` 的完整链路。
 
