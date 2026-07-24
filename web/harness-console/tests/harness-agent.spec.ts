@@ -237,7 +237,7 @@ describe("HarnessHttpAgent", () => {
     unsubscribe();
   });
 
-  it("buffers an ambiguous first text chunk before the response stream finishes", async () => {
+  it("publishes the first text chunk before the response stream finishes", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -284,13 +284,13 @@ describe("HarnessHttpAgent", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "第一段",
       status: "streaming",
-      visible: false,
+      visible: true,
     });
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "第一段",
       status: "streaming",
-      visible: false,
+      visible: true,
     });
 
     controller?.enqueue(

@@ -24,10 +24,10 @@ const emptySnapshot: LiveResponseSnapshot = Object.freeze({
   visible: false,
 });
 
-// The provider does not label text as "commentary" or "final" up front. Keep
-// active text provisional until RUN_FINISHED: Activity renders it while work
-// is in progress, and only the terminal message is promoted into the answer
-// slot. Time/length heuristics make slow tool prefaces flash as answers.
+// The provider does not label text as "commentary" or "final" up front. Render
+// a candidate immediately so Markdown can update while deltas arrive. If a
+// tool call follows, hide that provisional text and let Activity retain it as
+// part of the processing trace.
 
 type MessageDisposition = "idle" | "candidate" | "response" | "activity";
 
@@ -90,11 +90,11 @@ function cancelScheduledFrame() {
 function schedulePendingDelta() {
   if (scheduledFrame !== undefined) return;
   if (typeof globalThis.requestAnimationFrame !== "function") {
-    flushPendingDelta(disposition === "response");
+    flushPendingDelta(disposition !== "activity");
     return;
   }
   scheduledFrame = globalThis.requestAnimationFrame(() =>
-    flushPendingDelta(disposition === "response"),
+    flushPendingDelta(disposition !== "activity"),
   );
 }
 
@@ -139,7 +139,7 @@ export const liveResponseStore = {
     if (!isActiveRuntimeThread(threadId)) return;
     if (!delta) return;
     if (pendingMessageId && pendingMessageId !== messageId) {
-      flushPendingDelta(disposition === "response");
+      flushPendingDelta(disposition !== "activity");
     }
     pendingMessageId = messageId;
     pendingDelta += delta;
@@ -154,7 +154,7 @@ export const liveResponseStore = {
   },
   completeMessage(messageId: string, threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
-    flushPendingDelta(disposition === "response");
+    flushPendingDelta(disposition !== "activity");
     if (snapshot.messageId !== messageId) return;
     publish({ ...snapshot, status: "complete" });
   },
