@@ -211,7 +211,7 @@ describe("execution ribbon", () => {
           kind: "analysis",
           status: "succeeded",
           title: "进展说明",
-          summary: "我先读取设计文档，再检查发布边界。",
+          summary: "我先读取 **设计文档**，再检查发布边界。",
           timestamp: "2026-07-14T00:00:02Z",
           sequence: 2,
           metadata: { message_id: "assistant-progress" },
@@ -256,10 +256,10 @@ describe("execution ribbon", () => {
       />,
     );
 
-    expect(html).toContain("我先读取设计文档，再检查发布边界。");
-    expect(html).toContain("最终结论已经整理完成。");
+    expect(html).toContain("我先读取 <strong>设计文档</strong>，再检查发布边界。");
+    expect(html).not.toContain("最终结论已经整理完成。");
     expect(completedHtml).not.toContain("最终结论已经整理完成。");
-    expect(html.indexOf("我先读取设计文档")).toBeLessThan(
+    expect(html.indexOf("我先读取")).toBeLessThan(
       html.indexOf("搜索了 1 次内容 · 读取了 1 个文件"),
     );
   });

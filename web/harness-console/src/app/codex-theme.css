@@ -3853,6 +3853,42 @@ body.codex-theme-v1 .execution-commentary {
   white-space: pre-wrap;
 }
 
+body.codex-theme-v1
+  .execution-commentary
+  .aui-md.space-y-4.whitespace-normal {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
+}
+
+body.codex-theme-v1 .execution-commentary .aui-md > * {
+  margin-block: 0;
+}
+
+body.codex-theme-v1 .execution-commentary .aui-md > * + * {
+  margin-top: 6px;
+}
+
+body.codex-theme-v1
+  .execution-commentary
+  .aui-md
+  :is(
+    [data-streamdown="heading-1"],
+    [data-streamdown="heading-2"],
+    [data-streamdown="heading-3"],
+    [data-streamdown="heading-4"],
+    [data-streamdown="heading-5"],
+    [data-streamdown="heading-6"]
+  ) {
+  margin: 4px 0 2px;
+  color: inherit;
+  font-size: inherit;
+  font-weight: 650;
+  line-height: inherit;
+  letter-spacing: 0;
+}
+
 body.codex-theme-v1 .execution-action {
   width: 100%;
   min-width: 0;

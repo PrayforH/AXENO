@@ -1,5 +1,6 @@
 "use client";
 
+import { TextMessagePartProvider } from "@assistant-ui/react";
 import { useEffect, useState, type MouseEvent } from "react";
 import type { RunActivity } from "../lib/activity-schema";
 import { useRunViewModel } from "../lib/activity-store";
@@ -12,6 +13,7 @@ import {
   type WorkStatus,
 } from "../lib/run-view-model";
 import { toolActivitySentence } from "../lib/tool-presentation";
+import { MarkdownText } from "./markdown-text";
 
 const phaseLabels: Record<RunPhase, string> = {
   queued: "等待处理",
@@ -164,10 +166,6 @@ function processNodes(view: RunViewModel): ProcessNode[] {
 }
 
 function commentaryNodes(view: RunViewModel): CommentaryNode[] {
-  const active =
-    view.phase === "queued" ||
-    view.phase === "running" ||
-    view.phase === "waiting_approval";
   const actionSequences = view.items
     .filter(
       (item) =>
@@ -181,12 +179,11 @@ function commentaryNodes(view: RunViewModel): CommentaryNode[] {
   for (const item of view.items) {
     if (item.event_type !== "message.delta" || !item.summary?.trim()) continue;
     const nextAction = actionSequences.find((sequence) => sequence > item.sequence);
-    // While the provider has not revealed whether this message ends in a tool
-    // call, keep its trailing text in the processing area. Once the Run
-    // completes, only text that actually preceded an action stays here and
-    // the terminal message is rendered as the answer.
-    if (nextAction === undefined && !active) continue;
-    const groupKey = nextAction ?? Number.MAX_SAFE_INTEGER;
+    // A trailing message is still ambiguous while the Run is active: the
+    // live response owns it so Markdown can stream without duplication. Only
+    // text proven to precede an auditable action belongs in the process log.
+    if (nextAction === undefined) continue;
+    const groupKey = nextAction;
     const existing = grouped.get(groupKey);
     grouped.set(groupKey, {
       id: existing?.id ?? item.id,
@@ -195,6 +192,16 @@ function commentaryNodes(view: RunViewModel): CommentaryNode[] {
     });
   }
   return [...grouped.values()];
+}
+
+function ExecutionCommentary({ text }: { text: string }) {
+  return (
+    <div className="execution-commentary">
+      <TextMessagePartProvider text={text} isRunning={false}>
+        <MarkdownText />
+      </TextMessagePartProvider>
+    </div>
+  );
 }
 
 function rawTimeline(view: RunViewModel): RawTimelineNode[] {
@@ -671,9 +678,10 @@ export function ActivitySummary({
           <section className="execution-log" aria-label="处理过程">
             {timeline.map((entry) =>
               entry.kind === "commentary" ? (
-                <p className="execution-commentary" key={entry.commentary.id}>
-                  {entry.commentary.text}
-                </p>
+                <ExecutionCommentary
+                  key={entry.commentary.id}
+                  text={entry.commentary.text}
+                />
               ) : (
                 <ActionRow key={entry.action.id} action={entry.action} />
               ),
