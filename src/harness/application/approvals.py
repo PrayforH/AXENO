@@ -105,7 +105,7 @@ class ApprovalService:
             while True:
                 current = await self._approvals.get(tenant_id, approval_id)
                 if current.status is not ApprovalStatus.PENDING:
-                    if current.inline:
+                    if current.inline and current.status is ApprovalStatus.APPROVED:
                         await self._ensure_inline_run_resumed(current)
                     return current.status
                 run = await self._runs.get(tenant_id, current.run_id)
@@ -333,7 +333,7 @@ class ApprovalService:
             raise ConflictError("approval decision must be approved or rejected")
         current = await self._approvals.get(tenant_id, approval_id)
         if current.status is decision:
-            if current.inline:
+            if current.inline and decision is ApprovalStatus.APPROVED:
                 await self._ensure_inline_run_resumed(current)
             if decision is ApprovalStatus.APPROVED and not current.inline:
                 await self._enqueue_resumed_run(current)
@@ -361,7 +361,7 @@ class ApprovalService:
             status=decision.value,
         )
         inline = current.inline
-        if decision is ApprovalStatus.APPROVED or inline:
+        if decision is ApprovalStatus.APPROVED:
             await self._move(run, RunStatus.RUNNING)
             # An inline SDK hook keeps the original worker task and polls the
             # durable decision. Enqueuing a second copy here races that live
@@ -371,20 +371,21 @@ class ApprovalService:
             if decision is ApprovalStatus.APPROVED and not inline:
                 await self._enqueue_resumed_run(updated)
         else:
-            await self._events.append(
-                tenant_id=tenant_id,
-                run_id=run.run_id,
-                session_id=run.session_id,
-                event_type="tool.result",
-                payload={
-                    "tool_call_id": current.tool_call_id,
-                    "is_error": True,
-                    "error": {
-                        "code": "approval_rejected",
-                        "message": "tool use rejected",
+            if not inline:
+                await self._events.append(
+                    tenant_id=tenant_id,
+                    run_id=run.run_id,
+                    session_id=run.session_id,
+                    event_type="tool.result",
+                    payload={
+                        "tool_call_id": current.tool_call_id,
+                        "is_error": True,
+                        "error": {
+                            "code": "approval_rejected",
+                            "message": "tool use rejected",
+                        },
                     },
-                },
-            )
+                )
             await self._move(run, RunStatus.REJECTED)
         waiter = self._inline_waiters.get(approval_id)
         if waiter is not None and not waiter.done():

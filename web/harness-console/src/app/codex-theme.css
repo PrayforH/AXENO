@@ -4032,6 +4032,7 @@ body.codex-theme-v1 .execution-action-detail small {
 }
 
 body.codex-theme-v1 .execution-action-result {
+  margin: 0;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -4046,8 +4047,14 @@ body.codex-theme-v1 .execution-action-result {
   color: var(--codex-muted);
   background: var(--codex-inset);
   font: 450 10.5px/1.55 var(--codex-font-mono);
-  white-space: pre;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+body.codex-theme-v1 .execution-action-result > code {
+  font: inherit;
+  white-space: inherit;
 }
 
 body.codex-theme-v1 .execution-action-result:focus-visible {

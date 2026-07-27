@@ -207,7 +207,7 @@ describe("full-page agent workbench", () => {
       /\.execution-action:not\(\[open\]\)[\s\S]*?> \.execution-action-body\s*\{[^}]*display:\s*none;/s,
     );
     expect(codexStyles).toMatch(
-      /body\.codex-theme-v1 \.execution-action-result\s*\{[^}]*max-height:\s*9\.5rem;[^}]*overflow:\s*auto;/s,
+      /body\.codex-theme-v1 \.execution-action-result\s*\{[^}]*max-height:\s*9\.5rem;[^}]*overflow:\s*auto;[^}]*white-space:\s*pre-wrap;[^}]*word-break:\s*break-word;/s,
     );
     expect(codexStyles).toMatch(
       /body\.codex-theme-v1 \.reasoning-card > div\s*\{[^}]*max-height:\s*12rem;[^}]*overflow:\s*auto;/s,
@@ -320,10 +320,8 @@ describe("full-page agent workbench", () => {
     expect(markdown).toContain('aria-label="表格，可横向滚动"');
     expect(markdown).toContain("table: ScrollableTable");
     expect(markdown).not.toContain("defer");
-    expect(markdown).toContain("smooth={codexStreamSmoothing}");
-    expect(markdown).toContain("drainMs: 320");
-    expect(markdown).toContain("maxCharsPerFrame: 12");
-    expect(markdown).toContain("minCommitMs: 32");
+    expect(markdown).toContain("smooth={false}");
+    expect(markdown).not.toContain("codexStreamSmoothing");
     expect(styles).toMatch(
       /\.aui-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s,
     );

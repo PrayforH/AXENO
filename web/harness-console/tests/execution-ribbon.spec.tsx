@@ -1,6 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ActivitySummary } from "../src/components/activity-summary";
+import {
+  ActivitySummary,
+  formatResultPreview,
+} from "../src/components/activity-summary";
 import { runActivitySchema } from "../src/lib/activity-schema";
 
 const activity = runActivitySchema.parse({
@@ -108,6 +111,16 @@ afterEach(() => {
 });
 
 describe("execution ribbon", () => {
+  it("pretty prints JSON results while preserving non-JSON command output", () => {
+    expect(formatResultPreview('{"items":[{"name":"demo","ok":true}]}')).toBe(
+      '{\n  "items": [\n    {\n      "name": "demo",\n      "ok": true\n    }\n  ]\n}',
+    );
+    expect(formatResultPreview("line one\nline two")).toBe(
+      "line one\nline two",
+    );
+    expect(formatResultPreview("{not-json}")).toBe("{not-json}");
+  });
+
   it("expands active work before the assistant starts responding", () => {
     const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
 
@@ -547,6 +560,8 @@ describe("execution ribbon", () => {
     expect(html).toContain("退出码 0");
     expect(html).toContain("inputs/original/sample.jpg");
     expect(html).toContain("grid image ready");
+    expect(html).toContain('<pre class="execution-action-result"');
+    expect(html).toContain("<code>inputs/original/sample.jpg</code>");
     expect(html).toContain('<details class="execution-action action-completed">');
     expect(html).not.toContain(
       '<details class="execution-action action-completed" open',

@@ -986,7 +986,7 @@ async def test_remote_workspace_sibling_write_path_is_denied(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
+async def test_inline_rejection_denies_sdk_tool_and_terminates_run(
     tmp_path: Path,
 ) -> None:
     gate, approvals, runs, events, context = await _arrange(tmp_path)
@@ -1017,12 +1017,11 @@ async def test_inline_rejection_denies_sdk_tool_without_terminal_run_event(
     )
 
     assert _decision(await task) == "deny"
-    assert (await runs.get("tenant-a", "run-sdk")).status is RunStatus.RUNNING
+    assert (await runs.get("tenant-a", "run-sdk")).status is RunStatus.REJECTED
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     event_types = [event.type for event in emitted]
     assert "tool.result" not in event_types
-    assert "run.rejected" not in event_types
-    assert event_types[-1] == "run.running"
+    assert event_types[-1] == "run.rejected"
 
 
 @pytest.mark.asyncio

@@ -3820,6 +3820,7 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 .execution-action-result {
+  margin: 0;
   width: 100%;
   min-width: 0;
   max-height: 9.5rem;
@@ -3833,8 +3834,14 @@ textarea:not(.aui-composer-input):focus-visible,
   background: #f3f5f3;
   color: #909691;
   font: 450 10px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  white-space: pre;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.execution-action-result > code {
+  font: inherit;
+  white-space: inherit;
 }
 
 .execution-action-detail.action-failed,

@@ -259,7 +259,7 @@ async def test_inline_approval_wakes_the_waiting_sdk_call_and_cleans_up() -> Non
 
 
 @pytest.mark.asyncio
-async def test_inline_rejection_resumes_sdk_without_emitting_a_run_terminal() -> None:
+async def test_inline_rejection_terminates_run_without_resuming_sdk() -> None:
     service, runs, events = await arrange()
     approval = await service.request(
         tenant_id="tenant-a",
@@ -277,17 +277,16 @@ async def test_inline_rejection_resumes_sdk_without_emitting_a_run_terminal() ->
     )
 
     assert await waiting is ApprovalStatus.REJECTED
-    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.RUNNING
+    assert (await runs.get("tenant-a", "run-1")).status is RunStatus.REJECTED
     emitted = await events.list_after("tenant-a", "run-1", 0)
     event_types = [event.type for event in emitted]
     assert event_types == [
         "approval.requested",
         "run.waiting_approval",
         "approval.rejected",
-        "run.running",
+        "run.rejected",
     ]
     assert "tool.result" not in event_types
-    assert "run.rejected" not in event_types
 
 
 @pytest.mark.asyncio
@@ -340,7 +339,7 @@ async def test_inline_decision_crosses_api_and_worker_service_instances() -> Non
     )
 
     assert await asyncio.wait_for(waiting, timeout=0.2) is ApprovalStatus.REJECTED
-    assert (await runs.get("tenant-a", "run-cross-process")).status is RunStatus.RUNNING
+    assert (await runs.get("tenant-a", "run-cross-process")).status is RunStatus.REJECTED
 
 
 @pytest.mark.asyncio

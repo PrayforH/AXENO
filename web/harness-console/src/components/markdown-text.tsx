@@ -9,13 +9,6 @@ import { memo, useState, type ComponentPropsWithoutRef } from "react";
 import { MermaidCodeHeader, MermaidDiagram } from "./mermaid-diagram";
 import { SourceLink } from "./source-link";
 
-export const codexStreamSmoothing = {
-  drainMs: 320,
-  maxCharIntervalMs: 8,
-  maxCharsPerFrame: 12,
-  minCommitMs: 32,
-} as const;
-
 function CodeHeader({ language, code }: CodeHeaderProps) {
   const [copied, setCopied] = useState(false);
 
@@ -53,7 +46,12 @@ function MarkdownTextImpl() {
     <MarkdownTextPrimitive
       className="aui-md"
       remarkPlugins={[remarkGfm]}
-      smooth={codexStreamSmoothing}
+      // The live response store already batches network deltas per animation
+      // frame. A second character-by-character reveal exposes incomplete
+      // Markdown delimiters (for example `**`) until their closing token is
+      // replayed, which looks like a final-pass renderer. Parse every received
+      // delta immediately so Markdown remains formatted throughout streaming.
+      smooth={false}
       components={{ CodeHeader, a: SourceLink, table: ScrollableTable }}
       componentsByLanguage={{
         mermaid: {

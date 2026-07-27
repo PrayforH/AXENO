@@ -498,6 +498,37 @@ function ActionIcon({ kind }: { kind: ActionIconKind }) {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6.5h14M5 3v3.5M15 3v3.5M4 6.5V17h12V6.5M7 10h6M7 13h4" /></svg>;
 }
 
+export function formatResultPreview(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
+    return value;
+  }
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return value;
+  }
+}
+
+function ResultPreview({
+  children,
+  label,
+}: {
+  children: string;
+  label: string;
+}) {
+  return (
+    <pre
+      className="execution-action-result"
+      role="region"
+      aria-label={label}
+      tabIndex={0}
+    >
+      <code>{formatResultPreview(children)}</code>
+    </pre>
+  );
+}
+
 function ActionRow({ action }: { action: ActionNode }) {
   const hasResult = Boolean(action.resultPreview || action.entries?.length);
   const heading = (
@@ -514,39 +545,29 @@ function ActionRow({ action }: { action: ActionNode }) {
   const result = (
     <div className="execution-action-body">
       {action.resultPreview && (
-        <span
-          className="execution-action-result"
-          role="region"
-          aria-label="处理结果预览"
-          tabIndex={0}
-        >
+        <ResultPreview label="处理结果预览">
           {action.resultPreview}
-        </span>
+        </ResultPreview>
       )}
       {action.entries && (
-        <span className="execution-action-details">
+        <div className="execution-action-details">
           {action.entries.map((entry) => (
-            <span
+            <div
               className={`execution-action-detail action-${entry.status}`}
               key={entry.id}
             >
-              <span className="execution-action-detail-heading">
+              <div className="execution-action-detail-heading">
                 <span>{entry.label}</span>
                 <small>{entry.result}</small>
-              </span>
+              </div>
               {entry.preview && (
-                <span
-                  className="execution-action-result"
-                  role="region"
-                  aria-label={`${entry.label} 结果预览`}
-                  tabIndex={0}
-                >
+                <ResultPreview label={`${entry.label} 结果预览`}>
                   {entry.preview}
-                </span>
+                </ResultPreview>
               )}
-            </span>
+            </div>
           ))}
-        </span>
+        </div>
       )}
     </div>
   );
