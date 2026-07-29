@@ -16,9 +16,12 @@ API 指标由 `api:8000/metrics` 暴露，Worker 与 Reaper 指标由
 | 目标 | 阈值 | 数据源 |
 | --- | ---: | --- |
 | Run 创建 P95 | `< 500ms` | API middleware |
+| Queue Wait P95 | `< 1s` | durable Run lifecycle |
+| 首 Runtime Event P95 | `< 1.5s` | Worker runtime stream |
+| 首正文 P95 | `< 3s` | Worker runtime stream |
 | durable event 首次读取 P95 | `< 2s` | observed event repository |
-| 取消 API P95 | `< 10s` | API middleware |
-| 审批恢复 API P95 | `< 10s` | API middleware |
+| 取消收敛 P95 | `< 3s` | durable Run lifecycle |
+| 审批等待 P95 | `< 10s` | durable Approval lifecycle |
 | Artifact 下载成功率 | `> 99.9%` | artifact API |
 | 终态 Trace 完整率 | `> 99%` | terminal quality hook |
 
@@ -46,6 +49,8 @@ Credential Lease 撤销任一步失败，都会生成 `reaper_finalize_failed` �
 
 - `harness_queue_tasks{state="ready"}`：持续增长表示到达率超过完成率；
 - `harness_queue_tasks{state="processing"}`：接近 Worker 并发上限时是已用执行槽；
+- `harness_worker_queue_failures_total{operation=...}`：区分 dequeue、ack、retry 和续租故障；
+- `harness_run_stage_duration_seconds{stage=...}`：定位排队、Runtime 首事件或首正文变慢；
 - Run 五类活动状态：判断拥塞发生在排队、环境准备、模型执行、审批还是取消；
 - active Preview、Sandbox、Approval 与 Credential Lease：判断外部资源占用；
 - PostgreSQL pool checked-out：判断是否先受数据库连接池限制；
@@ -68,6 +73,15 @@ Credential Lease 撤销任一步失败，都会生成 `reaper_finalize_failed` �
 1. 检查 PostgreSQL `run_events` 写入与 Redis EventBus；
 2. EventBus 失败时客户端仍应能从 PostgreSQL 回放，不得丢失 durable event；
 3. 恢复后确认 sequence 连续，并观察告警窗口自然恢复。
+
+### Run 分段延迟
+
+1. Queue Wait 超标时先对比 ready/processing 队列、Worker 并发和 Sandbox 容量；
+2. 首 Runtime Event 超标而 Queue Wait 正常时，检查 Sandbox prepare、模型网关连接和
+   Runtime 初始化；
+3. 首事件正常但首正文超标时，检查模型首 token、工具前置调用和上下文大小；
+4. 审批等待从 durable 请求创建计到决策 CAS 成功，不能用审批 HTTP 请求耗时代替；
+5. 取消收敛从 durable `cancelling` 计到 `cancelled`，包含 Worker 或 Reaper 的真实收敛。
 
 ### Artifact 下载失败
 
@@ -96,7 +110,8 @@ Credential Lease 撤销任一步失败，都会生成 `reaper_finalize_failed` �
 ### 队列积压
 
 1. 对比 ready 与 processing；ready 增长而 processing 为零通常是 Worker 不可用；
-2. 检查 Redis、Worker 健康、任务 visibility lease 和执行后端；
+2. 按 `harness_worker_queue_failures_total` 的 operation 检查 Redis、Worker 健康、
+   visibility lease 和执行后端；
 3. Worker 扩容前检查模型网关、Sandbox、PostgreSQL 和租户 Quota；
 4. Redis 恢复后过期 processing task 会重新可见，Run fencing 阻止陈旧执行者覆盖新状态。
 
@@ -105,7 +120,7 @@ Credential Lease 撤销任一步失败，都会生成 `reaper_finalize_failed` �
 | 注入 | 期望证据 | 不允许发生 |
 | --- | --- | --- |
 | Worker 在 dequeue 后退出 | visibility 到期后重新投递；旧 fencing 失败 | 两个执行者同时提交终态 |
-| Redis 暂时不可用 | Worker 记录续租失败；Run 仍以 DB CAS 收敛 | 返回伪成功或丢 durable event |
+| Redis 暂时不可用 | Worker 记录有界队列失败指标并继续消费；Run 仍以 DB CAS 收敛 | Worker 退出、后续 Run 被阻断或丢 durable event |
 | PostgreSQL 写失败 | API/Worker 明确失败并重试 | 只写 Redis 后宣称成功 |
 | Sandbox 创建/销毁失败 | Run/incident 留下错误；Reaper 重试 | 自动回退到 unsafe local |
 | Langfuse 不可用 | quality record 可重放；Run 终态不变 | 因观测后端失败回滚业务结果 |

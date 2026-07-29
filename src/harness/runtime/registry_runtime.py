@@ -117,16 +117,14 @@ class RegistryClaudeRuntime:
             route_id,
             strict=route_override is not None,
         )
-        selected_model = (
-            snapshot.manifest.spec.model.model
-            if route_id == configured_route
-            else selected_config.model
-        )
         route = ModelRoute(
             route_id=route_id,
             provider=selected_config.provider,
             base_url=selected_config.base_url,
-            model=selected_model,
+            # The manifest selects a logical route. The deployment binding is
+            # authoritative for the provider model so the same published Agent
+            # can run against a locally mapped or production model.
+            model=selected_config.model,
             compatibility=selected_config.compatibility,
             capabilities=selected_config.capabilities,
             auth_scheme=selected_config.resolved_auth_scheme,
@@ -166,7 +164,7 @@ class RegistryClaudeRuntime:
                 route_id=fallback_route_id,
                 provider=selected_fallback.provider,
                 base_url=selected_fallback.base_url,
-                model=(snapshot.manifest.spec.model.fallback_model or selected_fallback.model),
+                model=selected_fallback.model,
                 compatibility=selected_fallback.compatibility,
                 capabilities=selected_fallback.capabilities,
                 auth_scheme=selected_fallback.resolved_auth_scheme,

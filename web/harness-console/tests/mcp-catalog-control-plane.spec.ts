@@ -44,6 +44,9 @@ describe("MCP capability catalog", () => {
 
   it("discovers an address and supports multi-tool selection", () => {
     expect(component).toContain("studioClient.discoverMcp");
+    expect(component).toContain("MCP_IDENTIFIER_PATTERN");
+    expect(component).toContain("支持连字符和单下划线");
+    expect(component).toContain("服务名可保留单下划线");
     expect(component).toContain("initialize 和 tools/list");
     expect(component).toContain("检测地址");
     expect(component).toContain("TRANSPORT_LABELS");

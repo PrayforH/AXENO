@@ -439,6 +439,7 @@ def build_memory_container(
         id_generator=id_generator,
         queue=queue,
         observability=observability,
+        metrics=reliability_metrics,
     )
     artifact_service = ArtifactService(
         runs=runs,

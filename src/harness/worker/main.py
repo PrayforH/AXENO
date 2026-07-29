@@ -38,6 +38,7 @@ async def _renew_task_lease(
     *,
     stop: asyncio.Event,
     interval: float,
+    metrics: ReliabilityMetrics | None = None,
 ) -> None:
     while not stop.is_set():
         await _wait_for_work(stop, interval)
@@ -53,6 +54,11 @@ async def _renew_task_lease(
                     "run task lease renewal failed",
                     extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
                 )
+                if metrics is not None:
+                    metrics.increment(
+                        "harness_worker_queue_failures_total",
+                        labels={"operation": "extend_lease"},
+                    )
 
 
 async def worker_loop(
@@ -64,6 +70,7 @@ async def worker_loop(
     lease_heartbeat_interval: float = 20,
     concurrency: int = 1,
     maintenance: Callable[[], Awaitable[object]] | None = None,
+    metrics: ReliabilityMetrics | None = None,
 ) -> None:
     """Consume durable run tasks until shutdown is requested.
 
@@ -90,6 +97,7 @@ async def worker_loop(
                 task,
                 stop=heartbeat_stop,
                 interval=lease_heartbeat_interval,
+                metrics=metrics,
             )
         )
         try:
@@ -103,10 +111,38 @@ async def worker_loop(
                 "run task execution escaped unexpectedly",
                 extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
             )
-            await queue.retry(task)
+            try:
+                await queue.retry(task)
+            except Exception:
+                # Keep the processing lease intact. Visibility-timeout recovery
+                # will make the task eligible again without terminating this
+                # worker or blocking unrelated ready tasks.
+                logger.exception(
+                    "run task retry failed",
+                    extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
+                )
+                if metrics is not None:
+                    metrics.increment(
+                        "harness_worker_queue_failures_total",
+                        labels={"operation": "retry"},
+                    )
             await _wait_for_work(stop, poll_interval)
         else:
-            await queue.acknowledge(task)
+            try:
+                await queue.acknowledge(task)
+            except Exception:
+                # A terminal Run is idempotent. If the queue acknowledge fails,
+                # leave the lease for redelivery; the next executor observes the
+                # terminal Run and acknowledges it without repeating business work.
+                logger.exception(
+                    "run task acknowledge failed",
+                    extra={"tenant_id": task.tenant_id, "run_id": task.run_id},
+                )
+                if metrics is not None:
+                    metrics.increment(
+                        "harness_worker_queue_failures_total",
+                        labels={"operation": "acknowledge"},
+                    )
         finally:
             heartbeat_stop.set()
             await heartbeat
@@ -127,7 +163,19 @@ async def worker_loop(
             done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
             active.difference_update(done)
             continue
-        task: RunTask | None = await queue.dequeue()
+        try:
+            task: RunTask | None = await queue.dequeue()
+        except Exception:
+            # Redis/network failures and malformed leased payloads are scoped to
+            # this poll. The worker remains alive and continues with later tasks.
+            logger.exception("run task dequeue failed")
+            if metrics is not None:
+                metrics.increment(
+                    "harness_worker_queue_failures_total",
+                    labels={"operation": "dequeue"},
+                )
+            await _wait_for_work(stop, poll_interval)
+            continue
         if task is None:
             done = {child for child in active if child.done()}
             active.difference_update(done)
@@ -290,6 +338,7 @@ async def serve(settings: Settings) -> None:
                 poll_interval=settings.worker_poll_interval_seconds,
                 lease_heartbeat_interval=settings.worker_task_heartbeat_seconds,
                 concurrency=settings.worker_concurrency,
+                metrics=container.reliability_metrics,
             )
         finally:
             stop.set()

@@ -99,6 +99,29 @@ async def test_discovers_multiple_tools_and_returns_canonical_names() -> None:
 
 
 @pytest.mark.asyncio
+async def test_discovery_preserves_single_underscores_in_mcp_identifiers() -> None:
+    connector = RecordingConnector()
+    service = McpDiscoveryService(
+        connector=connector,
+        host_resolver=private_host,
+    )
+
+    result = await service.discover(
+        request(
+            reference="sentiment_query_mcp",
+            serverName="sentiment_query_mcp",
+            endpointUrl="http://company-mcp:8001/mcp",
+            networkAccess="internal",
+        ),
+        tenant_id="tenant-a",
+        user_id="owner-a",
+    )
+
+    assert result.server_name == "sentiment_query_mcp"
+    assert result.tools[0].canonical_name == "mcp__sentiment_query_mcp__search"
+
+
+@pytest.mark.asyncio
 async def test_external_discovery_rejects_private_and_sensitive_urls() -> None:
     connector = RecordingConnector()
     service = McpDiscoveryService(

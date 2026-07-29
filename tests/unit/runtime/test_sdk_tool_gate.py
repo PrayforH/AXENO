@@ -26,7 +26,12 @@ from harness.config import Settings
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus, Session
 from harness.observability.provider import Observability, build_observability
-from harness.policy.models import ContextTrust, ToolResultPolicyRule
+from harness.policy.models import (
+    ContextTrust,
+    PolicyDecision,
+    PolicyRule,
+    ToolResultPolicyRule,
+)
 from harness.policy.profiles import default_policy_profiles
 from harness.policy.results import ResultPolicyEngine
 from harness.policy.rules import PolicyEngine, default_policy_rules
@@ -58,6 +63,7 @@ async def _arrange(
     *,
     sandbox_isolation: SandboxIsolation = SandboxIsolation.WORKSPACE,
     use_profiles: bool = False,
+    policy_rules: Sequence[PolicyRule] | None = None,
     quotas: QuotaService | None = None,
     observability: Observability | None = None,
 ):
@@ -98,7 +104,9 @@ async def _arrange(
         )
         if use_profiles
         else SdkToolGate(
-            policy=PolicyEngine(default_policy_rules()),
+            policy=PolicyEngine(
+                list(policy_rules) if policy_rules is not None else default_policy_rules()
+            ),
             approvals=approval_service,
             events=events,
             quotas=quotas,
@@ -188,10 +196,7 @@ async def test_read_normalizes_unique_immutable_skill_reference(
     requested_path: str,
 ) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
-    target = (
-        tmp_path
-        / ".claude/skills/public-opinion-analysis/references/query-contract.md"
-    )
+    target = tmp_path / ".claude/skills/public-opinion-analysis/references/query-contract.md"
     target.parent.mkdir(parents=True)
     target.write_text("query rules")
     requested_path = requested_path.format(workspace=tmp_path)
@@ -202,9 +207,7 @@ async def test_read_normalizes_unique_immutable_skill_reference(
         _input("Read", {"file_path": requested_path}, "tool-read-skill-reference"),
     )
 
-    relative = (
-        ".claude/skills/public-opinion-analysis/references/query-contract.md"
-    )
+    relative = ".claude/skills/public-opinion-analysis/references/query-contract.md"
     assert _decision(output) == "allow"
     assert _updated_input(output) == {"file_path": relative}
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
@@ -489,9 +492,7 @@ async def test_tool_gate_enforces_mcp_and_subagent_quota(
     assert _decision(first) == "allow"
     assert _decision(second) == "deny"
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
-    assert emitted[-1].payload["error"]["message"] == (
-        f"quota exceeded for {resource.value}"
-    )
+    assert emitted[-1].payload["error"]["message"] == (f"quota exceeded for {resource.value}")
 
 
 @pytest.mark.asyncio
@@ -509,9 +510,7 @@ async def test_completed_subagent_releases_concurrency_for_next_delegation(
         ),
     )
     gate, _, _, _, context = await _arrange(tmp_path, quotas=quotas)
-    assert _decision(
-        await _invoke(gate, context, _input("Task", {}, "delegation-one"))
-    ) == "allow"
+    assert _decision(await _invoke(gate, context, _input("Task", {}, "delegation-one"))) == "allow"
     post_input = cast(
         PostToolUseHookInput,
         {
@@ -528,9 +527,7 @@ async def test_completed_subagent_releases_concurrency_for_next_delegation(
     release_hook = gate.hooks(context)["PostToolUse"][1].hooks[0]
     await release_hook(post_input, "delegation-one", {"signal": None})
 
-    assert _decision(
-        await _invoke(gate, context, _input("Task", {}, "delegation-two"))
-    ) == "allow"
+    assert _decision(await _invoke(gate, context, _input("Task", {}, "delegation-two"))) == "allow"
 
 
 @pytest.mark.asyncio
@@ -732,16 +729,19 @@ async def test_successful_generated_python_file_executes_without_approval(
         {"file_path": "generate_ppt.py", "content": "print('ok')"},
         "tool-create-python",
     )
-    assert _decision(
-        cast(
-            SyncHookJSONOutput,
-            await pre_tool_use(
-                write_input,
-                write_input["tool_use_id"],
-                {"signal": None},
-            ),
+    assert (
+        _decision(
+            cast(
+                SyncHookJSONOutput,
+                await pre_tool_use(
+                    write_input,
+                    write_input["tool_use_id"],
+                    {"signal": None},
+                ),
+            )
         )
-    ) == "allow"
+        == "allow"
+    )
     post_input = cast(
         PostToolUseHookInput,
         {
@@ -838,6 +838,106 @@ async def test_declared_bundle_python_tool_is_allowed_only_with_sandbox_executor
 
 
 @pytest.mark.asyncio
+async def test_declared_published_mcp_tool_is_allowed_when_no_static_rule_matches(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    tool_name = "mcp__sentiment_query_mcp__search_risk_subjects"
+    matcher = gate.hooks(
+        context,
+        result_trust_by_tool={tool_name: ContextTrust.UNTRUSTED},
+    )["PreToolUse"][0]
+
+    output = cast(
+        SyncHookJSONOutput,
+        await matcher.hooks[0](
+            _input(tool_name, {"page_size": 20}, "tool-declared-mcp"),
+            "tool-declared-mcp",
+            {"signal": None},
+        ),
+    )
+
+    assert _decision(output) == "allow"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.allowed"]
+
+
+@pytest.mark.asyncio
+async def test_undeclared_mcp_tool_keeps_implicit_deny(tmp_path: Path) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    tool_name = "mcp__unregistered__search"
+
+    output = await _invoke(
+        gate,
+        context,
+        _input(tool_name, {}, "tool-undeclared-mcp"),
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.result"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_policy_deny_overrides_published_mcp_default(
+    tmp_path: Path,
+) -> None:
+    tool_name = "mcp__sentiment_query_mcp__search_risk_events"
+    gate, _, _, events, context = await _arrange(
+        tmp_path,
+        policy_rules=[
+            PolicyRule(
+                name="deny-risk-events",
+                tool=tool_name,
+                decision=PolicyDecision.DENY,
+            )
+        ],
+    )
+    matcher = gate.hooks(
+        context,
+        result_trust_by_tool={tool_name: ContextTrust.UNTRUSTED},
+    )["PreToolUse"][0]
+
+    output = cast(
+        SyncHookJSONOutput,
+        await matcher.hooks[0](
+            _input(tool_name, {"page_size": 20}, "tool-explicit-deny"),
+            "tool-explicit-deny",
+            {"signal": None},
+        ),
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.result"]
+
+
+@pytest.mark.asyncio
+async def test_declared_bundle_python_tool_still_requires_sandbox_executor(
+    tmp_path: Path,
+) -> None:
+    gate, _, _, events, context = await _arrange(tmp_path)
+    tool_name = "mcp__harness-python-domain-agent__normalize_score"
+    matcher = gate.hooks(
+        context,
+        result_trust_by_tool={tool_name: ContextTrust.SAFE},
+    )["PreToolUse"][0]
+
+    output = cast(
+        SyncHookJSONOutput,
+        await matcher.hooks[0](
+            _input(tool_name, {"value": 0.8}, "tool-python-without-sandbox"),
+            "tool-python-without-sandbox",
+            {"signal": None},
+        ),
+    )
+
+    assert _decision(output) == "deny"
+    emitted = await events.list_after("tenant-a", "run-sdk", 0)
+    assert [event.type for event in emitted] == ["tool.request", "tool.result"]
+
+
+@pytest.mark.asyncio
 async def test_tool_lifecycle_records_redacted_langfuse_observation(
     tmp_path: Path,
 ) -> None:
@@ -894,9 +994,7 @@ async def test_tool_lifecycle_records_redacted_langfuse_observation(
     assert span.attributes["harness.tool.status"] == "succeeded"
     assert span.attributes["langfuse.observation.type"] == "tool"
     assert span.attributes["langfuse.observation.input"] == (
-        '{"file_path":"'
-        + str(tmp_path / "report.md")
-        + '","authorization":"[REDACTED]"}'
+        '{"file_path":"' + str(tmp_path / "report.md") + '","authorization":"[REDACTED]"}'
     )
     assert span.attributes["langfuse.observation.output"] == '{"status":"succeeded"}'
     assert "private-value" not in repr(span.attributes)
@@ -925,9 +1023,7 @@ async def test_remote_workspace_absolute_write_path_is_mapped_to_local_capabilit
         },
         "tool-remote-create-report",
     )
-    output = await pre_tool_use(
-        write_input, write_input["tool_use_id"], {"signal": None}
-    )
+    output = await pre_tool_use(write_input, write_input["tool_use_id"], {"signal": None})
 
     assert _decision(cast(SyncHookJSONOutput, output)) == "allow"
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
@@ -961,9 +1057,7 @@ async def test_write_tools_deny_paths_outside_the_run_workspace(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_remote_workspace_sibling_write_path_is_denied(tmp_path: Path) -> None:
     gate, _, _, events, context = await _arrange(tmp_path)
-    context = context.model_copy(
-        update={"remote_workspace": "/home/user/harness/run-sdk"}
-    )
+    context = context.model_copy(update={"remote_workspace": "/home/user/harness/run-sdk"})
 
     output = await _invoke(
         gate,
@@ -1159,9 +1253,7 @@ async def test_untrusted_tool_result_tightens_follow_up_policy_without_raw_conte
     assert _decision(cast(SyncHookJSONOutput, memory_output)) == "deny"
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     requests = [event for event in emitted if event.type == "tool.request"]
-    trust_change = next(
-        event for event in emitted if event.type == "context.trust.changed"
-    )
+    trust_change = next(event for event in emitted if event.type == "context.trust.changed")
     assert requests[0].payload["context_trust"] == "safe"
     assert requests[1].payload["context_trust"] == "untrusted"
     assert trust_change.payload == {
@@ -1190,12 +1282,15 @@ async def test_failed_untrusted_tool_does_not_change_context_trust(
         {"query": "current release"},
         "tool-failed-web-search",
     )
-    assert _decision(
-        cast(
-            SyncHookJSONOutput,
-            await pre_tool_use(search, search["tool_use_id"], {"signal": None}),
+    assert (
+        _decision(
+            cast(
+                SyncHookJSONOutput,
+                await pre_tool_use(search, search["tool_use_id"], {"signal": None}),
+            )
         )
-    ) == "allow"
+        == "allow"
+    )
     failure = cast(
         PostToolUseFailureHookInput,
         {
@@ -1225,9 +1320,7 @@ async def test_failed_untrusted_tool_does_not_change_context_trust(
     emitted = await events.list_after("tenant-a", "run-sdk", 0)
     assert not any(event.type == "context.trust.changed" for event in emitted)
     assert [
-        event.payload["context_trust"]
-        for event in emitted
-        if event.type == "tool.request"
+        event.payload["context_trust"] for event in emitted if event.type == "tool.request"
     ] == ["safe", "safe"]
 
 
@@ -1285,8 +1378,7 @@ async def test_governed_result_policy_cannot_weaken_catalog_trust(
     trust_change = next(
         event
         for event in emitted
-        if event.type == "context.trust.changed"
-        and event.payload["tool_call_id"] == "tool-read"
+        if event.type == "context.trust.changed" and event.payload["tool_call_id"] == "tool-read"
     )
     assert trust_change.payload["current"] == "untrusted"
     assert "policy_rule" not in trust_change.payload

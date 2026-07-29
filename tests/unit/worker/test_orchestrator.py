@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextvars import ContextVar
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -409,6 +409,8 @@ async def arrange(
     credential_revoker: Callable[[str, str], Awaitable[None]] | None = None,
     quotas: QuotaService | None = None,
     workspaces: WorkspaceService | None = None,
+    clock: Callable[[], datetime] = lambda: NOW,
+    metrics: ReliabilityMetrics | None = None,
 ):
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
@@ -451,12 +453,12 @@ async def arrange(
         events=EventService(
             event_repository,
             InMemoryEventBus(),
-            clock=lambda: NOW,
+            clock=clock,
             id_generator=ids(),
         ),
         runtime=runtime,
         sandbox=sandbox,
-        clock=lambda: NOW,
+        clock=clock,
         policy=policy,
         observability=observability,
         runtime_asset_stager=runtime_asset_stager,
@@ -465,6 +467,7 @@ async def arrange(
         credential_revoker=credential_revoker,
         quotas=quotas,
         workspaces=workspaces,
+        metrics=metrics,
     )
     return orchestrator, runtime, runs, event_repository
 
@@ -890,6 +893,75 @@ async def test_executes_run_and_cleans_sandbox(tmp_path: Path) -> None:
         "run.succeeded",
     ]
     assert (await runs.get("tenant-a", "run-1")).status is RunStatus.SUCCEEDED
+
+
+@pytest.mark.asyncio
+async def test_records_queue_wait_first_runtime_event_and_first_text(
+    tmp_path: Path,
+) -> None:
+    current = [NOW + timedelta(seconds=2)]
+
+    class StageTimingRuntime(FakeRuntime):
+        async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+            del context
+            current[0] = NOW + timedelta(seconds=3)
+            yield RuntimeEvent(type="runtime.system", payload={"subtype": "init"})
+            current[0] = NOW + timedelta(seconds=5)
+            yield RuntimeEvent(type="message.start")
+            yield RuntimeEvent(type="message.delta", payload={"text": "hello"})
+            yield RuntimeEvent(type="message.completed")
+
+    metrics = ReliabilityMetrics()
+    orchestrator, _, _, _ = await arrange(
+        tmp_path,
+        runtime_override=StageTimingRuntime(),
+        clock=lambda: current[0],
+        metrics=metrics,
+    )
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
+        labels={"stage": "queue_wait"},
+    ) == (2, 1)
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
+        labels={"stage": "runtime_first_event"},
+    ) == (1, 1)
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
+        labels={"stage": "runtime_first_text"},
+    ) == (3, 1)
+
+
+@pytest.mark.asyncio
+async def test_recovered_provisioning_run_does_not_record_queue_wait_again(
+    tmp_path: Path,
+) -> None:
+    metrics = ReliabilityMetrics()
+    orchestrator, _, runs, _ = await arrange(tmp_path, metrics=metrics)
+    queued = await runs.get("tenant-a", "run-1")
+    recovering = queued.model_copy(
+        update={
+            "status": RunStatus.PROVISIONING,
+            "fencing_token": queued.fencing_token + 1,
+        }
+    )
+    assert await runs.compare_and_set(RunStatus.QUEUED, recovering)
+
+    result = await orchestrator.execute("tenant-a", "run-1")
+
+    assert result.status is RunStatus.SUCCEEDED
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
+        labels={"stage": "queue_wait"},
+    ) == (None, 0)
 
 
 @pytest.mark.asyncio

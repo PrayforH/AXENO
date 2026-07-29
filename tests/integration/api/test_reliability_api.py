@@ -20,7 +20,7 @@ async def test_reliability_overview_is_readable_but_reconcile_is_admin_only() ->
         denied = await client.post("/v1/operations/reconcile")
 
     assert overview.status_code == 200
-    assert len(overview.json()["objectives"]) == 6
+    assert len(overview.json()["objectives"]) == 9
     assert overview.json()["capacity"]["queueReady"] == 0
     assert denied.status_code == 403
 

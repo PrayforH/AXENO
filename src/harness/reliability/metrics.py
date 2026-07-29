@@ -34,6 +34,18 @@ DEFINITIONS = (
         ("workflow",),
     ),
     MetricDefinition(
+        "harness_run_stage_duration_seconds",
+        "Run latency for bounded execution stages.",
+        "summary",
+        ("stage",),
+    ),
+    MetricDefinition(
+        "harness_worker_queue_failures_total",
+        "Worker queue operation failures by bounded operation.",
+        "counter",
+        ("operation",),
+    ),
+    MetricDefinition(
         "harness_artifact_download_total",
         "Artifact download attempts by outcome.",
         "counter",
@@ -85,7 +97,13 @@ LABEL_VALUE_ALLOWLISTS: dict[tuple[str, str], frozenset[str]] = {
         {"success", "failure"}
     ),
     ("harness_workflow_convergence_seconds", "workflow"): frozenset(
-        {"run.cancel"}
+        {"run.cancel", "approval.decide"}
+    ),
+    ("harness_run_stage_duration_seconds", "stage"): frozenset(
+        {"queue_wait", "runtime_first_event", "runtime_first_text"}
+    ),
+    ("harness_worker_queue_failures_total", "operation"): frozenset(
+        {"dequeue", "acknowledge", "retry", "extend_lease"}
     ),
     ("harness_trace_terminal_total", "completeness"): frozenset(
         {"complete", "missing"}

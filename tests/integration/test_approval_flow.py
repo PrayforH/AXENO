@@ -16,6 +16,7 @@ from harness.application.events import EventService
 from harness.core.errors import ConflictError
 from harness.core.models import ApprovalStatus, Run, RunStatus
 from harness.core.ports import RunTask
+from harness.reliability.metrics import ReliabilityMetrics
 
 NOW = datetime(2026, 7, 11, tzinfo=UTC)
 
@@ -34,6 +35,7 @@ async def arrange(
     *,
     clock: Callable[[], datetime] = lambda: NOW,
     queue: InMemoryTaskQueue | None = None,
+    metrics: ReliabilityMetrics | None = None,
 ):
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -56,6 +58,7 @@ async def arrange(
         id_generator=ids(),
         queue=queue,
         ttl=timedelta(minutes=5),
+        metrics=metrics,
     )
     return service, runs, events
 
@@ -92,6 +95,41 @@ async def test_approval_request_is_idempotent_and_approval_resumes_run() -> None
         "approval.approved",
         "run.running",
     ]
+
+
+@pytest.mark.asyncio
+async def test_approval_decision_records_durable_wait_time() -> None:
+    current = NOW
+
+    def clock() -> datetime:
+        return current
+
+    metrics = ReliabilityMetrics()
+    service, _, _ = await arrange(clock=clock, metrics=metrics)
+    approval = await service.request(
+        tenant_id="tenant-a",
+        run_id="run-1",
+        tool_call_id="tool-timed",
+        reason="review",
+    )
+    current = NOW + timedelta(seconds=7)
+
+    await service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+    await service.decide(
+        tenant_id="tenant-a",
+        approval_id=approval.approval_id,
+        decision=ApprovalStatus.APPROVED,
+    )
+
+    assert metrics.quantile(
+        "harness_workflow_convergence_seconds",
+        0.95,
+        labels={"workflow": "approval.decide"},
+    ) == (7, 1)
 
 
 @pytest.mark.asyncio

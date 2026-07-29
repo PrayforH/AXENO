@@ -30,6 +30,15 @@ def test_prometheus_registry_exports_bounded_summaries_and_counters() -> None:
         1.25,
         labels={"workflow": "run.cancel", "run_id": "must-not-export"},
     )
+    metrics.observe(
+        "harness_run_stage_duration_seconds",
+        0.75,
+        labels={"stage": "runtime_first_text", "run_id": "must-not-export"},
+    )
+    metrics.increment(
+        "harness_worker_queue_failures_total",
+        labels={"operation": "dequeue", "queue": "must-not-export"},
+    )
 
     rendered = metrics.render_prometheus()
 
@@ -41,6 +50,14 @@ def test_prometheus_registry_exports_bounded_summaries_and_counters() -> None:
     assert 'harness_artifact_download_total{outcome="success"} 1' in rendered
     assert (
         'harness_workflow_convergence_seconds{workflow="run.cancel",quantile="0.95"} 1.25'
+        in rendered
+    )
+    assert (
+        'harness_run_stage_duration_seconds{stage="runtime_first_text",quantile="0.95"} 0.75'
+        in rendered
+    )
+    assert (
+        'harness_worker_queue_failures_total{operation="dequeue"} 1'
         in rendered
     )
     assert 'operation="unknown"' in rendered

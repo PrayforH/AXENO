@@ -20,6 +20,59 @@ groups:
           summary: Harness durable event 可见延迟 P95 超过 2 秒
           runbook_url: docs/runbooks/platform-reliability.md#event-可见延迟
 
+      - alert: HarnessQueueWaitHigh
+        expr: max(harness_run_stage_duration_seconds{stage="queue_wait",quantile="0.95"}) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Queue Wait P95 超过 1 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessRuntimeFirstEventDelayed
+        expr: max(harness_run_stage_duration_seconds{stage="runtime_first_event",quantile="0.95"}) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 首 Runtime Event P95 超过 1.5 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessRuntimeFirstTextDelayed
+        expr: max(harness_run_stage_duration_seconds{stage="runtime_first_text",quantile="0.95"}) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 首正文 P95 超过 3 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessCancelConvergenceDelayed
+        expr: max(harness_workflow_convergence_seconds{workflow="run.cancel",quantile="0.95"}) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 取消收敛 P95 超过 3 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessApprovalWaitHigh
+        expr: max(harness_workflow_convergence_seconds{workflow="approval.decide",quantile="0.95"}) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 审批等待 P95 超过 10 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessWorkerQueueOperationFailures
+        expr: sum by (operation) (increase(harness_worker_queue_failures_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Worker 检测到队列操作失败
+          runbook_url: docs/runbooks/platform-reliability.md#队列积压
+
       - alert: HarnessArtifactDownloadReliabilityLow
         expr: |
           sum(increase(harness_artifact_download_total{outcome="success"}[15m]))

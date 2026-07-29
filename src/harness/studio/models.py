@@ -330,13 +330,16 @@ class BuiltinToolCapability(StudioModel):
     approval_behavior: str = Field(alias="approvalBehavior")
 
 
+_MCP_IDENTIFIER_PATTERN = r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$"
+
+
 class McpCapability(StudioModel):
-    reference: str
+    reference: str = Field(pattern=_MCP_IDENTIFIER_PATTERN)
     category: Literal["tool", "knowledge"] = "tool"
     server_name: str | None = Field(
         default=None,
         alias="serverName",
-        pattern=r"^[a-z][a-z0-9-]*$",
+        pattern=_MCP_IDENTIFIER_PATTERN,
     )
     label: str
     description: str
@@ -393,8 +396,8 @@ class McpCapability(StudioModel):
 
 
 class McpDiscoveryRequest(StudioModel):
-    reference: str = Field(pattern=r"^[a-z][a-z0-9-]*$")
-    server_name: str = Field(alias="serverName", pattern=r"^[a-z][a-z0-9-]*$")
+    reference: str = Field(pattern=_MCP_IDENTIFIER_PATTERN)
+    server_name: str = Field(alias="serverName", pattern=_MCP_IDENTIFIER_PATTERN)
     endpoint_url: str = Field(alias="endpointUrl", min_length=1, max_length=2048)
     network_access: Literal["internal", "external"] = Field(alias="networkAccess")
     auth_mode: Literal["none", "bearer", "header", "query"] = Field(

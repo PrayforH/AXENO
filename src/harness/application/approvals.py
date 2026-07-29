@@ -16,6 +16,7 @@ from harness.core.ports import (
 )
 from harness.core.state_machine import transition
 from harness.observability.provider import Observability
+from harness.reliability.metrics import ReliabilityMetrics
 
 
 class ApprovalService:
@@ -31,6 +32,7 @@ class ApprovalService:
         ttl: timedelta = timedelta(minutes=15),
         decision_poll_interval_seconds: float = 0.25,
         observability: Observability | None = None,
+        metrics: ReliabilityMetrics | None = None,
     ) -> None:
         if decision_poll_interval_seconds <= 0:
             raise ValueError("approval decision poll interval must be positive")
@@ -43,6 +45,7 @@ class ApprovalService:
         self._ttl = ttl
         self._decision_poll_interval = decision_poll_interval_seconds
         self._observability = observability
+        self._metrics = metrics
         self._inline_waiters: dict[str, asyncio.Future[ApprovalStatus]] = {}
         self._inline_tenants: dict[str, str] = {}
 
@@ -340,12 +343,19 @@ class ApprovalService:
             return current
         if current.status is not ApprovalStatus.PENDING:
             raise ConflictError(f"approval is already {current.status.value}")
-        if self._clock() >= current.expires_at:
+        decided_at = self._clock()
+        if decided_at >= current.expires_at:
             await self._expire(current)
             raise ConflictError("approval has expired")
         updated = current.model_copy(update={"status": decision})
         if not await self._approvals.compare_and_set(ApprovalStatus.PENDING, updated):
             raise ConflictError("approval changed while decision was applied")
+        if self._metrics is not None:
+            self._metrics.observe(
+                "harness_workflow_convergence_seconds",
+                max(0, (decided_at - current.created_at).total_seconds()),
+                labels={"workflow": "approval.decide"},
+            )
         run = await self._runs.get(tenant_id, current.run_id)
         await self._events.append(
             tenant_id=tenant_id,

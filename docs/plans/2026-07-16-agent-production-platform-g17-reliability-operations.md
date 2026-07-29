@@ -39,11 +39,17 @@ Runbook，后续需要页面时可以复用这些真实控制面事实。
 | SLO | 目标 | 指标 |
 | --- | --- | --- |
 | Run 创建 P95 | `< 500ms` | `harness_api_request_duration_seconds{operation="run.create"}` |
+| Queue Wait P95 | `< 1s` | `harness_run_stage_duration_seconds{stage="queue_wait"}` |
+| 首 Runtime Event P95 | `< 1.5s` | `harness_run_stage_duration_seconds{stage="runtime_first_event"}` |
+| 首正文 P95 | `< 3s` | `harness_run_stage_duration_seconds{stage="runtime_first_text"}` |
 | Event 首次增量读取 P95 | `< 2s` | `harness_event_visibility_delay_seconds` |
-| 取消收敛 P95 | `< 10s` | `...{operation="run.cancel"}` |
-| 审批恢复 P95 | `< 10s` | `...{operation="approval.decide"}` |
+| 取消收敛 P95 | `< 3s` | `harness_workflow_convergence_seconds{workflow="run.cancel"}` |
+| 审批等待 P95 | `< 10s` | `harness_workflow_convergence_seconds{workflow="approval.decide"}` |
 | Artifact 下载成功率 | `> 99.9%` | `harness_artifact_download_total` |
 | 终态 Trace 完整率 | `> 99%` | `harness_trace_terminal_total` |
+
+> 2026-07-27 更新：取消与审批已从 API 请求耗时改为 durable lifecycle，
+> 并补齐 Queue Wait、首 Runtime Event、首正文三段执行指标。
 
 API 由 `/metrics` 暴露指标，生产环境需要 `HARNESS_API_BEARER_TOKEN`。Worker 在内部端口
 `8001` 暴露 Reaper、Trace 和容量指标，Compose 只使用 `expose`，不发布到宿主机。

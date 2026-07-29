@@ -16,9 +16,9 @@
 
 | 优先级 | 能力 | 参考提交 | 决策 |
 | --- | --- | --- | --- |
-| P0 | Worker 队列故障隔离 | `a163cfd` | 待实施 |
+| P0 | Worker 队列故障隔离 | `a163cfd` | 已实施（2026-07-27） |
 | P0 | 真实取消与 durable terminal | `783bba8` | 本批实施 |
-| P0 | Queue/首事件/首正文分段延迟 | `8c81e38` | 待实施 |
+| P0 | Queue/首事件/首正文分段延迟 | `8c81e38` | 已实施（2026-07-27） |
 | P1 | 多租户公平 Run Queue | `c429b66` | 待实施 |
 | P1 | Agent 版本运行影响 | `2ce92f0` | 待实施 |
 | P1 | Agent 版本生命周期治理 | `44405db` | 待实施 |
@@ -43,6 +43,19 @@
 8. 重复停止请求保持幂等，返回当前 `cancelling` 或既有终态。
 
 取消收敛指标从 HTTP 请求耗时改为“取消请求持久化到 durable `cancelled`”的真实耗时。
+
+## P0.1 / P0.2 实施结果（2026-07-27）
+
+- Worker 将 `dequeue`、`retry`、`acknowledge`、`extend_lease` 异常隔离在当前轮次或
+  当前任务；队列后端抖动不再终止消费循环；
+- 坏任务执行失败后排回队尾，不阻断其后的 Run；`retry` 或 `acknowledge` 失败时保留
+  processing lease，由 visibility timeout 恢复，Run fencing 保证重复投递安全；
+- 新增 `harness_worker_queue_failures_total{operation=...}`，只使用四个有界标签值；
+- 新增 `harness_run_stage_duration_seconds{stage=...}`，采集 `queue_wait`、
+  `runtime_first_event` 和 `runtime_first_text`；
+- 审批指标改为从 durable `ApprovalRequest.created_at` 到成功 CAS 决策的真实等待时长；
+- Reliability Overview 统一展示 Queue Wait、首 Runtime Event、首正文、审批等待和
+  取消收敛 P95；恢复执行不会重复记录初始 Queue Wait，重复审批决定不会重复采样。
 
 ## 本批实施结果
 

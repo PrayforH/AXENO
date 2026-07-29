@@ -742,6 +742,7 @@ def build_production_container(
         id_generator=ids,
         queue=queue,
         observability=observability,
+        metrics=reliability_metrics,
     )
     artifact_service = ArtifactService(
         runs=runs,

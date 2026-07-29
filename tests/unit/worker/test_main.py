@@ -4,13 +4,25 @@ import pytest
 
 from harness.core.models import Run
 from harness.core.ports import RunTask
+from harness.reliability.metrics import ReliabilityMetrics
 from harness.worker.main import maintenance_loop, worker_loop
 
 
 class Queue:
-    def __init__(self, tasks: list[RunTask], *, fail_lease_renewal: bool = False) -> None:
+    def __init__(
+        self,
+        tasks: list[RunTask],
+        *,
+        fail_lease_renewal: bool = False,
+        fail_dequeue_once: bool = False,
+        fail_acknowledge_once: bool = False,
+        fail_retry_once: bool = False,
+    ) -> None:
         self.tasks = tasks
         self.fail_lease_renewal = fail_lease_renewal
+        self.fail_dequeue_once = fail_dequeue_once
+        self.fail_acknowledge_once = fail_acknowledge_once
+        self.fail_retry_once = fail_retry_once
         self.acknowledged: list[RunTask] = []
         self.retried: list[RunTask] = []
         self.extended: list[RunTask] = []
@@ -19,12 +31,21 @@ class Queue:
         self.tasks.append(task)
 
     async def dequeue(self) -> RunTask | None:
+        if self.fail_dequeue_once:
+            self.fail_dequeue_once = False
+            raise RuntimeError("redis unavailable")
         return self.tasks.pop(0) if self.tasks else None
 
     async def acknowledge(self, task: RunTask) -> None:
+        if self.fail_acknowledge_once:
+            self.fail_acknowledge_once = False
+            raise RuntimeError("redis unavailable")
         self.acknowledged.append(task)
 
     async def retry(self, task: RunTask) -> None:
+        if self.fail_retry_once:
+            self.fail_retry_once = False
+            raise RuntimeError("redis unavailable")
         self.retried.append(task)
         self.tasks.append(task)
 
@@ -108,6 +129,20 @@ class SessionSerialExecutor:
         return Run.model_construct()
 
 
+class BadThenGoodExecutor:
+    def __init__(self, stop: asyncio.Event) -> None:
+        self.stop = stop
+        self.calls: list[str] = []
+
+    async def execute(self, tenant_id: str, run_id: str) -> Run:
+        del tenant_id
+        self.calls.append(run_id)
+        if run_id == "run-bad":
+            raise RuntimeError("poison task")
+        self.stop.set()
+        return Run.model_construct()
+
+
 @pytest.mark.asyncio
 async def test_worker_loop_executes_scoped_task_and_stops() -> None:
     stop = asyncio.Event()
@@ -132,6 +167,92 @@ async def test_worker_loop_requeues_task_after_unexpected_failure() -> None:
 
     assert queue.retried == [task]
     assert queue.acknowledged == []
+
+
+@pytest.mark.asyncio
+async def test_worker_recovers_after_dequeue_failure_and_consumes_next_task() -> None:
+    stop = asyncio.Event()
+    task = RunTask(tenant_id="tenant-a", run_id="run-1")
+    queue = Queue([task], fail_dequeue_once=True)
+    executor = Executor(stop)
+    metrics = ReliabilityMetrics()
+
+    await worker_loop(
+        queue,
+        executor,
+        stop=stop,
+        poll_interval=0.001,
+        metrics=metrics,
+    )
+
+    assert executor.calls == [("tenant-a", "run-1")]
+    assert queue.acknowledged == [task]
+    assert metrics.count(
+        "harness_worker_queue_failures_total",
+        labels={"operation": "dequeue"},
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_worker_contains_retry_failure_to_bad_task() -> None:
+    stop = asyncio.Event()
+    task = RunTask(tenant_id="tenant-a", run_id="run-bad")
+    queue = Queue([task], fail_retry_once=True)
+    executor = Executor(stop, fail=True)
+    metrics = ReliabilityMetrics()
+
+    await worker_loop(
+        queue,
+        executor,
+        stop=stop,
+        poll_interval=0.001,
+        metrics=metrics,
+    )
+
+    assert queue.retried == []
+    assert metrics.count(
+        "harness_worker_queue_failures_total",
+        labels={"operation": "retry"},
+    ) == 1
+
+
+@pytest.mark.asyncio
+async def test_bad_task_does_not_block_the_following_run() -> None:
+    stop = asyncio.Event()
+    bad = RunTask(tenant_id="tenant-a", run_id="run-bad")
+    good = RunTask(tenant_id="tenant-a", run_id="run-good")
+    queue = Queue([bad, good])
+    executor = BadThenGoodExecutor(stop)
+
+    await worker_loop(queue, executor, stop=stop, poll_interval=0.001)
+
+    assert executor.calls == ["run-bad", "run-good"]
+    assert queue.retried == [bad]
+    assert queue.acknowledged == [good]
+
+
+@pytest.mark.asyncio
+async def test_worker_contains_acknowledge_failure_after_terminal_run() -> None:
+    stop = asyncio.Event()
+    task = RunTask(tenant_id="tenant-a", run_id="run-1")
+    queue = Queue([task], fail_acknowledge_once=True)
+    executor = Executor(stop)
+    metrics = ReliabilityMetrics()
+
+    await worker_loop(
+        queue,
+        executor,
+        stop=stop,
+        poll_interval=0.001,
+        metrics=metrics,
+    )
+
+    assert executor.calls == [("tenant-a", "run-1")]
+    assert queue.acknowledged == []
+    assert metrics.count(
+        "harness_worker_queue_failures_total",
+        labels={"operation": "acknowledge"},
+    ) == 1
 
 
 @pytest.mark.asyncio
@@ -261,6 +382,7 @@ async def test_worker_continues_when_lease_renewal_temporarily_fails() -> None:
     task = RunTask(tenant_id="tenant-a", run_id="run-1")
     queue = Queue([task], fail_lease_renewal=True)
     executor = SlowExecutor(stop)
+    metrics = ReliabilityMetrics()
     worker = asyncio.create_task(
         worker_loop(
             queue,
@@ -268,6 +390,7 @@ async def test_worker_continues_when_lease_renewal_temporarily_fails() -> None:
             stop=stop,
             poll_interval=0.001,
             lease_heartbeat_interval=0.005,
+            metrics=metrics,
         )
     )
 
@@ -277,6 +400,10 @@ async def test_worker_continues_when_lease_renewal_temporarily_fails() -> None:
     await asyncio.wait_for(worker, timeout=0.2)
 
     assert queue.acknowledged == [task]
+    assert metrics.count(
+        "harness_worker_queue_failures_total",
+        labels={"operation": "extend_lease"},
+    ) >= 1
 
 
 @pytest.mark.asyncio

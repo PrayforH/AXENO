@@ -284,7 +284,10 @@ class RunOrchestrator:
                 yield event
 
     async def _cancellable_runtime_events(
-        self, context: RuntimeContext
+        self,
+        context: RuntimeContext,
+        *,
+        on_event: Callable[[Any], None] | None = None,
     ) -> AsyncGenerator[Any, None]:
         """Poll durable cancellation while the SDK waits on background children."""
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -292,6 +295,8 @@ class RunOrchestrator:
         async def produce() -> None:
             try:
                 async for event in self._runtime_events(context):
+                    if on_event is not None:
+                        on_event(event)
                     await queue.put(("event", event))
             except asyncio.CancelledError:
                 raise
@@ -624,6 +629,15 @@ class RunOrchestrator:
             )
         return updated
 
+    def _observe_run_stage(self, stage: str, duration_seconds: float) -> None:
+        if self._metrics is None:
+            return
+        self._metrics.observe(
+            "harness_run_stage_duration_seconds",
+            max(0, duration_seconds),
+            labels={"stage": stage},
+        )
+
     async def _handle_unexpected_error(
         self,
         tenant_id: str,
@@ -852,6 +866,10 @@ class RunOrchestrator:
                     run = await self._reclaim(run)
                 else:
                     run = await self._move(run, RunStatus.PROVISIONING)
+                    self._observe_run_stage(
+                        "queue_wait",
+                        (run.updated_at - run.created_at).total_seconds(),
+                    )
             else:
                 run = await self._reclaim(run)
             session = await self._sessions.get(tenant_id, run.session_id)
@@ -1044,7 +1062,29 @@ class RunOrchestrator:
             active_message_id: str | None = context.assistant_message_id
             last_completed_message_id: str | None = None
             active_message_text = ""
-            runtime_events = self._cancellable_runtime_events(context)
+            runtime_started_at = self._clock()
+            first_runtime_event_observed = False
+            first_runtime_text_observed = False
+
+            def observe_runtime_event(runtime_event: Any) -> None:
+                nonlocal first_runtime_event_observed, first_runtime_text_observed
+                observed_at = self._clock()
+                elapsed = (observed_at - runtime_started_at).total_seconds()
+                if not first_runtime_event_observed:
+                    self._observe_run_stage("runtime_first_event", elapsed)
+                    first_runtime_event_observed = True
+                if (
+                    not first_runtime_text_observed
+                    and getattr(runtime_event, "type", None) == "message.delta"
+                    and str(getattr(runtime_event, "payload", {}).get("text", "")).strip()
+                ):
+                    self._observe_run_stage("runtime_first_text", elapsed)
+                    first_runtime_text_observed = True
+
+            runtime_events = self._cancellable_runtime_events(
+                context,
+                on_event=observe_runtime_event,
+            )
             async for runtime_event in runtime_events:
                 latest = await self._runs.get(tenant_id, run_id)
                 if latest.status is RunStatus.CANCELLING:

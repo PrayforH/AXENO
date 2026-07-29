@@ -77,6 +77,26 @@ async def test_slo_reconciliation_does_not_resolve_reaper_incidents() -> None:
         4,
         labels={"workflow": "run.cancel"},
     )
+    metrics.observe(
+        "harness_workflow_convergence_seconds",
+        5,
+        labels={"workflow": "approval.decide"},
+    )
+    metrics.observe(
+        "harness_run_stage_duration_seconds",
+        0.5,
+        labels={"stage": "queue_wait"},
+    )
+    metrics.observe(
+        "harness_run_stage_duration_seconds",
+        1,
+        labels={"stage": "runtime_first_event"},
+    )
+    metrics.observe(
+        "harness_run_stage_duration_seconds",
+        2,
+        labels={"stage": "runtime_first_text"},
+    )
     counters: dict[str, int] = {}
 
     def ids(prefix: str) -> str:
@@ -97,6 +117,11 @@ async def test_slo_reconciliation_does_not_resolve_reaper_incidents() -> None:
     assert objectives["run_create_p95"].health is SloHealth.BREACHED
     assert objectives["cancel_convergence_p95"].observed == 4
     assert objectives["cancel_convergence_p95"].health is SloHealth.BREACHED
+    assert objectives["queue_wait_p95"].observed == 0.5
+    assert objectives["runtime_first_event_p95"].observed == 1
+    assert objectives["runtime_first_text_p95"].observed == 2
+    assert objectives["approval_convergence_p95"].observed == 5
+    assert objectives["approval_convergence_p95"].source == "durable approval lifecycle"
     incidents = await repository.list_incidents(
         "tenant-a", status=IncidentStatus.OPEN, limit=10
     )

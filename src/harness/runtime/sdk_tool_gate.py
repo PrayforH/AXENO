@@ -154,9 +154,7 @@ class _RunFileCapabilities:
             and self._remote_workspace is not None
             and pure.is_relative_to(self._remote_workspace)
         ):
-            candidate = self._workspace.joinpath(
-                *pure.relative_to(self._remote_workspace).parts
-            )
+            candidate = self._workspace.joinpath(*pure.relative_to(self._remote_workspace).parts)
         else:
             candidate = Path(value)
             if not candidate.is_absolute():
@@ -386,9 +384,7 @@ class SdkToolGate:
                     "harness.sandbox.provider": context.sandbox_provider,
                     "harness.sandbox.isolation": context.sandbox_isolation.value,
                     "langfuse.observation.type": "tool",
-                    "langfuse.observation.level": (
-                        "ERROR" if status != "succeeded" else "DEFAULT"
-                    ),
+                    "langfuse.observation.level": ("ERROR" if status != "succeeded" else "DEFAULT"),
                     "langfuse.observation.status_message": status,
                     "langfuse.observation.metadata.call_id": hook_input["tool_use_id"],
                     "langfuse.observation.metadata.policy": selected_policy_id,
@@ -520,8 +516,7 @@ class SdkToolGate:
             pending = pending_result_trust.pop(typed_input["tool_use_id"], None)
             if (
                 pending is not None
-                and _TRUST_PRECEDENCE[pending[1]]
-                > _TRUST_PRECEDENCE[current_context_trust]
+                and _TRUST_PRECEDENCE[pending[1]] > _TRUST_PRECEDENCE[current_context_trust]
             ):
                 tool_name, next_trust, result_policy_rule = pending
                 previous_trust = current_context_trust
@@ -566,9 +561,7 @@ class SdkToolGate:
             _tool_use_id: str | None,
             _hook_context: HookContext,
         ) -> HookJSONOutput:
-            typed_input = cast(
-                PostToolUseHookInput | PostToolUseFailureHookInput, hook_input
-            )
+            typed_input = cast(PostToolUseHookInput | PostToolUseFailureHookInput, hook_input)
             if self._quotas is not None:
                 await self._quotas.release_idempotency(
                     context.run.tenant_id,
@@ -613,9 +606,7 @@ class SdkToolGate:
         tool_call_id = hook_input["tool_use_id"]
         arguments = hook_input["tool_input"]
         updated_arguments = (
-            file_capabilities.normalize_skill_read(arguments)
-            if tool_name == "Read"
-            else None
+            file_capabilities.normalize_skill_read(arguments) if tool_name == "Read" else None
         )
         if tool_name == "Read" and arguments.get("pages") == "":
             updated_arguments = dict(updated_arguments or arguments)
@@ -672,9 +663,7 @@ class SdkToolGate:
                 "",
             )
             if requested_alias not in allowed_subagent_aliases:
-                reason = (
-                    "subagent role is not declared by the published Agent Manifest"
-                )
+                reason = "subagent role is not declared by the published Agent Manifest"
                 await self._append_denied(context, tool_call_id, reason)
                 return _hook_output("deny", reason)
         write_target: Path | None = None
@@ -717,6 +706,18 @@ class SdkToolGate:
                 decision=PolicyDecision.ALLOW,
                 rule_name="sandbox-low-risk-bash",
                 reason="matched sandbox low-risk Bash policy",
+            )
+        if (
+            result.decision is PolicyDecision.DENY
+            and result.rule_name == "implicit-deny"
+            and raw_tool_name.startswith("mcp__")
+            and not raw_tool_name.startswith("mcp__harness-python-")
+            and (raw_tool_name in declared_tools or tool_name in declared_tools)
+        ):
+            result = PolicyResult(
+                decision=PolicyDecision.ALLOW,
+                rule_name="published-mcp-tool",
+                reason=("matched MCP tool declared by the published Agent tool directory"),
             )
         if (
             result.decision is PolicyDecision.DENY

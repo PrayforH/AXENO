@@ -109,12 +109,12 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
 
     events = [event async for event in runtime.execute(context)]
 
-    assert captured[0].model == "deepseek-v4-flash"
+    assert captured[0].model == "gateway-model"
     assert captured[0].max_buffer_size == 32 * 1024 * 1024
     assert "Every final deliverable must exist" in str(captured[0].system_prompt)
     assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == broker_secret
     selected_event = next(event for event in events if event.type == "model.route.selected")
-    assert selected_event.payload["model"] == "deepseek-v4-flash"
+    assert selected_event.payload["model"] == "gateway-model"
     lease_event = events[0]
     assert lease_event.type == "credential.lease.issued"
     assert lease_event.payload["lease_id"] == "model-lease-one"
@@ -342,7 +342,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             CcSwitchClaudeConfig(
                 route_id="deepseek-v4-pro",
                 base_url="https://new-api.example",
-                model="deepseek-v4-pro",
+                model="shdata-glm",
                 provider="new-api",
                 credential=SecretStr("new-api-secret"),
             ),
@@ -410,9 +410,10 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     override_events = [event async for event in runtime.execute(override_context)]
 
     assert captured[1].env["ANTHROPIC_BASE_URL"] == "https://new-api.example"
-    assert captured[1].model == "deepseek-v4-pro"
+    assert captured[1].model == "shdata-glm"
     selected = next(event for event in override_events if event.type == "model.route.selected")
     assert selected.payload["route_id"] == "deepseek-v4-pro"
+    assert selected.payload["model"] == "shdata-glm"
     assert selected.payload["selection_source"] == "task_override"
     assert selected.payload["agent_default_route"] == "anthropic-official"
 
@@ -588,7 +589,7 @@ async def test_model_span_has_safe_agent_route_and_policy_dimensions(
     assert model_span.attributes is not None
     assert model_span.attributes["agent.name"] == "helper-agent"
     assert model_span.attributes["gen_ai.provider.name"] == "new-api"
-    assert model_span.attributes["gen_ai.request.model"] == "deepseek-v4-flash"
+    assert model_span.attributes["gen_ai.request.model"] == "gateway-model"
     assert model_span.attributes["harness.policy.profile"] == "production-read-only"
     assert model_span.attributes["agent.package_hash"] == "b" * 64
     assert model_span.attributes["gen_ai.usage.input_tokens"] == 100
@@ -686,7 +687,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     events = [event async for event in runtime.execute(context)]
 
     assert captured[0][0] == "hello registry"
-    assert captured[0][1].model == "deepseek-v4-pro"
+    assert captured[0][1].model == "cc-switch-model"
     assert captured[0][1].env["ANTHROPIC_BASE_URL"] == "https://gateway.example"
     assert captured[0][1].env["ANTHROPIC_AUTH_TOKEN"] == "registry-secret"
     assert captured[0][1].env["CLAUDE_CONFIG_DIR"] == str(

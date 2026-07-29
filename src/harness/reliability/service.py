@@ -81,15 +81,30 @@ class ReliabilityService:
         event_delay, event_count = self.metrics.quantile(
             "harness_event_visibility_delay_seconds", 0.95
         )
+        queue_wait, queue_wait_count = self.metrics.quantile(
+            "harness_run_stage_duration_seconds",
+            0.95,
+            labels={"stage": "queue_wait"},
+        )
+        runtime_first_event, runtime_first_event_count = self.metrics.quantile(
+            "harness_run_stage_duration_seconds",
+            0.95,
+            labels={"stage": "runtime_first_event"},
+        )
+        runtime_first_text, runtime_first_text_count = self.metrics.quantile(
+            "harness_run_stage_duration_seconds",
+            0.95,
+            labels={"stage": "runtime_first_text"},
+        )
         cancel, cancel_count = self.metrics.quantile(
             "harness_workflow_convergence_seconds",
             0.95,
             labels={"workflow": "run.cancel"},
         )
         approval, approval_count = self.metrics.quantile(
-            "harness_api_request_duration_seconds",
+            "harness_workflow_convergence_seconds",
             0.95,
-            labels={"operation": "approval.decide"},
+            labels={"workflow": "approval.decide"},
         )
         downloads_ok = self.metrics.count(
             "harness_artifact_download_total", labels={"outcome": "success"}
@@ -117,6 +132,30 @@ class ReliabilityService:
                 "api middleware",
             ),
             self._latency(
+                "queue_wait_p95",
+                "Queue Wait P95",
+                queue_wait,
+                queue_wait_count,
+                1,
+                "durable run lifecycle",
+            ),
+            self._latency(
+                "runtime_first_event_p95",
+                "首 Runtime Event P95",
+                runtime_first_event,
+                runtime_first_event_count,
+                1.5,
+                "worker runtime stream",
+            ),
+            self._latency(
+                "runtime_first_text_p95",
+                "首正文 P95",
+                runtime_first_text,
+                runtime_first_text_count,
+                3,
+                "worker runtime stream",
+            ),
+            self._latency(
                 "event_visibility_p95",
                 "Event 可见延迟 P95",
                 event_delay,
@@ -138,7 +177,7 @@ class ReliabilityService:
                 approval,
                 approval_count,
                 10,
-                "approval API",
+                "durable approval lifecycle",
             ),
             self._ratio(
                 "artifact_download_success",

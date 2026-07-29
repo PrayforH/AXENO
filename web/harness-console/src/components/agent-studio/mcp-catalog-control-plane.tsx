@@ -15,6 +15,11 @@ import styles from "./mcp-catalog-control-plane.module.css";
 
 type McpCapability = StudioCapabilities["mcpServers"][number];
 
+const MCP_IDENTIFIER_PATTERN =
+  /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/;
+const MCP_IDENTIFIER_INPUT_PATTERN =
+  "[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*";
+
 const EMPTY_MCP: McpCapability = {
   reference: "",
   category: "tool",
@@ -190,8 +195,14 @@ export function McpCatalogControlPlane({
     event.preventDefault();
     if (!record || !canManage) return;
     const reference = draft.reference.trim();
-    if (!/^[a-z][a-z0-9-]*$/.test(reference)) {
-      setError("引用标识只能使用小写字母、数字和连字符，并以字母开头。");
+    const serverName = draft.serverName?.trim() || reference;
+    if (
+      !MCP_IDENTIFIER_PATTERN.test(reference)
+      || !MCP_IDENTIFIER_PATTERN.test(serverName)
+    ) {
+      setError(
+        "引用标识和服务名须以小写字母开头，可使用小写字母、数字、连字符和单下划线。",
+      );
       return;
     }
     if (
@@ -216,7 +227,7 @@ export function McpCatalogControlPlane({
         {
           ...draft,
           reference,
-          serverName: draft.serverName?.trim() || reference,
+          serverName,
           label: draft.label.trim(),
           description: draft.description.trim(),
           endpointUrl: draft.endpointUrl.trim(),
@@ -302,11 +313,13 @@ export function McpCatalogControlPlane({
     const reference = draft.reference.trim();
     const serverName = draft.serverName?.trim() || reference;
     if (
-      !/^[a-z][a-z0-9-]*$/.test(reference) ||
-      !/^[a-z][a-z0-9-]*$/.test(serverName) ||
+      !MCP_IDENTIFIER_PATTERN.test(reference) ||
+      !MCP_IDENTIFIER_PATTERN.test(serverName) ||
       !draft.endpointUrl?.trim()
     ) {
-      setError("先填写有效的引用标识、服务名和 MCP 地址。");
+      setError(
+        "先填写有效的引用标识、服务名和 MCP 地址；标识支持小写字母、数字、连字符和单下划线。",
+      );
       return;
     }
     if (draft.networkAccess === "none") {
@@ -669,7 +682,7 @@ export function McpCatalogControlPlane({
                 <span>引用标识</span>
                 <input
                   required
-                  pattern="[a-z][a-z0-9-]*"
+                  pattern={MCP_IDENTIFIER_INPUT_PATTERN}
                   disabled={Boolean(editingReference)}
                   placeholder="company-search"
                   value={draft.reference}
@@ -683,20 +696,24 @@ export function McpCatalogControlPlane({
                     })
                   }
                 />
-                <small>智能体通过这个稳定标识绑定能力，创建后不可修改。</small>
+                <small>
+                  智能体通过这个稳定标识绑定能力，创建后不可修改；支持连字符和单下划线。
+                </small>
               </label>
               <label>
                 <span>MCP 服务名</span>
                 <input
                   required
-                  pattern="[a-z][a-z0-9-]*"
+                  pattern={MCP_IDENTIFIER_INPUT_PATTERN}
                   placeholder="company"
                   value={draft.serverName ?? ""}
                   onChange={(event) =>
                     updateConnection({ serverName: event.target.value })
                   }
                 />
-                <small>用于生成工具名：mcp__服务名__工具名。</small>
+                <small>
+                  用于生成工具名：mcp__服务名__工具名；服务名可保留单下划线。
+                </small>
               </label>
               <label>
                 <span>显示名称</span>

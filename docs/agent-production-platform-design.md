@@ -1142,8 +1142,11 @@ Artifact Registry
 | --- | --- |
 | Control Plane API 可用性 | 99.9% |
 | Run 创建 P95 | < 500 ms（不含执行） |
+| Queue Wait P95 | < 1 s |
+| 首 Runtime Event P95 | < 1.5 s |
+| 首正文 P95 | < 3 s |
 | Event 可见延迟 P95 | < 2 s |
-| 取消收敛 P95 | < 10 s |
+| 取消收敛 P95 | < 3 s |
 | Approval 决策恢复 P95 | < 10 s |
 | Artifact 下载成功率 | > 99.9% |
 | Trace 完整率 | > 99% |
