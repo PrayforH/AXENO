@@ -1,0 +1,54 @@
+# Harbor image overlay.
+#
+# Example (amd64, immutable release tag):
+#   HARNESS_IMAGE_ARCH=amd64 HARNESS_HARBOR_IMAGE_TAG=<git-sha> \
+#   docker compose \
+#     --env-file deploy/docker-compose/.env.docker \
+#     -p claude-agent-harness \
+#     -f deploy/docker-compose/compose.yaml \
+#     -f deploy/docker-compose/compose.harbor.yaml \
+#     --profile observability \
+#     pull
+#
+#   HARNESS_IMAGE_ARCH=amd64 HARNESS_HARBOR_IMAGE_TAG=<git-sha> \
+#   docker compose \
+#     --env-file deploy/docker-compose/.env.docker \
+#     -p claude-agent-harness \
+#     -f deploy/docker-compose/compose.yaml \
+#     -f deploy/docker-compose/compose.harbor.yaml \
+#     --profile observability \
+#     up -d --no-build --wait
+
+x-harbor-image: &harbor-image
+  pull_policy: always
+
+services:
+  migrate:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+
+  api:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+    build: null
+
+  worker:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-worker:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+
+  quality-sync:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-quality-sync:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+
+  seed:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+
+  web:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-web:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+    build: null
+
+  otel-collector:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-otel-collector:${HARNESS_HARBOR_IMAGE_TAG:-develop}
