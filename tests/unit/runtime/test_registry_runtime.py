@@ -51,9 +51,10 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
         )
     )
     broker_secret = "broker-model-secret"
+    model_route = snapshot.manifest.spec.model.route
     broker = InMemoryCredentialBroker(
         {
-            ("tenant-a", CredentialResourceKind.MODEL, "new-api-default"): (
+            ("tenant-a", CredentialResourceKind.MODEL, model_route): (
                 "vault://tenant-a/model/default",
                 {"api_key": SecretStr(broker_secret)},
             )

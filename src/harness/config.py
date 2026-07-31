@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     minimax_m3_compatibility: Literal["full", "degraded", "unsupported"] = "full"
     minimax_m3_capabilities: str = "streaming,tool_use,vision"
 
+    glm_5_2_base_url: str = ""
+    glm_5_2_api_key: SecretStr = SecretStr("")
+    glm_5_2_model: str = "shdata-glm"
+    glm_5_2_auth_scheme: Literal["bearer", "x-api-key"] = "bearer"
+    glm_5_2_compatibility: Literal["full", "degraded", "unsupported"] = "full"
+    glm_5_2_capabilities: str = "streaming,tool_use"
+
     anthropic_base_url: str = "https://api.anthropic.com"
     anthropic_api_key: SecretStr = SecretStr("")
     anthropic_model: str = ""

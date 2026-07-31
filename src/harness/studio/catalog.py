@@ -54,6 +54,14 @@ def default_capability_catalog() -> CapabilityCatalog:
                 credentialReference="MINIMAX_M3_API_KEY",
             ),
             ModelRouteCapability(
+                routeId="glm-5-2",
+                label="GLM-5.2",
+                provider="glm",
+                models=("shdata-glm",),
+                capabilities=("streaming", "tool_use"),
+                credentialReference="GLM_5_2_API_KEY",
+            ),
+            ModelRouteCapability(
                 routeId="anthropic-official",
                 label="Anthropic official",
                 provider="anthropic",

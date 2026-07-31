@@ -189,7 +189,11 @@ def test_trace_content_is_opt_in_redacted_and_bounded() -> None:
     trace_input = str(attributes["langfuse.trace.input"])
     assert len(trace_input) == 256
     assert trace_input.endswith("…")
+    assert attributes["langfuse.observation.input"] == trace_input
     assert attributes["langfuse.trace.output"] == (
+        "answer authorization: [REDACTED]"
+    )
+    assert attributes["langfuse.observation.output"] == (
         "answer authorization: [REDACTED]"
     )
     assert "top-secret" not in repr(attributes)

@@ -126,6 +126,17 @@ export function shouldShowComposerStop(
   return threadRunning || streamStatus === "running";
 }
 
+export function shouldShowPreResponseActivity(
+  isLastMessage: boolean,
+  runPhase?: RunPhase,
+): boolean {
+  return isLastMessage && (
+    runPhase === "queued" ||
+    runPhase === "running" ||
+    runPhase === "waiting_approval"
+  );
+}
+
 function HarnessComposer() {
   const aui = useAui();
   const threadRunning = useAuiState((state) => state.thread.isRunning);
@@ -849,7 +860,10 @@ function useMessageEditor() {
 
 function HarnessUserMessage() {
   const message = useAuiState((state) => state.message);
+  const isLastMessage = useAuiState((state) => state.message.isLast);
   const threadRunning = useAuiState((state) => state.thread.isRunning);
+  const activity = useRunActivity();
+  const runView = useRunViewModel();
   const isLatestUserMessage = useAuiState((state) => {
     for (let index = state.thread.messages.length - 1; index >= 0; index -= 1) {
       const candidate = state.thread.messages[index];
@@ -887,66 +901,83 @@ function HarnessUserMessage() {
     setEditor(null);
   }
 
+  const preResponseActivity =
+    activity &&
+    activity.run_id === runView?.runId &&
+    shouldShowPreResponseActivity(isLastMessage, runView.phase)
+      ? activity
+      : undefined;
+
   return (
+    <>
       <UserMessage.Root className="harness-user-message">
-      <UserMessage.Attachments
-        components={{ Attachment: HarnessMessageAttachment }}
-      />
-      <MessagePrimitive.If hasContent>
-        {editing ? (
-          <form className="user-message-editor" onSubmit={submitEdit}>
-            <textarea
-              className="user-message-editor-input"
-              aria-label="编辑用户输入"
-              value={draft}
-              onChange={(event) => {
-                setEditor({ messageId: message.id, draft: event.target.value });
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setEditor(null);
-              }}
-              autoFocus
-              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-            />
-            <div className="user-message-editor-actions">
-              <button type="button" onClick={() => setEditor(null)}>取消</button>
-              <button type="submit" disabled={!draft.trim() || threadRunning}>
-                发送
-              </button>
-            </div>
-          </form>
-        ) : (
-          <>
-            <UserMessage.Content />
-            <ActionBarPrimitive.Root
-              className="harness-user-action-bar"
-              autohide="never"
-            >
-              <ActionBarPrimitive.Copy
-                className="user-message-action"
-                aria-label="复制消息"
-                title="复制消息"
-                copiedDuration={1800}
-              >
-                <CopyMessageIcon />
-              </ActionBarPrimitive.Copy>
-              {isLatestUserMessage && !threadRunning ? (
-                <button
-                  className="user-message-action"
-                  type="button"
-                  aria-label="编辑消息"
-                  title="编辑消息"
-                  onClick={beginEdit}
-                >
-                  <EditMessageIcon />
+        <UserMessage.Attachments
+          components={{ Attachment: HarnessMessageAttachment }}
+        />
+        <MessagePrimitive.If hasContent>
+          {editing ? (
+            <form className="user-message-editor" onSubmit={submitEdit}>
+              <textarea
+                className="user-message-editor-input"
+                aria-label="编辑用户输入"
+                value={draft}
+                onChange={(event) => {
+                  setEditor({ messageId: message.id, draft: event.target.value });
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") setEditor(null);
+                }}
+                autoFocus
+                rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+              />
+              <div className="user-message-editor-actions">
+                <button type="button" onClick={() => setEditor(null)}>取消</button>
+                <button type="submit" disabled={!draft.trim() || threadRunning}>
+                  发送
                 </button>
-              ) : null}
-            </ActionBarPrimitive.Root>
-          </>
-        )}
-      </MessagePrimitive.If>
-      <BranchPicker />
-    </UserMessage.Root>
+              </div>
+            </form>
+          ) : (
+            <>
+              <UserMessage.Content />
+              <ActionBarPrimitive.Root
+                className="harness-user-action-bar"
+                autohide="never"
+              >
+                <ActionBarPrimitive.Copy
+                  className="user-message-action"
+                  aria-label="复制消息"
+                  title="复制消息"
+                  copiedDuration={1800}
+                >
+                  <CopyMessageIcon />
+                </ActionBarPrimitive.Copy>
+                {isLatestUserMessage && !threadRunning ? (
+                  <button
+                    className="user-message-action"
+                    type="button"
+                    aria-label="编辑消息"
+                    title="编辑消息"
+                    onClick={beginEdit}
+                  >
+                    <EditMessageIcon />
+                  </button>
+                ) : null}
+              </ActionBarPrimitive.Root>
+            </>
+          )}
+        </MessagePrimitive.If>
+        <BranchPicker />
+      </UserMessage.Root>
+      {preResponseActivity ? (
+        <div
+          className={`latest-activity pre-response-activity ${preResponseActivity.status}`}
+          data-activity-source="pre-response"
+        >
+          <ActivitySummary activity={preResponseActivity} />
+        </div>
+      ) : null}
+    </>
   );
 }
 

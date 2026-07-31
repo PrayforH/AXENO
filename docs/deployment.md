@@ -138,7 +138,9 @@ Langfuse 只接受 OTLP/HTTP；`LANGFUSE_OTLP_ENDPOINT` 应填写外部 Langfuse
 
 一次 Run 对应一个分布式 Trace；同一网页对话的多个 Run 使用 `langfuse.session.id` 聚合。`harness.model.run` 提供 Agent 版本、运行时内容哈希、package hash、Provider、模型、route、Policy Profile、Skill 数量、轮次、耗时、成本和白名单化 Token 计数等低敏检索维度。默认不输出 prompt、模型响应或 Provider 原始 usage 数据；只有下述显式内容观测开关可以增加脱敏后的问题与回答。
 
-内容观测由 `HARNESS_OTEL_CONTENT_CAPTURE` 显式控制。默认值 `off` 在所有环境都不导出问题和回答；仅在受控调试环境设置为 `redacted` 时，才会把经过凭据脱敏且受 `HARNESS_OTEL_CONTENT_MAX_CHARS` 限制的问题和最终回答映射为 Langfuse Trace/Observation 的 input 与 output。不存在绕过脱敏的 raw 模式。生产环境应保持 `off`，工具读取结果和上传文件正文无论何种模式都不会作为 Trace 内容导出。
+内容观测由 `HARNESS_OTEL_CONTENT_CAPTURE` 显式控制。默认值 `off` 在所有环境都不导出问题和回答；开发工作台或受控调试环境可设置为 `redacted`，将经过凭据脱敏且受 `HARNESS_OTEL_CONTENT_MAX_CHARS` 限制的问题与最终回答映射为 Langfuse v4 Observation 的 input 与 output，并保留旧 Trace 字段供存量 evaluator 兼容。不存在绕过脱敏的 raw 模式。生产环境只有在完成数据分级、访问控制和保留策略评审后才可启用；工具读取结果和上传文件正文无论何种模式都不会作为 Trace 内容导出。
+
+Langfuse 是异步导出的可观测副本，不是 Run、消息或审计事件的事实库。网络失败、进程退出前未 flush、项目保留策略和人工删除都可能造成观测数据不完整；开发工作台的状态恢复、重放和审计必须继续以 PostgreSQL 中的 Run 与 Run Event 为准。
 
 未启用 `observability` profile 时 Collector 不启动，`make docker-up` 不要求任何 Langfuse 配置。宿主机 OTLP 端口只绑定 `127.0.0.1`。
 

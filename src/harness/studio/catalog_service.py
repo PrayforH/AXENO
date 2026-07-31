@@ -24,58 +24,105 @@ from harness.studio.repositories import AgentDraftRepository
 CatalogResourceType = Literal["modelRoute", "mcp", "policy", "executionProfile"]
 
 
-def _upgrade_legacy_deepseek_routes(
+def _upgrade_system_managed_catalog(
     catalog: CapabilityCatalog,
 ) -> CapabilityCatalog | None:
-    """Split the former multi-model DeepSeek route without touching other entries."""
+    """Add new built-ins to a system-managed catalog without dropping tenant entries."""
 
+    defaults = default_capability_catalog()
     route_ids = {route.route_id for route in catalog.model_routes}
-    if {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
-        return None
-    legacy = next(
-        (route for route in catalog.model_routes if route.route_id == "new-api-default"),
-        None,
-    )
-    if legacy is None or set(legacy.models) != {
-        "deepseek-v4-flash",
-        "deepseek-v4-pro",
-    }:
-        return None
+    routes = list(catalog.model_routes)
+    changed = False
+    if not {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
+        legacy = next(
+            (route for route in routes if route.route_id == "new-api-default"),
+            None,
+        )
+        if legacy is not None and set(legacy.models) == {
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+        }:
+            compatibility_route = legacy.model_copy(
+                update={
+                    "label": "DeepSeek V4（兼容路由）",
+                    "models": ("deepseek-v4-pro",),
+                    "version": legacy.version + 1,
+                    "enabled": False,
+                }
+            )
+            split_routes = (
+                ModelRouteCapability(
+                    routeId="deepseek-v4-flash",
+                    label="DeepSeek V4 Flash",
+                    provider=legacy.provider,
+                    models=("deepseek-v4-flash",),
+                    capabilities=legacy.capabilities,
+                    credentialManaged=legacy.credential_managed,
+                    credentialReference=legacy.credential_reference,
+                ),
+                ModelRouteCapability(
+                    routeId="deepseek-v4-pro",
+                    label="DeepSeek V4 Pro",
+                    provider=legacy.provider,
+                    models=("deepseek-v4-pro",),
+                    capabilities=legacy.capabilities,
+                    credentialManaged=legacy.credential_managed,
+                    credentialReference=legacy.credential_reference,
+                ),
+            )
+            migrated: list[ModelRouteCapability] = []
+            for route in routes:
+                migrated.append(compatibility_route if route is legacy else route)
+                if route is legacy:
+                    migrated.extend(split_routes)
+            routes = migrated
+            route_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
+            changed = True
 
-    compatibility_route = legacy.model_copy(
+    if "glm-5-2" not in route_ids:
+        glm = next(
+            route
+            for route in defaults.model_routes
+            if route.route_id == "glm-5-2"
+        )
+        routes.append(glm)
+        changed = True
+
+    def append_missing(current: tuple, builtins: tuple, identifier: str) -> tuple:
+        nonlocal changed
+        identifiers = {getattr(item, identifier) for item in current}
+        additions = tuple(
+            item for item in builtins if getattr(item, identifier) not in identifiers
+        )
+        if additions:
+            changed = True
+        return (*current, *additions)
+
+    upgraded = catalog.model_copy(
         update={
-            "label": "DeepSeek V4（兼容路由）",
-            "models": ("deepseek-v4-pro",),
-            "version": legacy.version + 1,
-            "enabled": False,
+            "model_routes": append_missing(
+                tuple(routes),
+                defaults.model_routes,
+                "route_id",
+            ),
+            "mcp_servers": append_missing(
+                catalog.mcp_servers,
+                defaults.mcp_servers,
+                "reference",
+            ),
+            "policies": append_missing(
+                catalog.policies,
+                defaults.policies,
+                "policy_id",
+            ),
+            "execution_profiles": append_missing(
+                catalog.execution_profiles,
+                defaults.execution_profiles,
+                "profile_id",
+            ),
         }
     )
-    split_routes = (
-        ModelRouteCapability(
-            routeId="deepseek-v4-flash",
-            label="DeepSeek V4 Flash",
-            provider=legacy.provider,
-            models=("deepseek-v4-flash",),
-            capabilities=legacy.capabilities,
-            credentialManaged=legacy.credential_managed,
-            credentialReference=legacy.credential_reference,
-        ),
-        ModelRouteCapability(
-            routeId="deepseek-v4-pro",
-            label="DeepSeek V4 Pro",
-            provider=legacy.provider,
-            models=("deepseek-v4-pro",),
-            capabilities=legacy.capabilities,
-            credentialManaged=legacy.credential_managed,
-            credentialReference=legacy.credential_reference,
-        ),
-    )
-    routes: list[ModelRouteCapability] = []
-    for route in catalog.model_routes:
-        routes.append(compatibility_route if route is legacy else route)
-        if route is legacy:
-            routes.extend(split_routes)
-    return catalog.model_copy(update={"model_routes": tuple(routes)})
+    return upgraded if changed else None
 
 
 class CapabilityCatalogService:
@@ -99,11 +146,8 @@ class CapabilityCatalogService:
             updatedAt=self._clock(),
         )
         current = await self._repository.seed(seed)
-        if current.updated_by == "system":
-            upgraded_catalog = seed.catalog
-            updated_by = "system"
-        elif current.updated_by.startswith("system-"):
-            upgraded_catalog = _upgrade_legacy_deepseek_routes(current.catalog)
+        if current.updated_by == "system" or current.updated_by.startswith("system-"):
+            upgraded_catalog = _upgrade_system_managed_catalog(current.catalog)
             updated_by = "system-route-migration"
         else:
             upgraded_catalog = None

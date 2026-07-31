@@ -334,6 +334,28 @@ async def test_production_composition_registers_minimax_m3_as_selectable_route()
         await container.close()
 
 
+@pytest.mark.asyncio
+async def test_production_composition_registers_glm_5_2_as_selectable_route() -> None:
+    container = build_production_container(
+        production_settings(
+            glm_5_2_base_url="http://172.20.109.112:31300",
+            glm_5_2_api_key=SecretStr("glm-secret"),
+        )
+    )
+    try:
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        routes = {item.route_id: item for item in vars(runtime)["_route_configs"]}
+        glm = routes["glm-5-2"]
+        assert glm.provider == "new-api"
+        assert glm.model == "shdata-glm"
+        assert glm.resolved_auth_scheme == "bearer"
+        assert glm.capabilities == frozenset({"streaming", "tool_use"})
+        assert "glm-secret" not in repr(glm)
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
 def test_configured_app_selects_production_composition() -> None:
     app = create_configured_app(production_settings())
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { TextMessagePartProvider } from "@assistant-ui/react";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { RunActivity } from "../lib/activity-schema";
 import { useRunViewModel } from "../lib/activity-store";
 import {
@@ -591,12 +591,23 @@ function ActionRow({ action }: { action: ActionNode }) {
   );
 }
 
-function activeElapsedMs(view: RunViewModel, now: number | null) {
+export interface ElapsedAnchor {
+  runId: string;
+  observedAt: number;
+  elapsedMs: number;
+}
+
+export function activeElapsedMs(
+  view: RunViewModel,
+  now: number | null,
+  anchor: ElapsedAnchor,
+) {
   if (now === null) return view.elapsedMs;
-  const started = Date.parse(view.startedAt);
-  return Number.isFinite(started)
-    ? Math.max(view.elapsedMs, now - started)
-    : view.elapsedMs;
+  if (anchor.runId !== view.runId) return view.elapsedMs;
+  return Math.max(
+    view.elapsedMs,
+    anchor.elapsedMs + Math.max(0, now - anchor.observedAt),
+  );
 }
 
 export function ActivitySummary({
@@ -634,6 +645,18 @@ export function ActivitySummary({
     view.phase === "queued" ||
     view.phase === "running" ||
     view.phase === "waiting_approval";
+  const elapsedAnchor = useRef<ElapsedAnchor>({
+    runId: view.runId,
+    observedAt: Date.now(),
+    elapsedMs: view.elapsedMs,
+  });
+  if (elapsedAnchor.current.runId !== view.runId) {
+    elapsedAnchor.current = {
+      runId: view.runId,
+      observedAt: Date.now(),
+      elapsedMs: view.elapsedMs,
+    };
+  }
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     if (!active) {
@@ -648,7 +671,7 @@ export function ActivitySummary({
   // Successful work folds into the answer. Failed work stays open so the
   // action trail and the final diagnostic are visible without another click.
   const open = manuallyOpen ?? (active || view.phase === "failed");
-  const elapsed = activeElapsedMs(view, now);
+  const elapsed = activeElapsedMs(view, now, elapsedAnchor.current);
   const timeline = displayTimeline(view);
   const heading = activityHeading(view);
   const failure = view.phase === "failed" ? failureDetails(view) : null;

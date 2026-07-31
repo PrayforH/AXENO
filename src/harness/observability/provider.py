@@ -133,17 +133,22 @@ class Observability:
         output_value: object | None,
         trace_level: bool,
     ) -> None:
-        prefix = "langfuse.trace" if trace_level else "langfuse.observation"
+        # Langfuse v4 uses the root observation as the authoritative trace
+        # input/output. Keep the deprecated trace fields as a compatibility
+        # copy for existing trace-level evaluators during the migration.
+        prefixes = (
+            ("langfuse.observation", "langfuse.trace")
+            if trace_level
+            else ("langfuse.observation",)
+        )
         if input_value is not None:
-            span.set_attribute(
-                f"{prefix}.input",
-                redact_content(input_value, limit=self.content_max_chars),
-            )
+            value = redact_content(input_value, limit=self.content_max_chars)
+            for prefix in prefixes:
+                span.set_attribute(f"{prefix}.input", value)
         if output_value is not None:
-            span.set_attribute(
-                f"{prefix}.output",
-                redact_content(output_value, limit=self.content_max_chars),
-            )
+            value = redact_content(output_value, limit=self.content_max_chars)
+            for prefix in prefixes:
+                span.set_attribute(f"{prefix}.output", value)
 
     def record_completed_span(
         self,

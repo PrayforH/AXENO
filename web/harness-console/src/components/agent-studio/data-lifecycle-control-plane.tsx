@@ -10,6 +10,7 @@ import {
   type LifecycleScope,
   type RetentionPolicy,
 } from "../../lib/studio-client";
+import { createRandomId } from "../../lib/random-id";
 import styles from "./data-lifecycle-control-plane.module.css";
 
 const ADAPTER_LABELS: Record<string, string> = {
@@ -31,7 +32,7 @@ const STATUS_LABELS = {
 } as const;
 
 function key(prefix: string) {
-  return `${prefix}:${new Date().toISOString()}:${crypto.randomUUID()}`;
+  return `${prefix}:${new Date().toISOString()}:${createRandomId()}`;
 }
 
 function Jobs({ jobs, refresh }: { jobs: DataLifecycleJob[]; refresh: () => Promise<void> }) {

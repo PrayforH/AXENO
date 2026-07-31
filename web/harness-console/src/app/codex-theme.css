@@ -2563,6 +2563,10 @@ body.codex-theme-v1 .harness-user-message + .harness-assistant-message {
   padding-top: 30px;
 }
 
+body.codex-theme-v1 .harness-user-message + .pre-response-activity {
+  margin-top: 30px;
+}
+
 body.codex-theme-v1 .latest-activity,
 body.codex-theme-v1 .turn-activity-summary {
   margin-bottom: 7px;

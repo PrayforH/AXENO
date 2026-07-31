@@ -1,4 +1,5 @@
 import { streamAgui, type AguiEvent } from "./agui";
+import { createRandomId } from "./random-id";
 
 export type Identity = { tenantId: string; userId: string };
 export type Run = { run_id: string; session_id: string; status: string };
@@ -45,7 +46,7 @@ export class HarnessClient {
   createRun(sessionId: string, prompt: string) {
     return this.json<Run>(`/v1/sessions/${sessionId}/runs`, {
       method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
+      headers: { "Idempotency-Key": createRandomId() },
       body: JSON.stringify({ prompt }),
     });
   }

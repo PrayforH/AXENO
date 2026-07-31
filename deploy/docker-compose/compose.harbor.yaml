@@ -23,6 +23,24 @@ x-harbor-image: &harbor-image
   pull_policy: always
 
 services:
+  postgres:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-harbor.shdata.com:5000}/${HARNESS_HARBOR_DEPENDENCY_PROJECT:-dependencies-ai}/postgres:${HARNESS_HARBOR_POSTGRES_TAG:-18.1}
+
+  redis:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-harbor.shdata.com:5000}/${HARNESS_HARBOR_DEPENDENCY_PROJECT:-dependencies-ai}/redis:${HARNESS_HARBOR_REDIS_TAG:-7.0-alpine}
+
+  minio:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-harbor.shdata.com:5000}/${HARNESS_HARBOR_DEPENDENCY_PROJECT:-dependencies-ai}/minio/minio:${HARNESS_HARBOR_MINIO_TAG:-RELEASE.2025-04-22T22-12-26Z}
+
+  # The MinIO server image also contains /usr/bin/mc, so the init job does
+  # not need the separate Docker Hub minio/mc image.
+  minio-init:
+    <<: *harbor-image
+    image: ${HARNESS_HARBOR_REGISTRY:-harbor.shdata.com:5000}/${HARNESS_HARBOR_DEPENDENCY_PROJECT:-dependencies-ai}/minio/minio:${HARNESS_HARBOR_MINIO_TAG:-RELEASE.2025-04-22T22-12-26Z}
+
   migrate:
     <<: *harbor-image
     image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}

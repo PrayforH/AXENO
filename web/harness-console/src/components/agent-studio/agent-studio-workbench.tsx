@@ -35,6 +35,7 @@ import {
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
+import { createRandomId } from "../../lib/random-id";
 import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import { GovernanceControlPlane } from "./governance-control-plane";
@@ -968,7 +969,7 @@ export function AgentStudioWorkbench() {
         "studio-preview",
         draft.id,
         `r${draft.revision}`,
-        crypto.randomUUID(),
+        createRandomId(),
       ].join(":");
       const preview = await studioClient.createPreview(
         draft.id,
@@ -1039,7 +1040,7 @@ export function AgentStudioWorkbench() {
       const started = await studioClient.createEvalRun(
         dataset,
         draft.publishedVersion,
-        `studio-eval:${dataset.datasetId}:v${dataset.version}:${draft.publishedVersion}:${crypto.randomUUID()}`,
+        `studio-eval:${dataset.datasetId}:v${dataset.version}:${draft.publishedVersion}:${createRandomId()}`,
         previewId,
       );
       setEvalRuns((current) => [

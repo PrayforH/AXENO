@@ -62,6 +62,7 @@ import {
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
   shouldShowComposerStop,
+  shouldShowPreResponseActivity,
 } from "../src/components/agent-thread";
 
 const agentThreadSource = readFileSync(
@@ -130,6 +131,18 @@ it("switches the composer action to stop for an active run", () => {
   expect(agentThreadSource).toContain("aui.thread().cancelRun()");
   expect(agentThreadSource).toContain("<Composer.Send />");
   expect(agentThreadSource).not.toContain("<Composer.Action");
+});
+
+it("shows run activity before the first assistant message is created", () => {
+  expect(shouldShowPreResponseActivity(true, "queued")).toBe(true);
+  expect(shouldShowPreResponseActivity(true, "running")).toBe(true);
+  expect(shouldShowPreResponseActivity(true, "waiting_approval")).toBe(true);
+  expect(shouldShowPreResponseActivity(false, "running")).toBe(false);
+  expect(shouldShowPreResponseActivity(true, "completed")).toBe(false);
+  expect(agentThreadSource).toContain('data-activity-source="pre-response"');
+  expect(agentThreadSource).toContain(
+    "activity.run_id === runView?.runId",
+  );
 });
 
 it("keeps assistant output avatar-free so activity rows cannot overlap it", () => {

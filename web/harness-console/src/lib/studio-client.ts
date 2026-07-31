@@ -1,4 +1,5 @@
 import { requireAuthenticatedResponse } from "./client-auth";
+import { createRandomId } from "./random-id";
 import type {
   BuiltinToolOption,
   McpOption,
@@ -1525,7 +1526,7 @@ export const studioClient = {
       imageDigest: `sha256:${packageHash}`,
       executionProfile,
       config: {},
-      idempotencyKey: `studio-deploy:${agentName}:${agentVersion}:${environment.name}:r${environment.revision}:${crypto.randomUUID()}`,
+      idempotencyKey: `studio-deploy:${agentName}:${agentVersion}:${environment.name}:r${environment.revision}:${createRandomId()}`,
     }),
   }),
   rollbackDeployment: (
@@ -1539,7 +1540,7 @@ export const studioClient = {
       body: JSON.stringify({
         snapshotId,
         expectedEnvironmentRevision: environment.revision,
-        idempotencyKey: `studio-rollback:${agentName}:${environment.name}:${snapshotId}:r${environment.revision}:${crypto.randomUUID()}`,
+        idempotencyKey: `studio-rollback:${agentName}:${environment.name}:${snapshotId}:r${environment.revision}:${createRandomId()}`,
       }),
     },
   ),

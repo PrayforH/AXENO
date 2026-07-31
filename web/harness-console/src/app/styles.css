@@ -4606,6 +4606,10 @@ textarea:not(.aui-composer-input):focus-visible,
   padding-top: 35px;
 }
 
+.harness-user-message + .pre-response-activity {
+  margin-top: 35px;
+}
+
 .harness-user-message:hover .harness-user-action-bar,
 .harness-user-message:focus-within .harness-user-action-bar {
   opacity: 1;

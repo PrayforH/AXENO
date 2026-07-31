@@ -1,17 +1,19 @@
-FROM node:22.17.0-alpine AS dependencies
+ARG NODE_IMAGE=node:22.17.0-alpine
+
+FROM ${NODE_IMAGE} AS dependencies
 WORKDIR /app
 ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY web/harness-console/package.json web/harness-console/package-lock.json ./
 RUN npm ci --registry="${NPM_CONFIG_REGISTRY}"
 
-FROM node:22.17.0-alpine AS builder
+FROM ${NODE_IMAGE} AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY web/harness-console ./
 RUN npm run build
 
-FROM node:22.17.0-alpine AS runtime
+FROM ${NODE_IMAGE} AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

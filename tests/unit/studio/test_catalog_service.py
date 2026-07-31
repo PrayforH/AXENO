@@ -8,6 +8,7 @@ from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepositor
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.models import (
     CapabilityCatalogRecord,
+    McpCapability,
     ModelRouteCapability,
     NetworkAccess,
     UpsertCatalogResourceRequest,
@@ -23,6 +24,7 @@ def test_default_catalog_exposes_separate_deepseek_v4_routes() -> None:
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
     assert routes["new-api-default"].enabled is False
+    assert routes["glm-5-2"].models == ("shdata-glm",)
 
 
 def previous_system_catalog():
@@ -59,9 +61,53 @@ async def test_get_upgrades_an_untouched_system_catalog() -> None:
     upgraded = await service.get("tenant-a")
 
     assert upgraded.revision == 2
-    assert upgraded.updated_by == "system"
+    assert upgraded.updated_by == "system-route-migration"
     assert "local-development" in {
         profile.profile_id for profile in upgraded.catalog.execution_profiles
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_never_drops_tenant_mcp_from_a_system_authored_catalog() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = previous_system_catalog()
+    tenant_mcp = McpCapability(
+        reference="sentiment_query_mcp",
+        serverName="sentiment_query_mcp",
+        label="Sentiment query",
+        description="Read-only internal sentiment data.",
+        endpointUrl="http://sentiment-mcp:8001/mcp",
+        tools=("mcp__sentiment_query_mcp__search_risk_subjects",),
+        risk="medium",
+        networkAccess="internal",
+        sendsUserData=True,
+        readOnly=True,
+        executionLocation="external-mcp",
+    )
+    catalog = catalog.model_copy(
+        update={"mcp_servers": (*catalog.mcp_servers, tenant_mcp)}
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=4,
+            catalog=catalog,
+            updatedBy="system",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+
+    assert upgraded.revision == 5
+    assert {item.reference for item in upgraded.catalog.mcp_servers} == {
+        "tavily-readonly",
+        "sentiment_query_mcp",
     }
 
 
@@ -143,6 +189,7 @@ async def test_get_splits_legacy_deepseek_route_in_system_migrated_catalog() -> 
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
     assert routes["deepseek-v4-flash"].credential_reference == "CUSTOM_NEW_API_KEY"
+    assert routes["glm-5-2"].models == ("shdata-glm",)
 
 
 @pytest.mark.asyncio

@@ -2,8 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ActivitySummary,
+  activeElapsedMs,
   formatResultPreview,
 } from "../src/components/activity-summary";
+import type { RunViewModel } from "../src/lib/run-view-model";
 import { runActivitySchema } from "../src/lib/activity-schema";
 
 const activity = runActivitySchema.parse({
@@ -104,6 +106,30 @@ const activity = runActivitySchema.parse({
       },
     },
   ],
+});
+
+it("uses a browser-local elapsed anchor instead of subtracting server wall time", () => {
+  const view = {
+    runId: "run-clock-skew",
+    phase: "running",
+    startedAt: "2026-07-14T00:00:00Z",
+    updatedAt: "2026-07-14T00:00:00.500Z",
+    elapsedMs: 500,
+    summary: "准备执行",
+    items: [],
+    tasks: [],
+    tools: [],
+    taskCount: 0,
+    toolCount: 0,
+  } satisfies RunViewModel;
+
+  expect(
+    activeElapsedMs(view, 2_000, {
+      runId: view.runId,
+      observedAt: 1_000,
+      elapsedMs: 500,
+    }),
+  ).toBe(1_500);
 });
 
 afterEach(() => {

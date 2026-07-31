@@ -1,3 +1,5 @@
+import { createRandomId } from "./random-id";
+
 const THREAD_STORAGE_KEY = "harness-console-thread";
 const THREAD_AGENT_STORAGE_PREFIX = "harness-console-thread-agent:";
 
@@ -17,7 +19,7 @@ type IdFactory = () => string;
 
 export function loadOrCreateThread(
   storage: ThreadStorage,
-  createId: IdFactory = () => crypto.randomUUID(),
+  createId: IdFactory = createRandomId,
 ): string {
   const existing = storage.getItem(THREAD_STORAGE_KEY);
   return existing ?? createNewThread(storage, createId);
@@ -25,7 +27,7 @@ export function loadOrCreateThread(
 
 export function createNewThread(
   storage: ThreadStorage,
-  createId: IdFactory = () => crypto.randomUUID(),
+  createId: IdFactory = createRandomId,
 ): string {
   const threadId = createId();
   storage.setItem(THREAD_STORAGE_KEY, threadId);

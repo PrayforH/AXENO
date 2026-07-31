@@ -210,11 +210,33 @@ def _minimax_m3_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
     )
 
 
+def _glm_5_2_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
+    glm_key = settings.glm_5_2_api_key.get_secret_value()
+    if not (settings.glm_5_2_base_url and settings.glm_5_2_model and glm_key):
+        return None
+    return CcSwitchClaudeConfig(
+        route_id="glm-5-2",
+        base_url=settings.glm_5_2_base_url,
+        model=settings.glm_5_2_model,
+        # The company shdata-glm endpoint uses Anthropic messages with a
+        # bearer token, matching the applied cc-switch Claude configuration.
+        provider="new-api",
+        credential=SecretStr(glm_key),
+        auth_scheme=settings.glm_5_2_auth_scheme,
+        compatibility=ModelCompatibility(settings.glm_5_2_compatibility),
+        capabilities=_gateway_capabilities(
+            settings.glm_5_2_capabilities,
+            setting_name="HARNESS_GLM_5_2_CAPABILITIES",
+        ),
+    )
+
+
 def _gateways(
     settings: Settings,
 ) -> tuple[CcSwitchClaudeConfig, CcSwitchClaudeConfig | None]:
     new_api_key = settings.new_api_key.get_secret_value()
     minimax = _minimax_m3_gateway(settings)
+    glm = _glm_5_2_gateway(settings)
     if settings.new_api_base_url and settings.new_api_model and new_api_key:
         return (
             CcSwitchClaudeConfig(
@@ -230,15 +252,18 @@ def _gateways(
                     setting_name="HARNESS_NEW_API_CAPABILITIES",
                 ),
             ),
-            minimax or _anthropic_gateway(settings),
+            minimax or glm or _anthropic_gateway(settings),
         )
     if minimax is not None:
-        return minimax, None
+        return minimax, glm or _anthropic_gateway(settings)
+    if glm is not None:
+        return glm, _anthropic_gateway(settings)
     anthropic = _anthropic_gateway(settings)
     if anthropic is not None:
         return anthropic, None
     raise ValueError(
         "production requires HARNESS_NEW_API_BASE_URL/MODEL/KEY or "
+        "HARNESS_GLM_5_2_BASE_URL/MODEL/API_KEY or "
         "HARNESS_ANTHROPIC_BASE_URL/MODEL/API_KEY"
     )
 
@@ -270,8 +295,14 @@ def _configured_model_gateways(
                     capabilities=primary.capabilities,
                 )
             )
-    if fallback is not None:
-        gateways.append(fallback)
+    for optional in (
+        fallback,
+        _minimax_m3_gateway(settings),
+        _glm_5_2_gateway(settings),
+        _anthropic_gateway(settings),
+    ):
+        if optional is not None:
+            gateways.append(optional)
     return tuple({gateway.route_id: gateway for gateway in gateways}.values())
 
 

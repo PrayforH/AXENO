@@ -246,6 +246,9 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /\.harness-user-message \+ \.harness-assistant-message\s*\{[^}]*padding-top:\s*35px;/s,
     );
+    expect(styles).toMatch(
+      /\.harness-user-message \+ \.pre-response-activity\s*\{[^}]*margin-top:\s*35px;/s,
+    );
   });
 
   it("keeps the attachment control close to the composer text", () => {
