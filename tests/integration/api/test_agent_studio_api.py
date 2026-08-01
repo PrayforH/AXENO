@@ -112,6 +112,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         draft_id = created.json()["draftId"]
         validation = await client.post(f"/v1/studio/drafts/{draft_id}/validate", headers=headers)
         bundle = await client.get(f"/v1/studio/drafts/{draft_id}/bundle", headers=headers)
+        nexau = await client.get(f"/v1/studio/drafts/{draft_id}/nexau-bundle", headers=headers)
         published = await client.post(f"/v1/studio/drafts/{draft_id}/publish", headers=headers)
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
@@ -134,10 +135,50 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
     assert bundle.headers["etag"] == f'"{archive_hash}"'
     assert bundle.headers["x-agent-content-sha256"] == content_hash
     assert bundle.headers["x-agent-package-sha256"] == package_hash
+    assert nexau.status_code == 200
+    assert nexau.headers["x-agent-export-format"] == "nexau"
+    assert nexau.headers["content-disposition"] == (
+        'attachment; filename="policy-researcher-0.1.0-nexau.zip"'
+    )
+    with ZipFile(BytesIO(nexau.content)) as archive:
+        assert {"agent.yaml", "systemprompt.md"}.issubset(archive.namelist())
     assert published.status_code == 200
     assert published.json()["name"] == "policy-researcher"
     assert "snapshot" not in published.json()
     assert drafts.json()[0]["publishedVersion"] == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_studio_manages_mcp_credentials_without_returning_secret_values() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+    }
+    secret = "credential-that-must-never-be-returned"
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        configured = await client.put(
+            "/v1/studio/mcp/company-search/credentials",
+            headers=headers,
+            json={"authKey": "authorization", "value": secret},
+        )
+        listed = await client.get("/v1/studio/mcp/credentials", headers=headers)
+        deleted = await client.delete("/v1/studio/mcp/company-search/credentials", headers=headers)
+
+    assert configured.status_code == 200
+    assert configured.json()["configured"] is True
+    assert configured.json()["keyNames"] == ["authorization"]
+    assert listed.json()[0]["reference"] == "company-search"
+    assert deleted.json() == {
+        "reference": "company-search",
+        "configured": False,
+        "keyNames": [],
+        "revision": None,
+        "updatedBy": None,
+        "updatedAt": None,
+    }
+    assert secret not in configured.text
+    assert secret not in listed.text
 
 
 @pytest.mark.asyncio

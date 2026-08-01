@@ -18,14 +18,15 @@ export function SubagentCard({ status, parameters, result }: SubagentCardProps) 
   const agent = String(parameters.subagent_type ?? parameters.agent ?? "helper");
   const description = parameters.description ?? parameters.prompt;
   return (
-    <details className={`agent-card tool-status-${status}`} open={status !== "complete"}>
+    <details className={`agent-card subagent-card tool-status-${status}`} open={status !== "complete"}>
       <summary>
-        <span className="agent-avatar" aria-hidden="true"><i /><i /></span>
+        <span className="agent-avatar" aria-hidden="true"><i /><i /><b /></span>
         <span className="agent-card-copy">
-          <strong>委派给 {agent}</strong>
+          <em>Sub Agent · 委派给 {agent}</em>
+          <strong>{agent}</strong>
           {description != null && <small>{String(description)}</small>}
         </span>
-        <span className="tool-status-label">{statusLabel[status]}</span>
+        <span className="tool-status-label"><i aria-hidden="true" />{statusLabel[status]}</span>
         <span className="tool-chevron" aria-hidden="true" />
       </summary>
       <div className="tool-card-body">

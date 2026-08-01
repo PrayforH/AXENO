@@ -129,6 +129,12 @@ const loadingBoundary = readFileSync(
 );
 
 describe("Agent Studio management page", () => {
+  it("exports the current draft as a NexAU ZIP package", () => {
+    expect(workbench).toContain("studioClient.downloadNexauBundle");
+    expect(workbench).toContain("导出 NexAU ZIP");
+    expect(studioClient).toContain("/nexau-bundle");
+  });
+
   it("keeps release controls on one row and moves the read-only contract into a drawer", () => {
     expect(styles).toMatch(/\.headerActions\s*\{[^}]*display:\s*flex;/s);
     expect(styles).toMatch(

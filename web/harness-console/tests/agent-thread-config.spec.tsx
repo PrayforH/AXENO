@@ -61,6 +61,8 @@ import {
   incompleteRunGuidance,
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
+  messageOwnsRun,
+  ownsLiveResponse,
   shouldShowComposerStop,
   shouldShowPreResponseActivity,
 } from "../src/components/agent-thread";
@@ -97,6 +99,14 @@ it("uses the current run control name in incomplete-run guidance", () => {
   expect(agentThreadSource).toContain('className="run-retry-button"');
   expect(agentThreadSource).toContain("重新运行");
   expect(agentThreadSource).not.toContain("请查看运行详情");
+});
+
+it("uses interactive answer branch primitives for regenerated responses", () => {
+  expect(agentThreadSource).toContain("<HarnessBranchPicker />");
+  expect(agentThreadSource).toContain("<BranchPickerPrimitive.Previous asChild>");
+  expect(agentThreadSource).toContain("<BranchPickerPrimitive.Next asChild>");
+  expect(agentThreadSource).toContain('aria-label="上一个回答"');
+  expect(agentThreadSource).toContain('aria-label="下一个回答"');
 });
 
 it("distinguishes a historical failed turn from the current run", () => {
@@ -179,7 +189,7 @@ it("only edits the latest user turn and allows unchanged text to start a new run
 
 it("places each run activity before its assistant answer", () => {
   const assistantRoot = agentThreadSource.indexOf("<AssistantMessage.Root");
-  const activity = agentThreadSource.indexOf("<TurnActivity ", assistantRoot);
+  const activity = agentThreadSource.indexOf("<TurnActivity", assistantRoot);
   const content = agentThreadSource.indexOf("<AssistantMessage.Content", assistantRoot);
   expect(activity).toBeGreaterThan(assistantRoot);
   expect(content).toBeGreaterThan(activity);
@@ -285,8 +295,22 @@ it("uses one stable native assistant message for streaming output", () => {
     'data-direct-stream={directStream ? "true" : "false"}',
   );
   expect(agentThreadSource).toContain(
-    "<LiveAssistantResponse live={live} isLast={isLast} />",
+    "<LiveAssistantResponse live={live} ownsMessage={ownsLive} />",
   );
   expect(agentThreadSource).toContain("<TextMessagePartProvider");
   expect(agentThreadSource).not.toContain("hasCurrentTurnAssistantText");
+});
+
+it("keeps interrupted live output attached to its own regenerated branch", () => {
+  expect(ownsLiveResponse(true, "assistant-2", "assistant-2")).toBe(true);
+  expect(ownsLiveResponse(true, "assistant-1", "assistant-2")).toBe(false);
+  expect(ownsLiveResponse(false, "assistant-2", "assistant-2")).toBe(false);
+  expect(ownsLiveResponse(true, "assistant-2", undefined)).toBe(false);
+});
+
+it("keeps interrupted run activity attached to its own answer branch", () => {
+  expect(messageOwnsRun("assistant-run_2", "run_2")).toBe(true);
+  expect(messageOwnsRun("assistant-run_2-message_a", "run_2")).toBe(true);
+  expect(messageOwnsRun("assistant-run_1-message_a", "run_2")).toBe(false);
+  expect(agentThreadSource).toContain("messageOwnsRun(messageId, activity.run_id)");
 });

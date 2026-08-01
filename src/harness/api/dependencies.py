@@ -130,6 +130,12 @@ from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandbo
 from harness.sandbox.local import LocalSandboxProvider
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.mcp_credential_store import (
+    InMemoryMcpCredentialRepository,
+    McpCredentialCipher,
+    McpCredentialService,
+    StoredMcpCredentialProvider,
+)
 from harness.studio.mcp_discovery import (
     AutoDetectMcpConnector,
     McpDiscoveryService,
@@ -181,6 +187,7 @@ class ApiContainer:
     agent_drafts: AgentDraftRepository
     capability_catalogs: CapabilityCatalogService
     mcp_discovery: McpDiscoveryService
+    mcp_credentials: McpCredentialService
     studio: AgentStudioService
     preview_repository: PreviewRepository
     previews: PreviewService
@@ -353,9 +360,18 @@ def build_memory_container(
         agent_drafts,
         clock=clock,
     )
-    mcp_credentials = server_secret_credential_provider(
+    environment_mcp_credentials = server_secret_credential_provider(
         references_json=resolved_settings.mcp_secret_references_json,
         secrets_json=resolved_settings.mcp_server_secrets_json.get_secret_value(),
+    )
+    mcp_credential_service = McpCredentialService(
+        InMemoryMcpCredentialRepository(),
+        McpCredentialCipher(resolved_settings.auth_jwt_secret),
+        audit=audit,
+    )
+    mcp_credentials = StoredMcpCredentialProvider(
+        mcp_credential_service,
+        environment_mcp_credentials,
     )
     mcp_discovery = McpDiscoveryService(
         credentials=mcp_credentials,
@@ -837,6 +853,7 @@ def build_memory_container(
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
         mcp_discovery=mcp_discovery,
+        mcp_credentials=mcp_credential_service,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,

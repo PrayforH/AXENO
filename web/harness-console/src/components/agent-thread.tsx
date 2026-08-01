@@ -3,6 +3,7 @@
 import {
   ActionBarPrimitive,
   AttachmentPrimitive,
+  BranchPickerPrimitive,
   MessagePrimitive,
   TextMessagePartProvider,
   useAttachment,
@@ -410,7 +411,6 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
   const status = toolStatus(part);
   const args = objectValue(part.args);
   const runView = useRunViewModel();
-  const isLast = useAuiState((state) => state.message.isLast);
   if (part.toolName === "harness_run_activity") {
     const parsed = runActivitySchema.safeParse(args.activity);
     if (
@@ -441,12 +441,7 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
     );
   }
   if (part.toolName === "harness_present_artifact") {
-    const artifactRunId =
-      typeof args.run_id === "string" ? args.run_id : undefined;
-    if (!shouldShowArtifactForTurn(artifactRunId, runView?.runId, isLast)) {
-      return null;
-    }
-    return <ArtifactCard details={args as unknown as ArtifactDetails} />;
+    return <HarnessArtifactPart args={args} runId={runView?.runId} />;
   }
   if (shouldSuppressRawToolCard(runView, part.toolCallId)) {
     return null;
@@ -461,6 +456,20 @@ function HarnessToolPart(part: ToolCallMessagePartProps) {
       isError={part.isError}
     />
   );
+}
+
+function HarnessArtifactPart({
+  args,
+  runId,
+}: {
+  args: Record<string, unknown>;
+  runId: string | undefined;
+}) {
+  const isLast = useAuiState((state) => state.message.isLast);
+  const artifactRunId =
+    typeof args.run_id === "string" ? args.run_id : undefined;
+  if (!shouldShowArtifactForTurn(artifactRunId, runId, isLast)) return null;
+  return <ArtifactCard details={args as unknown as ArtifactDetails} />;
 }
 
 const ReasoningPart: ReasoningMessagePartComponent = ({ text, status }) => (
@@ -523,12 +532,12 @@ function HarnessAssistantText(part: TextMessagePartProps) {
 
 function LiveAssistantResponse({
   live,
-  isLast,
+  ownsMessage,
 }: {
   live: LiveResponseSnapshot;
-  isLast: boolean;
+  ownsMessage: boolean;
 }) {
-  if (!isLast || !live.visible || !live.text.trim()) return null;
+  if (!ownsMessage || !live.visible || !live.text.trim()) return null;
   const streaming = live.status === "streaming";
   return (
     <div
@@ -546,39 +555,44 @@ function LiveAssistantResponse({
 
 function TurnActivity({
   hasDurableProjection,
+  messageId,
 }: {
   hasDurableProjection: boolean;
+  messageId: string;
 }) {
   const activity = useRunActivity();
+  const ownedActivity = activity && messageOwnsRun(messageId, activity.run_id)
+    ? activity
+    : undefined;
   const runView = useRunViewModel();
   const isLast = useAuiState((state) => state.message.isLast);
   const responseStarted = useAssistantResponseStarted();
-  const [capturedActivity, setCapturedActivity] = useState(activity);
+  const [capturedActivity, setCapturedActivity] = useState(ownedActivity);
 
   useEffect(() => {
     if (
-      activity &&
+      ownedActivity &&
       shouldCaptureTurnActivity(
-        activity.run_id,
+        ownedActivity.run_id,
         capturedActivity?.run_id,
         isLast,
         runView?.runId,
       )
     ) {
-      setCapturedActivity(activity);
+      setCapturedActivity(ownedActivity);
     }
-  }, [activity, capturedActivity?.run_id, isLast, runView?.runId]);
+  }, [ownedActivity, capturedActivity?.run_id, isLast, runView?.runId]);
 
   // Reloaded history already contains a per-turn tool projection. Live
   // assistant-ui messages do not, so retain the last snapshot on the turn
   // when a newer user message makes it stop being the latest message.
   const displayed = selectTurnActivity(
-    activity,
+    ownedActivity,
     capturedActivity,
     isLast,
     hasDurableProjection,
   );
-  if (!displayed) return null;
+  if (!displayed || !messageOwnsRun(messageId, displayed.run_id)) return null;
 
   return (
     <div
@@ -624,9 +638,23 @@ export function incompleteRunGuidance(isLast: boolean) {
     : "该条历史运行未完整结束，可打开“运行详情”查看原因。";
 }
 
+export function ownsLiveResponse(
+  isLast: boolean,
+  messageId: string,
+  liveMessageId: string | undefined,
+) {
+  return isLast && Boolean(liveMessageId) && messageId === liveMessageId;
+}
+
+export function messageOwnsRun(messageId: string, runId: string) {
+  const prefix = `assistant-${runId}`;
+  return messageId === prefix || messageId.startsWith(`${prefix}-`);
+}
+
 function HarnessAssistantMessage() {
   const live = useLiveResponse();
   const isLast = useAuiState((state) => state.message.isLast);
+  const messageId = useAuiState((state) => state.message.id);
   const isIncomplete = useAuiState(
     (state) => state.message.status?.type === "incomplete",
   );
@@ -634,21 +662,24 @@ function HarnessAssistantMessage() {
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
   // this only on visible text lets assistant-ui paint the same preface once.
-  const directStream =
-    isLast && live.status !== "idle" && Boolean(live.messageId);
+  const ownsLive = ownsLiveResponse(isLast, messageId, live.messageId);
+  const directStream = ownsLive && live.status !== "idle";
   return (
     <AssistantMessage.Root
       className="harness-assistant-message"
       data-direct-stream={directStream ? "true" : "false"}
     >
-      <TurnActivity hasDurableProjection={hasRunActivityToolCall(content)} />
+      <TurnActivity
+        hasDurableProjection={hasRunActivityToolCall(content)}
+        messageId={messageId}
+      />
       <AssistantMessage.Content
         components={{
           Text: HarnessAssistantText,
           Reasoning: ReasoningPart,
         }}
       />
-      <LiveAssistantResponse live={live} isLast={isLast} />
+      <LiveAssistantResponse live={live} ownsMessage={ownsLive} />
       {isIncomplete ? (
         <div className="aui-message-error">
           <span>{incompleteRunGuidance(isLast)}</span>
@@ -662,10 +693,39 @@ function HarnessAssistantMessage() {
         </div>
       ) : null}
       <div className="assistant-message-controls">
-        <BranchPicker />
+        <HarnessBranchPicker />
         <AssistantActionBar />
       </div>
     </AssistantMessage.Root>
+  );
+}
+
+function HarnessBranchPicker() {
+  return (
+    <BranchPickerPrimitive.Root
+      className="harness-branch-picker"
+      hideWhenSingleBranch
+    >
+      <BranchPickerPrimitive.Previous asChild>
+        <button type="button" aria-label="上一个回答" title="上一个回答">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m12.5 4.5-5 5.5 5 5.5" />
+          </svg>
+        </button>
+      </BranchPickerPrimitive.Previous>
+      <span className="harness-branch-state" aria-label="回答版本">
+        <BranchPickerPrimitive.Number />
+        <i aria-hidden="true">/</i>
+        <BranchPickerPrimitive.Count />
+      </span>
+      <BranchPickerPrimitive.Next asChild>
+        <button type="button" aria-label="下一个回答" title="下一个回答">
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m7.5 4.5 5 5.5-5 5.5" />
+          </svg>
+        </button>
+      </BranchPickerPrimitive.Next>
+    </BranchPickerPrimitive.Root>
   );
 }
 

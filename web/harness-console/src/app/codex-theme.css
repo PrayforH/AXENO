@@ -2308,9 +2308,46 @@ body.codex-theme-v1 .aui-thread-scroll-to-bottom:hover {
    from the first delta through the durable history update. */
 
 body.codex-theme-v1 .assistant-answer {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   color: var(--codex-ink-soft);
   overflow-anchor: none;
+}
+
+/* A cancelled regeneration can leave the selected branch and the live run
+   projection changing in the same frame. Keep every layer independently
+   shrinkable so a long status label or rich response cannot widen the thread. */
+body.codex-theme-v1
+  :is(
+    .aui-assistant-message-content,
+    .execution-ribbon,
+    .execution-tree,
+    .execution-log,
+    .assistant-answer,
+    .aui-md
+  ) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+body.codex-theme-v1 .aui-assistant-message-root,
+body.codex-theme-v1 .latest-activity,
+body.codex-theme-v1 .turn-activity-summary {
+  min-width: 0;
+}
+
+body.codex-theme-v1 .aui-assistant-message-content,
+body.codex-theme-v1 .assistant-answer,
+body.codex-theme-v1 .aui-md {
+  width: 100%;
+}
+
+body.codex-theme-v1 .aui-table-scroll {
+  min-width: 0;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  contain: inline-size;
 }
 
 body.codex-theme-v1 .assistant-answer .aui-md {
@@ -3765,6 +3802,7 @@ body.codex-theme-v1 .execution-ribbon > .execution-disclosure {
   background: transparent;
   box-shadow: none;
   box-sizing: border-box;
+  overflow: hidden;
   cursor: pointer;
   font: inherit;
   text-align: left;
@@ -3799,13 +3837,18 @@ body.codex-theme-v1 .execution-ribbon > .execution-disclosure:focus-visible {
 }
 
 body.codex-theme-v1 .execution-phase {
+  min-width: 0;
+  overflow: hidden;
   color: inherit;
   font-size: 13px;
   font-weight: 590;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.codex-theme-v1 .execution-duration {
+  flex: 0 0 auto;
   color: var(--codex-faint);
   font-family: var(--codex-font-mono);
   font-size: 11px;
@@ -3814,6 +3857,7 @@ body.codex-theme-v1 .execution-duration {
 }
 
 body.codex-theme-v1 .execution-chevron {
+  flex: 0 0 auto;
   width: 7px;
   height: 7px;
   margin-left: 2px;
@@ -3847,6 +3891,7 @@ body.codex-theme-v1 .execution-log {
 }
 
 body.codex-theme-v1 .execution-commentary {
+  min-width: 0;
   margin: 0;
   padding: 0 0 2px;
   color: var(--codex-ink-soft);
@@ -3854,6 +3899,7 @@ body.codex-theme-v1 .execution-commentary {
   font-weight: 450;
   line-height: 1.65;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 

@@ -123,6 +123,7 @@ from harness.storage.lifecycle_adapters import (
     SdkSessionLifecycleAdapter,
 )
 from harness.storage.lifecycle_repository import PostgresDataLifecycleRepository
+from harness.storage.mcp_credential_repository import PostgresMcpCredentialRepository
 from harness.storage.memory_bank_repository import PostgresMemoryBankRepository
 from harness.storage.minio import MinioArtifactStore
 from harness.storage.models import UsageLedgerRow
@@ -147,6 +148,11 @@ from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.storage.trigger_repository import PostgresAgentTriggerRepository
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_service import CapabilityCatalogService
+from harness.studio.mcp_credential_store import (
+    McpCredentialCipher,
+    McpCredentialService,
+    StoredMcpCredentialProvider,
+)
 from harness.studio.mcp_discovery import (
     AutoDetectMcpConnector,
     McpDiscoveryService,
@@ -549,6 +555,7 @@ def build_production_container(
     trigger_repository = PostgresAgentTriggerRepository(sessions)
     quality_repository = PostgresQualityRepository(sessions)
     capability_catalog_repository = PostgresCapabilityCatalogRepository(sessions)
+    mcp_credential_repository = PostgresMcpCredentialRepository(sessions)
     auth = AuthService(
         PostgresAuthRepository(sessions),
         jwt_secret=settings.auth_jwt_secret,
@@ -666,9 +673,18 @@ def build_production_container(
         agent_drafts,
         clock=clock,
     )
-    discovery_credentials = server_secret_credential_provider(
+    environment_mcp_credentials = server_secret_credential_provider(
         references_json=settings.mcp_secret_references_json,
         secrets_json=settings.mcp_server_secrets_json.get_secret_value(),
+    )
+    mcp_credential_service = McpCredentialService(
+        mcp_credential_repository,
+        McpCredentialCipher(settings.auth_jwt_secret),
+        audit=audit,
+    )
+    discovery_credentials = StoredMcpCredentialProvider(
+        mcp_credential_service,
+        environment_mcp_credentials,
     )
     mcp_discovery = McpDiscoveryService(
         credentials=discovery_credentials,
@@ -940,6 +956,10 @@ def build_production_container(
             credential_provider,
             credential_broker,
         ) = execution_config
+        credential_provider = StoredMcpCredentialProvider(
+            mcp_credential_service,
+            credential_provider,
+        )
         tool_resolver = default_tool_resolver(
             credential_provider,
             catalogs=capability_catalogs,
@@ -1213,6 +1233,7 @@ def build_production_container(
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
         mcp_discovery=mcp_discovery,
+        mcp_credentials=mcp_credential_service,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,

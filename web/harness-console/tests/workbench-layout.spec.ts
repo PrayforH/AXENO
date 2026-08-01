@@ -71,7 +71,7 @@ describe("full-page agent workbench", () => {
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
-      ["/studio/capabilities", "能力"],
+      ["/studio/capabilities", "MCP"],
       ["/studio/knowledge", "知识库"],
       ["/studio/data", "数据"],
       ["/studio/usage", "用量"],
@@ -330,6 +330,12 @@ describe("full-page agent workbench", () => {
     );
     expect(styles).toMatch(
       /\.aui-table-scroll table\s*\{[^}]*width:\s*max-content;[^}]*min-width:\s*100%;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.aui-table-scroll\s*\{[^}]*min-width:\s*0;[^}]*inline-size:\s*100%;[^}]*contain:\s*inline-size;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.execution-phase\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s,
     );
   });
 

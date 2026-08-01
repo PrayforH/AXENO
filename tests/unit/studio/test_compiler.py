@@ -25,6 +25,7 @@ from harness.studio.models import (
     NetworkAccess,
     ValidationSeverity,
 )
+from harness.studio.nexau_export import export_nexau_agent
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
 
@@ -111,6 +112,62 @@ def test_binary_skill_asset_survives_compile_and_studio_round_trip() -> None:
     imported_asset = imported.spec.skills[0].files[0]
     assert imported_asset.content is None
     assert imported_asset.content_base64 == base64.b64encode(payload).decode("ascii")
+
+
+def test_nexau_export_is_deterministic_and_round_trips_editable_assets() -> None:
+    source = draft()
+    payload = b"\x89PNG\r\n\x1a\n\x00\xff"
+    skill = source.spec.skills[0].model_copy(
+        update={
+            "files": (
+                DraftSkillFile(
+                    path="assets/template.png",
+                    contentBase64=base64.b64encode(payload).decode("ascii"),
+                ),
+            )
+        }
+    )
+    python_tool = DraftPythonTool(
+        name="normalize_score",
+        description="Normalize a score.",
+        inputSchema={
+            "type": "object",
+            "properties": {"value": {"type": "number"}},
+            "required": ["value"],
+        },
+        code=(
+            "def run(arguments):\n"
+            "    value = float(arguments['value'])\n"
+            "    return {'normalized': max(0, min(1, value))}\n"
+        ),
+    )
+    source = source.model_copy(
+        update={
+            "spec": source.spec.model_copy(
+                update={"skills": (skill,), "python_tools": (python_tool,)}
+            )
+        }
+    )
+
+    first = export_nexau_agent(source)
+    second = export_nexau_agent(source)
+
+    assert first.content == second.content
+    assert first.filename == "invoice-reviewer-0.1.0-nexau.zip"
+    with ZipFile(BytesIO(first.content)) as archive:
+        config = yaml.safe_load(archive.read("agent.yaml"))
+        assert config["type"] == "agent"
+        assert config["system_prompt"] == "./systemprompt.md"
+        assert config["skills"] == ["./skills/invoice-reviewer-core"]
+        assert config["harness_extensions"]["unmapped_builtin_tools"] == ["Grep"]
+        assert archive.read("skills/invoice-reviewer-core/assets/template.png") == payload
+        assert "custom_tools/normalize_score.py" in archive.namelist()
+
+    imported = parse_agent_bundle(first.content)
+    namespace: dict[str, object] = {}
+    exec(imported.spec.python_tools[0].code, namespace)
+    result = namespace["run"]({"value": 1.4})  # type: ignore[operator]
+    assert result == {"normalized": 1}
 
 
 def test_studio_bundle_round_trips_into_an_editable_spec() -> None:

@@ -31,6 +31,7 @@ from harness.studio.models import (
     ValidationIssue,
     ValidationSeverity,
 )
+from harness.studio.nexau_export import NexauAgentArchive, export_nexau_agent
 from harness.studio.repositories import AgentDraftRepository
 
 
@@ -163,6 +164,9 @@ class AgentStudioService:
     async def bundle(self, tenant_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id)
         return compiler.compile(await self.get(tenant_id, draft_id))
+
+    async def nexau_bundle(self, tenant_id: str, draft_id: str) -> NexauAgentArchive:
+        return export_nexau_agent(await self.get(tenant_id, draft_id))
 
     async def import_bundle(
         self,

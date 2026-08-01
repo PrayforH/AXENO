@@ -877,6 +877,15 @@ export type StudioMcpDiscoveryResult = {
   }>;
 };
 
+export type StudioMcpCredentialStatus = {
+  reference: string;
+  configured: boolean;
+  keyNames: string[];
+  revision: number | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
 export class StudioApiError extends Error {
   constructor(
     readonly status: number,
@@ -1279,11 +1288,30 @@ export const studioClient = {
     authMode: "none" | "bearer" | "header" | "query";
     authName: string | null;
     authKey: string;
+    credentialValue?: string;
   }) =>
     request<StudioMcpDiscoveryResult>("mcp/discover", {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  listMcpCredentials: () =>
+    request<StudioMcpCredentialStatus[]>("mcp/credentials"),
+  configureMcpCredential: (
+    reference: string,
+    authKey: string,
+    value: string,
+  ) => request<StudioMcpCredentialStatus>(
+    `mcp/${encodeURIComponent(reference)}/credentials`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ authKey, value }),
+    },
+  ),
+  deleteMcpCredential: (reference: string) =>
+    request<StudioMcpCredentialStatus>(
+      `mcp/${encodeURIComponent(reference)}/credentials`,
+      { method: "DELETE" },
+    ),
   upsertMcp: (
     reference: string,
     expectedRevision: number,
@@ -1586,6 +1614,22 @@ export const studioClient = {
     if (!response.ok) throw await errorFrom(response);
     const disposition = response.headers.get("content-disposition") ?? "";
     const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "agent-bundle.zip";
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  },
+  async downloadNexauBundle(draftId: string): Promise<void> {
+    const response = requireAuthenticatedResponse(
+      await fetch(`/api/studio/drafts/${encodeURIComponent(draftId)}/nexau-bundle`, {
+        cache: "no-store",
+      }),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "nexau-agent.zip";
     const url = URL.createObjectURL(await response.blob());
     const anchor = document.createElement("a");
     anchor.href = url;

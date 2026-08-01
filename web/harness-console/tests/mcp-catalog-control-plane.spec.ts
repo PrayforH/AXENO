@@ -21,7 +21,7 @@ const page = readFileSync(
 describe("MCP capability catalog", () => {
   it("has a discoverable Studio navigation entry and dedicated page", () => {
     expect(navigation).toContain('href: "/studio/capabilities"');
-    expect(navigation).toContain('label: "能力"');
+    expect(navigation).toContain('label: "MCP"');
     expect(page).toContain("<McpCatalogControlPlane");
   });
 
@@ -66,9 +66,11 @@ describe("MCP capability catalog", () => {
     expect(component).toContain("去智能体更新");
   });
 
-  it("keeps secrets out of the browser catalog", () => {
-    expect(component).toContain("只登记环境变量名，不填写密钥值");
-    expect(component).toContain("浏览器只看到引用名");
+  it("configures required credentials without echoing stored secret values", () => {
+    expect(component).toContain("studioClient.configureMcpCredential");
+    expect(component).toContain("studioClient.listMcpCredentials");
+    expect(component).toContain('type="password"');
+    expect(component).toContain("凭据已加密保存；为安全起见不会回显原值");
     expect(component).toContain("HARNESS_MCP_SECRET_REFERENCES_JSON");
     expect(component).not.toContain('placeholder="sk-');
   });

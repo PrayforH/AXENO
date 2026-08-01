@@ -8,6 +8,7 @@ import {
   type StudioCapabilityCatalogRecord,
   type StudioCatalogImpact,
   type StudioDraftSummary,
+  type StudioMcpCredentialStatus,
   type StudioMcpDiscoveryResult,
 } from "../../lib/studio-client";
 import { StudioSidebar } from "./studio-sidebar";
@@ -103,11 +104,21 @@ export function McpCatalogControlPlane({
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [credentialValue, setCredentialValue] = useState("");
+  const [credentialStatuses, setCredentialStatuses] = useState<
+    Record<string, StudioMcpCredentialStatus>
+  >({});
 
   const load = useCallback(async () => {
     try {
-      const next = await studioClient.catalog();
+      const [next, credentials] = await Promise.all([
+        studioClient.catalog(),
+        studioClient.listMcpCredentials(),
+      ]);
       setRecord(next);
+      setCredentialStatuses(
+        Object.fromEntries(credentials.map((item) => [item.reference, item])),
+      );
       setError("");
     } catch (caught) {
       setError(
@@ -156,6 +167,7 @@ export function McpCatalogControlPlane({
     setPendingSync(null);
     setNotice("");
     setError("");
+    setCredentialValue("");
     setShowForm(true);
   }
 
@@ -188,6 +200,7 @@ export function McpCatalogControlPlane({
     setPendingSync(null);
     setNotice("");
     setError("");
+    setCredentialValue("");
     setShowForm(true);
   }
 
@@ -214,6 +227,15 @@ export function McpCatalogControlPlane({
       setError("名称、说明、MCP 地址和至少一个已检测工具不能为空。");
       return;
     }
+    const hasStoredCredential = Boolean(credentialStatuses[reference]?.configured);
+    if (
+      draft.authMode !== "none"
+      && !credentialValue.trim()
+      && !hasStoredCredential
+    ) {
+      setError("该 MCP 需要认证，请填写凭据后再保存。");
+      return;
+    }
     setBusy("save");
     setError("");
     setNotice("");
@@ -233,13 +255,34 @@ export function McpCatalogControlPlane({
           endpointUrl: draft.endpointUrl.trim(),
           tools: draft.tools,
           credentialReference:
-            draft.credentialReference?.trim().toUpperCase() || null,
+            draft.authMode === "none"
+              ? null
+              : `STUDIO_MCP_${reference.replace(/[-_]/g, "_").toUpperCase()}`,
           version: editingReference ? draft.version + 1 : draft.version,
           enabled: true,
         },
         allowedProfileIds,
       );
       setRecord(result.record);
+      let nextCredentialStatus = credentialStatuses[reference];
+      if (draft.authMode === "none") {
+        if (nextCredentialStatus?.configured) {
+          nextCredentialStatus = await studioClient.deleteMcpCredential(reference);
+        }
+      } else if (credentialValue.trim()) {
+        nextCredentialStatus = await studioClient.configureMcpCredential(
+          reference,
+          draft.authKey,
+          credentialValue,
+        );
+      }
+      if (nextCredentialStatus) {
+        setCredentialStatuses((current) => ({
+          ...current,
+          [reference]: nextCredentialStatus,
+        }));
+      }
+      setCredentialValue("");
       setShowForm(false);
       setEditingReference(null);
       const previousTools = new Set(previous?.tools ?? []);
@@ -326,8 +369,12 @@ export function McpCatalogControlPlane({
       setError("HTTP MCP 必须选择内部网络或外部网络。");
       return;
     }
-    if (draft.authMode !== "none" && !draft.credentialReference) {
-      setError("启用鉴权时必须填写服务端凭据引用。");
+    if (
+      draft.authMode !== "none"
+      && !credentialValue.trim()
+      && !credentialStatuses[reference]?.configured
+    ) {
+      setError("该 MCP 需要认证，请先填写凭据再检测连接。");
       return;
     }
     setBusy("discover");
@@ -342,6 +389,9 @@ export function McpCatalogControlPlane({
         authMode: draft.authMode,
         authName: draft.authName?.trim() || null,
         authKey: draft.authKey,
+        ...(credentialValue.trim()
+          ? { credentialValue }
+          : {}),
       });
       setDiscovery(result);
       setDraft((current) => ({
@@ -429,11 +479,11 @@ export function McpCatalogControlPlane({
     <main className={styles.shell} id="main-content">
       <StudioSidebar active={knowledgeMode ? "knowledge" : "capabilities"}>
         <div className={styles.railCopy}>
-          <strong>{knowledgeMode ? "外部知识" : "能力治理"}</strong>
+          <strong>{knowledgeMode ? "外部知识" : "MCP 治理"}</strong>
           <p>
             {knowledgeMode
               ? "平台只登记外部知识服务与检索工具，不上传资料、不切片，也不保存向量。"
-              : "MCP 目录、凭据引用与智能体绑定相互分离。浏览器不会保存连接密钥。"}
+              : "MCP 目录、认证凭据与智能体绑定相互分离；密钥加密保存且不会再次回显。"}
           </p>
         </div>
       </StudioSidebar>
@@ -553,7 +603,7 @@ export function McpCatalogControlPlane({
           <header>
             <div>
               <p>Registry</p>
-              <h2>{knowledgeMode ? "已连接的知识服务" : "已登记能力"}</h2>
+              <h2>{knowledgeMode ? "已连接的知识服务" : "已登记 MCP"}</h2>
             </div>
             {record && (
               <span>
@@ -612,7 +662,11 @@ export function McpCatalogControlPlane({
                   </details>
                   <footer>
                     <span>
-                      凭据引用：<code>{item.credentialReference ?? "无"}</code>
+                      {item.authMode === "none"
+                        ? "无需认证"
+                        : credentialStatuses[item.reference]?.configured
+                          ? "凭据已配置"
+                          : "等待配置凭据"}
                     </span>
                     {canManage && (
                       <div>
@@ -822,20 +876,24 @@ export function McpCatalogControlPlane({
               </label>
               {draft.authMode !== "none" && (
                 <label>
-                  <span>凭据引用</span>
+                  <span>认证凭据</span>
                   <input
-                    required
-                    pattern="[A-Z][A-Z0-9_]*"
-                    placeholder="COMPANY_MCP_TOKEN"
-                    value={draft.credentialReference ?? ""}
-                    onChange={(event) =>
-                      updateConnection({
-                        credentialReference:
-                          event.target.value.toUpperCase() || null,
-                      })
+                    required={!credentialStatuses[draft.reference.trim()]?.configured}
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={
+                      credentialStatuses[draft.reference.trim()]?.configured
+                        ? "已配置；留空则不更新"
+                        : "填写 Token 或 API Key"
                     }
+                    value={credentialValue}
+                    onChange={(event) => setCredentialValue(event.target.value)}
                   />
-                  <small>只登记环境变量名，不填写密钥值。</small>
+                  <small>
+                    {credentialStatuses[draft.reference.trim()]?.configured
+                      ? "凭据已加密保存；为安全起见不会回显原值。"
+                      : "保存前仅用于连接检测，保存后加密托管。"}
+                  </small>
                 </label>
               )}
               {(draft.authMode === "header" || draft.authMode === "query") && (
@@ -1039,21 +1097,21 @@ export function McpCatalogControlPlane({
         <section className={styles.runtime}>
           <div>
             <p>Runtime boundary</p>
-            <h2>连接信息在哪里配置？</h2>
+            <h2>凭据如何保存？</h2>
             <span>
-              地址、传输方式和已审核工具保存在能力目录；鉴权值仍由部署环境管理，浏览器只看到引用名。
+              地址和工具保存在 MCP 目录；认证值单独加密托管，页面与接口只返回配置状态，不返回原值。
             </span>
           </div>
           <ol>
             <li><span>1</span><div><strong>地址检测</strong><p>服务端连接 MCP 地址，读取 initialize 与 tools/list。</p></div></li>
-            <li><span>2</span><div><strong>服务端注入</strong><p>在 Compose 环境中配置允许的凭据引用与实际 secret。</p></div></li>
+            <li><span>2</span><div><strong>加密托管</strong><p>需要认证时直接在页面填写，服务端加密保存并按租户隔离。</p></div></li>
             <li><span>3</span><div><strong>工具审核与绑定</strong><p>只勾选需要暴露的工具，再到智能体编辑页绑定 MCP。</p></div></li>
           </ol>
           <details>
-            <summary>查看 Compose 配置键</summary>
+            <summary>部署环境兼容方式</summary>
             <pre>{`HARNESS_MCP_SECRET_REFERENCES_JSON={"company-search":{"authorization":"COMPANY_MCP_TOKEN"}}
 HARNESS_MCP_SERVER_SECRETS_JSON={"COMPANY_MCP_TOKEN":"<server-managed-secret>"}`}</pre>
-            <p>修改部署环境后需重新创建 API / Worker 容器；不要把真实 secret 提交到仓库。</p>
+            <p>已有环境变量配置仍可继续使用；页面配置优先，且无需重建 API / Worker 容器。</p>
           </details>
         </section>
       </section>

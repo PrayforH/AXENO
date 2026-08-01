@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request, status
 from fastapi.responses import Response
 
 from harness.agent_package import (
@@ -62,6 +62,11 @@ from harness.quota.service import QuotaService
 from harness.studio.bundle_import import AgentBundleImportError
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
+from harness.studio.mcp_credential_store import (
+    ConfigureMcpCredentialRequest,
+    McpCredentialService,
+    McpCredentialStatus,
+)
 from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
 from harness.studio.models import (
     AgentDraft,
@@ -209,6 +214,20 @@ def get_mcp_discovery_service(request: Request) -> McpDiscoveryService:
             detail={
                 "code": "mcp_discovery_not_configured",
                 "message": "MCP discovery is not configured",
+            },
+        )
+    return service
+
+
+def get_mcp_credential_service(request: Request) -> McpCredentialService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "mcp_credentials", None)
+    if not isinstance(service, McpCredentialService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "mcp_credentials_not_configured",
+                "message": "MCP credential storage is not configured",
             },
         )
     return service
@@ -763,6 +782,34 @@ async def discover_mcp(
         ) from error
 
 
+@router.get("/mcp/credentials", response_model=tuple[McpCredentialStatus, ...])
+async def list_mcp_credentials(
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
+) -> tuple[McpCredentialStatus, ...]:
+    return await service.list(actor.tenant_id)
+
+
+@router.put("/mcp/{reference}/credentials", response_model=McpCredentialStatus)
+async def configure_mcp_credential(
+    reference: Annotated[str, Path(pattern=r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$")],
+    body: ConfigureMcpCredentialRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
+) -> McpCredentialStatus:
+    return await service.configure(actor.tenant_id, actor.user_id, reference, body)
+
+
+@router.delete("/mcp/{reference}/credentials", response_model=McpCredentialStatus)
+async def delete_mcp_credential(
+    reference: Annotated[str, Path(pattern=r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$")],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
+) -> McpCredentialStatus:
+    await service.delete(actor.tenant_id, actor.user_id, reference)
+    return McpCredentialStatus(reference=reference, configured=False)
+
+
 @router.put("/catalog", response_model=CapabilityCatalogRecord)
 async def replace_catalog(
     body: ReplaceCapabilityCatalogRequest,
@@ -1191,6 +1238,27 @@ async def download_bundle(
             "ETag": f'"{hashlib.sha256(compiled.bundle).hexdigest()}"',
             "X-Agent-Content-SHA256": compiled.report.snapshot.content_hash,
             "X-Agent-Package-SHA256": compiled.report.package_hash,
+        },
+    )
+
+
+@router.get("/drafts/{draft_id}/nexau-bundle")
+async def download_nexau_bundle(
+    draft_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_reader)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> Response:
+    try:
+        exported = await service.nexau_bundle(actor.tenant_id, draft_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    return Response(
+        content=exported.content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{exported.filename}"',
+            "ETag": f'"{hashlib.sha256(exported.content).hexdigest()}"',
+            "X-Agent-Export-Format": "nexau",
         },
     )
 

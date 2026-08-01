@@ -25,7 +25,7 @@ class RecordingConnector:
     ) -> None:
         self.endpoint = ""
         self.headers: Mapping[str, str] = {}
-        self.transport = transport
+        self.transport: Literal["http", "sse"] = transport
         self.fail = fail
 
     async def discover(
@@ -172,6 +172,29 @@ async def test_internal_discovery_accepts_private_network_and_injects_bearer() -
 
     assert connector.endpoint == "http://company-mcp:8080/mcp"
     assert connector.headers == {"Authorization": "Bearer test-secret"}
+
+
+@pytest.mark.asyncio
+async def test_discovery_accepts_a_transient_page_credential() -> None:
+    connector = RecordingConnector()
+    service = McpDiscoveryService(
+        connector=connector,
+        host_resolver=private_host,
+    )
+
+    await service.discover(
+        request(
+            endpointUrl="http://company-mcp:8080/mcp",
+            networkAccess="internal",
+            authMode="header",
+            authName="X-API-Key",
+            credentialValue="page-only-secret",
+        ),
+        tenant_id="tenant-a",
+        user_id="owner-a",
+    )
+
+    assert connector.headers == {"X-API-Key": "page-only-secret"}
 
 
 @pytest.mark.asyncio

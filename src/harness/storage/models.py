@@ -128,6 +128,22 @@ class CapabilityCatalogRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class McpCredentialRow(Base):
+    __tablename__ = "mcp_credentials"
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_mcp_credentials_revision_positive"),
+        Index("ix_mcp_credentials_tenant_updated", "tenant_id", "updated_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    key_names: Mapped[list[str]] = mapped_column(JSON)
+    ciphertext: Mapped[str] = mapped_column(Text)
+    updated_by: Mapped[str] = mapped_column(String(128))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class PreviewDeploymentRow(Base):
     __tablename__ = "preview_deployments"
     __table_args__ = (

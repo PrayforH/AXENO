@@ -28,6 +28,11 @@ from harness.storage.catalog_repository import PostgresCapabilityCatalogReposito
 from harness.storage.redis import RedisTaskQueue
 from harness.storage.repositories import PostgresEventRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.studio.mcp_credential_store import (
+    InMemoryMcpCredentialRepository,
+    McpCredentialService,
+    StoredMcpCredentialProvider,
+)
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 
 
@@ -173,7 +178,8 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         resolver = cast(ToolResolver, vars(runtime)["_tool_resolver"])
         provider = vars(resolver)["_credential_provider"]
 
-        assert isinstance(provider, BrokerMcpCredentialProvider)
+        assert isinstance(provider, StoredMcpCredentialProvider)
+        assert isinstance(vars(provider)["_fallback"], BrokerMcpCredentialProvider)
         broker = cast(InMemoryCredentialBroker, vars(runtime)["_credential_broker"])
         assert isinstance(broker, InMemoryCredentialBroker)
         assert vars(broker)["_connection_authorizer"] is container.governance
@@ -182,6 +188,8 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         # This construction-only unit test does not start the PostgreSQL fixture.
         # Connection authorization is covered by governance repository integration tests.
         vars(broker)["_connection_authorizer"] = None
+        credential_service = cast(McpCredentialService, vars(provider)["_service"])
+        credential_service.repository = InMemoryMcpCredentialRepository()
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
         tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])

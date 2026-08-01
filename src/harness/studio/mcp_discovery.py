@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -162,7 +162,7 @@ class AutoDetectMcpConnector:
 
 
 async def _discover_session(
-    session: ClientSession[Any, Any],
+    session: ClientSession,
     *,
     transport: Literal["http", "sse"],
 ) -> DiscoveredServer:
@@ -351,30 +351,33 @@ class McpDiscoveryService:
     ) -> tuple[dict[str, str], str]:
         if request.auth_mode == "none":
             return {}, endpoint
-        try:
-            values = await self._credentials.resolve(
-                request.reference,
-                ExecutionIdentity(
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    project_id="studio-mcp-discovery",
-                    session_id="studio-mcp-discovery",
-                    run_id="studio-mcp-discovery",
-                    agent_name="studio-mcp-discovery",
-                    agent_version="1",
-                ),
-                frozenset({request.auth_key}),
-            )
-        except McpCredentialError as error:
-            raise McpDiscoveryError(
-                "mcp_credentials_unavailable",
-                (
-                    f"服务端尚未配置 {request.reference}.{request.auth_key} 的凭据引用；"
-                    "请更新 Compose 环境后重试。"
-                ),
-                status_code=422,
-            ) from error
-        secret = values[request.auth_key].get_secret_value()
+        if request.credential_value is not None:
+            secret = request.credential_value.get_secret_value()
+        else:
+            try:
+                values = await self._credentials.resolve(
+                    request.reference,
+                    ExecutionIdentity(
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        project_id="studio-mcp-discovery",
+                        session_id="studio-mcp-discovery",
+                        run_id="studio-mcp-discovery",
+                        agent_name="studio-mcp-discovery",
+                        agent_version="1",
+                    ),
+                    frozenset({request.auth_key}),
+                )
+            except McpCredentialError as error:
+                raise McpDiscoveryError(
+                    "mcp_credentials_unavailable",
+                    (
+                        f"尚未配置 {request.reference}.{request.auth_key} 的凭据；"
+                        "请在当前页面填写后重试。"
+                    ),
+                    status_code=422,
+                ) from error
+            secret = values[request.auth_key].get_secret_value()
         if request.auth_mode == "bearer":
             return {"Authorization": f"Bearer {secret}"}, endpoint
         if not request.auth_name:

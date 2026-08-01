@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from harness.core.manifest import ToolExposureMode
 from harness.evals.suite import EvalCase
@@ -409,6 +409,12 @@ class McpDiscoveryRequest(StudioModel):
         default="authorization",
         alias="authKey",
         pattern=r"^[a-z][a-z0-9_]*$",
+    )
+    credential_value: SecretStr | None = Field(
+        default=None,
+        alias="credentialValue",
+        min_length=1,
+        max_length=16_384,
     )
 
 

@@ -823,6 +823,17 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function downloadNexauBundle() {
+    const current = dirty ? await saveDraft() : draft;
+    if (!current?.id) return;
+    try {
+      await studioClient.downloadNexauBundle(current.id);
+      setNotice("NexAU ZIP 导出已开始");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "NexAU ZIP 导出失败");
+    }
+  }
+
   async function importBundle(file: File) {
     if (dirty && !window.confirm("当前修改尚未保存，导入 Bundle 将切换到新 Agent，是否继续？")) {
       return;
@@ -1605,6 +1616,17 @@ export function AgentStudioWorkbench() {
                   }}
                 >
                   <span><strong>下载 Bundle</strong><small>获取当前不可变配置包</small></span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.secondaryButton}
+                  disabled={!draft.id || saving}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void downloadNexauBundle();
+                  }}
+                >
+                  <span><strong>导出 NexAU ZIP</strong><small>生成可导入 NexAU 的 Agent 包</small></span>
                 </button>
               </div>
             </details>
