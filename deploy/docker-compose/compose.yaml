@@ -11,6 +11,9 @@ x-python-build: &python-build
 x-harness-environment: &harness-environment
   HARNESS_ENVIRONMENT: production
   HARNESS_RUNTIME: claude-sdk
+  # Workers decrypt tenant-scoped MCP credentials issued by the API, so both
+  # control and execution planes must derive their cipher from the same secret.
+  HARNESS_AUTH_JWT_SECRET: ${HARNESS_AUTH_JWT_SECRET:?set HARNESS_AUTH_JWT_SECRET}
   HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
   HARNESS_REDIS_URL: redis://redis:6379/0
   HARNESS_MINIO_ENDPOINT: minio:9000
