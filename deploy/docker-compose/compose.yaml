@@ -338,7 +338,8 @@ services:
       HARNESS_TENANT_ID: ${HARNESS_TENANT_ID:-local}
       HARNESS_USER_ID: ${HARNESS_USER_ID:-system}
       HARNESS_SEED_AGENT_MANIFESTS: /app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/archive-file-classifier-agent/agent.yaml
-      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml,/app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml,/app/agents/networked-knowledge-research-agent/agent.yaml
+      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml,/app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml
+      HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS: /app/agents/networked-knowledge-research-agent/agent.yaml
     depends_on:
       api:
         condition: service_healthy

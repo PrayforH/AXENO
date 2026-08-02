@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import seed_docker
 from scripts.seed_docker import _numeric_version, studio_spec_from_manifest
 
 ROOT = Path(__file__).parents[2]
@@ -10,6 +11,26 @@ ROOT = Path(__file__).parents[2]
 def test_numeric_version_orders_seed_versions_without_external_dependencies() -> None:
     assert _numeric_version("0.1.1") > _numeric_version("0.1.0")  # type: ignore[operator]
     assert _numeric_version("release") is None
+
+
+def test_optional_studio_seed_does_not_block_on_environment_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def unavailable(**_kwargs: object) -> None:
+        raise seed_docker.StudioDraftNotReadyError("private MCP is unavailable")
+
+    monkeypatch.setattr(seed_docker, "_sync_studio_agent", unavailable)
+
+    seed_docker._sync_optional_studio_agent(
+        api_url="http://api:8000",
+        tenant_id="local",
+        user_id="owner",
+        api_token="token",
+        manifest=Path("optional-agent/agent.yaml"),
+    )
+
+    assert "optional Studio seed skipped" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

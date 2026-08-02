@@ -16,6 +16,10 @@ from harness.core.manifest import load_manifest
 from harness.evals.suite import EvalSuite
 
 
+class StudioDraftNotReadyError(ValueError):
+    """An optional Studio seed cannot be published in this environment."""
+
+
 def _publish_bundle(
     *,
     api_url: str,
@@ -314,7 +318,7 @@ def _sync_studio_agent(
         else None
     )
     if validation_object is None or validation_object.get("ready") is not True:
-        raise ValueError(
+        raise StudioDraftNotReadyError(
             f"Studio draft is not ready: {spec['name']} "
             f"{validation_object.get('issues') if validation_object else validation}"
         )
@@ -327,6 +331,29 @@ def _sync_studio_agent(
         method="POST",
         body={"expectedRevision": revision},
     )
+
+
+def _sync_optional_studio_agent(
+    *,
+    api_url: str,
+    tenant_id: str,
+    user_id: str,
+    api_token: str,
+    manifest: Path,
+) -> None:
+    try:
+        _sync_studio_agent(
+            api_url=api_url,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            api_token=api_token,
+            manifest=manifest,
+        )
+    except StudioDraftNotReadyError as error:
+        # Optional examples may depend on private MCP services that are not
+        # present in every deployment. Keep the draft and surface the reason,
+        # but do not block the rest of the application from starting.
+        print(f"WARNING: optional Studio seed skipped: {error}", flush=True)
 
 
 def main() -> None:
@@ -367,6 +394,21 @@ def main() -> None:
         if not value:
             continue
         _sync_studio_agent(
+            api_url=api_url,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            api_token=api_token,
+            manifest=Path(value),
+        )
+    raw_optional_studio_manifests = os.getenv(
+        "HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS",
+        "/app/agents/networked-knowledge-research-agent/agent.yaml",
+    )
+    for value in raw_optional_studio_manifests.split(","):
+        value = value.strip()
+        if not value:
+            continue
+        _sync_optional_studio_agent(
             api_url=api_url,
             tenant_id=tenant_id,
             user_id=user_id,
