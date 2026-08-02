@@ -63,6 +63,7 @@ import {
   isIntermediateAssistantTextPart,
   messageOwnsRun,
   ownsLiveResponse,
+  shouldSuppressNativeAssistantText,
   shouldShowComposerStop,
   shouldShowPreResponseActivity,
 } from "../src/components/agent-thread";
@@ -224,14 +225,13 @@ it("renders uploaded images in an in-app original-size preview", () => {
   expect(agentThreadSource).not.toContain('target: "_blank"');
 });
 
-it("keeps final assistant text mounted while tool-bearing responses stream", () => {
+it("keeps final assistant text mounted outside the live-stream handoff", () => {
   expect(agentThreadSource).toContain(
     "function HarnessAssistantText(part: TextMessagePartProps)",
   );
   expect(agentThreadSource).toContain("<MarkdownText />");
-  expect(agentThreadSource).toContain(
-    "if (isIntermediateAssistantTextPart(parts, partIndex)) return null;",
-  );
+  expect(agentThreadSource).toContain("shouldSuppressNativeAssistantText(");
+  expect(agentThreadSource).toContain("isIntermediateAssistantTextPart(parts, partIndex)");
 });
 
 it("projects only pre-tool assistant prose as activity commentary", () => {
@@ -299,6 +299,13 @@ it("uses one stable native assistant message for streaming output", () => {
   );
   expect(agentThreadSource).toContain("<TextMessagePartProvider");
   expect(agentThreadSource).not.toContain("hasCurrentTurnAssistantText");
+});
+
+it("does not render the native text slot while the live response owns it", () => {
+  expect(shouldSuppressNativeAssistantText(true, "streaming")).toBe(true);
+  expect(shouldSuppressNativeAssistantText(true, "complete")).toBe(true);
+  expect(shouldSuppressNativeAssistantText(false, "streaming")).toBe(false);
+  expect(shouldSuppressNativeAssistantText(true, "idle")).toBe(false);
 });
 
 it("keeps interrupted live output attached to its own regenerated branch", () => {

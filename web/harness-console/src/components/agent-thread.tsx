@@ -513,12 +513,22 @@ export function isIntermediateAssistantTextPart(
 
 function HarnessAssistantText(part: TextMessagePartProps) {
   const aui = useAui();
+  const live = useLiveResponse();
+  const isLast = useAuiState((state) => state.message.isLast);
+  const messageId = useAuiState((state) => state.message.id);
   const parts = useAuiState((state) => state.message.content);
   const partIndex =
     aui.part.source === "message" && aui.part.query.type === "index"
       ? aui.part.query.index
       : -1;
-  if (isIntermediateAssistantTextPart(parts, partIndex)) return null;
+  if (
+    shouldSuppressNativeAssistantText(
+      ownsLiveResponse(isLast, messageId, live.messageId),
+      live.status,
+    ) || isIntermediateAssistantTextPart(parts, partIndex)
+  ) {
+    return null;
+  }
   return (
     <div
       className="assistant-answer"
@@ -644,6 +654,13 @@ export function ownsLiveResponse(
   liveMessageId: string | undefined,
 ) {
   return isLast && Boolean(liveMessageId) && messageId === liveMessageId;
+}
+
+export function shouldSuppressNativeAssistantText(
+  ownsLive: boolean,
+  liveStatus: LiveResponseSnapshot["status"],
+) {
+  return ownsLive && liveStatus !== "idle";
 }
 
 export function messageOwnsRun(messageId: string, runId: string) {
