@@ -79,7 +79,7 @@ class EvalControlPlaneService:
         user_id: str,
         request: CreateEvalDatasetVersionRequest,
     ) -> EvalDatasetVersion:
-        draft = await self._studio.get(tenant_id, request.draft_id)
+        draft = await self._studio.get(tenant_id, user_id, request.draft_id)
         if draft.revision != request.expected_revision:
             raise ConflictError(
                 "Agent draft revision changed before Eval Dataset creation: "
@@ -87,9 +87,9 @@ class EvalControlPlaneService:
             )
         if not draft.spec.evaluation_enabled:
             raise ConflictError("Agent Eval is disabled for this draft")
-        compiled = await self._studio.bundle(tenant_id, request.draft_id)
+        compiled = await self._studio.bundle(tenant_id, user_id, request.draft_id)
         dataset_id = request.dataset_id or self._id_generator("dataset")
-        version = await self._datasets.next_version(tenant_id, dataset_id)
+        version = await self._datasets.next_version(tenant_id, user_id, dataset_id)
         fixtures: list[EvalFixture] = []
         with zipfile.ZipFile(BytesIO(compiled.bundle)) as archive:
             for path, media_type in sorted(
@@ -149,13 +149,17 @@ class EvalControlPlaneService:
         )
         return dataset
 
-    async def list_datasets(self, tenant_id: str) -> list[EvalDatasetVersion]:
-        return await self._datasets.list_for_tenant(tenant_id)
+    async def list_datasets(self, tenant_id: str, owner_user_id: str) -> list[EvalDatasetVersion]:
+        return [
+            item
+            for item in await self._datasets.list_for_tenant(tenant_id)
+            if item.created_by == owner_user_id
+        ]
 
     async def get_dataset(
-        self, tenant_id: str, dataset_id: str, version: int
+        self, tenant_id: str, owner_user_id: str, dataset_id: str, version: int
     ) -> EvalDatasetVersion:
-        return await self._datasets.get(tenant_id, dataset_id, version)
+        return await self._datasets.get(tenant_id, owner_user_id, dataset_id, version)
 
     async def create_run(
         self,
@@ -164,19 +168,17 @@ class EvalControlPlaneService:
         user_id: str,
         request: CreateEvalRunRequest,
     ) -> EvalRunView:
-        existing = await self._runs.find_by_idempotency(
-            tenant_id, request.idempotency_key
-        )
+        existing = await self._runs.find_by_idempotency(tenant_id, user_id, request.idempotency_key)
         if existing is not None:
             self._ensure_same_run(existing, request)
             return await self._view(existing)
         dataset = await self._datasets.get(
-            tenant_id, request.dataset_id, request.dataset_version
+            tenant_id, user_id, request.dataset_id, request.dataset_version
         )
         if dataset.agent_name != request.agent_name:
             raise ConflictError("Eval Dataset targets a different Agent")
         version = await self._registry.get(
-            tenant_id, request.agent_name, request.agent_version
+            tenant_id, user_id, request.agent_name, request.agent_version
         )
         if version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("Eval Runs require a published Agent version")
@@ -185,10 +187,10 @@ class EvalControlPlaneService:
         if request.preview_id is not None:
             if self._previews is None:
                 raise ConflictError("Preview association is not configured")
-            preview = await self._previews.get(tenant_id, request.preview_id)
+            preview = await self._previews.get(tenant_id, user_id, request.preview_id)
             if preview.stale or preview.status.value != "ready":
                 raise ConflictError("Eval Run Preview must be ready and current")
-            preview_draft = await self._studio.get(tenant_id, preview.draft_id)
+            preview_draft = await self._studio.get(tenant_id, user_id, preview.draft_id)
             if preview_draft.spec.name != request.agent_name:
                 raise ConflictError("Eval Run Preview targets a different Agent")
         now = self._clock()
@@ -211,15 +213,13 @@ class EvalControlPlaneService:
             await self._runs.add(run)
         except ConflictError:
             concurrent = await self._runs.find_by_idempotency(
-                tenant_id, request.idempotency_key
+                tenant_id, user_id, request.idempotency_key
             )
             if concurrent is None:
                 raise
             self._ensure_same_run(concurrent, request)
             return await self._view(concurrent)
-        await self._queue.enqueue(
-            EvalTask(tenant_id=tenant_id, eval_run_id=run.eval_run_id)
-        )
+        await self._queue.enqueue(EvalTask(tenant_id=tenant_id, eval_run_id=run.eval_run_id))
         await self._record(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -237,22 +237,27 @@ class EvalControlPlaneService:
         )
         return await self._view(run)
 
-    async def get_run(self, tenant_id: str, eval_run_id: str) -> EvalRunView:
-        return await self._view(await self._runs.get(tenant_id, eval_run_id))
+    async def get_run(self, tenant_id: str, owner_user_id: str, eval_run_id: str) -> EvalRunView:
+        run = await self._runs.get(tenant_id, eval_run_id)
+        if run.requested_by != owner_user_id:
+            raise NotFoundError(f"Eval Run not found: {eval_run_id}")
+        return await self._view(run)
 
-    async def list_runs(self, tenant_id: str) -> list[EvalRunView]:
-        return [await self._view(run) for run in await self._runs.list_for_tenant(tenant_id)]
+    async def list_runs(self, tenant_id: str, owner_user_id: str) -> list[EvalRunView]:
+        return [
+            await self._view(run)
+            for run in await self._runs.list_for_tenant(tenant_id)
+            if run.requested_by == owner_user_id
+        ]
 
-    async def cancel_run(
-        self, *, tenant_id: str, user_id: str, eval_run_id: str
-    ) -> EvalRunView:
+    async def cancel_run(self, *, tenant_id: str, user_id: str, eval_run_id: str) -> EvalRunView:
         current = await self._runs.get(tenant_id, eval_run_id)
+        if current.requested_by != user_id:
+            raise NotFoundError(f"Eval Run not found: {eval_run_id}")
         if not current.status.is_terminal and current.status is not EvalRunStatus.CANCELLING:
             updated = current.model_copy(
                 update={
-                    "status": transition_eval_run(
-                        current.status, EvalRunStatus.CANCELLING
-                    ),
+                    "status": transition_eval_run(current.status, EvalRunStatus.CANCELLING),
                     "updated_at": self._clock(),
                     "fencing_token": current.fencing_token + 1,
                 }
@@ -261,9 +266,7 @@ class EvalControlPlaneService:
                 raise ConflictError("Eval Run changed during cancellation")
             current = updated
         if not current.status.is_terminal:
-            await self._queue.enqueue(
-                EvalTask(tenant_id=tenant_id, eval_run_id=eval_run_id)
-            )
+            await self._queue.enqueue(EvalTask(tenant_id=tenant_id, eval_run_id=eval_run_id))
         await self._record(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -275,9 +278,13 @@ class EvalControlPlaneService:
         return await self._view(current)
 
     async def gate(
-        self, tenant_id: str, agent_name: str, agent_version: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
     ) -> EvalGateResult:
-        version = await self._registry.get(tenant_id, agent_name, agent_version)
+        version = await self._registry.get(tenant_id, owner_user_id, agent_name, agent_version)
         if not _published_evaluation_enabled(version.snapshot):
             return EvalGateResult(
                 agentName=agent_name,
@@ -287,7 +294,11 @@ class EvalControlPlaneService:
                 passedDatasets=0,
                 missingDatasetIds=(),
             )
-        versions = await self._datasets.list_for_tenant(tenant_id)
+        versions = [
+            item
+            for item in await self._datasets.list_for_tenant(tenant_id)
+            if item.created_by == owner_user_id
+        ]
         latest: dict[str, EvalDatasetVersion] = {}
         for dataset in versions:
             if dataset.agent_name != agent_name or not dataset.required:
@@ -298,6 +309,7 @@ class EvalControlPlaneService:
         passed = {
             (run.dataset_id, run.dataset_version)
             for run in await self._runs.list_for_tenant(tenant_id)
+            if run.requested_by == owner_user_id
             if run.agent_name == agent_name
             and run.agent_version == agent_version
             and run.status is EvalRunStatus.PASSED
@@ -319,9 +331,13 @@ class EvalControlPlaneService:
         )
 
     async def require_promotion_allowed(
-        self, tenant_id: str, agent_name: str, agent_version: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
     ) -> EvalGateResult:
-        gate = await self.gate(tenant_id, agent_name, agent_version)
+        gate = await self.gate(tenant_id, owner_user_id, agent_name, agent_version)
         if not gate.passed:
             raise ConflictError(
                 "Agent version has not passed every required Eval Dataset: "
@@ -330,31 +346,33 @@ class EvalControlPlaneService:
         return gate
 
     async def download_artifact(
-        self, tenant_id: str, eval_run_id: str, artifact_id: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        eval_run_id: str,
+        artifact_id: str,
     ) -> tuple[str, str, bytes]:
         run = await self._runs.get(tenant_id, eval_run_id)
-        artifact = next(
-            (item for item in run.artifacts if item.artifact_id == artifact_id), None
-        )
+        if run.requested_by != owner_user_id:
+            raise NotFoundError(f"Eval Run not found: {eval_run_id}")
+        artifact = next((item for item in run.artifacts if item.artifact_id == artifact_id), None)
         if artifact is None:
             raise NotFoundError(f"Eval artifact not found: {artifact_id}")
-        return artifact.name, artifact.media_type, await self._object_store.get(
-            tenant_id, artifact_id
+        return (
+            artifact.name,
+            artifact.media_type,
+            await self._object_store.get(tenant_id, artifact_id),
         )
 
     async def _view(self, run: EvalRun) -> EvalRunView:
         dataset = await self._datasets.get(
-            run.tenant_id, run.dataset_id, run.dataset_version
+            run.tenant_id, run.requested_by, run.dataset_id, run.dataset_version
         )
         stored_cases = {
             item.case_id: item
-            for item in await self._runs.list_case_results(
-                run.tenant_id, run.eval_run_id
-            )
+            for item in await self._runs.list_case_results(run.tenant_id, run.eval_run_id)
         }
-        cases = tuple(
-            stored_cases[item.id] for item in dataset.cases if item.id in stored_cases
-        )
+        cases = tuple(stored_cases[item.id] for item in dataset.cases if item.id in stored_cases)
         return EvalRunView(
             run=run,
             cases=cases,

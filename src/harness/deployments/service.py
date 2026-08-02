@@ -38,7 +38,7 @@ from harness.studio.catalog import default_capability_catalog
 from harness.studio.models import CapabilityCatalogRecord, ExecutionProfileMetadata
 from harness.studio.preview_service import PreviewService
 
-QualityGate = Callable[[str, str, str], Awaitable[object]]
+QualityGate = Callable[[str, str, str, str], Awaitable[object]]
 ExecutionProfileResolver = Callable[[str, str], Awaitable[ExecutionProfileMetadata]]
 CapabilityCatalogResolver = Callable[[str], Awaitable[CapabilityCatalogRecord]]
 KnowledgeReferenceValidator = Callable[[str, tuple[str, ...]], Awaitable[None]]
@@ -295,14 +295,19 @@ class DeploymentService:
             )
 
     async def environment(
-        self, tenant_id: str, agent_name: str, name: EnvironmentName
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        name: EnvironmentName,
     ) -> Environment:
         try:
-            return await self._environments.get(tenant_id, agent_name, name)
+            return await self._environments.get(tenant_id, owner_user_id, agent_name, name)
         except NotFoundError:
             catalog = await self._catalog(tenant_id)
             value = Environment(
                 tenantId=tenant_id,
+                ownerUserId=owner_user_id,
                 agentName=agent_name,
                 name=name,
                 revision=0,
@@ -313,16 +318,20 @@ class DeploymentService:
             try:
                 await self._environments.add(value)
             except ConflictError:
-                return await self._environments.get(tenant_id, agent_name, name)
+                return await self._environments.get(tenant_id, owner_user_id, agent_name, name)
             return value
 
-    async def list_environments(self, tenant_id: str, agent_name: str) -> list[Environment]:
+    async def list_environments(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[Environment]:
         existing = {
             item.name: item
-            for item in await self._environments.list_for_agent(tenant_id, agent_name)
+            for item in await self._environments.list_for_agent(
+                tenant_id, owner_user_id, agent_name
+            )
         }
         return [
-            existing.get(name) or await self.environment(tenant_id, agent_name, name)
+            existing.get(name) or await self.environment(tenant_id, owner_user_id, agent_name, name)
             for name in EnvironmentName
         ]
 
@@ -335,7 +344,7 @@ class DeploymentService:
         environment_name: EnvironmentName,
         request: ReplaceEnvironmentPolicyRequest,
     ) -> Environment:
-        current = await self.environment(tenant_id, agent_name, environment_name)
+        current = await self.environment(tenant_id, user_id, agent_name, environment_name)
         if current.revision != request.expected_environment_revision:
             raise ConflictError("Environment revision changed before policy update")
         catalog = await self._catalog(tenant_id)
@@ -349,9 +358,12 @@ class DeploymentService:
         ):
             raise ConflictError("Production Environment requires an isolated production Profile")
         for route in current.routes:
-            snapshot = await self._deployments.get_snapshot(tenant_id, route.snapshot_id)
+            snapshot = await self._deployments.get_snapshot_for_user(
+                tenant_id, user_id, route.snapshot_id
+            )
             version = await self._registry.get(
                 tenant_id,
+                snapshot.created_by,
                 snapshot.agent_name,
                 snapshot.agent_version,
             )
@@ -392,24 +404,30 @@ class DeploymentService:
     async def promote(
         self, *, tenant_id: str, user_id: str, request: PromoteRequest
     ) -> DeploymentView:
-        existing = await self._deployments.find_by_idempotency(tenant_id, request.idempotency_key)
+        existing = await self._deployments.find_by_idempotency(
+            tenant_id, user_id, request.idempotency_key
+        )
         if existing is not None:
             return await self._same_promote(existing, request)
-        environment = await self.environment(tenant_id, request.agent_name, request.environment)
+        environment = await self.environment(
+            tenant_id, user_id, request.agent_name, request.environment
+        )
         if environment.revision != request.expected_environment_revision:
             raise ConflictError("Environment revision changed before promotion")
-        version = await self._registry.get(tenant_id, request.agent_name, request.agent_version)
+        version = await self._registry.get(
+            tenant_id, user_id, request.agent_name, request.agent_version
+        )
         if version.status is not AgentVersionStatus.PUBLISHED or not version.package_hash:
             raise ConflictError("Promotion requires an immutable published Agent package")
         gate = await self._evals.require_promotion_allowed(
-            tenant_id, request.agent_name, request.agent_version
+            tenant_id, user_id, request.agent_name, request.agent_version
         )
         if self._quality_gate is not None:
-            await self._quality_gate(tenant_id, request.agent_name, request.agent_version)
+            await self._quality_gate(tenant_id, user_id, request.agent_name, request.agent_version)
         if request.preview_id:
             if self._previews is None:
                 raise ConflictError("Preview verification is unavailable")
-            preview = await self._previews.get(tenant_id, request.preview_id)
+            preview = await self._previews.get(tenant_id, user_id, request.preview_id)
             if (
                 preview.stale
                 or preview.status.value != "ready"
@@ -486,8 +504,8 @@ class DeploymentService:
                 tenant_id=tenant_id,
                 resource=QuotaResource.DEPLOYMENT_PROMOTIONS,
                 amount=1,
-                subject_id=f"deployment:{request.idempotency_key}",
-                idempotency_key=f"deployment:{request.idempotency_key}:promotion",
+                subject_id=f"deployment:{user_id}:{request.idempotency_key}",
+                idempotency_key=(f"deployment:{user_id}:{request.idempotency_key}:promotion"),
                 agent_name=request.agent_name,
                 environment=request.environment.value,
             )
@@ -517,7 +535,7 @@ class DeploymentService:
             await self._deployments.add(deployment)
         except ConflictError:
             concurrent = await self._deployments.find_by_idempotency(
-                tenant_id, request.idempotency_key
+                tenant_id, user_id, request.idempotency_key
             )
             if concurrent is None:
                 if reservation is not None and self._quotas is not None:
@@ -547,9 +565,13 @@ class DeploymentService:
         environment_name: EnvironmentName,
         request: RollbackRequest,
     ) -> DeploymentView:
-        existing = await self._deployments.find_by_idempotency(tenant_id, request.idempotency_key)
+        existing = await self._deployments.find_by_idempotency(
+            tenant_id, user_id, request.idempotency_key
+        )
         if existing is not None:
-            target = await self._deployments.get_snapshot(tenant_id, existing.target_snapshot_id)
+            target = await self._deployments.get_snapshot_for_user(
+                tenant_id, user_id, existing.target_snapshot_id
+            )
             if (
                 existing.action != "rollback"
                 or existing.agent_name != agent_name
@@ -557,11 +579,13 @@ class DeploymentService:
                 or target.snapshot_id != request.snapshot_id
             ):
                 raise ConflictError("Deployment idempotency key was reused for another rollback")
-            return await self.view(tenant_id, existing.deployment_id)
-        environment = await self.environment(tenant_id, agent_name, environment_name)
+            return await self.view(tenant_id, user_id, existing.deployment_id)
+        environment = await self.environment(tenant_id, user_id, agent_name, environment_name)
         if environment.revision != request.expected_environment_revision:
             raise ConflictError("Environment revision changed before rollback")
-        snapshot = await self._deployments.get_snapshot(tenant_id, request.snapshot_id)
+        snapshot = await self._deployments.get_snapshot_for_user(
+            tenant_id, user_id, request.snapshot_id
+        )
         if (
             snapshot.agent_name != agent_name
             or snapshot.environment is not environment_name
@@ -593,29 +617,45 @@ class DeploymentService:
         await self._record(deployment, user_id, "studio.deployment.rollback")
         return DeploymentView(deployment=deployment, target=snapshot, environment=environment)
 
-    async def view(self, tenant_id: str, deployment_id: str) -> DeploymentView:
-        deployment = await self._deployments.get(tenant_id, deployment_id)
+    async def view(self, tenant_id: str, owner_user_id: str, deployment_id: str) -> DeploymentView:
+        deployment = await self._deployments.get_for_user(tenant_id, owner_user_id, deployment_id)
         return DeploymentView(
             deployment=deployment,
-            target=await self._deployments.get_snapshot(tenant_id, deployment.target_snapshot_id),
+            target=await self._deployments.get_snapshot_for_user(
+                tenant_id, owner_user_id, deployment.target_snapshot_id
+            ),
             environment=await self.environment(
-                tenant_id, deployment.agent_name, deployment.environment
+                tenant_id,
+                deployment.requested_by,
+                deployment.agent_name,
+                deployment.environment,
             ),
         )
 
-    async def list(self, tenant_id: str, agent_name: str) -> list[DeploymentView]:
+    async def list(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[DeploymentView]:
         return [
-            await self.view(tenant_id, item.deployment_id)
-            for item in await self._deployments.list_for_agent(tenant_id, agent_name)
+            await self.view(tenant_id, owner_user_id, item.deployment_id)
+            for item in await self._deployments.list_for_agent(tenant_id, owner_user_id, agent_name)
         ]
 
-    async def snapshots(self, tenant_id: str, agent_name: str) -> list[DeploymentSnapshot]:
-        return await self._deployments.list_snapshots(tenant_id, agent_name)
+    async def snapshots(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[DeploymentSnapshot]:
+        return await self._deployments.list_snapshots(tenant_id, owner_user_id, agent_name)
 
     async def resolve(
-        self, tenant_id: str, agent_name: str, environment_name: EnvironmentName, routing_key: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        environment_name: EnvironmentName,
+        routing_key: str,
     ) -> DeploymentResolution:
-        environment = await self._environments.get(tenant_id, agent_name, environment_name)
+        environment = await self._environments.get(
+            tenant_id, owner_user_id, agent_name, environment_name
+        )
         if not environment.routes:
             raise ConflictError(
                 f"Environment has no active deployment: {agent_name}/{environment_name}"
@@ -628,7 +668,9 @@ class DeploymentService:
             if bucket < cumulative:
                 selected = route
                 break
-        snapshot = await self._deployments.get_snapshot(tenant_id, selected.snapshot_id)
+        snapshot = await self._deployments.get_snapshot_for_user(
+            tenant_id, owner_user_id, selected.snapshot_id
+        )
         catalog = await self._catalog(tenant_id)
         self._validate_policy_catalog(environment.resource_policy, catalog)
         await self._validate_knowledge_references(
@@ -637,6 +679,7 @@ class DeploymentService:
         )
         version = await self._registry.get(
             tenant_id,
+            snapshot.created_by,
             snapshot.agent_name,
             snapshot.agent_version,
         )
@@ -658,8 +701,10 @@ class DeploymentService:
         )
 
     async def _same_promote(self, existing: Deployment, request: PromoteRequest) -> DeploymentView:
-        target = await self._deployments.get_snapshot(
-            existing.tenant_id, existing.target_snapshot_id
+        target = await self._deployments.get_snapshot_for_user(
+            existing.tenant_id,
+            existing.requested_by,
+            existing.target_snapshot_id,
         )
         if (
             existing.action != "promote"
@@ -668,7 +713,7 @@ class DeploymentService:
             or existing.canary_percent != request.canary_percent
         ):
             raise ConflictError("Deployment idempotency key was reused for another promotion")
-        return await self.view(existing.tenant_id, existing.deployment_id)
+        return await self.view(existing.tenant_id, existing.requested_by, existing.deployment_id)
 
     async def _record(self, deployment: Deployment, user_id: str, action: str) -> None:
         if self._audit:

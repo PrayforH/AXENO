@@ -21,33 +21,29 @@ async def test_publishes_an_immutable_manifest_snapshot() -> None:
     registry = InMemoryAgentRegistry()
     service = AgentService(registry, clock=lambda: NOW)
 
-    version = await service.publish("tenant-a", FIXTURE)
+    version = await service.publish("tenant-a", "user-1", FIXTURE)
 
     assert version.status is AgentVersionStatus.PUBLISHED
     assert version.manifest_hash == version.snapshot["content_hash"]
-    assert (await registry.get("tenant-a", "echo-agent", "0.1.0")) == version
+    assert (await registry.get("tenant-a", "user-1", "echo-agent", "0.1.0")) == version
 
 
 @pytest.mark.asyncio
 async def test_production_service_enforces_full_package_gate() -> None:
     registry = InMemoryAgentRegistry()
-    service = AgentService(
-        registry, clock=lambda: NOW, environment="production"
-    )
+    service = AgentService(registry, clock=lambda: NOW, environment="production")
 
     with pytest.raises(AgentPackageCheckError, match="production package check"):
-        await service.publish("tenant-a", FIXTURE)
+        await service.publish("tenant-a", "user-1", FIXTURE)
 
 
 @pytest.mark.asyncio
 async def test_production_service_publishes_ready_reference_agent() -> None:
     registry = InMemoryAgentRegistry()
-    service = AgentService(
-        registry, clock=lambda: NOW, environment="production"
-    )
+    service = AgentService(registry, clock=lambda: NOW, environment="production")
 
     version = await service.publish(
-        "tenant-a", Path("agents/public-opinion-agent/agent.yaml")
+        "tenant-a", "user-1", Path("agents/public-opinion-agent/agent.yaml")
     )
 
     assert version.name == "public-opinion-agent"
@@ -60,11 +56,9 @@ async def test_service_publishes_reproducible_bundle(tmp_path: Path) -> None:
         "agents/public-opinion-agent/agent.yaml", output_directory=tmp_path
     )
     registry = InMemoryAgentRegistry()
-    service = AgentService(
-        registry, clock=lambda: NOW, environment="production"
-    )
+    service = AgentService(registry, clock=lambda: NOW, environment="production")
 
-    version = await service.publish_bundle("tenant-a", archive.read_bytes())
+    version = await service.publish_bundle("tenant-a", "user-1", archive.read_bytes())
 
     assert version.name == "public-opinion-agent"
     assert version.manifest_hash == version.snapshot["content_hash"]
@@ -76,8 +70,8 @@ async def test_exact_release_retry_is_idempotent() -> None:
     registry = InMemoryAgentRegistry()
     service = AgentService(registry, clock=lambda: NOW)
 
-    first = await service.publish("tenant-a", FIXTURE)
-    repeated = await service.publish("tenant-a", FIXTURE)
+    first = await service.publish("tenant-a", "user-1", FIXTURE)
+    repeated = await service.publish("tenant-a", "user-1", FIXTURE)
 
     assert repeated == first
 
@@ -88,12 +82,12 @@ async def test_same_release_identity_rejects_different_content(tmp_path: Path) -
     copytree(FIXTURE.parent, package)
     registry = InMemoryAgentRegistry()
     service = AgentService(registry, clock=lambda: NOW)
-    await service.publish("tenant-a", package / "agent.yaml")
+    await service.publish("tenant-a", "user-1", package / "agent.yaml")
     prompt = package / "prompts/system.md"
     prompt.write_text(prompt.read_text() + "\nChanged without a version bump.\n")
 
     with pytest.raises(ConflictError, match="already exists"):
-        await service.publish("tenant-a", package / "agent.yaml")
+        await service.publish("tenant-a", "user-1", package / "agent.yaml")
 
 
 @pytest.mark.asyncio
@@ -106,10 +100,8 @@ async def test_bundle_retry_rejects_changed_evaluation_without_version_bump(
         package / "agent.yaml", output_directory=tmp_path / "first"
     )
     registry = InMemoryAgentRegistry()
-    service = AgentService(
-        registry, clock=lambda: NOW, environment="production"
-    )
-    await service.publish_bundle("tenant-a", first_archive.read_bytes())
+    service = AgentService(registry, clock=lambda: NOW, environment="production")
+    await service.publish_bundle("tenant-a", "user-1", first_archive.read_bytes())
     suite = package / "evals/suite.yaml"
     suite.write_text(suite.read_text() + "\n# Changed release evidence.\n")
     second_archive, _ = pack_agent_package(
@@ -117,7 +109,7 @@ async def test_bundle_retry_rejects_changed_evaluation_without_version_bump(
     )
 
     with pytest.raises(ConflictError, match="already exists"):
-        await service.publish_bundle("tenant-a", second_archive.read_bytes())
+        await service.publish_bundle("tenant-a", "user-1", second_archive.read_bytes())
 
 
 @pytest.mark.asyncio
@@ -127,6 +119,7 @@ async def test_session_requires_a_published_agent_version() -> None:
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             name="echo-agent",
             version="0.1.0",
             status=AgentVersionStatus.VALIDATED,
@@ -154,6 +147,7 @@ async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             name="public-opinion-agent",
             version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
@@ -188,6 +182,7 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
     for version in (
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             name="public-opinion-agent",
             version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
@@ -197,6 +192,7 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
         ),
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.VALIDATED,

@@ -90,6 +90,7 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     now = datetime.now(UTC)
     agent = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="agent-a",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -98,7 +99,7 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     )
     agent_repository = PostgresAgentRegistry(sessions)
     await agent_repository.add(agent)
-    assert await agent_repository.get("tenant-a", "agent-a", "1.0.0") == agent
+    assert await agent_repository.get("tenant-a", "user-a", "agent-a", "1.0.0") == agent
 
     thread = Session(
         session_id="session-a",
@@ -117,14 +118,10 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     assert bound_thread.claude_session_id == "claude-session-a"
     assert await session_repository.get("tenant-a", "session-a") == bound_thread
     assert (
-        await session_repository.bind_claude_session_id(
-            "tenant-a", "session-a", "claude-session-a"
-        )
+        await session_repository.bind_claude_session_id("tenant-a", "session-a", "claude-session-a")
     ) == bound_thread
     with pytest.raises(ConflictError, match="already bound"):
-        await session_repository.bind_claude_session_id(
-            "tenant-a", "session-a", "claude-session-b"
-        )
+        await session_repository.bind_claude_session_id("tenant-a", "session-a", "claude-session-b")
 
     approval = ApprovalRequest(
         approval_id="approval-a",
@@ -198,9 +195,7 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     )
     file_repository = PostgresThreadFileRepository(sessions)
     await file_repository.add(source)
-    assert await file_repository.list_for_session(
-        "tenant-a", "user-a", "session-a"
-    ) == [source]
+    assert await file_repository.list_for_session("tenant-a", "user-a", "session-a") == [source]
 
     snapshot = WorkspaceSnapshot(
         snapshot_id="snapshot-a",
@@ -224,9 +219,7 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     )
     binding_repository = PostgresAguiThreadBindingRepository(sessions)
     await binding_repository.add(binding)
-    assert await binding_repository.get_by_thread(
-        "tenant-a", "user-a", "thread-a"
-    ) == binding
+    assert await binding_repository.get_by_thread("tenant-a", "user-a", "thread-a") == binding
     titled = await binding_repository.update_title(
         "tenant-a",
         "user-a",
@@ -237,7 +230,5 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     )
     assert titled.title == "生成可下载报告"
     assert (
-        await binding_repository.get_by_thread(
-            "tenant-a", "user-a", "thread-a"
-        )
+        await binding_repository.get_by_thread("tenant-a", "user-a", "thread-a")
     ).title == "生成可下载报告"

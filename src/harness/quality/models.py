@@ -62,6 +62,7 @@ class AlertRule(StudioModel):
     blocks_promotion: bool = Field(default=True, alias="blocksPromotion")
     enabled: bool = True
     dashboard_url: str | None = Field(default=None, alias="dashboardUrl")
+    created_by: str = Field(alias="createdBy")
     created_at: datetime = Field(alias="createdAt")
 
     @model_validator(mode="after")
@@ -92,6 +93,7 @@ class AlertIncident(StudioModel):
     rule_id: str = Field(alias="ruleId")
     agent_name: str = Field(alias="agentName")
     agent_version: str = Field(alias="agentVersion")
+    owner_user_id: str = Field(alias="ownerUserId")
     state: AlertState
     observed_value: float = Field(alias="observedValue", ge=0, le=1)
     sample_count: int = Field(alias="sampleCount", ge=1)
@@ -120,6 +122,7 @@ class DatasetProjection(StudioModel):
     agent_name: str = Field(alias="agentName")
     case_count: int = Field(alias="caseCount", ge=1)
     content_hash: str = Field(alias="contentHash", pattern=r"^[a-f0-9]{64}$")
+    created_by: str = Field(alias="createdBy")
     created_at: datetime = Field(alias="createdAt")
 
 

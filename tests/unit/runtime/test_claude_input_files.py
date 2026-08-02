@@ -25,6 +25,7 @@ async def test_runtime_adds_staged_input_inventory_to_prompt(tmp_path: Path) -> 
     now = datetime.now(UTC)
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -42,9 +43,7 @@ async def test_runtime_adds_staged_input_inventory_to_prompt(tmp_path: Path) -> 
     )
     prompts: list[str] = []
 
-    async def fake_query(
-        prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         prompts.append(prompt)
         yield ResultMessage(
             subtype="success",

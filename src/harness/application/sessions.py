@@ -11,7 +11,9 @@ from harness.core.ports import AgentRegistry, SessionRepository
 from harness.deployments.models import DeploymentResolution, EnvironmentName
 from harness.knowledge.models import KnowledgeSnapshotBinding
 
-DeploymentResolver = Callable[[str, str, EnvironmentName, str], Awaitable[DeploymentResolution]]
+DeploymentResolver = Callable[
+    [str, str, str, EnvironmentName, str], Awaitable[DeploymentResolution]
+]
 KnowledgeBindingResolver = Callable[
     [str, str, Sequence[str]],
     Awaitable[Sequence[KnowledgeSnapshotBinding]],
@@ -54,17 +56,23 @@ class SessionService:
         environment: EnvironmentName | None = None,
         team_ids: tuple[str, ...] = (),
         api_key_id: str | None = None,
+        agent_owner_user_id: str | None = None,
     ) -> Session:
         if (agent_version is None) == (environment is None):
             raise ConflictError("provide exactly one of agent_version or environment")
         resolved_session_id = session_id or self._id_generator("session")
+        resolved_agent_owner = agent_owner_user_id or user_id
         deployment_snapshot_id: str | None = None
         environment_snapshot: dict[str, object] | None = None
         if environment is not None:
             if self._deployment_resolver is None:
                 raise ConflictError("environment deployment resolution is unavailable")
             resolution = await self._deployment_resolver(
-                tenant_id, agent_name, environment, resolved_session_id
+                tenant_id,
+                resolved_agent_owner,
+                agent_name,
+                environment,
+                resolved_session_id,
             )
             agent_version = resolution.agent_version
             deployment_snapshot_id = resolution.snapshot_id
@@ -82,13 +90,16 @@ class SessionService:
                     f"Environment does not allow {required_credential_scope} credentials"
                 )
         assert agent_version is not None
-        version = await self._registry.get(tenant_id, agent_name, agent_version)
+        version = await self._registry.get(
+            tenant_id, resolved_agent_owner, agent_name, agent_version
+        )
         if version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("sessions can only use a published Agent version")
         if self._require_published_dependencies:
             await resolve_published_agent_versions(
                 self._registry,
                 tenant_id=tenant_id,
+                owner_user_id=resolved_agent_owner,
                 agent_name=agent_name,
                 agent_version=agent_version,
             )
@@ -99,7 +110,7 @@ class SessionService:
                 raise ConflictError("knowledge snapshot resolution is unavailable")
             resolved = await self._knowledge_binding_resolver(
                 tenant_id,
-                user_id,
+                resolved_agent_owner,
                 snapshot.manifest.spec.knowledge_references,
             )
             knowledge_bindings = tuple(
@@ -109,6 +120,7 @@ class SessionService:
             session_id=resolved_session_id,
             tenant_id=tenant_id,
             user_id=user_id,
+            agent_owner_user_id=resolved_agent_owner,
             team_ids=team_ids,
             api_key_id=api_key_id,
             agent_name=agent_name,
@@ -127,6 +139,7 @@ class SessionService:
             existing = await self._sessions.get(tenant_id, session_id)
             if (
                 existing.user_id != user_id
+                or existing.resolved_agent_owner_user_id != resolved_agent_owner
                 or existing.team_ids != team_ids
                 or existing.api_key_id != api_key_id
                 or existing.agent_name != agent_name

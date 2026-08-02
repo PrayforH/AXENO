@@ -80,20 +80,14 @@ def _upgrade_system_managed_catalog(
             changed = True
 
     if "glm-5-2" not in route_ids:
-        glm = next(
-            route
-            for route in defaults.model_routes
-            if route.route_id == "glm-5-2"
-        )
+        glm = next(route for route in defaults.model_routes if route.route_id == "glm-5-2")
         routes.append(glm)
         changed = True
 
     def append_missing(current: tuple, builtins: tuple, identifier: str) -> tuple:
         nonlocal changed
         identifiers = {getattr(item, identifier) for item in current}
-        additions = tuple(
-            item for item in builtins if getattr(item, identifier) not in identifiers
-        )
+        additions = tuple(item for item in builtins if getattr(item, identifier) not in identifiers)
         if additions:
             changed = True
         return (*current, *additions)
@@ -197,7 +191,7 @@ class CapabilityCatalogService:
         if not self._contains(catalog, resource_type, resource_id):
             raise NotFoundError(f"Catalog resource not found: {resource_type}/{resource_id}")
         affected: list[str] = []
-        for draft in await self._drafts.list_for_tenant(tenant_id):
+        for draft in await self._drafts.list_all_for_tenant(tenant_id):
             spec = draft.spec
             referenced = (resource_type == "modelRoute" and spec.model.route_id == resource_id) or (
                 resource_type == "mcp" and resource_id in spec.mcp_servers

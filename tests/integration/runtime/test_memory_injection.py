@@ -27,9 +27,7 @@ async def test_memory_projection_is_delimited_and_not_emitted_in_events(
     now = datetime.now(UTC)
     captured: list[str] = []
 
-    async def fake_query(
-        prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def fake_query(prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         captured.append(prompt)
         yield ResultMessage(
             subtype="success",
@@ -43,6 +41,7 @@ async def test_memory_projection_is_delimited_and_not_emitted_in_events(
     runtime = ClaudeSdkRuntime(
         agent_version=AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="echo-agent",
             version="0.1.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -88,8 +87,5 @@ async def test_memory_projection_is_delimited_and_not_emitted_in_events(
 
     events = [event async for event in runtime.execute(context)]
 
-    assert captured == [
-        "<user_memory>\nPRIVATE-MEMORY-MARKER\n</user_memory>\n\nWrite a report"
-    ]
+    assert captured == ["<user_memory>\nPRIVATE-MEMORY-MARKER\n</user_memory>\n\nWrite a report"]
     assert "PRIVATE-MEMORY-MARKER" not in repr(events)
-

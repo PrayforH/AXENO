@@ -107,7 +107,7 @@ async def context(
             template=AgentTemplate.OPERATOR,
         ),
     )
-    validation = await studio.validate("tenant-a", draft.draft_id)
+    validation = await studio.validate("tenant-a", "builder", draft.draft_id)
     assert validation.ready
     assert validation.content_hash is not None
     assert validation.package_hash is not None
@@ -129,9 +129,7 @@ async def context(
     runner = LivePreflightRunner(
         studio=studio,
         sandbox=sandbox,
-        model_probe=FakeModelPreflightProbe(
-            fail_code=model_failure, delay_seconds=model_delay
-        ),
+        model_probe=FakeModelPreflightProbe(fail_code=model_failure, delay_seconds=model_delay),
         mcp_probe=FakeMcpPreflightProbe(fail_code=mcp_failure),
         policies=policies or default_policy_profiles(),
         observability=observability,
@@ -163,17 +161,13 @@ async def test_local_development_profile_matches_explicit_local_preview(
     tmp_path: Path,
 ) -> None:
     runner, preview, sandbox = await context(tmp_path, enforce_profile=True)
-    local_preview = preview.model_copy(
-        update={"execution_profile": "local-development"}
-    )
+    local_preview = preview.model_copy(update={"execution_profile": "local-development"})
 
     result = await runner.run(local_preview, cancelled=never_cancelled)
 
     assert result.status is PreflightResultStatus.PASSED
     provision = next(
-        check
-        for check in result.checks
-        if check.stage is PreflightStage.SANDBOX_PROVISION
+        check for check in result.checks if check.stage is PreflightStage.SANDBOX_PROVISION
     )
     assert provision.details["provider"] == "local"
     assert sandbox.destroyed
@@ -197,9 +191,7 @@ async def test_live_preflight_passes_every_boundary_and_collects_artifact(
     assert result.artifact.name == "preflight.txt"
     assert result.artifact.size_bytes == 34
     assert len(result.events) == len(result.checks) * 2
-    assert [event.sequence for event in result.events] == list(
-        range(1, len(result.events) + 1)
-    )
+    assert [event.sequence for event in result.events] == list(range(1, len(result.events) + 1))
     assert sandbox.destroyed
     assert list(tmp_path.iterdir()) == []
 
@@ -214,12 +206,8 @@ def mismatched_policies() -> PolicyProfileRegistry:
                         tool="Bash",
                         decision=PolicyDecision.ALLOW,
                     ),
-                    PolicyRule(
-                        name="write", tool="Write", decision=PolicyDecision.ALLOW
-                    ),
-                    PolicyRule(
-                        name="edit", tool="Edit", decision=PolicyDecision.ALLOW
-                    ),
+                    PolicyRule(name="write", tool="Write", decision=PolicyDecision.ALLOW),
+                    PolicyRule(name="edit", tool="Edit", decision=PolicyDecision.ALLOW),
                 ]
             )
         }
@@ -289,9 +277,7 @@ async def test_bundle_drift_and_approval_mismatch_are_fail_closed(tmp_path: Path
     drifted = await runner.run(drift, cancelled=never_cancelled)
     assert drifted.error_code == "preflight_bundle_drift"
 
-    runner, preview, sandbox = await context(
-        tmp_path / "approval", policies=mismatched_policies()
-    )
+    runner, preview, sandbox = await context(tmp_path / "approval", policies=mismatched_policies())
     rejected = await runner.run(preview, cancelled=never_cancelled)
     assert rejected.error_code == "approval_policy_mismatch"
     assert sandbox.destroyed
@@ -299,9 +285,7 @@ async def test_bundle_drift_and_approval_mismatch_are_fail_closed(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_cancel_and_timeout_are_terminal_and_always_cleanup(tmp_path: Path) -> None:
-    runner, preview, sandbox = await context(
-        tmp_path / "cancel", model_delay=1
-    )
+    runner, preview, sandbox = await context(tmp_path / "cancel", model_delay=1)
     calls = 0
 
     async def cancel_during_model() -> bool:
@@ -313,8 +297,7 @@ async def test_cancel_and_timeout_are_terminal_and_always_cleanup(tmp_path: Path
     assert cancelled.status is PreflightResultStatus.CANCELLED
     assert cancelled.error_code == "preflight_cancelled"
     assert any(
-        check.stage is PreflightStage.MODEL
-        and check.status is PreflightCheckStatus.CANCELLED
+        check.stage is PreflightStage.MODEL and check.status is PreflightCheckStatus.CANCELLED
         for check in cancelled.checks
     )
     assert sandbox.destroyed
@@ -325,9 +308,7 @@ async def test_cancel_and_timeout_are_terminal_and_always_cleanup(tmp_path: Path
     timed_out = await runner.run(preview, cancelled=never_cancelled)
     assert timed_out.status is PreflightResultStatus.TIMED_OUT
     assert timed_out.error_code == "preflight_timeout"
-    assert any(
-        check.status is PreflightCheckStatus.TIMED_OUT for check in timed_out.checks
-    )
+    assert any(check.status is PreflightCheckStatus.TIMED_OUT for check in timed_out.checks)
     assert sandbox.destroyed
 
 
@@ -339,9 +320,7 @@ async def test_preflight_trace_exports_only_allowlisted_stage_facts(tmp_path: Pa
         exporter=exporter,
         processor_factory=SimpleSpanProcessor,
     )
-    runner, preview, _sandbox = await context(
-        tmp_path, observability=observability
-    )
+    runner, preview, _sandbox = await context(tmp_path, observability=observability)
 
     result = await runner.run(preview, cancelled=never_cancelled)
 

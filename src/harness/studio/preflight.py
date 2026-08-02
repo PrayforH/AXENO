@@ -77,9 +77,7 @@ class LivePreflightRunner:
         self._enforce_execution_profile_provider = enforce_execution_profile_provider
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    async def run(
-        self, preview: PreviewDeployment, *, cancelled: CancelCheck
-    ) -> PreflightResult:
+    async def run(self, preview: PreviewDeployment, *, cancelled: CancelCheck) -> PreflightResult:
         started_at = self._clock()
         checks: list[PreflightCheck] = []
         events: list[PreflightEvent] = []
@@ -215,9 +213,7 @@ class LivePreflightRunner:
                 raise stable from failure
             completed = self._clock()
             status = (
-                PreflightCheckStatus.SKIPPED
-                if evidence.skipped
-                else PreflightCheckStatus.PASSED
+                PreflightCheckStatus.SKIPPED if evidence.skipped else PreflightCheckStatus.PASSED
             )
             check = PreflightCheck(
                 stage=stage,
@@ -241,14 +237,16 @@ class LivePreflightRunner:
 
         async def bundle_check() -> PreflightEvidence:
             nonlocal draft, compiled, manifest
-            draft = await self._studio.get(preview.tenant_id, preview.draft_id)
+            draft = await self._studio.get(
+                preview.tenant_id, preview.requested_by, preview.draft_id
+            )
             if draft.revision != preview.draft_revision:
                 raise PreflightCheckError(
                     "preflight_draft_stale", "Draft revision changed before Preflight"
                 )
             try:
                 compiled = await self._studio.bundle(
-                    preview.tenant_id, preview.draft_id
+                    preview.tenant_id, preview.requested_by, preview.draft_id
                 )
             except DraftCompilationError as error:
                 raise PreflightCheckError(
@@ -296,9 +294,7 @@ class LivePreflightRunner:
                 None,
             )
             actual_provider = (
-                "gvisor"
-                if handle.provider == "kubernetes-gvisor"
-                else handle.provider
+                "gvisor" if handle.provider == "kubernetes-gvisor" else handle.provider
             )
             if self._enforce_execution_profile_provider and (
                 profile is None or profile.sandbox_provider != actual_provider
@@ -341,9 +337,7 @@ class LivePreflightRunner:
                 agent_name=draft.spec.name,
                 agent_version=draft.spec.version,
             )
-            return await self._mcp_probe.verify(
-                manifest, identity, self._sandbox, handle
-            )
+            return await self._mcp_probe.verify(manifest, identity, self._sandbox, handle)
 
         async def approval_check() -> PreflightEvidence:
             assert (
@@ -366,11 +360,7 @@ class LivePreflightRunner:
             declared = (
                 {entry.name for entry in directory.entries}
                 if directory is not None
-                else {
-                    tool.builtin
-                    for tool in manifest.spec.tools
-                    if tool.builtin is not None
-                }
+                else {tool.builtin for tool in manifest.spec.tools if tool.builtin is not None}
             )
             decisions: dict[str, str | int | bool] = {}
             for tool_name in sorted(declared):
@@ -397,10 +387,7 @@ class LivePreflightRunner:
                         "approval_policy_mismatch",
                         f"Declared tool {tool_name} is denied by its permission profile",
                     )
-                if (
-                    tool_name == "Bash"
-                    and result.decision is not PolicyDecision.ASK
-                ):
+                if tool_name == "Bash" and result.decision is not PolicyDecision.ASK:
                     raise PreflightCheckError(
                         "approval_policy_mismatch",
                         "Declared Bash must enter human approval",
@@ -415,7 +402,7 @@ class LivePreflightRunner:
             assert handle is not None
             command = (
                 "set -eu; "
-                "test \"$(cat .harness-preflight/input.txt)\" = input-ready; "
+                'test "$(cat .harness-preflight/input.txt)" = input-ready; '
                 "mkdir -p output; "
                 "printf 'write-ready\\n' > output/preflight.txt; "
                 "printf 'edit-ready\\n' >> output/preflight.txt; "
@@ -472,9 +459,7 @@ class LivePreflightRunner:
                 await record(PreflightStage.MODEL, model_check)
                 await record(PreflightStage.MCP, mcp_check)
                 await record(PreflightStage.APPROVAL, approval_check)
-                await record(
-                    PreflightStage.WORKSPACE_ARTIFACT, workspace_artifact_check
-                )
+                await record(PreflightStage.WORKSPACE_ARTIFACT, workspace_artifact_check)
         except _PreflightCancelledError:
             result_status = PreflightResultStatus.CANCELLED
             error_code = "preflight_cancelled"
@@ -510,9 +495,7 @@ class LivePreflightRunner:
             error_code = failure.error_code
         finally:
             try:
-                await record(
-                    PreflightStage.CLEANUP, cleanup_check, honor_cancel=False
-                )
+                await record(PreflightStage.CLEANUP, cleanup_check, honor_cancel=False)
             except PreflightCheckError:
                 result_status = PreflightResultStatus.FAILED
                 error_code = "cleanup_failed"
@@ -556,9 +539,7 @@ class LivePreflightProvisioner:
         }:
             raise PreviewProvisioningError(result.error_code or "preflight_failed")
 
-    async def _attach(
-        self, tenant_id: str, preview_id: str, result: PreflightResult
-    ) -> None:
+    async def _attach(self, tenant_id: str, preview_id: str, result: PreflightResult) -> None:
         for _attempt in range(4):
             current = await self._repository.get(tenant_id, preview_id)
             if current.status.is_terminal:

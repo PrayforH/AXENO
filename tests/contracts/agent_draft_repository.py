@@ -47,14 +47,14 @@ async def exercise_repository_contract(repository: AgentDraftRepository) -> None
     await repository.add(tenant_b)
     await repository.add(newer)
 
-    assert await repository.get("tenant-a", tenant_a.draft_id) == tenant_a
-    assert await repository.get("tenant-b", tenant_b.draft_id) == tenant_b
-    assert await repository.list_for_tenant("tenant-a") == [newer, tenant_a]
-    assert await repository.list_for_tenant("tenant-b") == [tenant_b]
-    assert await repository.list_for_tenant("tenant-c") == []
+    assert await repository.get("tenant-a", "builder-a", tenant_a.draft_id) == tenant_a
+    assert await repository.get("tenant-b", "builder-a", tenant_b.draft_id) == tenant_b
+    assert await repository.list_for_user("tenant-a", "builder-a") == [newer, tenant_a]
+    assert await repository.list_for_user("tenant-b", "builder-a") == [tenant_b]
+    assert await repository.list_for_user("tenant-c", "builder-a") == []
 
     try:
-        await repository.get("tenant-c", tenant_a.draft_id)
+        await repository.get("tenant-c", "builder-a", tenant_a.draft_id)
     except NotFoundError:
         pass
     else:
@@ -83,8 +83,8 @@ async def exercise_repository_contract(repository: AgentDraftRepository) -> None
         }
     )
     await repository.replace(1, updated)
-    assert await repository.get("tenant-a", tenant_a.draft_id) == updated
-    assert await repository.get("tenant-b", tenant_b.draft_id) == tenant_b
+    assert await repository.get("tenant-a", "builder-a", tenant_a.draft_id) == updated
+    assert await repository.get("tenant-b", "builder-a", tenant_b.draft_id) == tenant_b
 
     try:
         await repository.replace(1, updated)
@@ -121,5 +121,5 @@ async def exercise_concurrent_replace(repository: AgentDraftRepository) -> None:
     assert sum(result is None for result in results) == 1
     conflicts = [result for result in results if isinstance(result, ConflictError)]
     assert len(conflicts) == 1
-    stored = await repository.get("tenant-a", original.draft_id)
+    stored = await repository.get("tenant-a", "builder-a", original.draft_id)
     assert stored in (first, second)

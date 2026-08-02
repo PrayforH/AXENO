@@ -44,29 +44,30 @@ class AgentService:
             environment or self._environment
         )
         if active_environment == "production":
-            return check_agent_package(
-                path, environment=active_environment
-            ).snapshot
+            return check_agent_package(path, environment=active_environment).snapshot
         return load_manifest(path, environment=active_environment)
 
-    async def list_published(self, tenant_id: str) -> list[AgentVersion]:
+    async def list_published(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         return [
             version
-            for version in await self._registry.list_for_tenant(tenant_id)
+            for version in await self._registry.list_for_user(tenant_id, owner_user_id)
             if version.status is AgentVersionStatus.PUBLISHED
         ]
 
     async def publish(
         self,
         tenant_id: str,
+        owner_user_id: str,
         path: str | Path,
         *,
         environment: Literal["local", "test", "production"] | None = None,
     ) -> AgentVersion:
         snapshot = self.validate(path, environment=environment)
-        return await self._publish_snapshot(tenant_id, snapshot)
+        return await self._publish_snapshot(tenant_id, owner_user_id, snapshot)
 
-    async def publish_bundle(self, tenant_id: str, content: bytes) -> AgentVersion:
+    async def publish_bundle(
+        self, tenant_id: str, owner_user_id: str, content: bytes
+    ) -> AgentVersion:
         with TemporaryDirectory(prefix="harness-agent-bundle-") as directory:
             manifest, claimed_hash, claimed_package_hash = extract_agent_bundle(
                 content, destination=directory
@@ -82,12 +83,16 @@ class AgentService:
                     "Agent bundle provenance does not match its release package"
                 )
             return await self._publish_snapshot(
-                tenant_id, snapshot, package_hash=report.package_hash
+                tenant_id,
+                owner_user_id,
+                snapshot,
+                package_hash=report.package_hash,
             )
 
     async def _publish_snapshot(
         self,
         tenant_id: str,
+        owner_user_id: str,
         snapshot: AgentManifestSnapshot,
         *,
         package_hash: str | None = None,
@@ -95,6 +100,7 @@ class AgentService:
         manifest = snapshot.manifest
         version = AgentVersion(
             tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
             name=manifest.metadata.name,
             version=manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
@@ -107,11 +113,13 @@ class AgentService:
             await self._registry.add(version)
         except ConflictError:
             existing = await self._registry.get(
-                tenant_id, manifest.metadata.name, manifest.metadata.version
+                tenant_id,
+                owner_user_id,
+                manifest.metadata.name,
+                manifest.metadata.version,
             )
             if existing.manifest_hash != version.manifest_hash or (
-                package_hash is not None
-                and existing.package_hash != package_hash
+                package_hash is not None and existing.package_hash != package_hash
             ):
                 raise
             return existing

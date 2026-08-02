@@ -89,12 +89,8 @@ async def test_create_is_idempotent_and_binds_test_identity_and_hashes() -> None
     studio, service, _controller, repository, _queue, _times = services()
     await create_draft(studio)
 
-    first = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
-    repeated = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    first = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
+    repeated = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
 
     assert repeated == first
     assert len(await repository.list_for_tenant("tenant-a")) == 1
@@ -110,9 +106,7 @@ async def test_create_is_idempotent_and_binds_test_identity_and_hashes() -> None
 async def test_draft_update_marks_existing_preview_stale() -> None:
     studio, service, _controller, _repository, _queue, _times = services()
     draft = await create_draft(studio)
-    preview = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    preview = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
     await studio.replace(
         tenant_id="tenant-a",
         user_id="builder",
@@ -123,7 +117,7 @@ async def test_draft_update_marks_existing_preview_stale() -> None:
         ),
     )
 
-    current = await service.get("tenant-a", preview.preview_id)
+    current = await service.get("tenant-a", "builder", preview.preview_id)
 
     assert current.stale is True
     assert current.stale_reason == "draft_revision_changed"
@@ -133,9 +127,7 @@ async def test_draft_update_marks_existing_preview_stale() -> None:
 async def test_controller_converges_ready_cancelled_and_expired() -> None:
     studio, service, controller, _repository, _queue, times = services()
     await create_draft(studio)
-    preview = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    preview = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
 
     ready = await controller.process_once()
     assert ready is not None and ready.status is PreviewStatus.READY
@@ -149,12 +141,10 @@ async def test_controller_converges_ready_cancelled_and_expired() -> None:
     # A fresh service set demonstrates TTL terminal convergence independently.
     studio2, service2, controller2, _repository2, _queue2, times2 = services()
     await create_draft(studio2)
-    expiring = await service2.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    expiring = await service2.create(tenant_id="tenant-a", user_id="builder", request=request())
     times2[0] += timedelta(minutes=11)
     assert await controller2.reap_expired() == 1
-    expired = await service2.get("tenant-a", expiring.preview_id)
+    expired = await service2.get("tenant-a", "builder", expiring.preview_id)
     assert expired.status is PreviewStatus.EXPIRED
 
     times[0] += timedelta(days=1)
@@ -165,14 +155,10 @@ async def test_controller_converges_ready_cancelled_and_expired() -> None:
 async def test_new_controller_recovers_a_provisioning_preview_after_crash() -> None:
     studio, service, _controller, repository, _queue, times = services()
     await create_draft(studio)
-    preview = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    preview = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
     provisioning = preview.model_copy(
         update={
-            "status": transition_preview(
-                PreviewStatus.QUEUED, PreviewStatus.PROVISIONING
-            ),
+            "status": transition_preview(PreviewStatus.QUEUED, PreviewStatus.PROVISIONING),
             "fencing_token": 1,
             "updated_at": times[0],
         }
@@ -192,9 +178,7 @@ async def test_new_controller_recovers_a_provisioning_preview_after_crash() -> N
 @pytest.mark.asyncio
 async def test_controller_discards_stale_queue_task_after_database_restore() -> None:
     _studio, _service, controller, _repository, queue, _times = services()
-    await queue.enqueue(
-        PreviewTask(tenant_id="tenant-a", preview_id="preview_missing")
-    )
+    await queue.enqueue(PreviewTask(tenant_id="tenant-a", preview_id="preview_missing"))
 
     assert await controller.process_once() is None
     assert await queue.dequeue() is None
@@ -204,9 +188,7 @@ async def test_controller_discards_stale_queue_task_after_database_restore() -> 
 async def test_controller_failure_is_terminal_and_never_publishes_a_version() -> None:
     studio, service, _controller, repository, queue, times = services()
     await create_draft(studio)
-    preview = await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    preview = await service.create(tenant_id="tenant-a", user_id="builder", request=request())
 
     async def fail(_preview: PreviewDeployment) -> None:
         raise RuntimeError("injected Preview failure")
@@ -229,9 +211,7 @@ async def test_controller_failure_is_terminal_and_never_publishes_a_version() ->
 async def test_controller_preserves_stable_preflight_error_code() -> None:
     studio, service, _controller, repository, queue, times = services()
     await create_draft(studio)
-    await service.create(
-        tenant_id="tenant-a", user_id="builder", request=request()
-    )
+    await service.create(tenant_id="tenant-a", user_id="builder", request=request())
 
     async def fail(_preview: PreviewDeployment) -> None:
         raise PreviewProvisioningError("mcp_tool_mismatch")

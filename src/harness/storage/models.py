@@ -89,6 +89,7 @@ class AgentVersionRow(Base):
     __tablename__ = "agent_versions"
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[str] = mapped_column(String(64), primary_key=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -102,11 +103,22 @@ class AgentDraftRow(Base):
             "schema_version >= 1",
             name="ck_agent_drafts_schema_version_positive",
         ),
-        Index("ix_agent_drafts_tenant_name", "tenant_id", "name"),
-        Index("ix_agent_drafts_tenant_updated", "tenant_id", "updated_at"),
+        Index(
+            "ix_agent_drafts_tenant_owner_name",
+            "tenant_id",
+            "owner_user_id",
+            "name",
+        ),
+        Index(
+            "ix_agent_drafts_tenant_owner_updated",
+            "tenant_id",
+            "owner_user_id",
+            "updated_at",
+        ),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     draft_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     revision: Mapped[int] = mapped_column(Integer)
@@ -132,10 +144,16 @@ class McpCredentialRow(Base):
     __tablename__ = "mcp_credentials"
     __table_args__ = (
         CheckConstraint("revision >= 1", name="ck_mcp_credentials_revision_positive"),
-        Index("ix_mcp_credentials_tenant_updated", "tenant_id", "updated_at"),
+        Index(
+            "ix_mcp_credentials_tenant_owner_updated",
+            "tenant_id",
+            "owner_user_id",
+            "updated_at",
+        ),
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     reference: Mapped[str] = mapped_column(String(128), primary_key=True)
     revision: Mapped[int] = mapped_column(Integer)
     key_names: Mapped[list[str]] = mapped_column(JSON)
@@ -149,6 +167,7 @@ class PreviewDeploymentRow(Base):
     __table_args__ = (
         UniqueConstraint(
             "tenant_id",
+            "requested_by",
             "idempotency_key",
             name="uq_preview_deployment_idempotency",
         ),
@@ -161,6 +180,7 @@ class PreviewDeploymentRow(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     preview_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    requested_by: Mapped[str] = mapped_column(String(128), index=True)
     draft_id: Mapped[str] = mapped_column(String(128), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(256))
     status: Mapped[str] = mapped_column(String(32), index=True)
@@ -179,6 +199,7 @@ class EvalDatasetVersionRow(Base):
     )
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    created_by: Mapped[str] = mapped_column(String(128), primary_key=True)
     dataset_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     agent_name: Mapped[str] = mapped_column(String(128))
@@ -190,7 +211,12 @@ class EvalDatasetVersionRow(Base):
 class EvalRunRow(Base):
     __tablename__ = "eval_runs"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "idempotency_key", name="uq_eval_run_idempotency"),
+        UniqueConstraint(
+            "tenant_id",
+            "requested_by",
+            "idempotency_key",
+            name="uq_eval_run_idempotency",
+        ),
         CheckConstraint("dataset_version >= 1", name="ck_eval_run_dataset_version_positive"),
         Index("ix_eval_runs_tenant_created", "tenant_id", "created_at"),
         Index(
@@ -203,6 +229,7 @@ class EvalRunRow(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     eval_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    requested_by: Mapped[str] = mapped_column(String(128), index=True)
     dataset_id: Mapped[str] = mapped_column(String(128), index=True)
     dataset_version: Mapped[int] = mapped_column(Integer)
     agent_name: Mapped[str] = mapped_column(String(128))
@@ -232,6 +259,7 @@ class EnvironmentRow(Base):
     __table_args__ = (CheckConstraint("revision >= 0", name="ck_environment_revision"),)
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(32), primary_key=True)
     revision: Mapped[int] = mapped_column(Integer)
@@ -245,6 +273,7 @@ class DeploymentSnapshotRow(Base):
         Index(
             "ix_deployment_snapshots_agent_created",
             "tenant_id",
+            "created_by",
             "agent_name",
             "created_at",
         ),
@@ -252,6 +281,7 @@ class DeploymentSnapshotRow(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     snapshot_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    created_by: Mapped[str] = mapped_column(String(128), index=True)
     agent_name: Mapped[str] = mapped_column(String(128))
     agent_version: Mapped[str] = mapped_column(String(64))
     environment: Mapped[str] = mapped_column(String(32), index=True)
@@ -262,10 +292,16 @@ class DeploymentSnapshotRow(Base):
 class DeploymentRow(Base):
     __tablename__ = "deployments"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "idempotency_key", name="uq_deployment_idempotency"),
+        UniqueConstraint(
+            "tenant_id",
+            "requested_by",
+            "idempotency_key",
+            name="uq_deployment_idempotency",
+        ),
         Index(
             "ix_deployments_agent_created",
             "tenant_id",
+            "requested_by",
             "agent_name",
             "created_at",
         ),
@@ -273,6 +309,7 @@ class DeploymentRow(Base):
 
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     deployment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    requested_by: Mapped[str] = mapped_column(String(128), index=True)
     agent_name: Mapped[str] = mapped_column(String(128))
     environment: Mapped[str] = mapped_column(String(32))
     idempotency_key: Mapped[str] = mapped_column(String(256))
@@ -495,9 +532,7 @@ class AgentTriggerRow(Base):
     environment: Mapped[str] = mapped_column(String(32), index=True)
     kind: Mapped[str] = mapped_column(String(32), index=True, default="webhook")
     enabled: Mapped[bool] = mapped_column(Boolean, index=True)
-    next_fire_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
+    next_fire_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     revision: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

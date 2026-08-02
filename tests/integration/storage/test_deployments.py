@@ -31,6 +31,7 @@ async def test_postgres_deployment_state_is_durable_and_fenced(
     now = datetime.now(UTC)
     environment = Environment(
         tenantId="tenant-a",
+        ownerUserId="release-manager",
         agentName="durable-agent",
         name=EnvironmentName.PRODUCTION,
         revision=0,
@@ -106,13 +107,13 @@ async def test_postgres_deployment_state_is_durable_and_fenced(
     restarted_deployments = PostgresDeploymentRepository(sessions)
     assert (
         await restarted_environments.get(
-            "tenant-a", "durable-agent", EnvironmentName.PRODUCTION
+            "tenant-a", "release-manager", "durable-agent", EnvironmentName.PRODUCTION
         )
         == governed
     )
     assert await restarted_deployments.get_snapshot("tenant-a", "snapshot-a") == snapshot
     assert await restarted_deployments.get("tenant-a", "deployment-a") == reconciling
     assert (
-        await restarted_deployments.find_by_idempotency("tenant-a", "release-a")
+        await restarted_deployments.find_by_idempotency("tenant-a", "release-manager", "release-a")
         == reconciling
     )

@@ -28,6 +28,7 @@ async def test_agent_registry_is_tenant_scoped_and_rejects_duplicates() -> None:
     registry = InMemoryAgentRegistry()
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-1",
         name="echo-agent",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -37,9 +38,9 @@ async def test_agent_registry_is_tenant_scoped_and_rejects_duplicates() -> None:
 
     await registry.add(version)
 
-    assert await registry.get("tenant-a", "echo-agent", "1.0.0") == version
+    assert await registry.get("tenant-a", "user-1", "echo-agent", "1.0.0") == version
     with pytest.raises(NotFoundError):
-        await registry.get("tenant-b", "echo-agent", "1.0.0")
+        await registry.get("tenant-b", "user-1", "echo-agent", "1.0.0")
     with pytest.raises(ConflictError):
         await registry.add(version)
 
@@ -76,20 +77,14 @@ async def test_session_repository_binds_claude_session_once() -> None:
     )
     await repository.add(session)
 
-    bound = await repository.bind_claude_session_id(
-        "tenant-a", "session-1", "claude-session-1"
-    )
+    bound = await repository.bind_claude_session_id("tenant-a", "session-1", "claude-session-1")
 
     assert bound.claude_session_id == "claude-session-1"
     assert (
-        await repository.bind_claude_session_id(
-            "tenant-a", "session-1", "claude-session-1"
-        )
+        await repository.bind_claude_session_id("tenant-a", "session-1", "claude-session-1")
     ) == bound
     with pytest.raises(ConflictError, match="already bound"):
-        await repository.bind_claude_session_id(
-            "tenant-a", "session-1", "claude-session-2"
-        )
+        await repository.bind_claude_session_id("tenant-a", "session-1", "claude-session-2")
 
 
 @pytest.mark.asyncio

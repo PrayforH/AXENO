@@ -134,6 +134,7 @@ async def test_retention_deletes_expired_sessions_but_preserves_audit_and_deploy
                 ),
                 EnvironmentRow(
                     tenant_id="tenant-a",
+                    owner_user_id="user-a",
                     agent_name="agent-a",
                     name="production",
                     revision=1,
@@ -169,9 +170,7 @@ async def test_memory_lifecycle_exports_and_deletes_only_requested_user_scope(
     database: DatabaseFixture,
 ) -> None:
     _, sessions = database
-    memory = MemoryBankService(
-        PostgresMemoryBankRepository(sessions), clock=lambda: NOW
-    )
+    memory = MemoryBankService(PostgresMemoryBankRepository(sessions), clock=lambda: NOW)
 
     def memory_identity(user_id: str) -> ExecutionIdentity:
         return ExecutionIdentity(
@@ -196,11 +195,7 @@ async def test_memory_lifecycle_exports_and_deletes_only_requested_user_scope(
         allow_agent_personal=True,
     )
     scoped = job("tenant-a", "memory-user-a").model_copy(
-        update={
-            "scope": LifecycleScope(
-                kind=LifecycleScopeKind.USER, subjectId="user-a"
-            )
-        }
+        update={"scope": LifecycleScope(kind=LifecycleScopeKind.USER, subjectId="user-a")}
     )
     adapter = MemoryLifecycleAdapter(sessions)
 

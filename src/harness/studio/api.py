@@ -377,7 +377,7 @@ async def list_quality_scores(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[QualityService, Depends(get_quality_service)],
 ) -> list[QualityScore]:
-    return await service.list_scores(actor.tenant_id, agent_name)
+    return await service.list_scores(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.get("/agents/{agent_name}/quality/incidents", response_model=list[AlertIncident])
@@ -386,7 +386,7 @@ async def list_quality_incidents(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[QualityService, Depends(get_quality_service)],
 ) -> list[AlertIncident]:
-    return await service.list_incidents(actor.tenant_id, agent_name)
+    return await service.list_incidents(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.get("/agents/{agent_name}/quality/rules", response_model=list[AlertRule])
@@ -395,7 +395,7 @@ async def list_quality_rules(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[QualityService, Depends(get_quality_service)],
 ) -> list[AlertRule]:
-    return await service.list_rules(actor.tenant_id, agent_name)
+    return await service.list_rules(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.get(
@@ -407,7 +407,7 @@ async def get_quality_gate(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[QualityService, Depends(get_quality_service)],
 ) -> QualityGateResult:
-    return await service.gate(actor.tenant_id, agent_name, agent_version)
+    return await service.gate(actor.tenant_id, actor.user_id, agent_name, agent_version)
 
 
 @router.post("/quality/rules", response_model=AlertRule, status_code=status.HTTP_201_CREATED)
@@ -426,6 +426,7 @@ async def create_quality_rule(
             minimumSamples=body.minimum_samples,
             blocksPromotion=body.blocks_promotion,
             dashboardUrl=body.dashboard_url,
+            createdBy=actor.user_id,
             createdAt=datetime.now(UTC),
         )
     )
@@ -458,7 +459,7 @@ async def sync_quality_dataset(
     quality: Annotated[QualityService, Depends(get_quality_service)],
 ) -> DatasetProjection:
     return await quality.project_dataset(
-        await evals.get_dataset(actor.tenant_id, dataset_id, version)
+        await evals.get_dataset(actor.tenant_id, actor.user_id, dataset_id, version)
     )
 
 
@@ -471,7 +472,7 @@ async def list_deployment_environments(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[DeploymentService, Depends(get_deployment_service)],
 ) -> list[Environment]:
-    return await service.list_environments(actor.tenant_id, agent_name)
+    return await service.list_environments(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.put(
@@ -506,7 +507,7 @@ async def list_deployments(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[DeploymentService, Depends(get_deployment_service)],
 ) -> list[DeploymentView]:
-    return await service.list(actor.tenant_id, agent_name)
+    return await service.list(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.get(
@@ -518,7 +519,7 @@ async def list_deployment_snapshots(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[DeploymentService, Depends(get_deployment_service)],
 ) -> list[DeploymentSnapshot]:
-    return await service.snapshots(actor.tenant_id, agent_name)
+    return await service.snapshots(actor.tenant_id, actor.user_id, agent_name)
 
 
 @router.get("/deployments/{deployment_id}", response_model=DeploymentView)
@@ -528,7 +529,7 @@ async def get_deployment(
     service: Annotated[DeploymentService, Depends(get_deployment_service)],
 ) -> DeploymentView:
     try:
-        return await service.view(actor.tenant_id, deployment_id)
+        return await service.view(actor.tenant_id, actor.user_id, deployment_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -625,7 +626,7 @@ async def list_eval_datasets(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
 ) -> list[EvalDatasetVersion]:
-    return await service.list_datasets(actor.tenant_id)
+    return await service.list_datasets(actor.tenant_id, actor.user_id)
 
 
 @router.get(
@@ -639,7 +640,7 @@ async def get_eval_dataset(
     service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
 ) -> EvalDatasetVersion:
     try:
-        return await service.get_dataset(actor.tenant_id, dataset_id, version)
+        return await service.get_dataset(actor.tenant_id, actor.user_id, dataset_id, version)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -677,7 +678,7 @@ async def list_eval_runs(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
 ) -> list[EvalRunView]:
-    return await service.list_runs(actor.tenant_id)
+    return await service.list_runs(actor.tenant_id, actor.user_id)
 
 
 @router.get("/eval-runs/{eval_run_id}", response_model=EvalRunView)
@@ -687,7 +688,7 @@ async def get_eval_run(
     service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
 ) -> EvalRunView:
     try:
-        return await service.get_run(actor.tenant_id, eval_run_id)
+        return await service.get_run(actor.tenant_id, actor.user_id, eval_run_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -731,7 +732,7 @@ async def download_eval_artifact(
 ) -> Response:
     try:
         name, media_type, content = await service.download_artifact(
-            actor.tenant_id, eval_run_id, artifact_id
+            actor.tenant_id, actor.user_id, eval_run_id, artifact_id
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
@@ -752,7 +753,7 @@ async def get_eval_gate(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
 ) -> EvalGateResult:
-    return await service.gate(actor.tenant_id, agent_name, agent_version)
+    return await service.gate(actor.tenant_id, actor.user_id, agent_name, agent_version)
 
 
 @router.get("/catalog", response_model=CapabilityCatalogRecord)
@@ -787,14 +788,14 @@ async def list_mcp_credentials(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
 ) -> tuple[McpCredentialStatus, ...]:
-    return await service.list(actor.tenant_id)
+    return await service.list(actor.tenant_id, actor.user_id)
 
 
 @router.put("/mcp/{reference}/credentials", response_model=McpCredentialStatus)
 async def configure_mcp_credential(
     reference: Annotated[str, Path(pattern=r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$")],
     body: ConfigureMcpCredentialRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
 ) -> McpCredentialStatus:
     return await service.configure(actor.tenant_id, actor.user_id, reference, body)
@@ -803,7 +804,7 @@ async def configure_mcp_credential(
 @router.delete("/mcp/{reference}/credentials", response_model=McpCredentialStatus)
 async def delete_mcp_credential(
     reference: Annotated[str, Path(pattern=r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$")],
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
 ) -> McpCredentialStatus:
     await service.delete(actor.tenant_id, actor.user_id, reference)
@@ -908,7 +909,7 @@ async def list_drafts(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> list[AgentDraftSummary]:
-    return await service.list(actor.tenant_id)
+    return await service.list(actor.tenant_id, actor.user_id)
 
 
 @router.post("/skills/conversation", response_model=SkillConversationReply)
@@ -1029,7 +1030,7 @@ async def list_previews(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[PreviewService, Depends(get_preview_service)],
 ) -> list[PreviewDeployment]:
-    return await service.list(actor.tenant_id)
+    return await service.list(actor.tenant_id, actor.user_id)
 
 
 @router.get("/previews/{preview_id}", response_model=PreviewDeployment)
@@ -1039,7 +1040,7 @@ async def get_preview(
     service: Annotated[PreviewService, Depends(get_preview_service)],
 ) -> PreviewDeployment:
     try:
-        return await service.get(actor.tenant_id, preview_id)
+        return await service.get(actor.tenant_id, actor.user_id, preview_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -1054,7 +1055,7 @@ async def get_preview_events(
     service: Annotated[PreviewService, Depends(get_preview_service)],
 ) -> list[PreflightEvent]:
     try:
-        preview = await service.get(actor.tenant_id, preview_id)
+        preview = await service.get(actor.tenant_id, actor.user_id, preview_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
     return list(preview.preflight_result.events) if preview.preflight_result else []
@@ -1176,7 +1177,7 @@ async def get_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return await service.get(actor.tenant_id, draft_id)
+        return await service.get(actor.tenant_id, actor.user_id, draft_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -1206,7 +1207,7 @@ async def validate_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> DraftValidationResult:
     try:
-        return await service.validate(actor.tenant_id, draft_id)
+        return await service.validate(actor.tenant_id, actor.user_id, draft_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -1218,7 +1219,7 @@ async def download_bundle(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> Response:
     try:
-        compiled = await service.bundle(actor.tenant_id, draft_id)
+        compiled = await service.bundle(actor.tenant_id, actor.user_id, draft_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
     except DraftCompilationError as error:
@@ -1249,7 +1250,7 @@ async def download_nexau_bundle(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> Response:
     try:
-        exported = await service.nexau_bundle(actor.tenant_id, draft_id)
+        exported = await service.nexau_bundle(actor.tenant_id, actor.user_id, draft_id)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
     return Response(
@@ -1277,7 +1278,9 @@ async def publish_draft(
             draft_id=draft_id,
             expected_revision=(body.expected_revision if body is not None else None),
         )
-        return PublishedAgentVersion.model_validate(version.model_dump(exclude={"snapshot"}))
+        return PublishedAgentVersion.model_validate(
+            version.model_dump(exclude={"snapshot", "owner_user_id"})
+        )
     except StudioPublicationConflictError as error:
         raise HTTPException(
             status_code=409,

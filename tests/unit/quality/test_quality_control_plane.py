@@ -38,7 +38,7 @@ async def seed_run(container: ApiContainer, name: str = "quality-agent"):
     version = await container.studio.publish(
         tenant_id="tenant-a", user_id="builder-a", draft_id=draft.draft_id
     )
-    session = await container.sessions.create("tenant-a", "user-a", name, version.version)
+    session = await container.sessions.create("tenant-a", "builder-a", name, version.version)
     await container.runs.create(
         "tenant-a", session.session_id, "quality-run", input={"prompt": "hello"}
     )
@@ -72,17 +72,18 @@ async def test_rule_scores_human_feedback_alert_and_promotion_gate() -> None:
         minimumSamples=1,
         blocksPromotion=True,
         dashboardUrl="https://langfuse.example/project/scores",
+        createdBy="builder-a",
         createdAt=datetime.now(UTC),
     )
     await container.quality.add_rule(rule)
     feedback = await container.quality.human_feedback(
         tenant_id="tenant-a",
-        user_id="reviewer-a",
+        user_id="builder-a",
         run_id=run.run_id,
         request=HumanFeedbackRequest(value=0),
     )
-    incidents = await container.quality.list_incidents("tenant-a", draft.spec.name)
-    gate = await container.quality.gate("tenant-a", draft.spec.name, version.version)
+    incidents = await container.quality.list_incidents("tenant-a", "builder-a", draft.spec.name)
+    gate = await container.quality.gate("tenant-a", "builder-a", draft.spec.name, version.version)
     assert feedback.source.value == "human"
     assert incidents[0].state is AlertState.OPEN
     assert gate.passed is False
@@ -90,7 +91,7 @@ async def test_rule_scores_human_feedback_alert_and_promotion_gate() -> None:
     with pytest.raises(ConflictError, match="blocking quality"):
         await container.deployments.promote(
             tenant_id="tenant-a",
-            user_id="release-a",
+            user_id="builder-a",
             request=PromoteRequest(
                 agentName=draft.spec.name,
                 agentVersion=version.version,
@@ -126,9 +127,12 @@ async def test_terminal_run_without_trace_is_counted_as_incomplete() -> None:
     container = build_memory_container()
     await seed_run(container, "missing-trace-agent")
 
-    assert container.reliability_metrics.count(
-        "harness_trace_terminal_total", labels={"completeness": "missing"}
-    ) == 1
+    assert (
+        container.reliability_metrics.count(
+            "harness_trace_terminal_total", labels={"completeness": "missing"}
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -140,7 +144,9 @@ async def test_dataset_projection_and_langfuse_payload_are_metadata_only() -> No
         user_id="builder-a",
         request=CreateEvalDatasetVersionRequest(
             draftId=draft.draft_id,
-            expectedRevision=(await container.studio.get("tenant-a", draft.draft_id)).revision,
+            expectedRevision=(
+                await container.studio.get("tenant-a", "builder-a", draft.draft_id)
+            ).revision,
             name="发布必测集",
         ),
     )

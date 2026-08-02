@@ -110,10 +110,11 @@ class AgentTriggerService:
         )
         return CreatedAgentTrigger(trigger=stored.public(), secret=secret)
 
-    async def list(self, tenant_id: str, agent_name: str) -> list[AgentTrigger]:
+    async def list(self, tenant_id: str, owner_user_id: str, agent_name: str) -> list[AgentTrigger]:
         return [
             trigger.public()
             for trigger in await self._repository.list_for_agent(tenant_id, agent_name)
+            if trigger.created_by == owner_user_id
         ]
 
     async def public_descriptor(
@@ -129,12 +130,14 @@ class AgentTriggerService:
             raise ConflictError("Trigger deployment description is unavailable")
         resolution = await self._deployment_resolver(
             trigger.tenant_id,
+            trigger.created_by,
             trigger.agent_name,
             trigger.environment,
             trigger.trigger_id,
         )
         version = await self._registry.get(
             trigger.tenant_id,
+            trigger.created_by,
             trigger.agent_name,
             resolution.agent_version,
         )
@@ -182,6 +185,8 @@ class AgentTriggerService:
         request: UpdateAgentTriggerRequest,
     ) -> AgentTrigger:
         current = await self._repository.get(tenant_id, trigger_id)
+        if current.created_by != user_id:
+            raise NotFoundError(f"Agent Trigger not found: {trigger_id}")
         updated = current.model_copy(
             update={
                 "name": request.name.strip(),
@@ -208,6 +213,8 @@ class AgentTriggerService:
         expected_revision: int,
     ) -> CreatedAgentTrigger:
         current = await self._repository.get(tenant_id, trigger_id)
+        if current.created_by != user_id:
+            raise NotFoundError(f"Agent Trigger not found: {trigger_id}")
         secret = self._secrets()
         updated = current.model_copy(
             update={
@@ -289,6 +296,7 @@ class AgentTriggerService:
                 session_id=session_id,
                 environment=trigger.environment,
                 api_key_id=trigger.trigger_id,
+                agent_owner_user_id=trigger.created_by,
             )
         run = await self._runs.create(
             trigger.tenant_id,

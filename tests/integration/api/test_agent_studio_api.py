@@ -142,9 +142,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         'attachment; filename="policy-researcher-0.1.0-nexau.zip"'
     )
     with ZipFile(BytesIO(nexau.content)) as archive:
-        assert {"nexau.json", "agent.yaml", "systemprompt.md"}.issubset(
-            archive.namelist()
-        )
+        assert {"nexau.json", "agent.yaml", "systemprompt.md"}.issubset(archive.namelist())
         manifest = json.loads(archive.read("nexau.json"))
         config = yaml.safe_load(archive.read("agent.yaml"))
         assert manifest["agents"] == {config["name"]: "agent.yaml"}
@@ -162,6 +160,7 @@ async def test_studio_manages_mcp_credentials_without_returning_secret_values() 
         "X-User-ID": "builder-a",
     }
     secret = "credential-that-must-never-be-returned"
+    other_headers = {**headers, "X-User-ID": "builder-b"}
     async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         configured = await client.put(
             "/v1/studio/mcp/company-search/credentials",
@@ -169,12 +168,14 @@ async def test_studio_manages_mcp_credentials_without_returning_secret_values() 
             json={"authKey": "authorization", "value": secret},
         )
         listed = await client.get("/v1/studio/mcp/credentials", headers=headers)
+        hidden = await client.get("/v1/studio/mcp/credentials", headers=other_headers)
         deleted = await client.delete("/v1/studio/mcp/company-search/credentials", headers=headers)
 
     assert configured.status_code == 200
     assert configured.json()["configured"] is True
     assert configured.json()["keyNames"] == ["authorization"]
     assert listed.json()[0]["reference"] == "company-search"
+    assert hidden.json() == []
     assert deleted.json() == {
         "reference": "company-search",
         "configured": False,
@@ -1273,7 +1274,7 @@ async def test_preview_api_is_idempotent_stale_cancellable_and_never_publishes()
     assert cancelled.json()["status"] == "cancelled"
     registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
     with pytest.raises(NotFoundError):
-        await registry.get("tenant-a", "preview-agent", "0.1.0")
+        await registry.get("tenant-a", "owner", "preview-agent", "0.1.0")
 
 
 @pytest.mark.asyncio
@@ -1577,6 +1578,11 @@ async def test_catalog_admin_can_discover_mcp_tools_but_member_cannot() -> None:
             headers={"Authorization": f"Bearer {member['access_token']}"},
             json=body,
         )
+        member_credential = await client.put(
+            "/v1/studio/mcp/company-search/credentials",
+            headers={"Authorization": f"Bearer {member['access_token']}"},
+            json={"authKey": "authorization", "value": "member-secret"},
+        )
 
     assert discovered.status_code == 200
     assert discovered.json()["transport"] == "http"
@@ -1586,6 +1592,7 @@ async def test_catalog_admin_can_discover_mcp_tools_but_member_cannot() -> None:
     ]
     assert rejected.status_code == 403
     assert rejected.json()["error"]["code"] == "permission_denied"
+    assert member_credential.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -1607,18 +1614,65 @@ async def test_published_agent_version_is_immutable_after_catalog_change() -> No
             headers=owner_headers,
         )
         registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
-        stored_before = await registry.get("tenant-a", "policy-researcher", "0.1.0")
+        stored_before = await registry.get("tenant-a", "owner-a", "policy-researcher", "0.1.0")
         disabled = await client.delete(
             "/v1/studio/catalog/modelRoute/new-api-default",
             headers=owner_headers,
             params={"expected_revision": 1},
         )
-        stored_after = await registry.get("tenant-a", "policy-researcher", "0.1.0")
+        stored_after = await registry.get("tenant-a", "owner-a", "policy-researcher", "0.1.0")
 
     assert published.status_code == 200
     assert disabled.status_code == 200
     assert stored_after == stored_before
     assert stored_after.manifest_hash == published.json()["manifest_hash"]
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_users_have_private_agent_namespaces() -> None:
+    application, container = app_and_container()
+    alice = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "alice",
+    }
+    bob = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "bob",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        alice_draft = await client.post(
+            "/v1/studio/drafts", headers=alice, json=draft_request("shared-name")
+        )
+        bob_draft = await client.post(
+            "/v1/studio/drafts", headers=bob, json=draft_request("shared-name")
+        )
+        alice_id = alice_draft.json()["draftId"]
+        bob_id = bob_draft.json()["draftId"]
+
+        hidden_from_bob = await client.get(f"/v1/studio/drafts/{alice_id}", headers=bob)
+        hidden_from_alice = await client.get(f"/v1/studio/drafts/{bob_id}", headers=alice)
+        alice_publish = await client.post(f"/v1/studio/drafts/{alice_id}/publish", headers=alice)
+        bob_publish = await client.post(f"/v1/studio/drafts/{bob_id}/publish", headers=bob)
+        alice_catalog = await client.get("/v1/agents", headers=alice)
+        bob_catalog = await client.get("/v1/agents", headers=bob)
+
+    assert alice_draft.status_code == 201
+    assert bob_draft.status_code == 201
+    assert hidden_from_bob.status_code == 404
+    assert hidden_from_alice.status_code == 404
+    assert alice_publish.status_code == 200
+    assert bob_publish.status_code == 200
+    assert [item["name"] for item in alice_catalog.json()] == ["shared-name"]
+    assert [item["name"] for item in bob_catalog.json()] == ["shared-name"]
+    registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
+    assert (
+        await registry.get("tenant-a", "alice", "shared-name", "0.1.0")
+    ).owner_user_id == "alice"
+    assert (await registry.get("tenant-a", "bob", "shared-name", "0.1.0")).owner_user_id == "bob"
 
 
 @pytest.mark.asyncio

@@ -17,11 +17,12 @@ async def resolve_published_agent_versions(
     registry: AgentRegistry,
     *,
     tenant_id: str,
+    owner_user_id: str,
     agent_name: str,
     agent_version: str,
 ) -> tuple[AgentVersion, dict[str, AgentVersion]]:
     """Resolve a fixed one-level SDK delegation graph and enforce publication state."""
-    root = await registry.get(tenant_id, agent_name, agent_version)
+    root = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
     if root.status is not AgentVersionStatus.PUBLISHED:
         raise ConflictError("sessions can only use a published Agent version")
     snapshot = AgentManifestSnapshot.model_validate(root.snapshot)
@@ -34,14 +35,10 @@ async def resolve_published_agent_versions(
             )
         runtime_name = subagent.runtime_name
         if runtime_name in children:
-            raise ManifestValidationError(
-                f"duplicate subagent runtime name: {runtime_name}"
-            )
-        child = await registry.get(tenant_id, name, version_id)
+            raise ManifestValidationError(f"duplicate subagent runtime name: {runtime_name}")
+        child = await registry.get(tenant_id, owner_user_id, name, version_id)
         if child.status is not AgentVersionStatus.PUBLISHED:
-            raise ConflictError(
-                f"subagent must be published before use: {name}@{version_id}"
-            )
+            raise ConflictError(f"subagent must be published before use: {name}@{version_id}")
         child_snapshot = AgentManifestSnapshot.model_validate(child.snapshot)
         if child_snapshot.manifest.spec.subagents:
             raise ManifestValidationError(
@@ -55,6 +52,7 @@ async def stage_published_agent_assets(
     registry: AgentRegistry,
     *,
     tenant_id: str,
+    owner_user_id: str,
     agent_name: str,
     agent_version: str,
     workspace: Path,
@@ -62,6 +60,7 @@ async def stage_published_agent_assets(
     version, children = await resolve_published_agent_versions(
         registry,
         tenant_id=tenant_id,
+        owner_user_id=owner_user_id,
         agent_name=agent_name,
         agent_version=agent_version,
     )

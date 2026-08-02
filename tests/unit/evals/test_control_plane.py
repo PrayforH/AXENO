@@ -46,6 +46,9 @@ class FailFirstSessionService(SessionService):
         *,
         session_id: str | None = None,
         environment: EnvironmentName | None = None,
+        team_ids: tuple[str, ...] = (),
+        api_key_id: str | None = None,
+        agent_owner_user_id: str | None = None,
     ) -> Session:
         self.calls += 1
         if self.calls == 1:
@@ -57,6 +60,9 @@ class FailFirstSessionService(SessionService):
             agent_version,
             session_id=session_id,
             environment=environment,
+            team_ids=team_ids,
+            api_key_id=api_key_id,
+            agent_owner_user_id=agent_owner_user_id,
         )
 
 
@@ -87,7 +93,7 @@ async def seed(container: ApiContainer, suffix: str = "default") -> str:
     )
     view = await container.evals.create_run(
         tenant_id="tenant-a",
-        user_id="evaluator-a",
+        user_id="builder-a",
         request=CreateEvalRunRequest(
             datasetId=dataset.dataset_id,
             datasetVersion=dataset.version,
@@ -107,9 +113,7 @@ async def execute_one_child(container: ApiContainer) -> None:
     await container.task_queue.acknowledge(task)
 
 
-async def drain(
-    container: ApiContainer, controller: EvalController, eval_run_id: str
-) -> None:
+async def drain(container: ApiContainer, controller: EvalController, eval_run_id: str) -> None:
     for _ in range(50):
         await controller.process_once()
         await execute_one_child(container)
@@ -146,7 +150,7 @@ async def test_infrastructure_error_is_secret_free_and_next_cases_continue() -> 
     controller = controller_with(container, sessions=sessions)
 
     await drain(container, controller, eval_run_id)
-    view = await container.evals.get_run("tenant-a", eval_run_id)
+    view = await container.evals.get_run("tenant-a", "builder-a", eval_run_id)
 
     assert view.run.status is EvalRunStatus.FAILED
     assert [item.status for item in view.cases] == [
@@ -155,9 +159,7 @@ async def test_infrastructure_error_is_secret_free_and_next_cases_continue() -> 
         EvalCaseStatus.PASSED,
     ]
     assert "private database" not in str(view.cases)
-    assert view.cases[0].failures == (
-        "evaluation infrastructure error (RuntimeError)",
-    )
+    assert view.cases[0].failures == ("evaluation infrastructure error (RuntimeError)",)
 
 
 @pytest.mark.asyncio
@@ -178,7 +180,7 @@ async def test_case_timeout_cancels_server_run_and_suite_continues() -> None:
 
     assert child.status.value == "cancelled"
     await drain(container, controller, eval_run_id)
-    view = await container.evals.get_run("tenant-a", eval_run_id)
+    view = await container.evals.get_run("tenant-a", "builder-a", eval_run_id)
     assert view.run.status is EvalRunStatus.FAILED
     assert view.cases[0].status is EvalCaseStatus.TIMED_OUT
     assert [item.status for item in view.cases[1:]] == [
@@ -198,10 +200,10 @@ async def test_cancel_converges_and_produces_partial_reports() -> None:
     active = await container.eval_run_repository.get("tenant-a", eval_run_id)
     assert active.active_run_id is not None
     await container.evals.cancel_run(
-        tenant_id="tenant-a", user_id="evaluator-a", eval_run_id=eval_run_id
+        tenant_id="tenant-a", user_id="builder-a", eval_run_id=eval_run_id
     )
     await container.eval_controller.process_once()
-    view = await container.evals.get_run("tenant-a", eval_run_id)
+    view = await container.evals.get_run("tenant-a", "builder-a", eval_run_id)
 
     assert view.run.status is EvalRunStatus.CANCELLED
     assert view.cases[0].status is EvalCaseStatus.CANCELLED
@@ -217,7 +219,7 @@ async def test_eval_run_create_is_idempotent_and_gate_tracks_latest_dataset() ->
     original = await container.eval_run_repository.get("tenant-a", eval_run_id)
     repeated = await container.evals.create_run(
         tenant_id="tenant-a",
-        user_id="evaluator-a",
+        user_id="builder-a",
         request=CreateEvalRunRequest(
             datasetId=original.dataset_id,
             datasetVersion=original.dataset_version,
@@ -229,17 +231,17 @@ async def test_eval_run_create_is_idempotent_and_gate_tracks_latest_dataset() ->
 
     assert repeated.run.eval_run_id == eval_run_id
     gate = await container.evals.gate(
-        "tenant-a", original.agent_name, original.agent_version
+        "tenant-a", "builder-a", original.agent_name, original.agent_version
     )
     assert gate.passed is False
     with pytest.raises(ConflictError, match="required Eval Dataset"):
         await container.evals.require_promotion_allowed(
-            "tenant-a", original.agent_name, original.agent_version
+            "tenant-a", "builder-a", original.agent_name, original.agent_version
         )
     await drain(container, container.eval_controller, eval_run_id)
     assert (
         await container.evals.gate(
-            "tenant-a", original.agent_name, original.agent_version
+            "tenant-a", "builder-a", original.agent_name, original.agent_version
         )
     ).passed is True
 
@@ -284,9 +286,7 @@ async def test_eval_can_be_disabled_per_agent_without_a_release_gate() -> None:
         user_id="builder-a",
         draft_id=draft.draft_id,
     )
-    gate = await container.evals.gate(
-        "tenant-a", version.name, version.version
-    )
+    gate = await container.evals.gate("tenant-a", "builder-a", version.name, version.version)
 
     assert gate.passed is True
     assert gate.required_datasets == 0
@@ -306,7 +306,7 @@ async def test_new_controller_resumes_an_in_flight_case_without_duplicate_run() 
     replacement = controller_with(container)
     await execute_one_child(container)
     await drain(container, replacement, eval_run_id)
-    after = await container.evals.get_run("tenant-a", eval_run_id)
+    after = await container.evals.get_run("tenant-a", "builder-a", eval_run_id)
 
     assert after.run.status is EvalRunStatus.PASSED
     assert after.cases[0].run_id == before.active_run_id
@@ -372,7 +372,7 @@ async def test_expected_waiting_approval_is_scored_then_child_run_is_cancelled()
     )
     view = await container.evals.create_run(
         tenant_id="tenant-a",
-        user_id="evaluator-a",
+        user_id="builder-a",
         request=CreateEvalRunRequest(
             datasetId=dataset.dataset_id,
             datasetVersion=dataset.version,
@@ -383,7 +383,7 @@ async def test_expected_waiting_approval_is_scored_then_child_run_is_cancelled()
     )
 
     await drain(container, container.eval_controller, view.run.eval_run_id)
-    finished = await container.evals.get_run("tenant-a", view.run.eval_run_id)
+    finished = await container.evals.get_run("tenant-a", "builder-a", view.run.eval_run_id)
     approval_result = finished.cases[2]
     child = await container.runs.get("tenant-a", approval_result.run_id)
 

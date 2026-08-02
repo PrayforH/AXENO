@@ -86,6 +86,7 @@ class ExecutionIdentity(FrozenModel):
 
     tenant_id: str
     user_id: str
+    agent_owner_user_id: str | None = None
     team_ids: tuple[str, ...] = ()
     project_id: str
     session_id: str
@@ -93,9 +94,14 @@ class ExecutionIdentity(FrozenModel):
     agent_name: str
     agent_version: str
 
+    @property
+    def resolved_agent_owner_user_id(self) -> str:
+        return self.agent_owner_user_id or self.user_id
+
 
 class AgentVersion(FrozenModel):
     tenant_id: str
+    owner_user_id: str
     name: str
     version: str
     status: AgentVersionStatus
@@ -109,6 +115,7 @@ class Session(FrozenModel):
     session_id: str
     tenant_id: str
     user_id: str
+    agent_owner_user_id: str | None = None
     agent_name: str
     agent_version: str
     created_at: datetime
@@ -120,6 +127,11 @@ class Session(FrozenModel):
     deployment_snapshot_id: str | None = None
     environment_snapshot: dict[str, Any] | None = None
     knowledge_snapshot_bindings: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def resolved_agent_owner_user_id(self) -> str:
+        """Owner pinned for runtime lookup; legacy sessions fall back to task owner."""
+        return self.agent_owner_user_id or self.user_id
 
 
 class Run(FrozenModel):

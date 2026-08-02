@@ -73,6 +73,7 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -170,16 +171,11 @@ async def test_runtime_builds_new_api_options_and_maps_fake_sdk_messages(
         "harness.model.run",
     }
     model_span = next(
-        span
-        for span in trace_exporter.get_finished_spans()
-        if span.name == "harness.model.run"
+        span for span in trace_exporter.get_finished_spans() if span.name == "harness.model.run"
     )
     assert model_span.attributes is not None
     assert model_span.attributes["langfuse.observation.type"] == "generation"
-    assert (
-        model_span.attributes["langfuse.observation.model.name"]
-        == "claude-sonnet-4-6"
-    )
+    assert model_span.attributes["langfuse.observation.model.name"] == "claude-sonnet-4-6"
     assert model_span.attributes["langfuse.observation.input"] == "hello"
     assert model_span.attributes["langfuse.observation.output"] == "fake response"
     assert model_span.attributes["langfuse.trace.output"] == "fake response"
@@ -196,6 +192,7 @@ async def test_local_sandbox_keeps_native_file_builtins_for_multimodal_reads(
     now = datetime.now(UTC)
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -290,6 +287,7 @@ async def test_manifest_timeout_cancels_sdk_query(tmp_path: Path) -> None:
     )
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="helper",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -306,9 +304,7 @@ async def test_manifest_timeout_cancels_sdk_query(tmp_path: Path) -> None:
         capabilities=frozenset({"streaming", "tool_use"}),
     )
 
-    async def slow_query(
-        _prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def slow_query(_prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         await asyncio.sleep(2)
         yield ResultMessage(
             subtype="success",
@@ -359,6 +355,7 @@ async def test_provider_timeout_is_not_mislabeled_as_manifest_timeout(
     snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="helper",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -375,9 +372,7 @@ async def test_provider_timeout_is_not_mislabeled_as_manifest_timeout(
         capabilities=frozenset({"streaming", "tool_use"}),
     )
 
-    async def provider_timeout(
-        _prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def provider_timeout(_prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         raise TimeoutError("gateway connection timeout")
         if False:
             yield object()
@@ -424,6 +419,7 @@ async def test_sdk_error_result_is_emitted_then_raises_and_marks_model_span(
     snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="helper",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -440,9 +436,7 @@ async def test_sdk_error_result_is_emitted_then_raises_and_marks_model_span(
         capabilities=frozenset({"streaming", "tool_use"}),
     )
 
-    async def error_query(
-        _prompt: str, _options: ClaudeAgentOptions
-    ) -> AsyncIterator[object]:
+    async def error_query(_prompt: str, _options: ClaudeAgentOptions) -> AsyncIterator[object]:
         yield ResultMessage(
             subtype="error_max_budget_usd",
             duration_ms=50,
@@ -519,6 +513,7 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -663,9 +658,7 @@ async def test_runtime_uses_partial_lifecycle_without_repeating_final_assistant_
         "runtime.result",
     ]
     text_deltas = [
-        str(event.payload.get("text", ""))
-        for event in events
-        if event.type == "message.delta"
+        str(event.payload.get("text", "")) for event in events if event.type == "message.delta"
     ]
     assert text_deltas == ["s", "treamed", "a", "gain"]
     terminal = next(event for event in events if event.type == "runtime.task.completed")
@@ -679,9 +672,7 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
 ) -> None:
     snapshot = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     tools = snapshot.manifest.spec.tools + (
-        ToolSpec.model_validate(
-            {"python": "tests.fixtures.runtime.domain_tools:lookup_tool"}
-        ),
+        ToolSpec.model_validate({"python": "tests.fixtures.runtime.domain_tools:lookup_tool"}),
         ToolSpec.model_validate({"mcp": "crm"}),
     )
     spec = snapshot.manifest.spec.model_copy(update={"tools": tools})
@@ -689,6 +680,7 @@ async def test_runtime_wires_resolved_python_and_mcp_tools_into_sdk_options(
     snapshot = snapshot.model_copy(update={"manifest": manifest})
     version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -810,6 +802,7 @@ async def test_runtime_wires_custom_tools_declared_by_subagents(tmp_path: Path) 
     now = datetime.now(UTC)
     main_version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="echo-agent",
         version="0.1.0",
         status=AgentVersionStatus.PUBLISHED,
@@ -819,6 +812,7 @@ async def test_runtime_wires_custom_tools_declared_by_subagents(tmp_path: Path) 
     )
     helper_version = AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name="helper",
         version="1.0.0",
         status=AgentVersionStatus.PUBLISHED,

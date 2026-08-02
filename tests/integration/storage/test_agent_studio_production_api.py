@@ -102,16 +102,12 @@ async def test_production_studio_api_restores_draft_after_container_restart(
         async with AsyncClient(
             transport=ASGITransport(app=second_app), base_url="http://test"
         ) as client:
-            restored = await client.get(
-                f"/v1/studio/drafts/{draft_id}", headers=headers()
-            )
+            restored = await client.get(f"/v1/studio/drafts/{draft_id}", headers=headers())
             restored_preview = await client.get(
                 f"/v1/studio/previews/{preview.json()['previewId']}",
                 headers=headers(),
             )
-            restored_catalog = await client.get(
-                "/v1/studio/catalog", headers=headers()
-            )
+            restored_catalog = await client.get("/v1/studio/catalog", headers=headers())
             reconciled_preview = await second.preview_controller.reconcile(
                 "tenant-a", preview.json()["previewId"]
             )
@@ -123,7 +119,9 @@ async def test_production_studio_api_restores_draft_after_container_restart(
     assert restored_preview.status_code == 200
     assert restored_preview.json()["status"] == "queued"
     assert reconciled_preview.status.value == "failed"
-    assert reconciled_preview.error_code == "preflight_draft_not_ready"
+    # The catalog changed after the Preview snapshot was queued, so the durable
+    # content/package hashes must fail closed as bundle drift after restart.
+    assert reconciled_preview.error_code == "preflight_bundle_drift"
     assert reconciled_preview.preflight_result is not None
     assert reconciled_preview.preflight_result.status.value == "failed"
     assert restored_catalog.status_code == 200

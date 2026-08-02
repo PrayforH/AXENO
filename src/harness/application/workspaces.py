@@ -25,7 +25,11 @@ class WorkspacePolicy:
 
 class WorkspacePolicyResolver(Protocol):
     async def __call__(
-        self, tenant_id: str, agent_name: str, agent_version: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
     ) -> WorkspacePolicy: ...
 
 

@@ -162,6 +162,7 @@ class PreviewController:
             raise ConflictError(f"Preview changed during transition: {current.preview_id}")
         if updated.status.is_terminal and self._quotas is not None:
             await self._quotas.release_subject(
-                updated.tenant_id, f"preview:{updated.idempotency_key}"
+                updated.tenant_id,
+                f"preview:{updated.requested_by}:{updated.idempotency_key}",
             )
         return updated

@@ -104,6 +104,7 @@ class RegistryClaudeRuntime:
         agent_version, subagent_versions = await resolve_published_agent_versions(
             self._registry,
             tenant_id=session.tenant_id,
+            owner_user_id=session.resolved_agent_owner_user_id,
             agent_name=session.agent_name,
             agent_version=session.agent_version,
         )

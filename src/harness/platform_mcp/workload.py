@@ -17,9 +17,7 @@ from harness.governance.service import GovernanceService
 from harness.quota.service import QuotaService
 
 type PlatformIdentity = tuple[str, str, frozenset[str]]
-_identity: ContextVar[PlatformIdentity | None] = ContextVar(
-    "platform_mcp_identity", default=None
-)
+_identity: ContextVar[PlatformIdentity | None] = ContextVar("platform_mcp_identity", default=None)
 
 
 class PlatformMcpTokenService:
@@ -29,9 +27,7 @@ class PlatformMcpTokenService:
         self._secret = secret.get_secret_value()
         self._ttl = ttl_seconds
 
-    def issue(
-        self, tenant_id: str, user_id: str, roles: frozenset[str]
-    ) -> str:
+    def issue(self, tenant_id: str, user_id: str, roles: frozenset[str]) -> str:
         now = datetime.now(UTC)
         return jwt.encode(
             {
@@ -110,6 +106,13 @@ def _tenant() -> str:
     return identity[0]
 
 
+def _user() -> str:
+    identity = _identity.get()
+    if identity is None:
+        raise RuntimeError("platform MCP identity is unavailable")
+    return identity[1]
+
+
 def build_platform_mcp_app(
     *,
     agents: AgentService,
@@ -121,8 +124,7 @@ def build_platform_mcp_app(
     server = FastMCP(
         "agent-studio-platform",
         instructions=(
-            "Read-only Agent Studio control-plane facts. "
-            "Tenant and role are always server-issued."
+            "Read-only Agent Studio control-plane facts. Tenant and role are always server-issued."
         ),
         host="0.0.0.0",
         streamable_http_path="/mcp",
@@ -132,7 +134,7 @@ def build_platform_mcp_app(
 
     @server.tool(name="list_agents", description="List immutable published Agents.")
     async def list_agents() -> dict[str, object]:
-        values = await agents.list_published(_tenant())
+        values = await agents.list_published(_tenant(), _user())
         return {
             "agents": [
                 {
@@ -150,12 +152,8 @@ def build_platform_mcp_app(
         description="List deployment environments for a published Agent.",
     )
     async def list_environments(agent_name: str) -> dict[str, object]:
-        values = await deployments.list_environments(_tenant(), agent_name)
-        return {
-            "environments": [
-                item.model_dump(mode="json", by_alias=True) for item in values
-            ]
-        }
+        values = await deployments.list_environments(_tenant(), _user(), agent_name)
+        return {"environments": [item.model_dump(mode="json", by_alias=True) for item in values]}
 
     @server.tool(
         name="get_quota_usage",
@@ -171,11 +169,7 @@ def build_platform_mcp_app(
     )
     async def list_governed_policies() -> dict[str, object]:
         values = await governance.list_policies(_tenant())
-        return {
-            "policies": [
-                item.model_dump(mode="json", by_alias=True) for item in values
-            ]
-        }
+        return {"policies": [item.model_dump(mode="json", by_alias=True) for item in values]}
 
     _ = (
         list_agents,

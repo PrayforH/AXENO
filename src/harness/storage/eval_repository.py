@@ -26,6 +26,7 @@ def _load_dataset(row: EvalDatasetVersionRow) -> EvalDatasetVersion:
     value = EvalDatasetVersion.model_validate(row.payload)
     if (
         value.tenant_id != row.tenant_id
+        or value.created_by != row.created_by
         or value.dataset_id != row.dataset_id
         or value.version != row.version
         or value.agent_name != row.agent_name
@@ -40,6 +41,7 @@ def _load_run(row: EvalRunRow) -> EvalRun:
     value = EvalRun.model_validate(row.payload)
     if (
         value.tenant_id != row.tenant_id
+        or value.requested_by != row.requested_by
         or value.eval_run_id != row.eval_run_id
         or value.dataset_id != row.dataset_id
         or value.dataset_version != row.dataset_version
@@ -64,9 +66,7 @@ def _load_result(row: EvalCaseResultRow) -> EvalCaseResult:
         or value.passed != row.passed
         or value.completed_at != row.completed_at
     ):
-        raise ValueError(
-            f"Corrupt Eval Case Result envelope: {row.eval_run_id}/{row.case_id}"
-        )
+        raise ValueError(f"Corrupt Eval Case Result envelope: {row.eval_run_id}/{row.case_id}")
     return value
 
 
@@ -79,6 +79,7 @@ class PostgresEvalDatasetRepository:
             session.add(
                 EvalDatasetVersionRow(
                     tenant_id=dataset.tenant_id,
+                    created_by=dataset.created_by,
                     dataset_id=dataset.dataset_id,
                     version=dataset.version,
                     agent_name=dataset.agent_name,
@@ -94,16 +95,15 @@ class PostgresEvalDatasetRepository:
                 raise ConflictError("Eval Dataset Version already exists") from error
 
     async def get(
-        self, tenant_id: str, dataset_id: str, version: int
+        self, tenant_id: str, owner_user_id: str, dataset_id: str, version: int
     ) -> EvalDatasetVersion:
         async with self._sessions() as session:
             row = await session.get(
-                EvalDatasetVersionRow, (tenant_id, dataset_id, version)
+                EvalDatasetVersionRow,
+                (tenant_id, owner_user_id, dataset_id, version),
             )
             if row is None:
-                raise NotFoundError(
-                    f"Eval Dataset Version not found: {dataset_id}@{version}"
-                )
+                raise NotFoundError(f"Eval Dataset Version not found: {dataset_id}@{version}")
             return _load_dataset(row)
 
     async def list_for_tenant(self, tenant_id: str) -> list[EvalDatasetVersion]:
@@ -119,9 +119,10 @@ class PostgresEvalDatasetRepository:
         async with self._sessions() as session:
             return [_load_dataset(row) for row in (await session.scalars(statement)).all()]
 
-    async def next_version(self, tenant_id: str, dataset_id: str) -> int:
+    async def next_version(self, tenant_id: str, owner_user_id: str, dataset_id: str) -> int:
         statement = select(func.max(EvalDatasetVersionRow.version)).where(
             EvalDatasetVersionRow.tenant_id == tenant_id,
+            EvalDatasetVersionRow.created_by == owner_user_id,
             EvalDatasetVersionRow.dataset_id == dataset_id,
         )
         async with self._sessions() as session:
@@ -139,6 +140,7 @@ class PostgresEvalRunRepository:
                 EvalRunRow(
                     tenant_id=run.tenant_id,
                     eval_run_id=run.eval_run_id,
+                    requested_by=run.requested_by,
                     dataset_id=run.dataset_id,
                     dataset_version=run.dataset_version,
                     agent_name=run.agent_name,
@@ -164,10 +166,11 @@ class PostgresEvalRunRepository:
             return _load_run(row)
 
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> EvalRun | None:
         statement = select(EvalRunRow).where(
             EvalRunRow.tenant_id == tenant_id,
+            EvalRunRow.requested_by == owner_user_id,
             EvalRunRow.idempotency_key == idempotency_key,
         )
         async with self._sessions() as session:
@@ -183,9 +186,7 @@ class PostgresEvalRunRepository:
         async with self._sessions() as session:
             return [_load_run(row) for row in (await session.scalars(statement)).all()]
 
-    async def compare_and_set(
-        self, expected_status: EvalRunStatus, updated: EvalRun
-    ) -> bool:
+    async def compare_and_set(self, expected_status: EvalRunStatus, updated: EvalRun) -> bool:
         statement = (
             update(EvalRunRow)
             .where(
@@ -236,16 +237,12 @@ class PostgresEvalRunRepository:
         self, tenant_id: str, eval_run_id: str, case_id: str
     ) -> EvalCaseResult:
         async with self._sessions() as session:
-            row = await session.get(
-                EvalCaseResultRow, (tenant_id, eval_run_id, case_id)
-            )
+            row = await session.get(EvalCaseResultRow, (tenant_id, eval_run_id, case_id))
             if row is None:
                 raise NotFoundError(f"Eval Case Result not found: {case_id}")
             return _load_result(row)
 
-    async def list_case_results(
-        self, tenant_id: str, eval_run_id: str
-    ) -> list[EvalCaseResult]:
+    async def list_case_results(self, tenant_id: str, eval_run_id: str) -> list[EvalCaseResult]:
         statement = (
             select(EvalCaseResultRow)
             .where(

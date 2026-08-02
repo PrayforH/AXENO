@@ -42,6 +42,7 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -101,6 +102,7 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
             session_id="session-broker",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="helper-agent",
             agent_version="1.0.0",
             created_at=now,
@@ -171,6 +173,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="directory-agent",
             version="0.1.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -232,6 +235,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
             session_id="session-directory",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="directory-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -250,9 +254,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         "content_hash": snapshot.tool_directory.content_hash,
         "entry_count": 5,
     }
-    degraded_event = next(
-        event for event in events if event.type == "tool.directory.degraded"
-    )
+    degraded_event = next(event for event in events if event.type == "tool.directory.degraded")
     assert degraded_event.payload == {
         "references": ["tavily-readonly"],
         "tool_count": 2,
@@ -300,6 +302,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="route-bound-agent",
             version="0.1.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -365,6 +368,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             session_id="session-route-bound",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="route-bound-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -401,6 +405,7 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             session_id="session-route-override",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="route-bound-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -443,6 +448,7 @@ async def test_runtime_materializes_immutable_skills_and_enables_them_by_name(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="domain-agent",
             version="0.1.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -491,6 +497,7 @@ async def test_runtime_materializes_immutable_skills_and_enables_them_by_name(
             session_id="session-skill",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="domain-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -513,6 +520,7 @@ async def test_model_span_has_safe_agent_route_and_policy_dimensions(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -575,6 +583,7 @@ async def test_model_span_has_safe_agent_route_and_policy_dimensions(
             session_id="session-trace",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="helper-agent",
             agent_version="1.0.0",
             created_at=now,
@@ -614,6 +623,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="echo-agent",
             version="0.4.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -625,6 +635,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -678,6 +689,7 @@ async def test_resolves_agent_version_and_delegates_to_claude_sdk(tmp_path: Path
             session_id="session-1",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="echo-agent",
             agent_version="0.4.0",
             created_at=now,
@@ -749,6 +761,7 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="echo-agent",
             version="0.1.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -760,6 +773,7 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -806,6 +820,7 @@ async def test_role_aliases_configure_multiple_sdk_agents_from_one_version(
             session_id="session-collaboration",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="echo-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -850,6 +865,7 @@ async def test_subagent_receives_its_declared_mcp_tools(tmp_path: Path) -> None:
         await registry.add(
             AgentVersion(
                 tenant_id="tenant-a",
+                owner_user_id="user-a",
                 name=name,
                 version=version,
                 status=AgentVersionStatus.PUBLISHED,
@@ -909,6 +925,7 @@ async def test_subagent_receives_its_declared_mcp_tools(tmp_path: Path) -> None:
             session_id="session-subagent-mcp",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="echo-agent",
             agent_version="0.1.0",
             created_at=now,
@@ -934,6 +951,7 @@ async def test_declared_gateway_capabilities_fail_closed_before_query(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -977,6 +995,7 @@ async def test_declared_gateway_capabilities_fail_closed_before_query(
             session_id="session-incompatible",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="helper-agent",
             agent_version="1.0.0",
             created_at=now,
@@ -1017,6 +1036,7 @@ async def test_incompatible_direct_gateway_uses_configured_anthropic_fallback(
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-a",
             name="helper-agent",
             version="1.0.0",
             status=AgentVersionStatus.PUBLISHED,
@@ -1071,6 +1091,7 @@ async def test_incompatible_direct_gateway_uses_configured_anthropic_fallback(
             session_id="session-fallback",
             tenant_id="tenant-a",
             user_id="developer",
+            agent_owner_user_id="user-a",
             agent_name="helper-agent",
             agent_version="1.0.0",
             created_at=now,

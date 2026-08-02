@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Protocol, cast
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import Field, SecretStr
 
@@ -28,6 +29,7 @@ from harness.studio.models import StudioModel
 @dataclass(frozen=True)
 class StoredMcpCredential:
     tenant_id: str
+    owner_user_id: str
     reference: str
     revision: int
     key_names: tuple[str, ...]
@@ -37,44 +39,56 @@ class StoredMcpCredential:
 
 
 class McpCredentialRepository(Protocol):
-    async def get(self, tenant_id: str, reference: str) -> StoredMcpCredential | None: ...
+    async def get(
+        self, tenant_id: str, owner_user_id: str, reference: str
+    ) -> StoredMcpCredential | None: ...
 
-    async def list_for_tenant(self, tenant_id: str) -> tuple[StoredMcpCredential, ...]: ...
+    async def list_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> tuple[StoredMcpCredential, ...]: ...
 
     async def upsert(self, value: StoredMcpCredential) -> StoredMcpCredential: ...
 
-    async def delete(self, tenant_id: str, reference: str) -> bool: ...
+    async def delete(self, tenant_id: str, owner_user_id: str, reference: str) -> bool: ...
 
 
 class InMemoryMcpCredentialRepository:
     def __init__(self) -> None:
-        self._items: dict[tuple[str, str], StoredMcpCredential] = {}
+        self._items: dict[tuple[str, str, str], StoredMcpCredential] = {}
         self._lock = asyncio.Lock()
 
-    async def get(self, tenant_id: str, reference: str) -> StoredMcpCredential | None:
-        return self._items.get((tenant_id, reference))
+    async def get(
+        self, tenant_id: str, owner_user_id: str, reference: str
+    ) -> StoredMcpCredential | None:
+        return self._items.get((tenant_id, owner_user_id, reference))
 
-    async def list_for_tenant(self, tenant_id: str) -> tuple[StoredMcpCredential, ...]:
+    async def list_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> tuple[StoredMcpCredential, ...]:
         return tuple(
             sorted(
-                (value for (scope, _), value in self._items.items() if scope == tenant_id),
+                (
+                    value
+                    for (scope, owner, _), value in self._items.items()
+                    if scope == tenant_id and owner == owner_user_id
+                ),
                 key=lambda value: value.reference,
             )
         )
 
     async def upsert(self, value: StoredMcpCredential) -> StoredMcpCredential:
         async with self._lock:
-            current = self._items.get((value.tenant_id, value.reference))
+            current = self._items.get((value.tenant_id, value.owner_user_id, value.reference))
             stored = replace(
                 value,
                 revision=(current.revision + 1 if current is not None else 1),
             )
-            self._items[(stored.tenant_id, stored.reference)] = stored
+            self._items[(stored.tenant_id, stored.owner_user_id, stored.reference)] = stored
             return stored
 
-    async def delete(self, tenant_id: str, reference: str) -> bool:
+    async def delete(self, tenant_id: str, owner_user_id: str, reference: str) -> bool:
         async with self._lock:
-            return self._items.pop((tenant_id, reference), None) is not None
+            return self._items.pop((tenant_id, owner_user_id, reference), None) is not None
 
 
 class McpCredentialCipher:
@@ -85,12 +99,13 @@ class McpCredentialCipher:
         self._cipher = AESGCM(hashlib.sha256(b"harness-mcp-v1\0" + material).digest())
 
     @staticmethod
-    def _aad(tenant_id: str, reference: str) -> bytes:
-        return f"{tenant_id}\0{reference}".encode()
+    def _aad(tenant_id: str, owner_user_id: str, reference: str) -> bytes:
+        return f"{tenant_id}\0{owner_user_id}\0{reference}".encode()
 
     def encrypt(
         self,
         tenant_id: str,
+        owner_user_id: str,
         reference: str,
         values: Mapping[str, SecretStr],
     ) -> str:
@@ -100,14 +115,27 @@ class McpCredentialCipher:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        sealed = self._cipher.encrypt(nonce, payload, self._aad(tenant_id, reference))
+        sealed = self._cipher.encrypt(
+            nonce, payload, self._aad(tenant_id, owner_user_id, reference)
+        )
         return base64.urlsafe_b64encode(nonce + sealed).decode("ascii")
 
     def decrypt(self, value: StoredMcpCredential) -> Mapping[str, SecretStr]:
         packed = base64.urlsafe_b64decode(value.ciphertext.encode("ascii"))
-        payload = self._cipher.decrypt(
-            packed[:12], packed[12:], self._aad(value.tenant_id, value.reference)
-        )
+        try:
+            payload = self._cipher.decrypt(
+                packed[:12],
+                packed[12:],
+                self._aad(value.tenant_id, value.owner_user_id, value.reference),
+            )
+        except InvalidTag:
+            # Credentials written before user isolation used tenant + reference
+            # as AAD. The migration preserves ciphertext and assigns its creator.
+            payload = self._cipher.decrypt(
+                packed[:12],
+                packed[12:],
+                f"{value.tenant_id}\0{value.reference}".encode(),
+            )
         raw = cast(object, json.loads(payload))
         if not isinstance(raw, dict):
             raise ValueError("Stored MCP credential payload is invalid")
@@ -158,8 +186,8 @@ class McpCredentialService:
             updatedAt=value.updated_at,
         )
 
-    async def list(self, tenant_id: str) -> tuple[McpCredentialStatus, ...]:
-        items = await self.repository.list_for_tenant(tenant_id)
+    async def list(self, tenant_id: str, owner_user_id: str) -> tuple[McpCredentialStatus, ...]:
+        items = await self.repository.list_for_user(tenant_id, owner_user_id)
         return tuple(self._status(item) for item in items)
 
     async def configure(
@@ -173,11 +201,13 @@ class McpCredentialService:
         stored = await self.repository.upsert(
             StoredMcpCredential(
                 tenant_id=tenant_id,
+                owner_user_id=user_id,
                 reference=reference,
                 revision=1,
                 key_names=(request.auth_key,),
                 ciphertext=self.cipher.encrypt(
                     tenant_id,
+                    user_id,
                     reference,
                     {request.auth_key: request.value},
                 ),
@@ -197,7 +227,7 @@ class McpCredentialService:
         return self._status(stored)
 
     async def delete(self, tenant_id: str, user_id: str, reference: str) -> bool:
-        deleted = await self.repository.delete(tenant_id, reference)
+        deleted = await self.repository.delete(tenant_id, user_id, reference)
         if deleted and self.audit is not None:
             await self.audit.record(
                 tenant_id=tenant_id,
@@ -224,7 +254,11 @@ class StoredMcpCredentialProvider:
         identity: ExecutionIdentity,
         required_keys: frozenset[str],
     ) -> Mapping[str, SecretStr]:
-        stored = await self._service.repository.get(identity.tenant_id, server_reference)
+        stored = await self._service.repository.get(
+            identity.tenant_id,
+            identity.resolved_agent_owner_user_id,
+            server_reference,
+        )
         if stored is not None:
             values = self._service.cipher.decrypt(stored)
             if required_keys.issubset(values):

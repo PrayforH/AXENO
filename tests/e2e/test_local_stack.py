@@ -116,19 +116,16 @@ def test_local_lifecycle_tracks_the_real_server_processes() -> None:
     assert "nohup uv run uvicorn harness.api.app:app" in start
     assert "nohup npm run dev -- --hostname 127.0.0.1" in start
     assert 'stop_matching "$ROOT/.venv/bin/uvicorn harness.api.app:app"' in stop
-    assert (
-        'stop_matching "$ROOT/web/harness-console/node_modules/.bin/next dev"'
-        in stop
-    )
+    assert 'stop_matching "$ROOT/web/harness-console/node_modules/.bin/next dev"' in stop
 
 
 @pytest.mark.asyncio
 async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> None:
     container = build_memory_container()
-    await container.agents.publish("local", "tests/fixtures/agents/echo-agent/agent.yaml")
-    session = await container.sessions.create(
-        "local", "developer", "echo-agent", "0.1.0"
+    await container.agents.publish(
+        "local", "developer", "tests/fixtures/agents/echo-agent/agent.yaml"
     )
+    session = await container.sessions.create("local", "developer", "echo-agent", "0.1.0")
     run = await container.runs.create(
         "local",
         session.session_id,
@@ -141,9 +138,7 @@ async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> Non
     paused_events = await container.events.list_after("local", run.run_id, 0)
     assert paused_events[-1].type == "message.completed"
 
-    approval_event = next(
-        item for item in paused_events if item.type == "approval.requested"
-    )
+    approval_event = next(item for item in paused_events if item.type == "approval.requested")
     await container.approvals.decide(
         tenant_id="local",
         approval_id=str(approval_event.payload["approval_id"]),
@@ -154,9 +149,7 @@ async def test_approval_resume_closes_message_and_uses_a_new_message_id() -> Non
 
     all_events = await container.events.list_after("local", run.run_id, 0)
     message_ids = [
-        str(item.payload["message_id"])
-        for item in all_events
-        if item.type == "message.start"
+        str(item.payload["message_id"]) for item in all_events if item.type == "message.start"
     ]
     assert len(message_ids) == 2
     assert len(set(message_ids)) == 2

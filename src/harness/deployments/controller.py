@@ -73,7 +73,10 @@ class DeploymentController:
         snapshot = await self._deployments.get_snapshot(tenant_id, current.target_snapshot_id)
         try:
             environment = await self._environments.get(
-                tenant_id, current.agent_name, current.environment
+                tenant_id,
+                current.requested_by,
+                current.agent_name,
+                current.environment,
             )
             if environment.revision != current.expected_environment_revision:
                 return await self._move(

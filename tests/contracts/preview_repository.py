@@ -45,7 +45,7 @@ async def exercise_repository_contract(repository: PreviewRepository) -> None:
 
     assert await repository.get("tenant-a", tenant_a.preview_id) == tenant_a
     assert await repository.get("tenant-b", tenant_b.preview_id) == tenant_b
-    assert await repository.find_by_idempotency("tenant-a", "preview-key") == tenant_a
+    assert await repository.find_by_idempotency("tenant-a", "builder-a", "preview-key") == tenant_a
     assert len(await repository.list_for_tenant("tenant-a")) == 2
     assert await repository.list_for_tenant("tenant-c") == []
     assert await repository.list_expired_active(NOW, limit=10) == [expired]
@@ -80,9 +80,7 @@ async def exercise_repository_contract(repository: PreviewRepository) -> None:
 async def exercise_concurrent_cas(repository: PreviewRepository) -> None:
     original = preview(preview_id="preview-concurrent", idempotency_key="concurrent")
     await repository.add(original)
-    ready = original.model_copy(
-        update={"status": PreviewStatus.READY, "fencing_token": 1}
-    )
+    ready = original.model_copy(update={"status": PreviewStatus.READY, "fencing_token": 1})
     cancelling = original.model_copy(
         update={"status": PreviewStatus.CANCELLING, "fencing_token": 1}
     )

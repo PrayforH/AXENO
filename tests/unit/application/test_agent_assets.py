@@ -22,6 +22,7 @@ async def _publish(registry: InMemoryAgentRegistry, manifest_path: str) -> None:
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             name=metadata.name,
             version=metadata.version,
             status=AgentVersionStatus.PUBLISHED,
@@ -41,15 +42,14 @@ async def test_stages_main_and_pinned_subagent_skills(tmp_path: Path) -> None:
     names = await stage_published_agent_assets(
         registry,
         tenant_id="tenant-a",
+        owner_user_id="user-1",
         agent_name="echo-agent",
         agent_version="0.4.1",
         workspace=tmp_path,
     )
 
     assert names == ("delegated-investigation", "workspace-validation")
-    assert (
-        tmp_path / ".claude/skills/delegated-investigation/SKILL.md"
-    ).is_file()
+    assert (tmp_path / ".claude/skills/delegated-investigation/SKILL.md").is_file()
     assert (tmp_path / ".claude/skills/workspace-validation/SKILL.md").is_file()
 
 
@@ -62,9 +62,7 @@ async def test_pinned_subagent_rejects_nested_delegation() -> None:
         update={"subagents": (SubagentSpec(ref="leaf@1.0.0"),)}
     )
     child = child.model_copy(
-        update={
-            "manifest": child.manifest.model_copy(update={"spec": child_spec})
-        }
+        update={"manifest": child.manifest.model_copy(update={"spec": child_spec})}
     )
     now = datetime.now(UTC)
     for snapshot in (child, root):
@@ -72,6 +70,7 @@ async def test_pinned_subagent_rejects_nested_delegation() -> None:
         await registry.add(
             AgentVersion(
                 tenant_id="tenant-a",
+                owner_user_id="user-1",
                 name=metadata.name,
                 version=metadata.version,
                 status=AgentVersionStatus.PUBLISHED,
@@ -85,6 +84,7 @@ async def test_pinned_subagent_rejects_nested_delegation() -> None:
         await resolve_published_agent_versions(
             registry,
             tenant_id="tenant-a",
+            owner_user_id="user-1",
             agent_name="echo-agent",
             agent_version="0.1.0",
         )

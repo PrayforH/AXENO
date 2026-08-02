@@ -21,6 +21,7 @@ def _load(row: PreviewDeploymentRow) -> PreviewDeployment:
     if (
         preview.tenant_id != row.tenant_id
         or preview.preview_id != row.preview_id
+        or preview.requested_by != row.requested_by
         or preview.draft_id != row.draft_id
         or preview.idempotency_key != row.idempotency_key
         or preview.status.value != row.status
@@ -42,6 +43,7 @@ class PostgresPreviewRepository:
                 PreviewDeploymentRow(
                     tenant_id=preview.tenant_id,
                     preview_id=preview.preview_id,
+                    requested_by=preview.requested_by,
                     draft_id=preview.draft_id,
                     idempotency_key=preview.idempotency_key,
                     status=preview.status.value,
@@ -61,21 +63,44 @@ class PostgresPreviewRepository:
         async with self._sessions() as session:
             row = await session.get(PreviewDeploymentRow, (tenant_id, preview_id))
             if row is None:
-                raise NotFoundError(
-                    f"Preview Deployment not found: {preview_id}"
-                )
+                raise NotFoundError(f"Preview Deployment not found: {preview_id}")
+            return _load(row)
+
+    async def get_for_user(
+        self, tenant_id: str, owner_user_id: str, preview_id: str
+    ) -> PreviewDeployment:
+        async with self._sessions() as session:
+            row = await session.get(PreviewDeploymentRow, (tenant_id, preview_id))
+            if row is None or row.requested_by != owner_user_id:
+                raise NotFoundError(f"Preview Deployment not found: {preview_id}")
             return _load(row)
 
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> PreviewDeployment | None:
         statement = select(PreviewDeploymentRow).where(
             PreviewDeploymentRow.tenant_id == tenant_id,
+            PreviewDeploymentRow.requested_by == owner_user_id,
             PreviewDeploymentRow.idempotency_key == idempotency_key,
         )
         async with self._sessions() as session:
             row = await session.scalar(statement)
             return None if row is None else _load(row)
+
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[PreviewDeployment]:
+        statement = (
+            select(PreviewDeploymentRow)
+            .where(
+                PreviewDeploymentRow.tenant_id == tenant_id,
+                PreviewDeploymentRow.requested_by == owner_user_id,
+            )
+            .order_by(
+                PreviewDeploymentRow.created_at.desc(),
+                PreviewDeploymentRow.preview_id.desc(),
+            )
+        )
+        async with self._sessions() as session:
+            return [_load(row) for row in (await session.scalars(statement)).all()]
 
     async def list_for_tenant(self, tenant_id: str) -> list[PreviewDeployment]:
         statement = (

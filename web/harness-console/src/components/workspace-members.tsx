@@ -130,7 +130,7 @@ export function WorkspaceMembers({
       <header>
         <div>
           <strong>{members.length} 位成员</strong>
-          <span>{ownerCount} 位所有者 · 角色变更会写入审计日志</span>
+          <span>{ownerCount} 位所有者 · 角色变更会写入审计日志 · 管理权限不包含查看成员的私人任务与智能体</span>
         </div>
         <button type="button" onClick={() => void load()}>刷新</button>
       </header>

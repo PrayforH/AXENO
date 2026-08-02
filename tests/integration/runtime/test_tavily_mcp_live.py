@@ -66,7 +66,7 @@ async def test_tavily_live_search_returns_cited_current_information() -> None:
     container = build_memory_container(settings=live_settings)
     try:
         await container.agents.publish(
-            "local", "tests/fixtures/agents/tavily-live-agent/agent.yaml"
+            "local", "live-smoke", "tests/fixtures/agents/tavily-live-agent/agent.yaml"
         )
         session = await container.sessions.create(
             "local", "live-smoke", "tavily-live-agent", "1.0.0"
@@ -97,20 +97,15 @@ async def test_tavily_live_search_returns_cited_current_information() -> None:
         ]
         if completed.status is not RunStatus.SUCCEEDED:
             pytest.fail(
-                "live run failed; event sequence:\n"
-                + "\n".join(map(str, event_summary)),
+                "live run failed; event sequence:\n" + "\n".join(map(str, event_summary)),
                 pytrace=False,
             )
         tool_names = {
-            str(event.payload.get("name"))
-            for event in events
-            if event.type == "tool.request"
+            str(event.payload.get("name")) for event in events if event.type == "tool.request"
         }
         assert tool_names.intersection(TAVILY_ALLOWED_TOOLS)
         answer = "".join(
-            str(event.payload.get("text", ""))
-            for event in events
-            if event.type == "message.delta"
+            str(event.payload.get("text", "")) for event in events if event.type == "message.delta"
         )
         assert re.search(r"https://\S+", answer)
         if credential in repr(events):

@@ -27,8 +27,16 @@ def _payload(value: Environment | DeploymentSnapshot | Deployment) -> dict[str, 
 
 def _environment(row: EnvironmentRow) -> Environment:
     value = Environment.model_validate(row.payload)
-    if (value.tenant_id, value.agent_name, value.name.value, value.revision, value.updated_at) != (
+    if (
+        value.tenant_id,
+        value.owner_user_id,
+        value.agent_name,
+        value.name.value,
+        value.revision,
+        value.updated_at,
+    ) != (
         row.tenant_id,
+        row.owner_user_id,
         row.agent_name,
         row.name,
         row.revision,
@@ -93,6 +101,7 @@ class PostgresEnvironmentRepository:
             session.add(
                 EnvironmentRow(
                     tenant_id=environment.tenant_id,
+                    owner_user_id=environment.owner_user_id,
                     agent_name=environment.agent_name,
                     name=environment.name.value,
                     revision=environment.revision,
@@ -106,17 +115,27 @@ class PostgresEnvironmentRepository:
                 await session.rollback()
                 raise ConflictError("Environment already exists") from error
 
-    async def get(self, tenant_id: str, agent_name: str, name: EnvironmentName) -> Environment:
+    async def get(
+        self, tenant_id: str, owner_user_id: str, agent_name: str, name: EnvironmentName
+    ) -> Environment:
         async with self._sessions() as session:
-            row = await session.get(EnvironmentRow, (tenant_id, agent_name, name.value))
+            row = await session.get(
+                EnvironmentRow, (tenant_id, owner_user_id, agent_name, name.value)
+            )
             if row is None:
                 raise NotFoundError(f"Environment not found: {agent_name}/{name}")
             return _environment(row)
 
-    async def list_for_agent(self, tenant_id: str, agent_name: str) -> list[Environment]:
+    async def list_for_agent(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[Environment]:
         statement = (
             select(EnvironmentRow)
-            .where(EnvironmentRow.tenant_id == tenant_id, EnvironmentRow.agent_name == agent_name)
+            .where(
+                EnvironmentRow.tenant_id == tenant_id,
+                EnvironmentRow.owner_user_id == owner_user_id,
+                EnvironmentRow.agent_name == agent_name,
+            )
             .order_by(EnvironmentRow.name)
         )
         async with self._sessions() as session:
@@ -127,6 +146,7 @@ class PostgresEnvironmentRepository:
             update(EnvironmentRow)
             .where(
                 EnvironmentRow.tenant_id == updated.tenant_id,
+                EnvironmentRow.owner_user_id == updated.owner_user_id,
                 EnvironmentRow.agent_name == updated.agent_name,
                 EnvironmentRow.name == updated.name.value,
                 EnvironmentRow.revision == expected_revision,
@@ -151,6 +171,7 @@ class PostgresDeploymentRepository:
             session.add(
                 DeploymentSnapshotRow(
                     tenant_id=snapshot.tenant_id,
+                    created_by=snapshot.created_by,
                     snapshot_id=snapshot.snapshot_id,
                     agent_name=snapshot.agent_name,
                     agent_version=snapshot.agent_version,
@@ -174,11 +195,23 @@ class PostgresDeploymentRepository:
                 raise NotFoundError(f"Deployment Snapshot not found: {snapshot_id}")
             return _snapshot(row)
 
-    async def list_snapshots(self, tenant_id: str, agent_name: str) -> list[DeploymentSnapshot]:
+    async def get_snapshot_for_user(
+        self, tenant_id: str, owner_user_id: str, snapshot_id: str
+    ) -> DeploymentSnapshot:
+        async with self._sessions() as session:
+            row = await session.get(DeploymentSnapshotRow, (tenant_id, snapshot_id))
+            if row is None or row.created_by != owner_user_id:
+                raise NotFoundError(f"Deployment Snapshot not found: {snapshot_id}")
+            return _snapshot(row)
+
+    async def list_snapshots(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[DeploymentSnapshot]:
         statement = (
             select(DeploymentSnapshotRow)
             .where(
                 DeploymentSnapshotRow.tenant_id == tenant_id,
+                DeploymentSnapshotRow.created_by == owner_user_id,
                 DeploymentSnapshotRow.agent_name == agent_name,
             )
             .order_by(
@@ -193,6 +226,7 @@ class PostgresDeploymentRepository:
             session.add(
                 DeploymentRow(
                     tenant_id=deployment.tenant_id,
+                    requested_by=deployment.requested_by,
                     deployment_id=deployment.deployment_id,
                     agent_name=deployment.agent_name,
                     environment=deployment.environment.value,
@@ -216,18 +250,37 @@ class PostgresDeploymentRepository:
                 raise NotFoundError(f"Deployment not found: {deployment_id}")
             return _deployment(row)
 
-    async def find_by_idempotency(self, tenant_id: str, key: str) -> Deployment | None:
+    async def get_for_user(
+        self, tenant_id: str, owner_user_id: str, deployment_id: str
+    ) -> Deployment:
+        async with self._sessions() as session:
+            row = await session.get(DeploymentRow, (tenant_id, deployment_id))
+            if row is None or row.requested_by != owner_user_id:
+                raise NotFoundError(f"Deployment not found: {deployment_id}")
+            return _deployment(row)
+
+    async def find_by_idempotency(
+        self, tenant_id: str, owner_user_id: str, key: str
+    ) -> Deployment | None:
         statement = select(DeploymentRow).where(
-            DeploymentRow.tenant_id == tenant_id, DeploymentRow.idempotency_key == key
+            DeploymentRow.tenant_id == tenant_id,
+            DeploymentRow.requested_by == owner_user_id,
+            DeploymentRow.idempotency_key == key,
         )
         async with self._sessions() as session:
             row = await session.scalar(statement)
             return None if row is None else _deployment(row)
 
-    async def list_for_agent(self, tenant_id: str, agent_name: str) -> list[Deployment]:
+    async def list_for_agent(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[Deployment]:
         statement = (
             select(DeploymentRow)
-            .where(DeploymentRow.tenant_id == tenant_id, DeploymentRow.agent_name == agent_name)
+            .where(
+                DeploymentRow.tenant_id == tenant_id,
+                DeploymentRow.requested_by == owner_user_id,
+                DeploymentRow.agent_name == agent_name,
+            )
             .order_by(DeploymentRow.created_at.desc(), DeploymentRow.deployment_id.desc())
         )
         async with self._sessions() as session:

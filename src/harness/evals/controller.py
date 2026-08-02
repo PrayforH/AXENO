@@ -124,7 +124,10 @@ class EvalController:
                 status=transition_eval_run(current.status, EvalRunStatus.RUNNING),
             )
         dataset = await self._datasets.get(
-            tenant_id, current.dataset_id, current.dataset_version
+            tenant_id,
+            current.requested_by,
+            current.dataset_id,
+            current.dataset_version,
         )
         if current.next_case_index >= len(dataset.cases):
             return await self._finalize(current)
@@ -140,8 +143,7 @@ class EvalController:
                 return await self._create_child_run(current, case.prompt, case.id)
             child = await self._runs.get(tenant_id, current.active_run_id)
             accepted_nonterminal = (
-                child.status.value in case.expect.terminal_statuses
-                and not child.status.is_terminal
+                child.status.value in case.expect.terminal_statuses and not child.status.is_terminal
             )
             if not child.status.is_terminal and not accepted_nonterminal:
                 assert current.active_started_at is not None
@@ -182,9 +184,7 @@ class EvalController:
                     status=EvalCaseStatus.ERROR,
                     passed=False,
                     durationSeconds=self._active_duration(current),
-                    failures=(
-                        f"evaluation infrastructure error ({type(error).__name__})",
-                    ),
+                    failures=(f"evaluation infrastructure error ({type(error).__name__})",),
                     completedAt=self._clock(),
                 ),
             )
@@ -199,6 +199,7 @@ class EvalController:
             current.agent_name,
             current.agent_version,
             session_id=f"eval_session_{digest}",
+            agent_owner_user_id=current.requested_by,
         )
         return await self._replace(
             current,
@@ -207,9 +208,7 @@ class EvalController:
             active_started_at=self._clock(),
         )
 
-    async def _upload_inputs(
-        self, current: EvalRun, dataset: EvalDatasetVersion
-    ) -> EvalRun:
+    async def _upload_inputs(self, current: EvalRun, dataset: EvalDatasetVersion) -> EvalRun:
         case = dataset.cases[current.next_case_index]
         fixture_by_path = {item.path: item for item in dataset.fixtures}
         ids: list[str] = []
@@ -226,9 +225,7 @@ class EvalController:
             ids.append(uploaded.input_artifact_id)
         return await self._replace(current, active_input_artifact_ids=tuple(ids))
 
-    async def _create_child_run(
-        self, current: EvalRun, prompt: str, case_id: str
-    ) -> EvalRun:
+    async def _create_child_run(self, current: EvalRun, prompt: str, case_id: str) -> EvalRun:
         assert current.active_session_id is not None
         digest = hashlib.sha256(
             f"{current.eval_run_id}:{current.dataset_version}:{case_id}".encode()
@@ -246,9 +243,7 @@ class EvalController:
         )
         return await self._replace(current, active_run_id=child.run_id)
 
-    async def _score_case(
-        self, current: EvalRun, case: EvalCase, child: Run
-    ) -> EvalRun:
+    async def _score_case(self, current: EvalRun, case: EvalCase, child: Run) -> EvalRun:
         events = await self._events.list_after(current.tenant_id, child.run_id, 0)
         duration = max(0, (child.updated_at - child.created_at).total_seconds())
         scored = evaluate_recorded_run(
@@ -270,9 +265,7 @@ class EvalController:
                 caseId=scored.case_id,
                 sessionId=current.active_session_id or "",
                 runId=scored.run_id,
-                status=(
-                    EvalCaseStatus.PASSED if scored.passed else EvalCaseStatus.FAILED
-                ),
+                status=(EvalCaseStatus.PASSED if scored.passed else EvalCaseStatus.FAILED),
                 passed=scored.passed,
                 durationSeconds=scored.duration_seconds,
                 failures=scored.failures,
@@ -284,9 +277,7 @@ class EvalController:
             ),
         )
 
-    async def _complete_case(
-        self, current: EvalRun, result: EvalCaseResult
-    ) -> EvalRun:
+    async def _complete_case(self, current: EvalRun, result: EvalCaseResult) -> EvalRun:
         await self._repository.add_case_result(result)
         return await self._replace(
             current,
@@ -330,9 +321,7 @@ class EvalController:
         )
 
     async def _finalize(self, current: EvalRun) -> EvalRun:
-        results = await self._repository.list_case_results(
-            current.tenant_id, current.eval_run_id
-        )
+        results = await self._repository.list_case_results(current.tenant_id, current.eval_run_id)
         current = await self._write_artifacts(current)
         return await self._replace(
             current,
@@ -348,16 +337,15 @@ class EvalController:
     async def _write_artifacts(self, current: EvalRun) -> EvalRun:
         if current.artifacts:
             return current
-        records = await self._repository.list_case_results(
-            current.tenant_id, current.eval_run_id
-        )
+        records = await self._repository.list_case_results(current.tenant_id, current.eval_run_id)
         dataset = await self._datasets.get(
-            current.tenant_id, current.dataset_id, current.dataset_version
+            current.tenant_id,
+            current.requested_by,
+            current.dataset_id,
+            current.dataset_version,
         )
         by_case_id = {item.case_id: item for item in records}
-        records = [
-            by_case_id[item.id] for item in dataset.cases if item.id in by_case_id
-        ]
+        records = [by_case_id[item.id] for item in dataset.cases if item.id in by_case_id]
         report = EvalReport(
             agent=current.agent_name,
             agent_version=current.agent_version,
@@ -385,9 +373,7 @@ class EvalController:
                 f"{current.eval_run_id}-report-json",
                 "report.json",
                 "application/json",
-                json.dumps(
-                    report_payload, ensure_ascii=False, indent=2, sort_keys=True
-                ).encode(),
+                json.dumps(report_payload, ensure_ascii=False, indent=2, sort_keys=True).encode(),
             ),
             (
                 f"{current.eval_run_id}-junit-xml",
@@ -398,9 +384,7 @@ class EvalController:
         )
         artifacts: list[EvalOutputArtifact] = []
         for artifact_id, name, media_type, content in payloads:
-            stored = await self._object_store.put(
-                current.tenant_id, artifact_id, content
-            )
+            stored = await self._object_store.put(current.tenant_id, artifact_id, content)
             artifacts.append(
                 EvalOutputArtifact(
                     artifactId=artifact_id,

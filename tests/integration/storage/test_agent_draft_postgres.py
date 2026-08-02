@@ -48,7 +48,7 @@ async def test_postgres_agent_draft_survives_repository_and_engine_restart(
     second_engine, second_sessions = create_database(DATABASE_URL)
     try:
         restored = await PostgresAgentDraftRepository(second_sessions).get(
-            original.tenant_id, original.draft_id
+            original.tenant_id, original.created_by, original.draft_id
         )
     finally:
         await second_engine.dispose()
@@ -76,4 +76,4 @@ async def test_postgres_agent_draft_rejects_unknown_payload_schema(
         await session.commit()
 
     with pytest.raises(ValueError, match="Unsupported Agent Draft schema version"):
-        await repository.get(original.tenant_id, original.draft_id)
+        await repository.get(original.tenant_id, original.created_by, original.draft_id)

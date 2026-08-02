@@ -15,9 +15,17 @@ class PreviewRepository(Protocol):
 
     async def get(self, tenant_id: str, preview_id: str) -> PreviewDeployment: ...
 
+    async def get_for_user(
+        self, tenant_id: str, owner_user_id: str, preview_id: str
+    ) -> PreviewDeployment: ...
+
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> PreviewDeployment | None: ...
+
+    async def list_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[PreviewDeployment]: ...
 
     async def list_for_tenant(self, tenant_id: str) -> list[PreviewDeployment]: ...
 
@@ -33,12 +41,12 @@ class PreviewRepository(Protocol):
 class InMemoryPreviewRepository:
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], PreviewDeployment] = {}
-        self._idempotency: dict[tuple[str, str], str] = {}
+        self._idempotency: dict[tuple[str, str, str], str] = {}
         self._lock = asyncio.Lock()
 
     async def add(self, preview: PreviewDeployment) -> None:
         key = (preview.tenant_id, preview.preview_id)
-        idem = (preview.tenant_id, preview.idempotency_key)
+        idem = (preview.tenant_id, preview.requested_by, preview.idempotency_key)
         async with self._lock:
             if key in self._items or idem in self._idempotency:
                 raise ConflictError("Preview Deployment already exists")
@@ -51,11 +59,30 @@ class InMemoryPreviewRepository:
         except KeyError as error:
             raise NotFoundError(f"Preview Deployment not found: {preview_id}") from error
 
+    async def get_for_user(
+        self, tenant_id: str, owner_user_id: str, preview_id: str
+    ) -> PreviewDeployment:
+        value = await self.get(tenant_id, preview_id)
+        if value.requested_by != owner_user_id:
+            raise NotFoundError(f"Preview Deployment not found: {preview_id}")
+        return value
+
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> PreviewDeployment | None:
-        preview_id = self._idempotency.get((tenant_id, idempotency_key))
+        preview_id = self._idempotency.get((tenant_id, owner_user_id, idempotency_key))
         return None if preview_id is None else self._items[(tenant_id, preview_id)]
+
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[PreviewDeployment]:
+        return sorted(
+            (
+                preview
+                for (stored_tenant, _preview_id), preview in self._items.items()
+                if stored_tenant == tenant_id and preview.requested_by == owner_user_id
+            ),
+            key=lambda item: (item.created_at, item.preview_id),
+            reverse=True,
+        )
 
     async def list_for_tenant(self, tenant_id: str) -> list[PreviewDeployment]:
         return sorted(
@@ -90,8 +117,7 @@ class InMemoryPreviewRepository:
             (
                 item
                 for item in self._items.values()
-                if not item.status.is_terminal
-                and item.expires_at <= expires_at_or_before
+                if not item.status.is_terminal and item.expires_at <= expires_at_or_before
             ),
             key=lambda item: (item.expires_at, item.preview_id),
         )[:limit]

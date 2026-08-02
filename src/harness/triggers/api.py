@@ -86,7 +86,7 @@ async def list_agent_triggers(
     service: Annotated[AgentTriggerService, Depends(get_trigger_service)],
 ) -> list[AgentTrigger]:
     ensure_permission(identity, "studio:read")
-    return await service.list(identity.tenant_id, agent_name)
+    return await service.list(identity.tenant_id, identity.user_id, agent_name)
 
 
 @studio_router.post(

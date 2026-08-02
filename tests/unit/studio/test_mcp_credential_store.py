@@ -1,6 +1,10 @@
+import base64
+import hashlib
 import json
+from datetime import UTC, datetime
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import SecretStr
 
 from harness.auth.audit import AuditService
@@ -12,6 +16,7 @@ from harness.studio.mcp_credential_store import (
     InMemoryMcpCredentialRepository,
     McpCredentialCipher,
     McpCredentialService,
+    StoredMcpCredential,
     StoredMcpCredentialProvider,
 )
 
@@ -29,7 +34,7 @@ def identity(tenant_id: str = "tenant-a") -> ExecutionIdentity:
 
 
 @pytest.mark.asyncio
-async def test_credentials_are_encrypted_tenant_scoped_and_never_audited() -> None:
+async def test_credentials_are_encrypted_user_scoped_and_never_audited() -> None:
     repository = InMemoryMcpCredentialRepository()
     audit_repository = InMemoryAuditRepository()
     service = McpCredentialService(
@@ -45,7 +50,7 @@ async def test_credentials_are_encrypted_tenant_scoped_and_never_audited() -> No
         "company-search",
         ConfigureMcpCredentialRequest(authKey="authorization", value=SecretStr(secret)),
     )
-    stored = await repository.get("tenant-a", "company-search")
+    stored = await repository.get("tenant-a", "owner-a", "company-search")
     provider = StoredMcpCredentialProvider(service, EmptyMcpCredentialProvider())
     resolved = await provider.resolve("company-search", identity(), frozenset({"authorization"}))
 
@@ -65,6 +70,30 @@ async def test_credentials_are_encrypted_tenant_scoped_and_never_audited() -> No
     )
     with pytest.raises(McpCredentialError, match="missing MCP credentials"):
         await provider.resolve("company-search", identity("tenant-b"), frozenset({"authorization"}))
+    other_user = identity().model_copy(update={"user_id": "owner-b"})
+    with pytest.raises(McpCredentialError, match="missing MCP credentials"):
+        await provider.resolve("company-search", other_user, frozenset({"authorization"}))
 
     assert await service.delete("tenant-a", "owner-a", "company-search") is True
-    assert await repository.get("tenant-a", "company-search") is None
+    assert await repository.get("tenant-a", "owner-a", "company-search") is None
+
+
+def test_cipher_can_read_pre_isolation_tenant_scoped_ciphertext() -> None:
+    secret = "encryption-key-for-tests"
+    cipher = McpCredentialCipher(SecretStr(secret))
+    nonce = b"0" * 12
+    plaintext = b'{"authorization":"legacy-token"}'
+    key = hashlib.sha256(b"harness-mcp-v1\0" + secret.encode()).digest()
+    sealed = AESGCM(key).encrypt(nonce, plaintext, b"tenant-a\0company-search")
+    stored = StoredMcpCredential(
+        tenant_id="tenant-a",
+        owner_user_id="owner-a",
+        reference="company-search",
+        revision=1,
+        key_names=("authorization",),
+        ciphertext=base64.urlsafe_b64encode(nonce + sealed).decode(),
+        updated_by="owner-a",
+        updated_at=datetime.now(UTC),
+    )
+
+    assert cipher.decrypt(stored)["authorization"].get_secret_value() == "legacy-token"

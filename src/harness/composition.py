@@ -435,10 +435,7 @@ def _manifests_require_remote_cli(
         for tool in manifest.spec.tools:
             if tool.python_entry is not None:
                 return True
-            if (
-                tool.mcp is not None
-                and tool.mcp not in read_only_mcp_references
-            ):
+            if tool.mcp is not None and tool.mcp not in read_only_mcp_references:
                 return True
     return False
 
@@ -748,8 +745,13 @@ def build_production_container(
         knowledge_binding_resolver=knowledge.resolve_bindings,
     )
 
-    async def run_quota_plan(tenant_id: str, agent_name: str, agent_version: str) -> RunQuotaPlan:
-        version = await registry.get(tenant_id, agent_name, agent_version)
+    async def run_quota_plan(
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
+    ) -> RunQuotaPlan:
+        version = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
         limits = AgentManifestSnapshot.model_validate(version.snapshot).manifest.spec.limits
         return RunQuotaPlan(
             max_budget_usd=limits.max_budget_usd,
@@ -916,9 +918,12 @@ def build_production_container(
     )
 
     async def workspace_policy(
-        tenant_id: str, agent_name: str, agent_version: str
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
     ) -> WorkspacePolicy:
-        version = await registry.get(tenant_id, agent_name, agent_version)
+        version = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
         return WorkspacePolicy(
             restore_session=manifest.spec.workspace.restore_session,
@@ -927,6 +932,7 @@ def build_production_container(
 
     async def stage_runtime_assets(
         tenant_id: str,
+        owner_user_id: str,
         agent_name: str,
         agent_version: str,
         workspace: Path,
@@ -934,13 +940,19 @@ def build_production_container(
         return await stage_published_agent_assets(
             registry,
             tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
             agent_name=agent_name,
             agent_version=agent_version,
             workspace=workspace,
         )
 
-    async def resolve_policy(tenant_id: str, agent_name: str, agent_version: str) -> ResolvedPolicy:
-        version = await registry.get(tenant_id, agent_name, agent_version)
+    async def resolve_policy(
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
+    ) -> ResolvedPolicy:
+        version = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
         return await governance.resolve_runtime(tenant_id, manifest.spec.permissions.policy)
 
@@ -1028,6 +1040,7 @@ def build_production_container(
             root, children = await resolve_published_agent_versions(
                 registry,
                 tenant_id=tenant_id,
+                owner_user_id=session.resolved_agent_owner_user_id,
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
             )

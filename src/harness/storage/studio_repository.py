@@ -1,4 +1,4 @@
-"""PostgreSQL adapter for tenant-scoped Agent Studio drafts."""
+"""PostgreSQL adapter for tenant-and-owner-scoped Agent Studio drafts."""
 
 from typing import Any, cast
 
@@ -26,6 +26,7 @@ def _load_draft(row: AgentDraftRow) -> AgentDraft:
     draft = AgentDraft.model_validate(row.payload)
     if (
         draft.tenant_id != row.tenant_id
+        or draft.created_by != row.owner_user_id
         or draft.draft_id != row.draft_id
         or draft.revision != row.revision
         or draft.spec.name != row.name
@@ -36,7 +37,7 @@ def _load_draft(row: AgentDraftRow) -> AgentDraft:
 
 
 class PostgresAgentDraftRepository:
-    """Durable Draft storage with tenant isolation and atomic revision CAS."""
+    """Durable Draft storage with owner isolation and atomic revision CAS."""
 
     def __init__(self, sessions: SessionFactory) -> None:
         self._sessions = sessions
@@ -46,6 +47,7 @@ class PostgresAgentDraftRepository:
             session.add(
                 AgentDraftRow(
                     tenant_id=draft.tenant_id,
+                    owner_user_id=draft.created_by,
                     draft_id=draft.draft_id,
                     name=draft.spec.name,
                     revision=draft.revision,
@@ -58,18 +60,29 @@ class PostgresAgentDraftRepository:
                 await session.commit()
             except IntegrityError as error:
                 await session.rollback()
-                raise ConflictError(
-                    f"Agent draft already exists: {draft.draft_id}"
-                ) from error
+                raise ConflictError(f"Agent draft already exists: {draft.draft_id}") from error
 
-    async def get(self, tenant_id: str, draft_id: str) -> AgentDraft:
+    async def get(self, tenant_id: str, owner_user_id: str, draft_id: str) -> AgentDraft:
         async with self._sessions() as session:
-            row = await session.get(AgentDraftRow, (tenant_id, draft_id))
+            row = await session.get(AgentDraftRow, (tenant_id, owner_user_id, draft_id))
             if row is None:
                 raise NotFoundError(f"Agent draft not found: {draft_id}")
             return _load_draft(row)
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentDraft]:
+        statement = (
+            select(AgentDraftRow)
+            .where(
+                AgentDraftRow.tenant_id == tenant_id,
+                AgentDraftRow.owner_user_id == owner_user_id,
+            )
+            .order_by(AgentDraftRow.updated_at.desc(), AgentDraftRow.draft_id.desc())
+        )
+        async with self._sessions() as session:
+            rows = (await session.scalars(statement)).all()
+            return [_load_draft(row) for row in rows]
+
+    async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
         statement = (
             select(AgentDraftRow)
             .where(AgentDraftRow.tenant_id == tenant_id)
@@ -86,6 +99,7 @@ class PostgresAgentDraftRepository:
             update(AgentDraftRow)
             .where(
                 AgentDraftRow.tenant_id == draft.tenant_id,
+                AgentDraftRow.owner_user_id == draft.created_by,
                 AgentDraftRow.draft_id == draft.draft_id,
                 AgentDraftRow.revision == expected_revision,
             )
@@ -105,6 +119,7 @@ class PostgresAgentDraftRepository:
             actual_revision = await session.scalar(
                 select(AgentDraftRow.revision).where(
                     AgentDraftRow.tenant_id == draft.tenant_id,
+                    AgentDraftRow.owner_user_id == draft.created_by,
                     AgentDraftRow.draft_id == draft.draft_id,
                 )
             )

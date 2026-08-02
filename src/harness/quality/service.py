@@ -4,7 +4,7 @@ import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from harness.core.errors import ConflictError
+from harness.core.errors import ConflictError, NotFoundError
 from harness.core.events import RunEvent
 from harness.core.models import Artifact, ArtifactStatus, Run, RunStatus, Session
 from harness.core.ports import ArtifactRepository, EventRepository, RunRepository, SessionRepository
@@ -101,6 +101,8 @@ class QualityService:
     ) -> QualityScore:
         run = await self._runs.get(tenant_id, run_id)
         session = await self._sessions.get(tenant_id, run.session_id)
+        if session.user_id != user_id:
+            raise NotFoundError(f"Run not found: {run_id}")
         existing = await self._repository.list_scores(tenant_id, session.agent_name)
         trace_id = next((item.trace_id for item in existing if item.run_id == run_id), None)
         if trace_id is None:
@@ -119,6 +121,7 @@ class QualityService:
             agentName=dataset.agent_name,
             caseCount=len(dataset.cases),
             contentHash=dataset.source_content_hash,
+            createdBy=dataset.created_by,
             createdAt=self._clock(),
         )
         await self._repository.add_dataset(projection)
@@ -129,18 +132,46 @@ class QualityService:
         await self._repository.add_rule(rule)
         return rule
 
-    async def list_scores(self, tenant_id: str, agent_name: str) -> list[QualityScore]:
-        return await self._repository.list_scores(tenant_id, agent_name)
+    async def list_scores(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[QualityScore]:
+        result: list[QualityScore] = []
+        for score in await self._repository.list_scores(tenant_id, agent_name):
+            session = await self._sessions.get(tenant_id, score.session_id)
+            if session.resolved_agent_owner_user_id == owner_user_id:
+                result.append(score)
+        return result
 
-    async def list_rules(self, tenant_id: str, agent_name: str) -> list[AlertRule]:
-        return await self._repository.list_rules(tenant_id, agent_name)
+    async def list_rules(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[AlertRule]:
+        return [
+            item
+            for item in await self._repository.list_rules(tenant_id, agent_name)
+            if item.created_by == owner_user_id
+        ]
 
-    async def list_incidents(self, tenant_id: str, agent_name: str) -> list[AlertIncident]:
-        return await self._repository.list_incidents(tenant_id, agent_name)
+    async def list_incidents(
+        self, tenant_id: str, owner_user_id: str, agent_name: str
+    ) -> list[AlertIncident]:
+        return [
+            item
+            for item in await self._repository.list_incidents(tenant_id, agent_name)
+            if item.owner_user_id == owner_user_id
+        ]
 
-    async def gate(self, tenant_id: str, agent_name: str, agent_version: str) -> QualityGateResult:
-        rules = {item.rule_id: item for item in await self.list_rules(tenant_id, agent_name)}
-        incidents = await self.list_incidents(tenant_id, agent_name)
+    async def gate(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
+    ) -> QualityGateResult:
+        rules = {
+            item.rule_id: item
+            for item in await self.list_rules(tenant_id, owner_user_id, agent_name)
+        }
+        incidents = await self.list_incidents(tenant_id, owner_user_id, agent_name)
         blocking = tuple(
             sorted(
                 item.incident_id
@@ -159,9 +190,13 @@ class QualityService:
         )
 
     async def require_promotion_allowed(
-        self, tenant_id: str, agent_name: str, agent_version: str
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_name: str,
+        agent_version: str,
     ) -> QualityGateResult:
-        gate = await self.gate(tenant_id, agent_name, agent_version)
+        gate = await self.gate(tenant_id, owner_user_id, agent_name, agent_version)
         if not gate.passed:
             raise ConflictError(
                 "Agent version has blocking quality incidents: "
@@ -221,12 +256,14 @@ class QualityService:
         await self._queue.enqueue(QualityTask(tenant_id=tenant_id, sync_id=sync.sync_id))
 
     async def _evaluate_alerts(self, score: QualityScore) -> None:
-        for rule in await self.list_rules(score.tenant_id, score.agent_name):
+        session = await self._sessions.get(score.tenant_id, score.session_id)
+        owner_user_id = session.resolved_agent_owner_user_id
+        for rule in await self.list_rules(score.tenant_id, owner_user_id, score.agent_name):
             if not rule.enabled or rule.score_name != score.name:
                 continue
             matching = [
                 item
-                for item in await self.list_scores(score.tenant_id, score.agent_name)
+                for item in await self.list_scores(score.tenant_id, owner_user_id, score.agent_name)
                 if item.agent_version == score.agent_version and item.name == score.name
             ]
             if len(matching) < rule.minimum_samples:
@@ -236,7 +273,9 @@ class QualityService:
             previous = next(
                 (
                     item
-                    for item in await self.list_incidents(score.tenant_id, score.agent_name)
+                    for item in await self.list_incidents(
+                        score.tenant_id, owner_user_id, score.agent_name
+                    )
                     if item.incident_id == incident_id
                 ),
                 None,
@@ -248,6 +287,7 @@ class QualityService:
                 ruleId=rule.rule_id,
                 agentName=score.agent_name,
                 agentVersion=score.agent_version,
+                ownerUserId=owner_user_id,
                 state=state,
                 observedValue=observed,
                 sampleCount=len(matching),

@@ -1437,7 +1437,7 @@ export function AgentStudioWorkbench() {
   }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
-    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>AS</span><h1>正在读取 Agent Studio</h1><p>从控制面恢复租户草稿与能力目录。</p></section></main>;
+    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>AS</span><h1>正在读取 Agent Studio</h1><p>正在恢复你的智能体草稿与能力目录。</p></section></main>;
   }
   if (loadError) {
     return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Agent Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
@@ -1447,7 +1447,7 @@ export function AgentStudioWorkbench() {
     <main className={styles.studioShell} id="main-content" data-studio-integration="api">
       <StudioSidebar active="agents">
         <div className={styles.railHeading}>
-          <span>智能体目录</span>
+          <span>我的智能体</span>
           <button
             type="button"
             aria-label="新建智能体"
@@ -1504,8 +1504,8 @@ export function AgentStudioWorkbench() {
       <section className={styles.editorShell} data-readonly={!canEdit}>
         {drafts.length === 0 && !draft.id && (
           <div className={styles.emptyBanner} role="status">
-            <strong>当前租户还没有智能体草稿</strong>
-            <span>{canEdit ? "填写模板并保存，即可创建第一个草稿。" : "请联系成员或管理员创建后再查看。"}</span>
+            <strong>你还没有智能体草稿</strong>
+            <span>{canEdit ? "填写模板并保存，即可创建第一个私人草稿。" : "当前角色只能查看自己已有的智能体。"}</span>
           </div>
         )}
         <header className={styles.editorHeader}>

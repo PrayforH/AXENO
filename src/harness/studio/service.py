@@ -36,7 +36,9 @@ from harness.studio.repositories import AgentDraftRepository
 
 
 class AgentBundlePublisher(Protocol):
-    async def publish_bundle(self, tenant_id: str, content: bytes) -> AgentVersion: ...
+    async def publish_bundle(
+        self, tenant_id: str, owner_user_id: str, content: bytes
+    ) -> AgentVersion: ...
 
 
 class StudioPublisherNotConfiguredError(RuntimeError):
@@ -118,13 +120,13 @@ class AgentStudioService:
         await self._repository.add(draft)
         return draft
 
-    async def get(self, tenant_id: str, draft_id: str) -> AgentDraft:
-        return await self._repository.get(tenant_id, draft_id)
+    async def get(self, tenant_id: str, owner_user_id: str, draft_id: str) -> AgentDraft:
+        return await self._repository.get(tenant_id, owner_user_id, draft_id)
 
-    async def list(self, tenant_id: str) -> list[AgentDraftSummary]:
+    async def list(self, tenant_id: str, owner_user_id: str) -> list[AgentDraftSummary]:
         return [
             AgentDraftSummary.from_draft(draft)
-            for draft in await self._repository.list_for_tenant(tenant_id)
+            for draft in await self._repository.list_for_user(tenant_id, owner_user_id)
         ]
 
     async def replace(
@@ -135,7 +137,7 @@ class AgentStudioService:
         draft_id: str,
         request: ReplaceAgentDraftRequest,
     ) -> AgentDraft:
-        current = await self._repository.get(tenant_id, draft_id)
+        current = await self._repository.get(tenant_id, user_id, draft_id)
         updated = current.model_copy(
             update={
                 "revision": current.revision + 1,
@@ -147,11 +149,13 @@ class AgentStudioService:
         await self._repository.replace(request.expected_revision, updated)
         return updated
 
-    async def validate(self, tenant_id: str, draft_id: str) -> DraftValidationResult:
+    async def validate(
+        self, tenant_id: str, owner_user_id: str, draft_id: str
+    ) -> DraftValidationResult:
         compiler = await self._compiler_for(tenant_id)
-        draft = await self.get(tenant_id, draft_id)
+        draft = await self.get(tenant_id, owner_user_id, draft_id)
         validation = compiler.validate(draft)
-        dependency_issues = await self._dependency_issues(tenant_id, draft)
+        dependency_issues = await self._dependency_issues(tenant_id, owner_user_id, draft)
         if not dependency_issues:
             return validation
         return validation.model_copy(
@@ -161,14 +165,16 @@ class AgentStudioService:
             }
         )
 
-    async def bundle(self, tenant_id: str, draft_id: str) -> CompiledAgentDraft:
+    async def bundle(self, tenant_id: str, owner_user_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id)
-        return compiler.compile(await self.get(tenant_id, draft_id))
+        return compiler.compile(await self.get(tenant_id, owner_user_id, draft_id))
 
-    async def nexau_bundle(self, tenant_id: str, draft_id: str) -> NexauAgentArchive:
+    async def nexau_bundle(
+        self, tenant_id: str, owner_user_id: str, draft_id: str
+    ) -> NexauAgentArchive:
         catalog = await self.capabilities(tenant_id)
         return export_nexau_agent(
-            await self.get(tenant_id, draft_id),
+            await self.get(tenant_id, owner_user_id, draft_id),
             mcp_capabilities={item.reference: item for item in catalog.mcp_servers},
         )
 
@@ -240,7 +246,7 @@ class AgentStudioService:
     ) -> AgentVersion:
         if self._publisher is None:
             raise StudioPublisherNotConfiguredError("Agent Studio publisher is not configured")
-        draft = await self.get(tenant_id, draft_id)
+        draft = await self.get(tenant_id, user_id, draft_id)
         compiler = await self._compiler_for(tenant_id)
         try:
             if expected_revision is not None and draft.revision != expected_revision:
@@ -249,10 +255,10 @@ class AgentStudioService:
                     f"expected={expected_revision} actual={draft.revision}"
                 )
             compiled = compiler.compile(draft)
-            dependency_issues = await self._dependency_issues(tenant_id, draft)
+            dependency_issues = await self._dependency_issues(tenant_id, user_id, draft)
             if dependency_issues:
                 raise DraftCompilationError(dependency_issues)
-            existing = await self._idempotent_version(tenant_id, draft, compiled)
+            existing = await self._idempotent_version(tenant_id, user_id, draft, compiled)
             if existing is not None:
                 await self._record_publish_audit(
                     tenant_id=tenant_id,
@@ -265,7 +271,7 @@ class AgentStudioService:
                 )
                 return existing
             try:
-                version = await self._publisher.publish_bundle(tenant_id, compiled.bundle)
+                version = await self._publisher.publish_bundle(tenant_id, user_id, compiled.bundle)
             except ConflictError as error:
                 raise StudioPublicationConflictError(
                     f"Agent version content conflicts with existing immutable release: "
@@ -311,7 +317,7 @@ class AgentStudioService:
         return version
 
     async def _dependency_issues(
-        self, tenant_id: str, draft: AgentDraft
+        self, tenant_id: str, owner_user_id: str, draft: AgentDraft
     ) -> tuple[ValidationIssue, ...]:
         references = tuple(sorted({item.ref for item in draft.spec.subagents}))
         knowledge_references = tuple(sorted(set(draft.spec.knowledge_references)))
@@ -351,11 +357,11 @@ class AgentStudioService:
                 )
             )
             return tuple(issues)
-        tenant_drafts = await self._repository.list_for_tenant(tenant_id)
+        tenant_drafts = await self._repository.list_for_user(tenant_id, owner_user_id)
         for reference in references:
             name, version_id = reference.rsplit("@", 1)
             try:
-                version = await self._registry.get(tenant_id, name, version_id)
+                version = await self._registry.get(tenant_id, owner_user_id, name, version_id)
             except NotFoundError:
                 issues.append(
                     ValidationIssue(
@@ -401,6 +407,7 @@ class AgentStudioService:
     async def _idempotent_version(
         self,
         tenant_id: str,
+        owner_user_id: str,
         draft: AgentDraft,
         compiled: CompiledAgentDraft,
     ) -> AgentVersion | None:
@@ -415,7 +422,9 @@ class AgentStudioService:
                 "Published Draft cannot be verified against the Agent Registry"
             )
         try:
-            existing = await self._registry.get(tenant_id, draft.spec.name, draft.spec.version)
+            existing = await self._registry.get(
+                tenant_id, owner_user_id, draft.spec.name, draft.spec.version
+            )
         except NotFoundError as error:
             raise StudioPublicationConflictError(
                 "Draft publication metadata points to a missing Agent version"

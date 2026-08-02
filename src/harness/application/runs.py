@@ -49,7 +49,7 @@ class RunAdmission(Protocol):
     async def release_subject(self, tenant_id: str, subject_id: str) -> int: ...
 
 
-RunQuotaPlanResolver = Callable[[str, str, str], Awaitable[RunQuotaPlan]]
+RunQuotaPlanResolver = Callable[[str, str, str, str], Awaitable[RunQuotaPlan]]
 
 
 def _request_attachment_ids(value: object) -> tuple[str, ...] | None:
@@ -65,11 +65,9 @@ def _same_user_request(left: dict[str, object], right: dict[str, object]) -> boo
     right_prompt = right.get("prompt")
     if not isinstance(left_prompt, str) or not isinstance(right_prompt, str):
         return False
-    return (
-        left_prompt == right_prompt
-        and _request_attachment_ids(left.get("input_artifact_ids", []))
-        == _request_attachment_ids(right.get("input_artifact_ids", []))
-    )
+    return left_prompt == right_prompt and _request_attachment_ids(
+        left.get("input_artifact_ids", [])
+    ) == _request_attachment_ids(right.get("input_artifact_ids", []))
 
 
 def _blocking_predecessor(active_runs: list[Run]) -> Run | None:
@@ -196,18 +194,12 @@ class RunService:
         run_input = input or {}
         active_runs = [
             item
-            for item in await self._runs.list_for_sessions(
-                tenant_id, [session_id], limit=200
-            )
+            for item in await self._runs.list_for_sessions(tenant_id, [session_id], limit=200)
             if not item.status.is_terminal
         ]
         if deduplicate_active_input:
             duplicate = next(
-                (
-                    item
-                    for item in active_runs
-                    if _same_user_request(item.input, run_input)
-                ),
+                (item for item in active_runs if _same_user_request(item.input, run_input)),
                 None,
             )
             if duplicate is not None:
@@ -235,7 +227,10 @@ class RunService:
         if self._admission is not None:
             plan = (
                 await self._quota_plan_resolver(
-                    tenant_id, session.agent_name, session.agent_version
+                    tenant_id,
+                    session.resolved_agent_owner_user_id,
+                    session.agent_name,
+                    session.agent_version,
                 )
                 if self._quota_plan_resolver is not None
                 else RunQuotaPlan(None, None, 3600)
@@ -266,15 +261,9 @@ class RunService:
             waiting_for_approval = predecessor.status is RunStatus.WAITING_APPROVAL
             queue_payload = {
                 "reason_code": (
-                    "predecessor_waiting_approval"
-                    if waiting_for_approval
-                    else "predecessor_active"
+                    "predecessor_waiting_approval" if waiting_for_approval else "predecessor_active"
                 ),
-                "reason": (
-                    "前序任务等待审批"
-                    if waiting_for_approval
-                    else "前序任务仍在执行"
-                ),
+                "reason": ("前序任务等待审批" if waiting_for_approval else "前序任务仍在执行"),
                 "blocked_by_run_id": predecessor.run_id,
                 "blocked_by_status": predecessor.status.value,
             }

@@ -13,10 +13,8 @@ FIXTURE = Path("tests/fixtures/agents/echo-agent/agent.yaml")
 @pytest.mark.asyncio
 async def test_only_the_run_owner_can_decide_an_approval() -> None:
     container = build_memory_container()
-    await container.agents.publish("tenant-a", FIXTURE)
-    session = await container.sessions.create(
-        "tenant-a", "owner", "echo-agent", "0.1.0"
-    )
+    await container.agents.publish("tenant-a", "owner", FIXTURE)
+    session = await container.sessions.create("tenant-a", "owner", "echo-agent", "0.1.0")
     run = await container.runs.create(
         "tenant-a",
         session.session_id,
@@ -26,9 +24,7 @@ async def test_only_the_run_owner_can_decide_an_approval() -> None:
     waiting = await container.worker.execute("tenant-a", run.run_id)
     assert waiting.status is RunStatus.WAITING_APPROVAL
     events = await container.events.list_after("tenant-a", run.run_id, 0)
-    approval_event = next(
-        event for event in events if event.type == "approval.requested"
-    )
+    approval_event = next(event for event in events if event.type == "approval.requested")
     approval_id = str(approval_event.payload["approval_id"])
 
     async with AsyncClient(

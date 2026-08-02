@@ -154,6 +154,7 @@ class EnvironmentResourcePolicy(StudioModel):
 
 class Environment(StudioModel):
     tenant_id: str = Field(alias="tenantId", min_length=1)
+    owner_user_id: str = Field(alias="ownerUserId", min_length=1)
     agent_name: str = Field(alias="agentName", pattern=r"^[a-z][a-z0-9-]*$")
     name: EnvironmentName
     revision: int = Field(ge=0)

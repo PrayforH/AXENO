@@ -267,6 +267,8 @@ services:
   worker:
     <<: *python-image
     entrypoint: ["entrypoint-worker"]
+    deploy:
+      replicas: ${HARNESS_WORKER_REPLICAS:-1}
     environment: *harness-environment
     expose:
       - "${HARNESS_WORKER_METRICS_PORT:-8001}"

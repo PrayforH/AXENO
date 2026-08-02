@@ -238,7 +238,7 @@ export function TaskSidebar({
               </div>
             ))}
             {tasks.length === 0 && !error && (
-              <p className="task-list-empty">暂无历史任务</p>
+              <p className="task-list-empty">你还没有历史任务</p>
             )}
             {error && <p className="task-list-error">任务列表暂时不可用</p>}
           </div>

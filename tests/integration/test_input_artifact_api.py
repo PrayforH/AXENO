@@ -93,11 +93,9 @@ async def test_upload_reports_storage_capacity_instead_of_generic_500() -> None:
 async def test_thread_file_catalog_api_is_user_scoped() -> None:
     container = build_memory_container()
     await container.agents.publish(
-        "tenant-a", "tests/fixtures/agents/echo-agent/agent.yaml"
+        "tenant-a", "user-1", "tests/fixtures/agents/echo-agent/agent.yaml"
     )
-    session = await container.sessions.create(
-        "tenant-a", "user-1", "echo-agent", "0.1.0"
-    )
+    session = await container.sessions.create("tenant-a", "user-1", "echo-agent", "0.1.0")
     identity = ExecutionIdentity(
         tenant_id="tenant-a",
         user_id="user-1",
@@ -117,9 +115,7 @@ async def test_thread_file_catalog_api_is_user_scoped() -> None:
     app = create_app(container)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            f"/v1/threads/{session.session_id}/files", headers=HEADERS
-        )
+        response = await client.get(f"/v1/threads/{session.session_id}/files", headers=HEADERS)
         cross_user = await client.get(
             f"/v1/threads/{session.session_id}/files",
             headers={"X-Tenant-ID": "tenant-a", "X-User-ID": "user-2"},

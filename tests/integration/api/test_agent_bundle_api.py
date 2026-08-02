@@ -33,12 +33,8 @@ async def test_production_api_accepts_bundle_and_rejects_server_local_path(
     archive, report = pack_agent_package(MANIFEST, output_directory=tmp_path)
     app = create_memory_app(settings=production_settings())
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        local_path = await client.post(
-            "/v1/agents", json={"path": str(MANIFEST)}, headers=HEADERS
-        )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        local_path = await client.post("/v1/agents", json={"path": str(MANIFEST)}, headers=HEADERS)
         published = await client.post(
             "/v1/agents/bundles",
             content=archive.read_bytes(),
@@ -64,9 +60,7 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
     archive, _report = pack_agent_package(MANIFEST, output_directory=tmp_path)
     app = create_memory_app(settings=production_settings())
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         published = await client.post(
             "/v1/agents/bundles",
             content=archive.read_bytes(),
@@ -82,7 +76,7 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
             "version": "0.3.5",
             "display_name": "舆情分析",
             "domain": "public-opinion",
-            "model_route": "new-api-default",
+            "model_route": "deepseek-v4-pro",
             "model": "deepseek-v4-pro",
             "model_capabilities": [],
         }
@@ -93,9 +87,7 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
 async def test_bundle_api_returns_structured_validation_error() -> None:
     app = create_memory_app(settings=production_settings())
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/v1/agents/bundles",
             content=b"not-a-bundle",
@@ -113,9 +105,7 @@ async def test_bundle_api_rejects_oversized_content_length_before_reading_body(
     monkeypatch.setattr(agent_routes, "MAX_AGENT_BUNDLE_UPLOAD_BYTES", 4)
     app = create_memory_app(settings=production_settings())
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/v1/agents/bundles",
             content=b"x",
@@ -141,9 +131,7 @@ async def test_bundle_api_stops_chunked_upload_at_size_limit(
         yield b"123"
         yield b"45"
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/v1/agents/bundles",
             content=chunks(),
@@ -158,9 +146,7 @@ async def test_bundle_api_stops_chunked_upload_at_size_limit(
 async def test_bundle_api_requires_zip_media_type() -> None:
     app = create_memory_app(settings=production_settings())
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/v1/agents/bundles",
             content=b"not-a-bundle",

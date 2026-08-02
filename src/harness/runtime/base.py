@@ -60,12 +60,9 @@ class RuntimeContext(BaseModel):
     sandbox_command_executor: SandboxCommandExecutor | None = Field(
         default=None, exclude=True, repr=False
     )
-    artifact_publisher: ArtifactPublisher | None = Field(
-        default=None, exclude=True, repr=False
-    )
-    resolved_policy: ResolvedPolicy | None = Field(
-        default=None, exclude=True, repr=False
-    )
+    artifact_publisher: ArtifactPublisher | None = Field(default=None, exclude=True, repr=False)
+    resolved_policy: ResolvedPolicy | None = Field(default=None, exclude=True, repr=False)
+
     @model_validator(mode="after")
     def derive_identity(self) -> "RuntimeContext":
         if not self.assistant_message_id:
@@ -81,6 +78,7 @@ class RuntimeContext(BaseModel):
                 ExecutionIdentity(
                     tenant_id=self.session.tenant_id,
                     user_id=self.session.user_id,
+                    agent_owner_user_id=self.session.resolved_agent_owner_user_id,
                     team_ids=self.session.team_ids,
                     project_id=self.session.agent_name,
                     session_id=self.session.session_id,

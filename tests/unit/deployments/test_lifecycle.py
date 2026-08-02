@@ -55,7 +55,7 @@ async def published_versions(
         ),
     )
     first = await container.studio.publish(tenant_id=TENANT, user_id=USER, draft_id=draft.draft_id)
-    published_draft = await container.studio.get(TENANT, draft.draft_id)
+    published_draft = await container.studio.get(TENANT, USER, draft.draft_id)
     updated = await container.studio.replace(
         tenant_id=TENANT,
         user_id=USER,
@@ -114,7 +114,7 @@ async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() 
     )
     old_session = await container.sessions.create(
         TENANT,
-        "user-a",
+        USER,
         draft.spec.name,
         None,
         environment=EnvironmentName.PRODUCTION,
@@ -137,7 +137,7 @@ async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() 
     for index in range(1000):
         candidate = f"new-session-{index}"
         resolution = await container.deployments.resolve(
-            TENANT, draft.spec.name, EnvironmentName.PRODUCTION, candidate
+            TENANT, USER, draft.spec.name, EnvironmentName.PRODUCTION, candidate
         )
         if resolution.agent_version == second_version:
             selected_key = candidate
@@ -145,7 +145,7 @@ async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() 
     assert selected_key
     canary_session = await container.sessions.create(
         TENANT,
-        "user-b",
+        USER,
         draft.spec.name,
         None,
         session_id=selected_key,
@@ -168,7 +168,7 @@ async def test_canary_only_routes_new_sessions_and_rollback_restores_snapshot() 
         TENANT, rollback.deployment.deployment_id
     )
     environment = await container.deployments.environment(
-        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+        TENANT, USER, draft.spec.name, EnvironmentName.PRODUCTION
     )
 
     assert rolled_back.status is DeploymentStatus.SUCCEEDED
@@ -200,10 +200,12 @@ async def test_environment_policy_snapshot_is_immutable_per_session() -> None:
         "user-a",
         draft.spec.name,
         None,
+        agent_owner_user_id=USER,
         environment=EnvironmentName.PRODUCTION,
     )
     current = await container.deployments.environment(
         TENANT,
+        USER,
         draft.spec.name,
         EnvironmentName.PRODUCTION,
     )
@@ -231,6 +233,7 @@ async def test_environment_policy_snapshot_is_immutable_per_session() -> None:
         "user-b",
         draft.spec.name,
         None,
+        agent_owner_user_id=USER,
         environment=EnvironmentName.PRODUCTION,
     )
 
@@ -256,6 +259,7 @@ async def test_environment_policy_denies_agent_resources_and_workload_scope() ->
     )
     current = await container.deployments.environment(
         TENANT,
+        USER,
         draft.spec.name,
         EnvironmentName.PRODUCTION,
     )
@@ -311,6 +315,7 @@ async def test_environment_policy_denies_agent_resources_and_workload_scope() ->
             "trigger:external",
             draft.spec.name,
             None,
+            agent_owner_user_id=USER,
             environment=EnvironmentName.PRODUCTION,
         )
 
@@ -375,6 +380,7 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
     )
     environment = await container.deployments.environment(
         TENANT,
+        USER,
         updated.spec.name,
         EnvironmentName.PRODUCTION,
     )
@@ -416,6 +422,7 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
         "user-a",
         updated.spec.name,
         None,
+        agent_owner_user_id=USER,
         environment=EnvironmentName.PRODUCTION,
     )
     old_binding = first_session.knowledge_snapshot_bindings[0]
@@ -449,6 +456,7 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
         "user-b",
         updated.spec.name,
         None,
+        agent_owner_user_id=USER,
         environment=EnvironmentName.PRODUCTION,
     )
 
@@ -474,6 +482,7 @@ async def test_promotion_rejects_agent_built_from_a_stale_tool_catalog() -> None
     )
     environment = await container.deployments.environment(
         TENANT,
+        USER,
         draft.spec.name,
         EnvironmentName.PRODUCTION,
     )
@@ -526,7 +535,7 @@ async def test_failed_reconcile_preserves_last_healthy_environment() -> None:
     controller._deploy = fail  # pyright: ignore[reportPrivateUsage]
     result = await controller.drain_locally(TENANT, pending.deployment.deployment_id)
     environment = await container.deployments.environment(
-        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+        TENANT, USER, draft.spec.name, EnvironmentName.PRODUCTION
     )
 
     assert result.status is DeploymentStatus.FAILED
@@ -570,7 +579,7 @@ async def test_concurrent_promotions_use_environment_compare_and_set() -> None:
         controller.reconcile(TENANT, second.deployment.deployment_id),
     )
     environment = await container.deployments.environment(
-        TENANT, draft.spec.name, EnvironmentName.PRODUCTION
+        TENANT, USER, draft.spec.name, EnvironmentName.PRODUCTION
     )
 
     assert sorted(item.status.value for item in outcomes) == ["failed", "succeeded"]
@@ -663,7 +672,7 @@ async def test_deployment_promotion_quota_rejects_before_snapshot_is_created() -
             ),
         )
 
-    snapshots = await container.deployments.snapshots(TENANT, draft.spec.name)
+    snapshots = await container.deployments.snapshots(TENANT, USER, draft.spec.name)
     assert len(snapshots) == 1
 
 

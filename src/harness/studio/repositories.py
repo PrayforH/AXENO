@@ -1,4 +1,4 @@
-"""Tenant-scoped Agent Draft persistence ports and adapters."""
+"""Tenant-and-owner-scoped Agent Draft persistence ports and adapters."""
 
 from __future__ import annotations
 
@@ -12,38 +12,51 @@ from harness.studio.models import AgentDraft
 class AgentDraftRepository(Protocol):
     async def add(self, draft: AgentDraft) -> None: ...
 
-    async def get(self, tenant_id: str, draft_id: str) -> AgentDraft: ...
+    async def get(self, tenant_id: str, owner_user_id: str, draft_id: str) -> AgentDraft: ...
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentDraft]: ...
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentDraft]: ...
+
+    async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]: ...
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None: ...
 
 
 class InMemoryAgentDraftRepository:
-    """Optimistic, tenant-scoped draft storage used by tests and local previews."""
+    """Optimistic tenant-and-owner-scoped storage used by tests and previews."""
 
     def __init__(self) -> None:
-        self._items: dict[tuple[str, str], AgentDraft] = {}
+        self._items: dict[tuple[str, str, str], AgentDraft] = {}
         self._lock = asyncio.Lock()
 
     async def add(self, draft: AgentDraft) -> None:
-        key = (draft.tenant_id, draft.draft_id)
+        key = (draft.tenant_id, draft.created_by, draft.draft_id)
         async with self._lock:
             if key in self._items:
                 raise ConflictError(f"Agent draft already exists: {draft.draft_id}")
             self._items[key] = draft
 
-    async def get(self, tenant_id: str, draft_id: str) -> AgentDraft:
+    async def get(self, tenant_id: str, owner_user_id: str, draft_id: str) -> AgentDraft:
         try:
-            return self._items[(tenant_id, draft_id)]
+            return self._items[(tenant_id, owner_user_id, draft_id)]
         except KeyError as error:
             raise NotFoundError(f"Agent draft not found: {draft_id}") from error
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentDraft]:
         return sorted(
             (
                 draft
-                for (stored_tenant, _draft_id), draft in self._items.items()
+                for (stored_tenant, stored_owner, _draft_id), draft in self._items.items()
+                if stored_tenant == tenant_id and stored_owner == owner_user_id
+            ),
+            key=lambda draft: (draft.updated_at, draft.draft_id),
+            reverse=True,
+        )
+
+    async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
+        return sorted(
+            (
+                draft
+                for (stored_tenant, _owner, _draft_id), draft in self._items.items()
                 if stored_tenant == tenant_id
             ),
             key=lambda draft: (draft.updated_at, draft.draft_id),
@@ -51,7 +64,7 @@ class InMemoryAgentDraftRepository:
         )
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None:
-        key = (draft.tenant_id, draft.draft_id)
+        key = (draft.tenant_id, draft.created_by, draft.draft_id)
         async with self._lock:
             current = self._items.get(key)
             if current is None:

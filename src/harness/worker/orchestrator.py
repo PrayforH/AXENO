@@ -76,9 +76,9 @@ from harness.sandbox.base import (
     SandboxProvider,
 )
 
-RuntimeAssetStager = Callable[[str, str, str, Path], Awaitable[tuple[str, ...]]]
+RuntimeAssetStager = Callable[[str, str, str, str, Path], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[
-    [str, str, str],
+    [str, str, str, str],
     Awaitable[PolicyEngine | ResolvedPolicy],
 ]
 RunQualityHook = Callable[[Run, Session, str], Awaitable[object]]
@@ -721,7 +721,12 @@ class RunOrchestrator:
         if self._quotas is None:
             return
         plan = (
-            await self._quota_plan_resolver(tenant_id, session.agent_name, session.agent_version)
+            await self._quota_plan_resolver(
+                tenant_id,
+                session.resolved_agent_owner_user_id,
+                session.agent_name,
+                session.agent_version,
+            )
             if self._quota_plan_resolver is not None
             else RunQuotaPlan(None, None, 3600)
         )
@@ -883,7 +888,12 @@ class RunOrchestrator:
                     active_sandbox.provision(run),
                 )
             policy_resolution = (
-                await self._policy_resolver(tenant_id, session.agent_name, session.agent_version)
+                await self._policy_resolver(
+                    tenant_id,
+                    session.resolved_agent_owner_user_id,
+                    session.agent_name,
+                    session.agent_version,
+                )
                 if self._policy_resolver is not None
                 else self._policy
             )
@@ -897,7 +907,10 @@ class RunOrchestrator:
             )
             workspace_policy = (
                 await self._workspace_policy_resolver(
-                    tenant_id, session.agent_name, session.agent_version
+                    tenant_id,
+                    session.resolved_agent_owner_user_id,
+                    session.agent_name,
+                    session.agent_version,
                 )
                 if self._workspace_policy_resolver is not None
                 else WorkspacePolicy()
@@ -920,6 +933,7 @@ class RunOrchestrator:
             identity = ExecutionIdentity(
                 tenant_id=session.tenant_id,
                 user_id=session.user_id,
+                agent_owner_user_id=session.resolved_agent_owner_user_id,
                 team_ids=session.team_ids,
                 project_id=session.agent_name,
                 session_id=session.session_id,
@@ -972,6 +986,7 @@ class RunOrchestrator:
                 with self._stage("harness.agent.assets.stage", {"run.id": run_id}):
                     staged_skills = await self._runtime_asset_stager(
                         tenant_id,
+                        session.resolved_agent_owner_user_id,
                         session.agent_name,
                         session.agent_version,
                         handle.path,

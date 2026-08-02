@@ -71,10 +71,10 @@ async def test_drafts_are_tenant_scoped_and_return_summary_order() -> None:
         tenant_id="tenant-a", user_id="builder", request=create_request()
     )
 
-    assert (await service.list("tenant-a"))[0].draft_id == created.draft_id
-    assert await service.list("tenant-b") == []
+    assert (await service.list("tenant-a", "builder"))[0].draft_id == created.draft_id
+    assert await service.list("tenant-b", "builder") == []
     with pytest.raises(NotFoundError):
-        await service.get("tenant-b", created.draft_id)
+        await service.get("tenant-b", "builder", created.draft_id)
 
 
 @pytest.mark.asyncio
@@ -88,17 +88,17 @@ async def test_replace_uses_optimistic_revision_and_preserves_publication_identi
 
     updated = await service.replace(
         tenant_id="tenant-a",
-        user_id="builder-2",
+        user_id="builder",
         draft_id=created.draft_id,
         request=request,
     )
 
     assert updated.revision == 2
-    assert updated.updated_by == "builder-2"
+    assert updated.updated_by == "builder"
     with pytest.raises(ConflictError, match="revision changed"):
         await service.replace(
             tenant_id="tenant-a",
-            user_id="stale-builder",
+            user_id="builder",
             draft_id=created.draft_id,
             request=request,
         )
@@ -118,9 +118,9 @@ async def test_publish_reuses_production_bundle_gate_and_marks_draft() -> None:
     )
 
     version = await service.publish(
-        tenant_id="tenant-a", user_id="publisher", draft_id=created.draft_id
+        tenant_id="tenant-a", user_id="builder", draft_id=created.draft_id
     )
-    stored = await service.get("tenant-a", created.draft_id)
+    stored = await service.get("tenant-a", "builder", created.draft_id)
 
     assert version.name == "contract-reviewer"
     assert version.version == "0.1.0"
@@ -128,7 +128,7 @@ async def test_publish_reuses_production_bundle_gate_and_marks_draft() -> None:
     assert stored.published_version == "0.1.0"
     assert stored.published_hash == version.manifest_hash
     assert stored.published_package_hash == version.package_hash
-    assert stored.updated_by == "publisher"
+    assert stored.updated_by == "builder"
     assert stored.revision == 2
 
 
@@ -152,19 +152,19 @@ async def test_exact_studio_publish_retry_is_idempotent_and_audited() -> None:
 
     first = await service.publish(
         tenant_id="tenant-a",
-        user_id="publisher",
+        user_id="builder",
         draft_id=created.draft_id,
         expected_revision=1,
     )
     repeated = await service.publish(
         tenant_id="tenant-a",
-        user_id="publisher",
+        user_id="builder",
         draft_id=created.draft_id,
         expected_revision=2,
     )
 
     assert repeated == first
-    assert (await service.get("tenant-a", created.draft_id)).revision == 2
+    assert (await service.get("tenant-a", "builder", created.draft_id)).revision == 2
     audits = await audit_repository.list_for_tenant("tenant-a", limit=10)
     assert [entry.action for entry in audits] == ["studio.publish", "studio.publish"]
     assert {entry.details["idempotent"] for entry in audits} == {False, True}
@@ -181,14 +181,14 @@ async def test_unpublished_subagent_blocks_validation_and_publication() -> None:
         request=create_request(template=AgentTemplate.ORCHESTRATOR),
     )
 
-    validation = await service.validate("tenant-a", created.draft_id)
+    validation = await service.validate("tenant-a", "builder", created.draft_id)
 
     assert validation.ready is False
     assert {issue.code for issue in validation.issues} >= {"subagent_not_published"}
     with pytest.raises(DraftCompilationError, match="尚未发布"):
         await service.publish(
             tenant_id="tenant-a",
-            user_id="publisher",
+            user_id="builder",
             draft_id=created.draft_id,
         )
 
@@ -218,14 +218,14 @@ async def test_unknown_knowledge_reference_blocks_validation_and_publication() -
         ),
     )
 
-    validation = await service.validate("tenant-a", updated.draft_id)
+    validation = await service.validate("tenant-a", "builder", updated.draft_id)
 
     assert validation.ready is False
     assert "knowledge_base_not_found" in {issue.code for issue in validation.issues}
     with pytest.raises(DraftCompilationError, match="知识库尚未注册"):
         await service.publish(
             tenant_id="tenant-a",
-            user_id="publisher",
+            user_id="builder",
             draft_id=updated.draft_id,
         )
 
@@ -287,7 +287,7 @@ async def test_registered_knowledge_reference_can_be_published() -> None:
 
     version = await service.publish(
         tenant_id="tenant-a",
-        user_id="publisher",
+        user_id="builder",
         draft_id=updated.draft_id,
     )
 
@@ -302,14 +302,16 @@ class DriftRegistry:
     async def add(self, version: AgentVersion) -> None:
         await self._delegate.add(version)
 
-    async def get(self, tenant_id: str, name: str, version: str) -> AgentVersion:
-        stored = await self._delegate.get(tenant_id, name, version)
+    async def get(
+        self, tenant_id: str, owner_user_id: str, name: str, version: str
+    ) -> AgentVersion:
+        stored = await self._delegate.get(tenant_id, owner_user_id, name, version)
         if name == "helper-agent":
             return stored.model_copy(update={"manifest_hash": "f" * 64})
         return stored
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
-        return await self._delegate.list_for_tenant(tenant_id)
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
+        return await self._delegate.list_for_user(tenant_id, owner_user_id)
 
 
 @pytest.mark.asyncio
@@ -340,7 +342,7 @@ async def test_subagent_hash_drift_blocks_lead_publication() -> None:
             spec=child.spec.model_copy(update={"version": "1.0.0"}),
         ),
     )
-    await child_service.publish(tenant_id="tenant-a", user_id="publisher", draft_id=child.draft_id)
+    await child_service.publish(tenant_id="tenant-a", user_id="builder", draft_id=child.draft_id)
     lead_service = AgentStudioService(
         repository,
         AgentDraftCompiler(default_capability_catalog()),
@@ -356,7 +358,7 @@ async def test_subagent_hash_drift_blocks_lead_publication() -> None:
         request=create_request(name="contract-lead", template=AgentTemplate.ORCHESTRATOR),
     )
 
-    validation = await lead_service.validate("tenant-a", lead.draft_id)
+    validation = await lead_service.validate("tenant-a", "builder", lead.draft_id)
 
     assert validation.ready is False
     assert {issue.code for issue in validation.issues} >= {"subagent_version_drift"}

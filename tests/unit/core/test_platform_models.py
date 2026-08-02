@@ -35,6 +35,7 @@ def test_execution_identity_is_immutable_and_contains_run_scope() -> None:
     assert identity.model_dump() == {
         "tenant_id": "tenant-a",
         "user_id": "user-a",
+        "agent_owner_user_id": None,
         "team_ids": (),
         "project_id": "project-a",
         "session_id": "session-a",
@@ -113,6 +114,7 @@ def test_runtime_context_derives_identity_and_hides_sensitive_runtime_state(
         created_at=NOW,
         updated_at=NOW,
     )
+
     def transport_factory(_options: object) -> object:
         return object()
 

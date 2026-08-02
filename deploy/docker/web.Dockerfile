@@ -1,12 +1,16 @@
 ARG NODE_IMAGE=node:22.17.0-alpine
 
-FROM ${NODE_IMAGE} AS dependencies
+# The Next.js bundle is architecture-independent. Keep dependency installation
+# and compilation on the builder architecture so cross-platform releases do
+# not execute Node under QEMU; only the runtime stage targets the requested
+# deployment platform.
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS dependencies
 WORKDIR /app
 ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
 COPY web/harness-console/package.json web/harness-console/package-lock.json ./
 RUN npm ci --registry="${NPM_CONFIG_REGISTRY}"
 
-FROM ${NODE_IMAGE} AS builder
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules

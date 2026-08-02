@@ -765,6 +765,7 @@ async def test_runtime_assets_are_staged_before_sandbox_prepare(tmp_path: Path) 
 
     async def stage_assets(
         _tenant_id: str,
+        _owner_user_id: str,
         _agent_name: str,
         _agent_version: str,
         workspace: Path,
@@ -793,7 +794,10 @@ async def test_manifest_policy_resolver_overrides_generic_worker_policy(
     tmp_path: Path,
 ) -> None:
     async def resolve_policy(
-        _tenant_id: str, _agent_name: str, _agent_version: str
+        _tenant_id: str,
+        _owner_user_id: str,
+        _agent_name: str,
+        _agent_version: str,
     ) -> PolicyEngine:
         return default_policy_profiles().resolve("production-read-only")
 
@@ -821,7 +825,10 @@ async def test_governed_policy_snapshot_is_recorded_and_enforced(
     tmp_path: Path,
 ) -> None:
     async def resolve_policy(
-        _tenant_id: str, _agent_name: str, _agent_version: str
+        _tenant_id: str,
+        _owner_user_id: str,
+        _agent_name: str,
+        _agent_version: str,
     ) -> ResolvedPolicy:
         return ResolvedPolicy(
             policy_id="governed-production",

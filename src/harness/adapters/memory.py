@@ -27,11 +27,16 @@ from harness.core.ports import RunTask, StoredObject
 
 class InMemoryAgentRegistry:
     def __init__(self) -> None:
-        self._items: dict[tuple[str, str, str], AgentVersion] = {}
+        self._items: dict[tuple[str, str, str, str], AgentVersion] = {}
         self._lock = asyncio.Lock()
 
     async def add(self, version: AgentVersion) -> None:
-        key = (version.tenant_id, version.name, version.version)
+        key = (
+            version.tenant_id,
+            version.owner_user_id,
+            version.name,
+            version.version,
+        )
         async with self._lock:
             if key in self._items:
                 raise ConflictError(
@@ -39,18 +44,25 @@ class InMemoryAgentRegistry:
                 )
             self._items[key] = version
 
-    async def get(self, tenant_id: str, name: str, version: str) -> AgentVersion:
+    async def get(
+        self, tenant_id: str, owner_user_id: str, name: str, version: str
+    ) -> AgentVersion:
         try:
-            return self._items[(tenant_id, name, version)]
+            return self._items[(tenant_id, owner_user_id, name, version)]
         except KeyError as error:
             raise NotFoundError(f"agent version not found: {name}@{version}") from error
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         return sorted(
             (
                 version
-                for (stored_tenant, _name, _version), version in self._items.items()
-                if stored_tenant == tenant_id
+                for (
+                    stored_tenant,
+                    stored_owner,
+                    _name,
+                    _version,
+                ), version in self._items.items()
+                if stored_tenant == tenant_id and stored_owner == owner_user_id
             ),
             key=lambda version: (version.name, version.version),
         )
@@ -90,9 +102,7 @@ class InMemorySessionRepository:
                         f"session {session_id} is already bound to another Claude session"
                     )
                 return current
-            updated = current.model_copy(
-                update={"claude_session_id": claude_session_id}
-            )
+            updated = current.model_copy(update={"claude_session_id": claude_session_id})
             self._items[key] = updated
             return updated
 
@@ -151,11 +161,7 @@ class InMemoryRunRepository:
 
     async def list_for_tenant(self, tenant_id: str, *, limit: int) -> list[Run]:
         return sorted(
-            (
-                run
-                for (stored_tenant, _), run in self._items.items()
-                if stored_tenant == tenant_id
-            ),
+            (run for (stored_tenant, _), run in self._items.items() if stored_tenant == tenant_id),
             key=lambda run: (run.updated_at, run.run_id),
             reverse=True,
         )[:limit]
@@ -226,9 +232,7 @@ class InMemoryApprovalRepository:
         ]
         return sorted(items, key=lambda approval: approval.expires_at)[:limit]
 
-    async def list_for_runs(
-        self, tenant_id: str, run_ids: list[str]
-    ) -> list[ApprovalRequest]:
+    async def list_for_runs(self, tenant_id: str, run_ids: list[str]) -> list[ApprovalRequest]:
         wanted = set(run_ids)
         return sorted(
             (
@@ -350,26 +354,20 @@ class InMemoryInputArtifactRepository:
         key = (artifact.tenant_id, artifact.input_artifact_id)
         async with self._lock:
             if key in self._items:
-                raise ConflictError(
-                    f"input artifact already exists: {artifact.input_artifact_id}"
-                )
+                raise ConflictError(f"input artifact already exists: {artifact.input_artifact_id}")
             self._items[key] = artifact
 
     async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact:
         try:
             return self._items[(tenant_id, input_artifact_id)]
         except KeyError as error:
-            raise NotFoundError(
-                f"input artifact not found: {input_artifact_id}"
-            ) from error
+            raise NotFoundError(f"input artifact not found: {input_artifact_id}") from error
 
     async def update(self, artifact: InputArtifact) -> None:
         key = (artifact.tenant_id, artifact.input_artifact_id)
         async with self._lock:
             if key not in self._items:
-                raise NotFoundError(
-                    f"input artifact not found: {artifact.input_artifact_id}"
-                )
+                raise NotFoundError(f"input artifact not found: {artifact.input_artifact_id}")
             self._items[key] = artifact
 
 
@@ -512,7 +510,8 @@ class InMemoryAguiThreadBindingRepository:
         matches = [
             binding
             for (item_tenant, item_user, _), binding in self._by_thread.items()
-            if item_tenant == tenant_id and item_user == user_id
+            if item_tenant == tenant_id
+            and item_user == user_id
             and (binding.archived_at is not None) is archived
         ]
         return sorted(
@@ -536,9 +535,7 @@ class InMemoryAguiThreadBindingRepository:
             try:
                 binding = self._by_thread[thread_key]
             except KeyError as error:
-                raise NotFoundError(
-                    f"AG-UI thread binding not found: {thread_id}"
-                ) from error
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}") from error
             if binding.title_updated_at is not None and binding.title_updated_at > generated_at:
                 return binding
             updated = binding.model_copy(
@@ -566,9 +563,7 @@ class InMemoryAguiThreadBindingRepository:
             try:
                 binding = self._by_thread[thread_key]
             except KeyError as error:
-                raise NotFoundError(
-                    f"AG-UI thread binding not found: {thread_id}"
-                ) from error
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}") from error
             updated = binding.model_copy(
                 update={
                     "archived_at": archived_at,

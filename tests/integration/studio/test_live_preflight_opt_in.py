@@ -83,12 +83,10 @@ async def test_daytona_model_and_mcp_live_preflight() -> None:
         draft_id=draft.draft_id,
         request=ReplaceAgentDraftRequest(
             expectedRevision=1,
-            spec=draft.spec.model_copy(
-                update={"mcp_servers": ("tavily-readonly",)}
-            ),
+            spec=draft.spec.model_copy(update={"mcp_servers": ("tavily-readonly",)}),
         ),
     )
-    validation = await studio.validate("live-preflight", draft.draft_id)
+    validation = await studio.validate("live-preflight", "live-smoke", draft.draft_id)
     assert validation.ready
     assert validation.content_hash and validation.package_hash
     preview = PreviewDeployment(
@@ -124,9 +122,7 @@ async def test_daytona_model_and_mcp_live_preflight() -> None:
         credential=SecretStr(model_key),
         compatibility=ModelCompatibility(settings.new_api_compatibility),
         capabilities=frozenset(
-            part.strip()
-            for part in settings.new_api_capabilities.split(",")
-            if part.strip()
+            part.strip() for part in settings.new_api_capabilities.split(",") if part.strip()
         ),
     )
     credentials = server_secret_credential_provider(

@@ -50,18 +50,20 @@ class PreviewService:
         user_id: str,
         request: CreatePreviewRequest,
     ) -> PreviewDeployment:
-        existing = await self._repository.find_by_idempotency(tenant_id, request.idempotency_key)
+        existing = await self._repository.find_by_idempotency(
+            tenant_id, user_id, request.idempotency_key
+        )
         if existing is not None:
             self._ensure_same_request(existing, request)
             return await self._view(existing)
 
-        draft = await self._studio.get(tenant_id, request.draft_id)
+        draft = await self._studio.get(tenant_id, user_id, request.draft_id)
         if draft.revision != request.expected_revision:
             raise ConflictError(
                 "Agent draft revision changed before Preview creation: "
                 f"expected={request.expected_revision} actual={draft.revision}"
             )
-        validation = await self._studio.validate(tenant_id, request.draft_id)
+        validation = await self._studio.validate(tenant_id, user_id, request.draft_id)
         if not validation.ready:
             raise DraftCompilationError(
                 tuple(issue for issue in validation.issues if issue.severity == "error")
@@ -95,14 +97,14 @@ class PreviewService:
             updatedAt=now,
             expiresAt=now + timedelta(seconds=request.ttl_seconds),
         )
-        quota_subject = f"preview:{request.idempotency_key}"
+        quota_subject = f"preview:{user_id}:{request.idempotency_key}"
         reservation = (
             await self._quotas.reserve(
                 tenant_id=tenant_id,
                 resource=QuotaResource.ACTIVE_PREVIEWS,
                 amount=1,
                 subject_id=quota_subject,
-                idempotency_key=f"preview:{request.idempotency_key}:active",
+                idempotency_key=f"preview:{user_id}:{request.idempotency_key}:active",
                 agent_name=draft.spec.name,
                 environment="preview",
                 ttl_seconds=request.ttl_seconds + 300,
@@ -114,7 +116,7 @@ class PreviewService:
             await self._repository.add(preview)
         except ConflictError:
             concurrent = await self._repository.find_by_idempotency(
-                tenant_id, request.idempotency_key
+                tenant_id, user_id, request.idempotency_key
             )
             if concurrent is None:
                 if reservation is not None:
@@ -135,17 +137,19 @@ class PreviewService:
         )
         return preview
 
-    async def get(self, tenant_id: str, preview_id: str) -> PreviewDeployment:
-        return await self._view(await self._repository.get(tenant_id, preview_id))
+    async def get(self, tenant_id: str, owner_user_id: str, preview_id: str) -> PreviewDeployment:
+        return await self._view(
+            await self._repository.get_for_user(tenant_id, owner_user_id, preview_id)
+        )
 
-    async def list(self, tenant_id: str) -> list[PreviewDeployment]:
+    async def list(self, tenant_id: str, owner_user_id: str) -> list[PreviewDeployment]:
         return [
             await self._view(preview)
-            for preview in await self._repository.list_for_tenant(tenant_id)
+            for preview in await self._repository.list_for_user(tenant_id, owner_user_id)
         ]
 
     async def cancel(self, *, tenant_id: str, user_id: str, preview_id: str) -> PreviewDeployment:
-        current = await self._repository.get(tenant_id, preview_id)
+        current = await self._repository.get_for_user(tenant_id, user_id, preview_id)
         if current.status.is_terminal:
             return await self._view(current)
         if current.status is not PreviewStatus.CANCELLING:
@@ -179,7 +183,7 @@ class PreviewService:
             )
 
     async def _view(self, preview: PreviewDeployment) -> PreviewDeployment:
-        draft = await self._studio.get(preview.tenant_id, preview.draft_id)
+        draft = await self._studio.get(preview.tenant_id, preview.requested_by, preview.draft_id)
         if draft.revision != preview.draft_revision:
             return preview.model_copy(
                 update={
@@ -187,7 +191,9 @@ class PreviewService:
                     "stale_reason": "draft_revision_changed",
                 }
             )
-        validation = await self._studio.validate(preview.tenant_id, preview.draft_id)
+        validation = await self._studio.validate(
+            preview.tenant_id, preview.requested_by, preview.draft_id
+        )
         if (
             validation.content_hash != preview.content_hash
             or validation.package_hash != preview.package_hash

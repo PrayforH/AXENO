@@ -20,6 +20,7 @@ def _version(name: str = "helper", version: str = "1.0.0") -> AgentVersion:
     snapshot = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     return AgentVersion(
         tenant_id="tenant-a",
+        owner_user_id="user-a",
         name=name,
         version=version,
         status=AgentVersionStatus.PUBLISHED,
@@ -41,9 +42,7 @@ def _root(*, concurrency: int = 2, tokens: int = 100):
             "max_subagent_usage_units": tokens,
         }
     )
-    spec = snapshot.manifest.spec.model_copy(
-        update={"subagents": bindings, "limits": limits}
-    )
+    spec = snapshot.manifest.spec.model_copy(update={"subagents": bindings, "limits": limits})
     manifest = snapshot.manifest.model_copy(update={"spec": spec})
     return snapshot.model_copy(update={"manifest": manifest})
 
@@ -261,8 +260,7 @@ def test_subagent_span_contains_identity_and_usage_but_no_child_content() -> Non
     )
 
     span = next(
-        item for item in exporter.get_finished_spans()
-        if item.name == "harness.subagent.run"
+        item for item in exporter.get_finished_spans() if item.name == "harness.subagent.run"
     )
     assert span.attributes is not None
     assert span.attributes["harness.subagent.alias"] == "fact-checker"

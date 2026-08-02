@@ -45,6 +45,7 @@ async def test_postgres_quality_facts_survive_repository_restart(
         agentName="agent-a",
         scoreName="terminal_success",
         minimumValue=0.9,
+        createdBy="release-manager",
         createdAt=now,
     )
     incident = AlertIncident(
@@ -53,6 +54,7 @@ async def test_postgres_quality_facts_survive_repository_restart(
         ruleId="rule-a",
         agentName="agent-a",
         agentVersion="1.0.0",
+        ownerUserId="release-manager",
         state=AlertState.OPEN,
         observedValue=0,
         sampleCount=1,

@@ -40,11 +40,7 @@ def _subagent_coordinates(version: AgentVersion) -> set[str]:
 
 def _is_internal(version: AgentVersion) -> bool:
     metadata = _manifest_mapping(version).get("metadata")
-    labels = (
-        cast(dict[str, object], metadata).get("labels")
-        if isinstance(metadata, dict)
-        else None
-    )
+    labels = cast(dict[str, object], metadata).get("labels") if isinstance(metadata, dict) else None
     if not isinstance(labels, dict):
         return False
     return cast(dict[str, object], labels).get("visibility") == "internal"
@@ -56,11 +52,9 @@ async def list_agents(
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[AgentCatalogItem]:
     ensure_permission(identity, "tasks:read")
-    versions = await container.agents.list_published(identity.tenant_id)
+    versions = await container.agents.list_published(identity.tenant_id, identity.user_id)
     dependency_coordinates = {
-        coordinate
-        for version in versions
-        for coordinate in _subagent_coordinates(version)
+        coordinate for version in versions for coordinate in _subagent_coordinates(version)
     }
     return [
         AgentCatalogItem.from_version(version)
@@ -85,7 +79,7 @@ async def publish_agent(
                 "message": "production accepts reproducible Agent bundles, not server-local paths",
             },
         )
-    return await container.agents.publish(identity.tenant_id, body.path)
+    return await container.agents.publish(identity.tenant_id, identity.user_id, body.path)
 
 
 @router.post(
@@ -139,4 +133,6 @@ async def publish_agent_bundle(
                     ),
                 },
             )
-    return await container.agents.publish_bundle(identity.tenant_id, bytes(content))
+    return await container.agents.publish_bundle(
+        identity.tenant_id, identity.user_id, bytes(content)
+    )

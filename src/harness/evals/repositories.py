@@ -18,12 +18,12 @@ class EvalDatasetRepository(Protocol):
     async def add(self, dataset: EvalDatasetVersion) -> None: ...
 
     async def get(
-        self, tenant_id: str, dataset_id: str, version: int
+        self, tenant_id: str, owner_user_id: str, dataset_id: str, version: int
     ) -> EvalDatasetVersion: ...
 
     async def list_for_tenant(self, tenant_id: str) -> list[EvalDatasetVersion]: ...
 
-    async def next_version(self, tenant_id: str, dataset_id: str) -> int: ...
+    async def next_version(self, tenant_id: str, owner_user_id: str, dataset_id: str) -> int: ...
 
 
 class EvalRunRepository(Protocol):
@@ -32,39 +32,40 @@ class EvalRunRepository(Protocol):
     async def get(self, tenant_id: str, eval_run_id: str) -> EvalRun: ...
 
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> EvalRun | None: ...
 
     async def list_for_tenant(self, tenant_id: str) -> list[EvalRun]: ...
 
-    async def compare_and_set(
-        self, expected_status: EvalRunStatus, updated: EvalRun
-    ) -> bool: ...
+    async def compare_and_set(self, expected_status: EvalRunStatus, updated: EvalRun) -> bool: ...
 
     async def add_case_result(self, result: EvalCaseResult) -> None: ...
 
-    async def list_case_results(
-        self, tenant_id: str, eval_run_id: str
-    ) -> list[EvalCaseResult]: ...
+    async def list_case_results(self, tenant_id: str, eval_run_id: str) -> list[EvalCaseResult]: ...
 
 
 class InMemoryEvalDatasetRepository:
     def __init__(self) -> None:
-        self._items: dict[tuple[str, str, int], EvalDatasetVersion] = {}
+        self._items: dict[tuple[str, str, str, int], EvalDatasetVersion] = {}
         self._lock = asyncio.Lock()
 
     async def add(self, dataset: EvalDatasetVersion) -> None:
-        key = (dataset.tenant_id, dataset.dataset_id, dataset.version)
+        key = (
+            dataset.tenant_id,
+            dataset.created_by,
+            dataset.dataset_id,
+            dataset.version,
+        )
         async with self._lock:
             if key in self._items:
                 raise ConflictError("Eval Dataset Version already exists")
             self._items[key] = dataset
 
     async def get(
-        self, tenant_id: str, dataset_id: str, version: int
+        self, tenant_id: str, owner_user_id: str, dataset_id: str, version: int
     ) -> EvalDatasetVersion:
         try:
-            return self._items[(tenant_id, dataset_id, version)]
+            return self._items[(tenant_id, owner_user_id, dataset_id, version)]
         except KeyError as error:
             raise NotFoundError(
                 f"Eval Dataset Version not found: {dataset_id}@{version}"
@@ -74,18 +75,20 @@ class InMemoryEvalDatasetRepository:
         return sorted(
             (
                 item
-                for (stored_tenant, _dataset_id, _version), item in self._items.items()
+                for (stored_tenant, _owner, _dataset_id, _version), item in self._items.items()
                 if stored_tenant == tenant_id
             ),
             key=lambda item: (item.created_at, item.dataset_id, item.version),
             reverse=True,
         )
 
-    async def next_version(self, tenant_id: str, dataset_id: str) -> int:
+    async def next_version(self, tenant_id: str, owner_user_id: str, dataset_id: str) -> int:
         versions = [
             version
-            for stored_tenant, stored_id, version in self._items
-            if stored_tenant == tenant_id and stored_id == dataset_id
+            for stored_tenant, stored_owner, stored_id, version in self._items
+            if stored_tenant == tenant_id
+            and stored_owner == owner_user_id
+            and stored_id == dataset_id
         ]
         return max(versions, default=0) + 1
 
@@ -93,13 +96,13 @@ class InMemoryEvalDatasetRepository:
 class InMemoryEvalRunRepository:
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], EvalRun] = {}
-        self._idempotency: dict[tuple[str, str], str] = {}
+        self._idempotency: dict[tuple[str, str, str], str] = {}
         self._results: dict[tuple[str, str, str], EvalCaseResult] = {}
         self._lock = asyncio.Lock()
 
     async def add(self, run: EvalRun) -> None:
         key = (run.tenant_id, run.eval_run_id)
-        idem = (run.tenant_id, run.idempotency_key)
+        idem = (run.tenant_id, run.requested_by, run.idempotency_key)
         async with self._lock:
             if key in self._items or idem in self._idempotency:
                 raise ConflictError("Eval Run already exists")
@@ -113,9 +116,9 @@ class InMemoryEvalRunRepository:
             raise NotFoundError(f"Eval Run not found: {eval_run_id}") from error
 
     async def find_by_idempotency(
-        self, tenant_id: str, idempotency_key: str
+        self, tenant_id: str, owner_user_id: str, idempotency_key: str
     ) -> EvalRun | None:
-        run_id = self._idempotency.get((tenant_id, idempotency_key))
+        run_id = self._idempotency.get((tenant_id, owner_user_id, idempotency_key))
         return None if run_id is None else self._items[(tenant_id, run_id)]
 
     async def list_for_tenant(self, tenant_id: str) -> list[EvalRun]:
@@ -129,9 +132,7 @@ class InMemoryEvalRunRepository:
             reverse=True,
         )
 
-    async def compare_and_set(
-        self, expected_status: EvalRunStatus, updated: EvalRun
-    ) -> bool:
+    async def compare_and_set(self, expected_status: EvalRunStatus, updated: EvalRun) -> bool:
         key = (updated.tenant_id, updated.eval_run_id)
         async with self._lock:
             current = self._items.get(key)
@@ -150,9 +151,7 @@ class InMemoryEvalRunRepository:
                 raise ConflictError("Eval Case Result already exists")
             self._results[key] = result
 
-    async def list_case_results(
-        self, tenant_id: str, eval_run_id: str
-    ) -> list[EvalCaseResult]:
+    async def list_case_results(self, tenant_id: str, eval_run_id: str) -> list[EvalCaseResult]:
         return sorted(
             (
                 item

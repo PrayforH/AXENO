@@ -1,5 +1,6 @@
 import asyncio
 import os
+from collections import Counter
 from typing import cast
 
 import pytest
@@ -74,6 +75,23 @@ class RecoveringExecutor:
         return Run.model_construct()
 
 
+class MultiWorkerExecutor:
+    def __init__(self, stop: asyncio.Event, expected: int) -> None:
+        self._stop = stop
+        self._expected = expected
+        self._lock = asyncio.Lock()
+        self.calls: Counter[str] = Counter()
+
+    async def execute(self, tenant_id: str, run_id: str) -> Run:
+        del tenant_id
+        await asyncio.sleep(0.005)
+        async with self._lock:
+            self.calls[run_id] += 1
+            if sum(self.calls.values()) == self._expected:
+                self._stop.set()
+        return Run.model_construct()
+
+
 @pytest.mark.parametrize("operation", ["dequeue", "retry", "acknowledge"])
 @pytest.mark.asyncio
 async def test_worker_recovers_from_real_redis_queue_operation_failure(
@@ -110,10 +128,13 @@ async def test_worker_recovers_from_real_redis_queue_operation_failure(
 
         assert executor.business_completions == 1
         assert executor.calls == (2 if operation in {"retry", "acknowledge"} else 1)
-        assert metrics.count(
-            "harness_worker_queue_failures_total",
-            labels={"operation": operation},
-        ) == 1
+        assert (
+            metrics.count(
+                "harness_worker_queue_failures_total",
+                labels={"operation": operation},
+            )
+            == 1
+        )
         assert await redis_queue.stats() == {"ready": 0, "processing": 0}
     finally:
         await client.aclose()
@@ -153,6 +174,43 @@ async def test_redis_queue_deduplicates_delivery() -> None:
         await second_owner.acknowledge(task)
         await queue.enqueue(task)
         assert await queue.dequeue() == task
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_multiple_workers_compete_without_duplicate_execution() -> None:
+    client: Redis = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
+        redis_url(9), decode_responses=True
+    )
+    await client.flushdb()  # pyright: ignore[reportUnknownMemberType]
+    first = RedisTaskQueue(
+        cast(AsyncRedisClient, client),
+        namespace="multi-worker",
+        visibility_timeout_seconds=1,
+        retry_delay_seconds=0,
+    )
+    second = RedisTaskQueue(
+        cast(AsyncRedisClient, client),
+        namespace="multi-worker",
+        visibility_timeout_seconds=1,
+        retry_delay_seconds=0,
+    )
+    tasks = [RunTask(tenant_id="tenant-a", run_id=f"run-{index}") for index in range(12)]
+    for task in tasks:
+        await first.enqueue(task)
+    stop = asyncio.Event()
+    executor = MultiWorkerExecutor(stop, len(tasks))
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(
+                worker_loop(first, executor, stop=stop, poll_interval=0.001),
+                worker_loop(second, executor, stop=stop, poll_interval=0.001),
+            ),
+            timeout=2,
+        )
+        assert executor.calls == Counter({task.run_id: 1 for task in tasks})
+        assert await first.stats() == {"ready": 0, "processing": 0}
     finally:
         await client.aclose()
 

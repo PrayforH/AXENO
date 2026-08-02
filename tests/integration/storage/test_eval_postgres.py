@@ -84,9 +84,7 @@ async def test_eval_dataset_run_and_case_survive_engine_restart(
     await runs.add(active)
     await runs.add_case_result(result)
 
-    advanced = active.model_copy(
-        update={"next_case_index": 1, "fencing_token": 1}
-    )
+    advanced = active.model_copy(update={"next_case_index": 1, "fencing_token": 1})
     assert await runs.compare_and_set(EvalRunStatus.RUNNING, advanced) is True
     stale = active.model_copy(update={"fencing_token": 1})
     assert await runs.compare_and_set(EvalRunStatus.RUNNING, stale) is False
@@ -95,14 +93,14 @@ async def test_eval_dataset_run_and_case_survive_engine_restart(
     second_engine, second_sessions = create_database(DATABASE_URL)
     try:
         restored_dataset = await PostgresEvalDatasetRepository(second_sessions).get(
-            "tenant-a", source.dataset_id, source.version
+            "tenant-a", source.created_by, source.dataset_id, source.version
         )
         restored_run = await PostgresEvalRunRepository(second_sessions).get(
             "tenant-a", active.eval_run_id
         )
-        restored_results = await PostgresEvalRunRepository(
-            second_sessions
-        ).list_case_results("tenant-a", active.eval_run_id)
+        restored_results = await PostgresEvalRunRepository(second_sessions).list_case_results(
+            "tenant-a", active.eval_run_id
+        )
     finally:
         await second_engine.dispose()
 
@@ -120,7 +118,7 @@ async def test_eval_dataset_versions_are_immutable_and_monotonic(
     first = dataset()
     await repository.add(first)
 
-    assert await repository.next_version("tenant-a", first.dataset_id) == 2
+    assert await repository.next_version("tenant-a", first.created_by, first.dataset_id) == 2
     second = first.model_copy(update={"version": 2, "source_draft_revision": 4})
     await repository.add(second)
 

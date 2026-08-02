@@ -50,6 +50,7 @@ class PostgresAgentRegistry:
             session.add(
                 AgentVersionRow(
                     tenant_id=version.tenant_id,
+                    owner_user_id=version.owner_user_id,
                     name=version.name,
                     version=version.version,
                     payload=version.model_dump(mode="json"),
@@ -60,17 +61,22 @@ class PostgresAgentRegistry:
                 message=f"agent version already exists: {version.name}@{version.version}",
             )
 
-    async def get(self, tenant_id: str, name: str, version: str) -> AgentVersion:
+    async def get(
+        self, tenant_id: str, owner_user_id: str, name: str, version: str
+    ) -> AgentVersion:
         async with self._sessions() as session:
-            row = await session.get(AgentVersionRow, (tenant_id, name, version))
+            row = await session.get(AgentVersionRow, (tenant_id, owner_user_id, name, version))
             if row is None:
                 raise NotFoundError(f"agent version not found: {name}@{version}")
             return AgentVersion.model_validate(row.payload)
 
-    async def list_for_tenant(self, tenant_id: str) -> list[AgentVersion]:
+    async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         statement = (
             select(AgentVersionRow.payload)
-            .where(AgentVersionRow.tenant_id == tenant_id)
+            .where(
+                AgentVersionRow.tenant_id == tenant_id,
+                AgentVersionRow.owner_user_id == owner_user_id,
+            )
             .order_by(AgentVersionRow.name, AgentVersionRow.version)
         )
         async with self._sessions() as session:
@@ -92,9 +98,7 @@ class PostgresSessionRepository:
                     payload=session.model_dump(mode="json"),
                 )
             )
-            await _commit_add(
-                db_session, message=f"session already exists: {session.session_id}"
-            )
+            await _commit_add(db_session, message=f"session already exists: {session.session_id}")
 
     async def get(self, tenant_id: str, session_id: str) -> Session:
         async with self._sessions() as session:
@@ -123,9 +127,7 @@ class PostgresSessionRepository:
                         f"session {session_id} is already bound to another Claude session"
                     )
                 return current
-            updated = current.model_copy(
-                update={"claude_session_id": claude_session_id}
-            )
+            updated = current.model_copy(update={"claude_session_id": claude_session_id})
             row.payload = updated.model_dump(mode="json")
             await session.commit()
             return updated
@@ -148,9 +150,7 @@ class PostgresApprovalRepository:
                     payload=approval.model_dump(mode="json"),
                 )
             )
-            await _commit_add(
-                session, message=f"approval already exists: {approval.approval_id}"
-            )
+            await _commit_add(session, message=f"approval already exists: {approval.approval_id}")
 
     async def get(self, tenant_id: str, approval_id: str) -> ApprovalRequest:
         async with self._sessions() as session:
@@ -207,9 +207,7 @@ class PostgresApprovalRepository:
             payloads = (await session.execute(statement)).scalars().all()
             return [ApprovalRequest.model_validate(payload) for payload in payloads]
 
-    async def list_for_runs(
-        self, tenant_id: str, run_ids: list[str]
-    ) -> list[ApprovalRequest]:
+    async def list_for_runs(self, tenant_id: str, run_ids: list[str]) -> list[ApprovalRequest]:
         if not run_ids:
             return []
         statement = (
@@ -243,9 +241,7 @@ class PostgresArtifactRepository:
                     payload=artifact.model_dump(mode="json"),
                 )
             )
-            await _commit_add(
-                session, message=f"artifact already exists: {artifact.artifact_id}"
-            )
+            await _commit_add(session, message=f"artifact already exists: {artifact.artifact_id}")
 
     async def get(self, tenant_id: str, artifact_id: str) -> Artifact:
         async with self._sessions() as session:
@@ -301,9 +297,7 @@ class PostgresInputArtifactRepository:
 
     async def get(self, tenant_id: str, input_artifact_id: str) -> InputArtifact:
         async with self._sessions() as session:
-            row = await session.get(
-                InputArtifactRow, (tenant_id, input_artifact_id)
-            )
+            row = await session.get(InputArtifactRow, (tenant_id, input_artifact_id))
             if row is None:
                 raise NotFoundError(f"input artifact not found: {input_artifact_id}")
             return InputArtifact.model_validate(row.payload)
@@ -321,9 +315,7 @@ class PostgresInputArtifactRepository:
             result = await session.execute(statement)
             await session.commit()
             if not cast(CursorResult[Any], result).rowcount:
-                raise NotFoundError(
-                    f"input artifact not found: {artifact.input_artifact_id}"
-                )
+                raise NotFoundError(f"input artifact not found: {artifact.input_artifact_id}")
 
 
 class PostgresUserMemoryRepository:
@@ -343,18 +335,12 @@ class PostgresUserMemoryRepository:
             )
             await _commit_add(session, message="user memory already exists")
 
-    async def get(
-        self, tenant_id: str, user_id: str, agent_name: str
-    ) -> UserMemory | None:
+    async def get(self, tenant_id: str, user_id: str, agent_name: str) -> UserMemory | None:
         async with self._sessions() as session:
-            row = await session.get(
-                UserMemoryRow, (tenant_id, user_id, agent_name)
-            )
+            row = await session.get(UserMemoryRow, (tenant_id, user_id, agent_name))
             return None if row is None else UserMemory.model_validate(row.payload)
 
-    async def compare_and_set(
-        self, expected_version: int, updated: UserMemory
-    ) -> bool:
+    async def compare_and_set(self, expected_version: int, updated: UserMemory) -> bool:
         if updated.version != expected_version + 1:
             raise ConflictError("user memory version must increment by one")
         statement = (
@@ -394,21 +380,15 @@ class PostgresThreadFileRepository:
     async def add(self, file: ThreadFile) -> None:
         async with self._sessions() as session:
             if file.parent_file_id is not None:
-                parent = await session.get(
-                    ThreadFileRow, (file.tenant_id, file.parent_file_id)
-                )
+                parent = await session.get(ThreadFileRow, (file.tenant_id, file.parent_file_id))
                 if parent is None:
-                    raise NotFoundError(
-                        f"parent thread file not found: {file.parent_file_id}"
-                    )
+                    raise NotFoundError(f"parent thread file not found: {file.parent_file_id}")
                 parent_value = ThreadFile.model_validate(parent.payload)
                 if (parent_value.user_id, parent_value.session_id) != (
                     file.user_id,
                     file.session_id,
                 ):
-                    raise ConflictError(
-                        "derived file must share its parent's thread scope"
-                    )
+                    raise ConflictError("derived file must share its parent's thread scope")
             session.add(
                 ThreadFileRow(
                     tenant_id=file.tenant_id,
@@ -420,9 +400,7 @@ class PostgresThreadFileRepository:
                     payload=file.model_dump(mode="json"),
                 )
             )
-            await _commit_add(
-                session, message=f"thread file already exists: {file.file_id}"
-            )
+            await _commit_add(session, message=f"thread file already exists: {file.file_id}")
 
     async def get(self, tenant_id: str, file_id: str) -> ThreadFile:
         async with self._sessions() as session:
@@ -449,9 +427,7 @@ class PostgresThreadFileRepository:
                 for payload in (await session.scalars(statement)).all()
             ]
 
-    async def list_children(
-        self, tenant_id: str, parent_file_id: str
-    ) -> list[ThreadFile]:
+    async def list_children(self, tenant_id: str, parent_file_id: str) -> list[ThreadFile]:
         statement = (
             select(ThreadFileRow.payload)
             .where(
@@ -489,16 +465,12 @@ class PostgresWorkspaceSnapshotRepository:
 
     async def get(self, tenant_id: str, snapshot_id: str) -> WorkspaceSnapshot:
         async with self._sessions() as session:
-            row = await session.get(
-                WorkspaceSnapshotRow, (tenant_id, snapshot_id)
-            )
+            row = await session.get(WorkspaceSnapshotRow, (tenant_id, snapshot_id))
             if row is None:
                 raise NotFoundError(f"workspace snapshot not found: {snapshot_id}")
             return WorkspaceSnapshot.model_validate(row.payload)
 
-    async def latest(
-        self, tenant_id: str, session_id: str
-    ) -> WorkspaceSnapshot | None:
+    async def latest(self, tenant_id: str, session_id: str) -> WorkspaceSnapshot | None:
         statement = (
             select(WorkspaceSnapshotRow.payload)
             .where(
@@ -537,9 +509,7 @@ class PostgresAguiThreadBindingRepository:
         self, tenant_id: str, user_id: str, thread_id: str
     ) -> AguiThreadBinding:
         async with self._sessions() as session:
-            row = await session.get(
-                AguiThreadBindingRow, (tenant_id, user_id, thread_id)
-            )
+            row = await session.get(AguiThreadBindingRow, (tenant_id, user_id, thread_id))
             if row is None:
                 raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
             return AguiThreadBinding.model_validate(row.payload)
@@ -555,32 +525,21 @@ class PostgresAguiThreadBindingRepository:
         async with self._sessions() as session:
             payload = (await session.execute(statement)).scalar_one_or_none()
             if payload is None:
-                raise NotFoundError(
-                    f"AG-UI session binding not found: {session_id}"
-                )
+                raise NotFoundError(f"AG-UI session binding not found: {session_id}")
             return AguiThreadBinding.model_validate(payload)
 
     async def list_for_user(
         self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]:
-        statement = (
-            select(AguiThreadBindingRow.payload)
-            .where(
-                AguiThreadBindingRow.tenant_id == tenant_id,
-                AguiThreadBindingRow.user_id == user_id,
-            )
+        statement = select(AguiThreadBindingRow.payload).where(
+            AguiThreadBindingRow.tenant_id == tenant_id,
+            AguiThreadBindingRow.user_id == user_id,
         )
         async with self._sessions() as session:
             payloads = (await session.execute(statement)).scalars().all()
-            bindings = (
-                AguiThreadBinding.model_validate(payload) for payload in payloads
-            )
+            bindings = (AguiThreadBinding.model_validate(payload) for payload in payloads)
             return sorted(
-                (
-                    binding
-                    for binding in bindings
-                    if (binding.archived_at is not None) is archived
-                ),
+                (binding for binding in bindings if (binding.archived_at is not None) is archived),
                 key=lambda binding: (binding.updated_at, binding.thread_id),
                 reverse=True,
             )[:limit]
@@ -596,9 +555,7 @@ class PostgresAguiThreadBindingRepository:
         generated_at: datetime,
     ) -> AguiThreadBinding:
         async with self._sessions() as session:
-            row = await session.get(
-                AguiThreadBindingRow, (tenant_id, user_id, thread_id)
-            )
+            row = await session.get(AguiThreadBindingRow, (tenant_id, user_id, thread_id))
             if row is None:
                 raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
             binding = AguiThreadBinding.model_validate(row.payload)
@@ -625,9 +582,7 @@ class PostgresAguiThreadBindingRepository:
         archived_at: datetime | None,
     ) -> AguiThreadBinding:
         async with self._sessions() as session:
-            row = await session.get(
-                AguiThreadBindingRow, (tenant_id, user_id, thread_id)
-            )
+            row = await session.get(AguiThreadBindingRow, (tenant_id, user_id, thread_id))
             if row is None:
                 raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
             binding = AguiThreadBinding.model_validate(row.payload)
