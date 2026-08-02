@@ -164,6 +164,34 @@ async def test_production_container_uses_durable_event_and_queue_adapters() -> N
 
 
 @pytest.mark.asyncio
+async def test_production_container_can_disable_all_quota_enforcement() -> None:
+    container = build_production_container(
+        production_settings(quota_enforcement_enabled=False)
+    )
+
+    try:
+        runtime = cast(RegistryClaudeRuntime, container.runtime)
+        tool_gate = vars(runtime)["_tool_gate"]
+        workspaces = vars(container.worker)["_workspaces"]
+
+        # Keep the quota control plane available for visibility and future
+        # production policy, while removing every runtime enforcement hook.
+        assert container.quotas is not None
+        assert vars(container.runs)["_admission"] is None
+        assert vars(container.previews)["_quotas"] is None
+        assert vars(container.preview_controller)["_quotas"] is None
+        assert vars(container.deployments)["_quotas"] is None
+        assert vars(container.artifacts)["_quotas"] is None
+        assert vars(workspaces)["_quotas"] is None
+        assert vars(tool_gate)["_quotas"] is None
+        assert vars(container.worker)["_quotas"] is None
+        assert vars(container.reliability_controller)["_quotas"] is None
+    finally:
+        assert container.close is not None
+        await container.close()
+
+
+@pytest.mark.asyncio
 async def test_production_composition_uses_server_owned_mcp_registry() -> None:
     container = build_production_container(
         production_settings(

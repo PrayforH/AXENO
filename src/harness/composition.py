@@ -618,6 +618,7 @@ def build_production_container(
         clock=clock,
         id_generator=ids,
     )
+    enforced_quotas = quotas if settings.quota_enforcement_enabled else None
     lifecycle_repository = PostgresDataLifecycleRepository(sessions)
     lifecycle_adapters: tuple[LifecycleAdapter, ...] = (
         ObjectStoreLifecycleAdapter(sessions, store),
@@ -729,7 +730,7 @@ def build_production_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: ids("preview"),
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     events = EventService(
         raw_event_repository,
@@ -769,7 +770,7 @@ def build_production_container(
         id_generator=ids,
         observability=observability,
         metrics=reliability_metrics,
-        admission=quotas,
+        admission=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
     )
     trigger_service = AgentTriggerService(
@@ -798,7 +799,7 @@ def build_production_container(
         id_generator=ids,
         max_file_bytes=settings.output_artifact_max_bytes,
         sessions=session_repository,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     file_service = FileCatalogService(file_repository, clock=clock, id_generator=ids)
     input_service = InputArtifactService(
@@ -871,7 +872,7 @@ def build_production_container(
         quality_gate=quality_service.require_promotion_allowed,
         capability_catalog_resolver=capability_catalogs.get,
         knowledge_reference_validator=knowledge.require_bases,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     trigger_service.configure_deployment_resolver(deployment_service.resolve)
@@ -911,7 +912,7 @@ def build_production_container(
         max_archive_bytes=settings.workspace_archive_max_bytes,
         max_archive_members=settings.workspace_archive_max_members,
         sessions=session_repository,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
 
     async def workspace_policy(
@@ -974,7 +975,7 @@ def build_production_container(
                 profiles=policy_profiles,
                 approvals=approval_service,
                 events=events,
-                quotas=quotas,
+                quotas=enforced_quotas,
                 observability=observability,
             ),
             memory_service=memory_service,
@@ -1083,7 +1084,7 @@ def build_production_container(
         ),
         heartbeat_seconds=settings.worker_task_heartbeat_seconds,
         clock=clock,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     worker = RunOrchestrator(
         sessions=session_repository,
@@ -1108,7 +1109,7 @@ def build_production_container(
             credential_broker.revoke_run if credential_broker is not None else None
         ),
         sandbox_resolver=sandbox_resolver,
-        quotas=quotas,
+        quotas=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
         metrics=reliability_metrics,
     )
@@ -1215,7 +1216,7 @@ def build_production_container(
             RunStatus.CANCELLING: settings.stuck_cancelling_seconds,
         },
         maintenance=maintenance,
-        quotas=quotas,
+        quotas=enforced_quotas,
         credentials=credential_broker,
         clock=clock,
         id_generator=ids,
