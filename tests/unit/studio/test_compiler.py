@@ -22,6 +22,8 @@ from harness.studio.models import (
     CapabilityRisk,
     DraftPythonTool,
     DraftSkillFile,
+    DraftSubagent,
+    McpCapability,
     NetworkAccess,
     ValidationSeverity,
 )
@@ -100,9 +102,7 @@ def test_binary_skill_asset_survives_compile_and_studio_round_trip() -> None:
             )
         }
     )
-    source = source.model_copy(
-        update={"spec": source.spec.model_copy(update={"skills": (skill,)})}
-    )
+    source = source.model_copy(update={"spec": source.spec.model_copy(update={"skills": (skill,)})})
 
     compiled = compiler.compile(source)
     imported = parse_agent_bundle(compiled.bundle)
@@ -144,26 +144,116 @@ def test_nexau_export_is_deterministic_and_round_trips_editable_assets() -> None
     source = source.model_copy(
         update={
             "spec": source.spec.model_copy(
-                update={"skills": (skill,), "python_tools": (python_tool,)}
+                update={
+                    "skills": (skill,),
+                    "python_tools": (python_tool,),
+                    "builtin_tools": (*source.spec.builtin_tools, "Edit", "Task"),
+                    "mcp_servers": ("tavily-readonly",),
+                    "subagents": (
+                        DraftSubagent(
+                            alias="fact-researcher",
+                            ref="helper-agent@1.0.0",
+                            responsibility="只读核验事实、来源和证据缺口。",
+                            background=True,
+                        ),
+                    ),
+                }
             )
         }
     )
 
-    first = export_nexau_agent(source)
-    second = export_nexau_agent(source)
+    tavily = McpCapability(
+        reference="tavily-readonly",
+        serverName="tavily",
+        label="公网搜索",
+        description="只读公网搜索。",
+        endpointUrl="https://mcp.tavily.com/mcp/",
+        tools=("mcp__tavily__tavily_search",),
+        risk="medium",
+        networkAccess="external",
+        sendsUserData=True,
+        readOnly=True,
+        executionLocation="external-mcp",
+        credentialReference="TAVILY_API_KEY",
+        authMode="query",
+        authName="tavilyApiKey",
+        authKey="api_key",
+    )
+
+    first = export_nexau_agent(
+        source,
+        mcp_capabilities={"tavily-readonly": tavily},
+    )
+    second = export_nexau_agent(
+        source,
+        mcp_capabilities={"tavily-readonly": tavily},
+    )
 
     assert first.content == second.content
     assert first.filename == "invoice-reviewer-0.1.0-nexau.zip"
     with ZipFile(BytesIO(first.content)) as archive:
+        manifest = json.loads(archive.read("nexau.json"))
+        assert manifest == {
+            "agents": {"invoice-reviewer": "agent.yaml"},
+            "excluded": [".nexau/", ".env", "__pycache__/"],
+        }
         config = yaml.safe_load(archive.read("agent.yaml"))
         assert config["type"] == "agent"
+        assert manifest["agents"] == {config["name"]: "agent.yaml"}
         assert config["system_prompt"] == "./systemprompt.md"
+        assert config["tool_call_mode"] == "structured"
+        assert config["max_context_tokens"] == 128000
+        assert config["llm_config"]["model"] == "${env.LLM_MODEL}"
         assert config["skills"] == ["./skills/invoice-reviewer-core"]
-        assert config["harness_extensions"]["unmapped_builtin_tools"] == ["Grep"]
+        assert "tracers" not in config
+        assert "harness_extensions" not in config
+        extensions = json.loads(archive.read("agent-studio.json"))
+        assert extensions["unmapped_builtin_tools"] == []
+        assert {tool["name"] for tool in config["tools"]} == {
+            "read_file",
+            "list_directory",
+            "search_file_content",
+            "replace",
+            "normalize_score",
+        }
+        assert config["mcp_servers"] == [
+            {
+                "name": "tavily",
+                "source_id": "tavily-readonly",
+                "type": "http",
+                "url": "https://mcp.tavily.com/mcp/?tavilyApiKey=${env.TAVILY_API_KEY}",
+                "timeout": 30,
+            }
+        ]
+        assert config["sub_agents"] == [
+            {
+                "name": "fact-researcher",
+                "config_path": "./subagents/fact-researcher/agent.yaml",
+                "source_id": "helper-agent@1.0.0",
+            }
+        ]
         assert archive.read("skills/invoice-reviewer-core/assets/template.png") == payload
+        assert "tools/search_file_content.tool.yaml" in archive.namelist()
+        assert "tools/replace.tool.yaml" in archive.namelist()
         assert "custom_tools/normalize_score.py" in archive.namelist()
+        assert "subagents/fact-researcher/agent.yaml" in archive.namelist()
+        assert "subagents/fact-researcher/systemprompt.md" in archive.namelist()
+        assert "NAC-DEPLOYMENT.md" in archive.namelist()
+        assert "skills 根目录位于 /home/user/.skills/" in archive.read(
+            "systemprompt.md"
+        ).decode()
+        deployment_guide = archive.read("NAC-DEPLOYMENT.md").decode()
+        assert "`LLM_MODEL`" in deployment_guide
+        subagent_config = yaml.safe_load(
+            archive.read("subagents/fact-researcher/agent.yaml")
+        )
+        assert subagent_config["llm_config"]["model"] == "${env.LLM_MODEL}"
+        assert subagent_config["skills"] == []
 
     imported = parse_agent_bundle(first.content)
+    assert imported.spec.mcp_servers == ("tavily-readonly",)
+    assert imported.spec.subagents[0].alias == "fact-researcher"
+    assert {"Grep", "Edit", "Task"}.issubset(imported.spec.builtin_tools)
     namespace: dict[str, object] = {}
     exec(imported.spec.python_tools[0].code, namespace)
     result = namespace["run"]({"value": 1.4})  # type: ignore[operator]

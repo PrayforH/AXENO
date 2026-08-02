@@ -166,7 +166,11 @@ class AgentStudioService:
         return compiler.compile(await self.get(tenant_id, draft_id))
 
     async def nexau_bundle(self, tenant_id: str, draft_id: str) -> NexauAgentArchive:
-        return export_nexau_agent(await self.get(tenant_id, draft_id))
+        catalog = await self.capabilities(tenant_id)
+        return export_nexau_agent(
+            await self.get(tenant_id, draft_id),
+            mcp_capabilities={item.reference: item for item in catalog.mcp_servers},
+        )
 
     async def import_bundle(
         self,

@@ -6,11 +6,12 @@ import ast
 import base64
 import hashlib
 import io
+import json
 import re
 import stat
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 import yaml
@@ -42,6 +43,8 @@ _NEXAU_BUILTINS = {
     "read_visual_file": "Read",
     "write_file": "Write",
     "list_directory": "Glob",
+    "search_file_content": "Grep",
+    "replace": "Edit",
     "run_shell_command": "Bash",
 }
 _MAX_NEXAU_UNPACKED_BYTES = 50 * 1024 * 1024
@@ -155,9 +158,15 @@ def _safe_name(value: str, *, separator: str = "-") -> str:
 def _nexau_root(archive: zipfile.ZipFile) -> str:
     files = [name for name in archive.namelist() if name and not name.endswith("/")]
     candidates = [name for name in files if name == "agent.yaml" or name.endswith("/agent.yaml")]
-    if len(candidates) != 1:
-        raise AgentBundleImportError("NexAU ZIP 必须且只能包含一个 agent.yaml")
-    root = candidates[0][: -len("agent.yaml")]
+    if not candidates:
+        raise AgentBundleImportError("NexAU ZIP 必须包含根 Agent 的 agent.yaml")
+    shallowest_depth = min(len(PurePosixPath(name).parts) for name in candidates)
+    root_candidates = [
+        name for name in candidates if len(PurePosixPath(name).parts) == shallowest_depth
+    ]
+    if len(root_candidates) != 1:
+        raise AgentBundleImportError("NexAU ZIP 必须且只能包含一个根 Agent 的 agent.yaml")
+    root = root_candidates[0][: -len("agent.yaml")]
     total = 0
     for item in archive.infolist():
         path = Path(item.filename)
@@ -390,6 +399,55 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
         if config.get("middlewares"):
             warnings.append("NexAU 上下文压缩与长输出策略由 Harness 运行时统一治理")
 
+        extensions: dict[str, object] = {}
+        inline_extensions = config.get("harness_extensions")
+        if isinstance(inline_extensions, dict):
+            extensions = {str(key): value for key, value in inline_extensions.items()}
+        elif f"{root}agent-studio.json" in archive.namelist():
+            try:
+                raw_extensions = json.loads(_zip_text(archive, root, "agent-studio.json"))
+            except json.JSONDecodeError as error:
+                raise AgentBundleImportError("NexAU agent-studio.json 无效") from error
+            if isinstance(raw_extensions, dict):
+                extensions = {str(key): value for key, value in raw_extensions.items()}
+        native_mcp_references = tuple(
+            str(item.get("source_id") or item.get("name"))
+            for item in config.get("mcp_servers") or []
+            if isinstance(item, dict) and (item.get("source_id") or item.get("name"))
+        )
+        extension_mcp = extensions.get("mcp_servers")
+        mcp_servers = tuple(
+            str(item)
+            for item in (
+                extension_mcp if isinstance(extension_mcp, list) else native_mcp_references
+            )
+            if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*", str(item))
+        )
+        subagents: list[DraftSubagent] = []
+        extension_subagents = extensions.get("subagents")
+        if isinstance(extension_subagents, list):
+            for item in extension_subagents:
+                if not isinstance(item, dict):
+                    continue
+                alias = str(item.get("alias") or "")
+                reference = str(item.get("ref") or "")
+                description = str(item.get("description") or "")
+                if (
+                    re.fullmatch(r"[a-z][a-z0-9-]*", alias)
+                    and re.fullmatch(r"[a-z][a-z0-9-]*@[^@]+", reference)
+                    and description
+                ):
+                    subagents.append(
+                        DraftSubagent(
+                            alias=alias,
+                            ref=reference,
+                            responsibility=description[:500],
+                            background=bool(item.get("background", False)),
+                        )
+                    )
+        if subagents and "Task" not in builtin_tools:
+            builtin_tools.append("Task")
+
         # Imported environment placeholders never become credentials. The user
         # selects a governed route after import.
         llm = config.get("llm_config") if isinstance(config.get("llm_config"), dict) else {}
@@ -424,6 +482,8 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
                 "skills": tuple(skills),
                 "builtin_tools": tuple(builtin_tools),
                 "python_tools": tuple(python_tools),
+                "mcp_servers": mcp_servers,
+                "subagents": tuple(subagents),
                 "model": DraftModelSelection(
                     routeId=route_id,
                     model=model,

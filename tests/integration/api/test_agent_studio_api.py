@@ -9,6 +9,7 @@ from typing import Any, cast
 from zipfile import ZipFile
 
 import pytest
+import yaml
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
@@ -141,7 +142,12 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         'attachment; filename="policy-researcher-0.1.0-nexau.zip"'
     )
     with ZipFile(BytesIO(nexau.content)) as archive:
-        assert {"agent.yaml", "systemprompt.md"}.issubset(archive.namelist())
+        assert {"nexau.json", "agent.yaml", "systemprompt.md"}.issubset(
+            archive.namelist()
+        )
+        manifest = json.loads(archive.read("nexau.json"))
+        config = yaml.safe_load(archive.read("agent.yaml"))
+        assert manifest["agents"] == {config["name"]: "agent.yaml"}
     assert published.status_code == 200
     assert published.json()["name"] == "policy-researcher"
     assert "snapshot" not in published.json()
