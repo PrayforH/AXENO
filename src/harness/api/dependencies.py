@@ -128,6 +128,8 @@ from harness.sandbox.deferred import DeferredToolSandboxProvider
 from harness.sandbox.e2b import E2BSandboxProvider, SdkE2BClient
 from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandboxProvider
 from harness.sandbox.local import LocalSandboxProvider
+from harness.sharing.repositories import InMemoryTeamSpaceRepository
+from harness.sharing.service import TeamSpaceService
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.mcp_credential_store import (
@@ -210,6 +212,7 @@ class ApiContainer:
     reliability: ReliabilityService
     reliability_controller: ReliabilityController
     agents: AgentService
+    team_spaces: TeamSpaceService
     sessions: SessionService
     runs: RunService
     triggers: AgentTriggerService
@@ -247,6 +250,7 @@ def build_memory_container(
 ) -> ApiContainer:
     resolved_settings = settings or Settings()
     registry = InMemoryAgentRegistry()
+    team_space_repository = InMemoryTeamSpaceRepository()
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -355,6 +359,13 @@ def build_memory_container(
     )
 
     agent_service = AgentService(registry, clock=clock, environment=resolved_settings.environment)
+    team_spaces = TeamSpaceService(
+        team_space_repository,
+        registry,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    knowledge.configure_team_grant_checker(team_spaces.has_knowledge_access)
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
         agent_drafts,
@@ -891,6 +902,7 @@ def build_memory_container(
         reliability=reliability,
         reliability_controller=reliability_controller,
         agents=agent_service,
+        team_spaces=team_spaces,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,

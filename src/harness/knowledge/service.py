@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -31,6 +31,8 @@ from harness.knowledge.models import (
 from harness.knowledge.repositories import KnowledgeRepository
 from harness.knowledge.search import HybridKnowledgeSearch, tokenize
 
+TeamGrantChecker = Callable[[str, str, tuple[str, ...], str], Awaitable[bool]]
+
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
@@ -48,6 +50,7 @@ class KnowledgeService:
         id_generator: Callable[[str], str] | None = None,
         chunk_characters: int = 1_600,
         chunk_overlap: int = 240,
+        team_grant_checker: TeamGrantChecker | None = None,
     ) -> None:
         if chunk_overlap >= chunk_characters:
             raise ValueError("knowledge chunk overlap must be smaller than chunk size")
@@ -59,6 +62,12 @@ class KnowledgeService:
         self._ids = id_generator or _id
         self._chunk_characters = chunk_characters
         self._chunk_overlap = chunk_overlap
+        self._team_grant_checker = team_grant_checker
+
+    def configure_team_grant_checker(self, checker: TeamGrantChecker) -> None:
+        if self._team_grant_checker is not None:
+            raise RuntimeError("team knowledge grant checker is already configured")
+        self._team_grant_checker = checker
 
     async def create_base(
         self,
@@ -384,6 +393,7 @@ class KnowledgeService:
         tenant_id: str,
         actor_id: str,
         knowledge_base_references: Sequence[str],
+        team_ids: tuple[str, ...] = (),
     ) -> tuple[KnowledgeSnapshotBinding, ...]:
         bindings: list[KnowledgeSnapshotBinding] = []
         seen: set[tuple[str, str]] = set()
@@ -394,7 +404,9 @@ class KnowledgeService:
                 key = (base_reference, source_reference)
                 if (
                     key in seen
-                    or not source.acl.allows(actor_id)
+                    or not await self._allows_source(
+                        tenant_id, actor_id, team_ids, base_reference, source
+                    )
                     or source.health is not KnowledgeSourceHealth.HEALTHY
                     or source.active_snapshot_id is None
                 ):
@@ -419,6 +431,7 @@ class KnowledgeService:
         knowledge_base_references: Sequence[str] = (),
         bindings: Sequence[KnowledgeSnapshotBinding] = (),
         limit: int = 8,
+        team_ids: tuple[str, ...] = (),
     ) -> SearchKnowledgeResponse:
         resolved_bindings = (
             tuple(bindings)
@@ -427,6 +440,7 @@ class KnowledgeService:
                 tenant_id,
                 actor_id,
                 knowledge_base_references,
+                team_ids,
             )
         )
         # Recheck ACL before loading any candidate text. Session-pinned snapshot IDs do not
@@ -438,7 +452,13 @@ class KnowledgeService:
             if source is None:
                 source = await self.repository.get_source(tenant_id, binding.source_reference)
                 source_by_reference[source.reference] = source
-            if source.acl.allows(actor_id):
+            if await self._allows_source(
+                tenant_id,
+                actor_id,
+                team_ids,
+                binding.knowledge_base_reference,
+                source,
+            ):
                 allowed.append(binding)
         snapshots = frozenset(item.snapshot_id for item in allowed)
         chunks = await self.repository.list_chunks(tenant_id, snapshots)
@@ -470,6 +490,24 @@ class KnowledgeService:
         return SearchKnowledgeResponse(
             hits=tuple(hits),
             searchedSnapshotIds=tuple(sorted(snapshots)),
+        )
+
+    async def _allows_source(
+        self,
+        tenant_id: str,
+        actor_id: str,
+        team_ids: tuple[str, ...],
+        base_reference: str,
+        source: KnowledgeSource,
+    ) -> bool:
+        if source.acl.allows(actor_id):
+            return True
+        return bool(
+            team_ids
+            and self._team_grant_checker is not None
+            and await self._team_grant_checker(
+                tenant_id, actor_id, team_ids, base_reference
+            )
         )
 
     async def get_visible_chunk(

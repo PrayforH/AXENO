@@ -35,7 +35,16 @@ async def create_run(
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Run:
     ensure_permission(identity, "tasks:write")
-    await require_owned_session(container, identity, session_id)
+    session = await require_owned_session(container, identity, session_id)
+    if session.team_ids:
+        await container.team_spaces.require_agent_access(
+            identity.tenant_id,
+            identity.user_id,
+            session.team_ids[0],
+            session.resolved_agent_owner_user_id,
+            session.agent_name,
+            session.agent_version,
+        )
     run_input: dict[str, object] = {"prompt": body.prompt}
     if body.input_artifact_ids:
         run_input["input_artifact_ids"] = list(body.input_artifact_ids)

@@ -14,6 +14,8 @@ export interface TaskSummary {
   title: string;
   agent_name: string;
   agent_version: string;
+  agent_owner_user_id: string;
+  space_id?: string | null;
   status: string;
   run_id?: string;
   created_at: string;

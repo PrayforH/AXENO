@@ -9,6 +9,11 @@ export interface TaskAgent {
   modelRoute?: string;
   model?: string;
   modelCapabilities?: string[];
+  ownerUserId?: string;
+  scope?: "personal" | "team";
+  spaceId?: string;
+  spaceName?: string;
+  runnableByViewer?: boolean;
 }
 
 interface RuntimeAgent {
@@ -24,6 +29,11 @@ interface PublishedAgent {
   model_route?: string | null;
   model?: string | null;
   model_capabilities?: string[];
+  owner_user_id: string;
+  scope: "personal" | "team";
+  space_id?: string | null;
+  space_name?: string | null;
+  runnable_by_viewer?: boolean;
 }
 
 export interface TaskAgentCatalog {
@@ -67,14 +77,22 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
       domain: draft.domain,
     }));
   const studioByCoordinate = new Map(
-    studioVersions.map((agent) => [agentCoordinate(agent), agent]),
+    studioVersions.map((agent) => [`${agent.name}@${agent.version}`, agent]),
   );
   const registryVersions = registry.map((agent) => {
-    const studio = studioByCoordinate.get(agentCoordinate(agent));
+    const studio = studioByCoordinate.get(`${agent.name}@${agent.version}`);
+    const sharing = {
+      ownerUserId: agent.owner_user_id,
+      scope: agent.scope,
+      spaceId: agent.space_id ?? undefined,
+      spaceName: agent.space_name ?? undefined,
+      runnableByViewer: agent.runnable_by_viewer ?? true,
+    } as const;
     return (
       studio
         ? {
             ...studio,
+            ...sharing,
             modelRoute: agent.model_route ?? undefined,
             model: agent.model ?? undefined,
             modelCapabilities: agent.model_capabilities ?? [],
@@ -87,6 +105,7 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
             ? "舆情分析"
             : agent.display_name,
         domain: agent.domain,
+        ...sharing,
         modelRoute: agent.model_route ?? undefined,
         model: agent.model ?? undefined,
         modelCapabilities: agent.model_capabilities ?? [],
@@ -124,5 +143,12 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
 }
 
 export function agentCoordinate(agent: Pick<TaskAgent, "name" | "version">) {
-  return `${agent.name}@${agent.version}`;
+  const scoped = agent as Pick<
+    TaskAgent,
+    "name" | "version" | "ownerUserId" | "spaceId" | "scope"
+  >;
+  if (!scoped.scope && !scoped.spaceId && !scoped.ownerUserId) {
+    return `${agent.name}@${agent.version}`;
+  }
+  return `${scoped.scope ?? "personal"}:${scoped.spaceId ?? "-"}:${scoped.ownerUserId ?? "-"}:${agent.name}@${agent.version}`;
 }

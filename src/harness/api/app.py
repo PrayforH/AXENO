@@ -17,7 +17,12 @@ from harness.agui import routes as agui_routes
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, auth, input_artifacts, runs, sessions
 from harness.config import Settings
-from harness.core.errors import HarnessDomainError, NotFoundError, StorageCapacityError
+from harness.core.errors import (
+    HarnessDomainError,
+    NotFoundError,
+    PermissionDeniedError,
+    StorageCapacityError,
+)
 from harness.core.manifest import ManifestValidationError
 from harness.governance import api as governance_routes
 from harness.knowledge import api as knowledge_routes
@@ -26,6 +31,7 @@ from harness.memory_bank import api as memory_bank_routes
 from harness.platform_mcp import api as platform_mcp_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
+from harness.sharing import api as sharing_routes
 from harness.studio import api as studio_routes
 from harness.triggers import a2a as a2a_routes
 from harness.triggers import api as trigger_routes
@@ -67,6 +73,8 @@ async def _domain_error(_request: Request, error: Exception) -> JSONResponse:
     assert isinstance(error, HarnessDomainError)
     if isinstance(error, NotFoundError):
         status_code = 404
+    elif isinstance(error, PermissionDeniedError):
+        status_code = 403
     elif isinstance(error, StorageCapacityError):
         status_code = 507
     else:
@@ -76,7 +84,13 @@ async def _domain_error(_request: Request, error: Exception) -> JSONResponse:
     elif isinstance(error, QuotaExceededError):
         code = "quota_exceeded"
     else:
-        code = "not_found" if status_code == 404 else "conflict"
+        code = (
+            "not_found"
+            if status_code == 404
+            else "permission_denied"
+            if status_code == 403
+            else "conflict"
+        )
     return JSONResponse(
         status_code=status_code,
         content={"error": {"code": code, "message": str(error)}},
@@ -289,6 +303,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         lifecycle_routes.router,
         memory_bank_routes.router,
         reliability_routes.router,
+        sharing_routes.router,
         agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")

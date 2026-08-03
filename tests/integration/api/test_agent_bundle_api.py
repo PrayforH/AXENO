@@ -79,6 +79,11 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
             "model_route": "deepseek-v4-pro",
             "model": "deepseek-v4-pro",
             "model_capabilities": [],
+            "owner_user_id": "publisher",
+            "scope": "personal",
+            "space_id": None,
+            "space_name": None,
+            "runnable_by_viewer": True,
         }
     ]
 

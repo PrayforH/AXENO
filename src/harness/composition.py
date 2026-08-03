@@ -103,6 +103,7 @@ from harness.sandbox.kubernetes import (
     KubernetesSandboxProvider,
 )
 from harness.sandbox.local import LocalSandboxProvider
+from harness.sharing.service import TeamSpaceService
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
 from harness.storage.deployment_repository import (
@@ -144,6 +145,7 @@ from harness.storage.quota_repository import PostgresQuotaRepository
 from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
 from harness.storage.reliability_repository import PostgresReliabilityRepository
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
+from harness.storage.sharing_repository import PostgresTeamSpaceRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.storage.trigger_repository import PostgresAgentTriggerRepository
 from harness.studio.catalog import default_capability_catalog
@@ -530,6 +532,7 @@ def build_production_container(
     redis = Redis.from_url(settings.redis_url)  # pyright: ignore[reportUnknownMemberType]
     redis_client = cast(AsyncRedisClient, redis)
     registry = PostgresAgentRegistry(sessions)
+    team_space_repository = PostgresTeamSpaceRepository(sessions)
     session_repository = PostgresSessionRepository(sessions)
     runs = PostgresRunRepository(sessions)
     approvals = PostgresApprovalRepository(sessions)
@@ -674,6 +677,13 @@ def build_production_container(
         environment="production",
         default_manifest_path=default_agent_manifest,
     )
+    team_spaces = TeamSpaceService(
+        team_space_repository,
+        registry,
+        clock=clock,
+        id_generator=ids,
+    )
+    knowledge.configure_team_grant_checker(team_spaces.has_knowledge_access)
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
         agent_drafts,
@@ -1278,6 +1288,7 @@ def build_production_container(
         reliability=reliability,
         reliability_controller=reliability_controller,
         agents=agent_service,
+        team_spaces=team_spaces,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,

@@ -95,6 +95,60 @@ class AgentVersionRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class TeamSpaceRow(Base):
+    __tablename__ = "team_spaces"
+    __table_args__ = (Index("ix_team_spaces_tenant_created", "tenant_id", "created_at"),)
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class TeamSpaceMemberRow(Base):
+    __tablename__ = "team_space_members"
+    __table_args__ = (
+        Index("ix_team_space_members_user", "tenant_id", "user_id", "space_id"),
+        Index("ix_team_space_members_role", "tenant_id", "space_id", "role"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    role: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class SharedAgentVersionRow(Base):
+    __tablename__ = "shared_agent_versions"
+    __table_args__ = (
+        Index("ix_shared_agent_versions_space", "tenant_id", "space_id", "created_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_version: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class SharedKnowledgeBaseRow(Base):
+    __tablename__ = "shared_knowledge_bases"
+    __table_args__ = (
+        Index("ix_shared_knowledge_bases_space", "tenant_id", "space_id", "created_at"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    knowledge_base_reference: Mapped[str] = mapped_column(String(128), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class AgentDraftRow(Base):
     __tablename__ = "agent_drafts"
     __table_args__ = (

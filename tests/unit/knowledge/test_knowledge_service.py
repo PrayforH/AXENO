@@ -139,6 +139,63 @@ async def test_acl_filters_chunks_before_retrieval_scoring() -> None:
 
 
 @pytest.mark.asyncio
+async def test_team_space_grant_allows_restricted_knowledge_only_for_bound_team() -> None:
+    async def grants(
+        tenant_id: str,
+        actor_id: str,
+        team_ids: tuple[str, ...],
+        reference: str,
+    ) -> bool:
+        return (
+            tenant_id == "tenant"
+            and actor_id == "member"
+            and team_ids == ("space-one",)
+            and reference == "company"
+        )
+
+    service = KnowledgeService(
+        InMemoryKnowledgeRepository(), team_grant_checker=grants
+    )
+    await service.create_source(
+        "tenant",
+        "owner",
+        file_source(
+            "private",
+            "Shared investigation procedure.",
+            acl=KnowledgeAcl(
+                visibility=KnowledgeVisibility.RESTRICTED,
+                userIds=("owner",),
+            ),
+        ),
+    )
+    await service.create_base(
+        "tenant",
+        "owner",
+        CreateKnowledgeBaseRequest.model_validate(
+            {
+                "reference": "company",
+                "displayName": "Company",
+                "sourceReferences": ["private"],
+            }
+        ),
+    )
+
+    denied = await service.search(
+        "tenant", "member", "investigation", knowledge_base_references=("company",)
+    )
+    allowed = await service.search(
+        "tenant",
+        "member",
+        "investigation",
+        knowledge_base_references=("company",),
+        team_ids=("space-one",),
+    )
+
+    assert denied.hits == ()
+    assert len(allowed.hits) == 1
+
+
+@pytest.mark.asyncio
 async def test_direct_citation_open_cannot_bypass_source_acl() -> None:
     service = KnowledgeService(InMemoryKnowledgeRepository())
     source, _ = await service.create_source(

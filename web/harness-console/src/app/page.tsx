@@ -63,22 +63,30 @@ export default function Home() {
           ? {
               name: currentTask.agent_name,
               version: currentTask.agent_version,
+              ownerUserId: currentTask.agent_owner_user_id,
+              scope: currentTask.space_id ? "team" as const : "personal" as const,
+              spaceId: currentTask.space_id ?? undefined,
             }
           : stored ?? catalog.defaultAgent;
         const selected =
-          catalog.agents.find(
-            (agent) =>
-              agent.name === coordinates.name &&
-              agent.version === coordinates.version,
+          catalog.agents.find((agent) =>
+            agent.name === coordinates.name &&
+            agent.version === coordinates.version &&
+            (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
+            (!coordinates.spaceId || agent.spaceId === coordinates.spaceId),
           ) ?? {
             name: coordinates.name,
             version: coordinates.version,
             displayName: stored?.displayName ?? coordinates.name,
             domain: stored?.domain ?? "historical",
+            ownerUserId: coordinates.ownerUserId,
+            scope: coordinates.scope,
+            spaceId: coordinates.spaceId,
           };
         const agents = catalog.agents.some(
           (agent) =>
-            agent.name === selected.name && agent.version === selected.version,
+            agent.name === selected.name && agent.version === selected.version &&
+            agent.ownerUserId === selected.ownerUserId && agent.spaceId === selected.spaceId,
         )
           ? catalog.agents
           : [selected, ...catalog.agents];
@@ -123,17 +131,23 @@ export default function Home() {
     const nextAgent =
       taskAgents.find(
         (agent) =>
-          agent.name === task.agent_name && agent.version === task.agent_version,
+          agent.name === task.agent_name && agent.version === task.agent_version &&
+          agent.ownerUserId === task.agent_owner_user_id &&
+          agent.spaceId === (task.space_id ?? undefined),
       ) ?? {
         name: task.agent_name,
         version: task.agent_version,
         displayName: task.agent_name,
         domain: "historical",
+        ownerUserId: task.agent_owner_user_id,
+        scope: task.space_id ? "team" : "personal",
+        spaceId: task.space_id ?? undefined,
       };
     if (
       !taskAgents.some(
         (agent) =>
-          agent.name === nextAgent.name && agent.version === nextAgent.version,
+          agent.name === nextAgent.name && agent.version === nextAgent.version &&
+          agent.ownerUserId === nextAgent.ownerUserId && agent.spaceId === nextAgent.spaceId,
       )
     ) {
       setTaskAgents((current) => [nextAgent, ...current]);
@@ -154,8 +168,11 @@ export default function Home() {
 
   function switchAgent(nextAgent: TaskAgent) {
     if (
-      selectedAgent?.name === nextAgent.name &&
-      selectedAgent.version === nextAgent.version
+      selectedAgent &&
+      selectedAgent.name === nextAgent.name &&
+      selectedAgent.version === nextAgent.version &&
+      selectedAgent.ownerUserId === nextAgent.ownerUserId &&
+      selectedAgent.spaceId === nextAgent.spaceId
     ) {
       return;
     }
@@ -196,10 +213,12 @@ export default function Home() {
             <div className="chat-surface">
               {threadId && selectedAgent ? (
                 <AssistantRuntimeShell
-                  key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}`}
+                  key={`${threadId}:${selectedAgent.spaceId ?? "personal"}:${selectedAgent.ownerUserId ?? "self"}:${selectedAgent.name}:${selectedAgent.version}`}
                   threadId={threadId}
                   agentName={selectedAgent.name}
                   agentVersion={selectedAgent.version}
+                  agentOwnerUserId={selectedAgent.ownerUserId}
+                  spaceId={selectedAgent.spaceId}
                   agentDefaultModelRoute={selectedAgent.modelRoute ?? null}
                   modelRoutes={modelRoutes}
                   modelRouteOverride={modelRouteOverride}

@@ -15,7 +15,7 @@ DeploymentResolver = Callable[
     [str, str, str, EnvironmentName, str], Awaitable[DeploymentResolution]
 ]
 KnowledgeBindingResolver = Callable[
-    [str, str, Sequence[str]],
+    [str, str, Sequence[str], tuple[str, ...]],
     Awaitable[Sequence[KnowledgeSnapshotBinding]],
 ]
 
@@ -110,8 +110,9 @@ class SessionService:
                 raise ConflictError("knowledge snapshot resolution is unavailable")
             resolved = await self._knowledge_binding_resolver(
                 tenant_id,
-                resolved_agent_owner,
+                user_id,
                 snapshot.manifest.spec.knowledge_references,
+                team_ids,
             )
             knowledge_bindings = tuple(
                 item.model_dump(mode="json", by_alias=True) for item in resolved

@@ -57,12 +57,27 @@ async def list_agents(
     dependency_coordinates = {
         coordinate for version in versions for coordinate in _subagent_coordinates(version)
     }
-    return [
+    personal = [
         AgentCatalogItem.from_version(version)
         for version in versions
         if f"{version.name}@{version.version}" not in dependency_coordinates
         and not _is_internal(version)
     ]
+    shared = [
+        AgentCatalogItem.from_version(
+            version,
+            scope="team",
+            space_id=space.space_id,
+            space_name=space.name,
+            runnable_by_viewer=grant.runnable_by_viewer,
+        )
+        for space, member, grant, version in await container.team_spaces.list_accessible_agents(
+            identity.tenant_id, identity.user_id
+        )
+        if not _is_internal(version)
+        and (member.role.value != "viewer" or grant.runnable_by_viewer)
+    ]
+    return [*personal, *shared]
 
 
 @router.post("", response_model=AgentVersion, status_code=status.HTTP_201_CREATED)

@@ -256,7 +256,7 @@ class StoredMcpCredentialProvider:
     ) -> Mapping[str, SecretStr]:
         stored = await self._service.repository.get(
             identity.tenant_id,
-            identity.resolved_agent_owner_user_id,
+            identity.user_id,
             server_reference,
         )
         if stored is not None:

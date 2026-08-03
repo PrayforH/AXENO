@@ -6,6 +6,7 @@ export type WorkspaceId =
   | "agents"
   | "capabilities"
   | "knowledge"
+  | "spaces"
   | "usage"
   | "data";
 export type WorkspaceMode = "tasks" | "studio";
@@ -19,6 +20,7 @@ export const workspaceItems: ReadonlyArray<{
   { id: "agents", href: "/studio/agents", label: "智能体" },
   { id: "capabilities", href: "/studio/capabilities", label: "MCP" },
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
+  { id: "spaces", href: "/studio/spaces", label: "共享空间" },
   { id: "data", href: "/studio/data", label: "数据" },
   { id: "usage", href: "/studio/usage", label: "用量" },
 ];
@@ -61,6 +63,15 @@ export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
       <svg viewBox="0 0 20 20" aria-hidden="true">
         <path d="M4.5 4.5h7a3 3 0 0 1 3 3v8h-7a3 3 0 0 1-3-3z" />
         <path d="M7.5 7.5h4m-4 3h4" />
+      </svg>
+    );
+  }
+  if (workspace === "spaces") {
+    return (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="7" cy="7" r="2.5" />
+        <circle cx="14" cy="8" r="2" />
+        <path d="M2.8 16c.5-3 2-4.5 4.3-4.5s3.8 1.5 4.3 4.5m.1-3.5c.7-.8 1.5-1.2 2.5-1.2 1.8 0 3 1.2 3.4 3.5" />
       </svg>
     );
   }

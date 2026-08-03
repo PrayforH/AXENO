@@ -64,7 +64,7 @@ describe("full-page agent workbench", () => {
     expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
     expect(studioSidebar).toContain(
-      ': ["agents", "capabilities", "knowledge", "data", "usage"]',
+      ': ["agents", "capabilities", "knowledge", "spaces", "data", "usage"]',
     );
     expect(workspaceNavigation).toContain('aria-label="工作模式"');
     expect(workspaceNavigation).toContain("<span>Studio</span>");
@@ -111,7 +111,7 @@ describe("full-page agent workbench", () => {
 
   it("keeps the conversation runtime mounted while task status changes", () => {
     expect(page).toContain(
-      'key={`${threadId}:${selectedAgent.name}:${selectedAgent.version}`}',
+      'key={`${threadId}:${selectedAgent.spaceId ?? "personal"}:${selectedAgent.ownerUserId ?? "self"}:${selectedAgent.name}:${selectedAgent.version}`}',
     );
     expect(page).not.toContain("refreshToken");
     expect(taskSidebar).not.toContain("onCurrentTaskStatusChange");

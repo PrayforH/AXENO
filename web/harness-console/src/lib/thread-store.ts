@@ -13,6 +13,10 @@ export interface ThreadAgentBinding {
   version: string;
   displayName?: string;
   domain?: string;
+  ownerUserId?: string;
+  scope?: "personal" | "team";
+  spaceId?: string;
+  spaceName?: string;
 }
 
 type IdFactory = () => string;
@@ -73,6 +77,10 @@ export function loadThreadAgent(
         ? { displayName: value.displayName }
         : {}),
       ...(typeof value.domain === "string" ? { domain: value.domain } : {}),
+      ...(typeof value.ownerUserId === "string" ? { ownerUserId: value.ownerUserId } : {}),
+      ...(value.scope === "personal" || value.scope === "team" ? { scope: value.scope } : {}),
+      ...(typeof value.spaceId === "string" ? { spaceId: value.spaceId } : {}),
+      ...(typeof value.spaceName === "string" ? { spaceName: value.spaceName } : {}),
     };
   } catch {
     return null;

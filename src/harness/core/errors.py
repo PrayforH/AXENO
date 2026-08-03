@@ -17,6 +17,10 @@ class ConflictError(HarnessDomainError):
     """Raised when an idempotency or optimistic concurrency rule is violated."""
 
 
+class PermissionDeniedError(HarnessDomainError):
+    """Raised when an authenticated actor cannot access a domain resource."""
+
+
 class StorageCapacityError(HarnessDomainError):
     """Raised when durable artifact storage cannot accept more content."""
 

@@ -1,6 +1,6 @@
 """Request schemas for the public Harness API."""
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -19,9 +19,22 @@ class AgentCatalogItem(BaseModel):
     model_route: str | None = None
     model: str | None = None
     model_capabilities: tuple[str, ...] = ()
+    owner_user_id: str
+    scope: Literal["personal", "team"] = "personal"
+    space_id: str | None = None
+    space_name: str | None = None
+    runnable_by_viewer: bool = True
 
     @classmethod
-    def from_version(cls, version: AgentVersion) -> "AgentCatalogItem":
+    def from_version(
+        cls,
+        version: AgentVersion,
+        *,
+        scope: Literal["personal", "team"] = "personal",
+        space_id: str | None = None,
+        space_name: str | None = None,
+        runnable_by_viewer: bool = True,
+    ) -> "AgentCatalogItem":
         manifest = version.snapshot.get("manifest")
         metadata = (
             cast(dict[str, Any], manifest).get("metadata") if isinstance(manifest, dict) else None
@@ -47,6 +60,11 @@ class AgentCatalogItem(BaseModel):
             model_route=(str(model_values["route"]) if model_values.get("route") else None),
             model=str(model_values["model"]) if model_values.get("model") else None,
             model_capabilities=capabilities,
+            owner_user_id=version.owner_user_id,
+            scope=scope,
+            space_id=space_id,
+            space_name=space_name,
+            runnable_by_viewer=runnable_by_viewer,
         )
 
 
@@ -54,6 +72,8 @@ class CreateSessionRequest(BaseModel):
     agent_name: str = Field(min_length=1)
     agent_version: str | None = Field(default=None, min_length=1)
     environment: str | None = Field(default=None, pattern="^(test|canary|production)$")
+    agent_owner_user_id: str | None = Field(default=None, min_length=1)
+    space_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def select_version_or_environment(self) -> "CreateSessionRequest":

@@ -23,6 +23,8 @@ export function AssistantRuntimeShell({
   threadId,
   agentName,
   agentVersion,
+  agentOwnerUserId,
+  spaceId,
   agentDefaultModelRoute,
   modelRoutes,
   modelRouteOverride,
@@ -32,6 +34,8 @@ export function AssistantRuntimeShell({
   threadId: string;
   agentName: string;
   agentVersion: string;
+  agentOwnerUserId?: string;
+  spaceId?: string;
   agentDefaultModelRoute: string | null;
   modelRoutes: TaskModelRoute[];
   modelRouteOverride: string | null;
@@ -44,13 +48,15 @@ export function AssistantRuntimeShell({
       agent_name: agentName,
       agent_version: agentVersion,
     });
+    if (agentOwnerUserId) query.set("agent_owner_user_id", agentOwnerUserId);
+    if (spaceId) query.set("space_id", spaceId);
     const next = new HarnessHttpAgent({
       url: `/api/agui?${query.toString()}`,
       modelRouteOverride,
     });
     next.threadId = threadId;
     return next;
-  }, [agentName, agentVersion, modelRouteOverride, threadId]);
+  }, [agentName, agentOwnerUserId, agentVersion, modelRouteOverride, spaceId, threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);

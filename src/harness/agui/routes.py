@@ -66,6 +66,8 @@ class AguiThreadSummary(BaseModel):
     title: str
     agent_name: str
     agent_version: str
+    agent_owner_user_id: str
+    space_id: str | None = None
     status: str
     run_id: str | None = None
     created_at: datetime
@@ -164,14 +166,30 @@ async def run_agui_agent(
     container: Annotated[ApiContainer, Depends(get_container)],
     agent_name: Annotated[str, Query()],
     agent_version: Annotated[str, Query()],
+    agent_owner_user_id: Annotated[str | None, Query()] = None,
+    space_id: Annotated[str | None, Query()] = None,
 ) -> StreamingResponse:
     ensure_permission(identity, "tasks:write")
+    resolved_owner = agent_owner_user_id or identity.user_id
+    if space_id is not None:
+        await container.team_spaces.require_agent_access(
+            identity.tenant_id,
+            identity.user_id,
+            space_id,
+            resolved_owner,
+            agent_name,
+            agent_version,
+        )
+    elif resolved_owner != identity.user_id:
+        raise ConflictError("agent_owner_user_id requires a team space grant")
     creation = await container.agui.create_run_with_result(
         tenant_id=identity.tenant_id,
         user_id=identity.user_id,
         agent_name=agent_name,
         agent_version=agent_version,
         request=body,
+        agent_owner_user_id=resolved_owner,
+        space_id=space_id,
     )
     run = creation.run
     worker_task = (
@@ -299,6 +317,8 @@ async def list_agui_threads(
                 title=await container.agui.resolve_title(binding, prompts),
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
+                agent_owner_user_id=session.resolved_agent_owner_user_id,
+                space_id=session.team_ids[0] if session.team_ids else None,
                 status=(
                     "waiting_approval"
                     if pending is not None

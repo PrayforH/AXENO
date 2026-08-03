@@ -1,0 +1,1 @@
+"""Team-space resource sharing."""

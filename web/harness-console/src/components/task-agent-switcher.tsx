@@ -20,7 +20,7 @@ export function groupTaskAgents(
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const matching = normalizedQuery
     ? agents.filter((agent) =>
-        [agent.displayName, agent.name, agent.version, agent.domain]
+        [agent.displayName, agent.name, agent.version, agent.domain, agent.spaceName]
           .join(" ")
           .toLocaleLowerCase()
           .includes(normalizedQuery),
@@ -28,11 +28,12 @@ export function groupTaskAgents(
     : agents;
   const groups = new Map<string, TaskAgentGroup>();
   for (const agent of matching) {
-    const group = groups.get(agent.name);
+    const groupKey = `${agent.scope ?? "personal"}:${agent.spaceId ?? "-"}:${agent.ownerUserId ?? "-"}:${agent.name}`;
+    const group = groups.get(groupKey);
     if (group) {
       group.agents.push(agent);
     } else {
-      groups.set(agent.name, {
+      groups.set(groupKey, {
         name: agent.name,
         displayName: agent.displayName,
         domain: agent.domain,
@@ -178,7 +179,10 @@ export function TaskAgentSwitcher({
                         >
                           <span className="task-agent-group-copy">
                             <strong>{group.displayName}</strong>
-                            <span>{group.name} · {group.domain}</span>
+                            <span>
+                              {group.name} · {group.domain}
+                              {preferred.scope === "team" ? ` · ${preferred.spaceName ?? "团队空间"}` : " · 个人"}
+                            </span>
                           </span>
                           {group.agents.length === 1 && (
                             <small>{preferred.version}{groupActive ? " · 当前" : ""}</small>
@@ -188,16 +192,16 @@ export function TaskAgentSwitcher({
                           <label className="task-agent-version-select">
                             <select
                               aria-label={`${group.displayName} 版本`}
-                              value={preferred.version}
+                              value={agentCoordinate(preferred)}
                               onChange={(event) => {
                                 const next = group.agents.find(
-                                  (agent) => agent.version === event.target.value,
+                                  (agent) => agentCoordinate(agent) === event.target.value,
                                 );
                                 if (next) choose(next);
                               }}
                             >
                               {group.agents.map((agent) => (
-                                <option key={agentCoordinate(agent)} value={agent.version}>
+                                <option key={agentCoordinate(agent)} value={agentCoordinate(agent)}>
                                   {agent.version}
                                   {agentCoordinate(agent) === selectedCoordinate ? " · 当前" : ""}
                                 </option>

@@ -36,6 +36,8 @@ class AguiThreadBinding:
     session_id: str
     agent_name: str
     agent_version: str
+    agent_owner_user_id: str
+    space_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,8 @@ class AguiRunService:
             session_id=session.session_id,
             agent_name=session.agent_name,
             agent_version=session.agent_version,
+            agent_owner_user_id=session.resolved_agent_owner_user_id,
+            space_id=session.team_ids[0] if session.team_ids else None,
         )
 
     async def list_bindings(
@@ -112,6 +116,8 @@ class AguiRunService:
         agent_name: str,
         agent_version: str,
         request: RunAgentInput,
+        agent_owner_user_id: str | None = None,
+        space_id: str | None = None,
     ) -> Run:
         return (
             await self.create_run_with_result(
@@ -120,6 +126,8 @@ class AguiRunService:
                 agent_name=agent_name,
                 agent_version=agent_version,
                 request=request,
+                agent_owner_user_id=agent_owner_user_id,
+                space_id=space_id,
             )
         ).run
 
@@ -131,6 +139,8 @@ class AguiRunService:
         agent_name: str,
         agent_version: str,
         request: RunAgentInput,
+        agent_owner_user_id: str | None = None,
+        space_id: str | None = None,
     ) -> AguiRunCreation:
         prompt, input_artifact_ids = _latest_user_input(request)
         conversation_prompts = _user_prompts(request)
@@ -145,6 +155,8 @@ class AguiRunService:
             thread_id=request.thread_id,
             agent_name=agent_name,
             agent_version=agent_version,
+            agent_owner_user_id=agent_owner_user_id,
+            space_id=space_id,
         )
         creation = await self._run_service.create_with_result(
             tenant_id,
@@ -332,6 +344,8 @@ class AguiRunService:
         thread_id: str,
         agent_name: str,
         agent_version: str,
+        agent_owner_user_id: str | None,
+        space_id: str | None,
     ) -> AguiThreadBinding:
         async with self._lock:
             try:
@@ -344,8 +358,16 @@ class AguiRunService:
                     session_id=session.session_id,
                     agent_name=session.agent_name,
                     agent_version=session.agent_version,
+                    agent_owner_user_id=session.resolved_agent_owner_user_id,
+                    space_id=session.team_ids[0] if session.team_ids else None,
                 )
-                if (existing.agent_name, existing.agent_version) != (agent_name, agent_version):
+                resolved_owner = agent_owner_user_id or user_id
+                if (
+                    existing.agent_name,
+                    existing.agent_version,
+                    existing.agent_owner_user_id,
+                    existing.space_id,
+                ) != (agent_name, agent_version, resolved_owner, space_id):
                     raise ConflictError(
                         f"AG-UI thread {thread_id} is already bound to "
                         f"{existing.agent_name}@{existing.agent_version}"
@@ -358,11 +380,20 @@ class AguiRunService:
                         archived_at=None,
                     )
                 return existing
-            session = await self._sessions.create(tenant_id, user_id, agent_name, agent_version)
+            session = await self._sessions.create(
+                tenant_id,
+                user_id,
+                agent_name,
+                agent_version,
+                agent_owner_user_id=agent_owner_user_id,
+                team_ids=(space_id,) if space_id else (),
+            )
             binding = AguiThreadBinding(
                 session_id=session.session_id,
                 agent_name=agent_name,
                 agent_version=agent_version,
+                agent_owner_user_id=session.resolved_agent_owner_user_id,
+                space_id=space_id,
             )
             timestamp = datetime.now(UTC)
             await self._bindings.add(

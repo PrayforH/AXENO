@@ -226,6 +226,8 @@ export async function proxyAguiRequest(
     const requested = new URL(request.url).searchParams;
     const agentName = requested.get("agent_name");
     const agentVersion = requested.get("agent_version");
+    const agentOwnerUserId = requested.get("agent_owner_user_id");
+    const spaceId = requested.get("space_id");
     if (
       agentName &&
       agentVersion &&
@@ -234,6 +236,12 @@ export async function proxyAguiRequest(
     ) {
       url.searchParams.set("agent_name", agentName);
       url.searchParams.set("agent_version", agentVersion);
+      if (agentOwnerUserId && agentOwnerUserId.length <= 128) {
+        url.searchParams.set("agent_owner_user_id", agentOwnerUserId);
+      }
+      if (spaceId && spaceId.length <= 128) {
+        url.searchParams.set("space_id", spaceId);
+      }
     }
   }
   const spanName =
@@ -282,6 +290,19 @@ export async function proxyStudioRequest(
   );
   url.search = new URL(request.url).search;
   return forward(request, url.toString(), config, fetcher, "harness.web.studio");
+}
+
+export async function proxyTeamSpaceRequest(
+  request: Request,
+  config: HarnessServerConfig,
+  fetcher: typeof fetch = fetch,
+  path = "",
+) {
+  const url = new URL(
+    `${config.apiUrl}/v1/spaces${path ? `/${path.replace(/^\//, "")}` : ""}`,
+  );
+  url.search = new URL(request.url).search;
+  return forward(request, url.toString(), config, fetcher, "harness.web.team_space");
 }
 
 export async function proxyAgentTriggerRequest(
