@@ -38,6 +38,18 @@ export interface McpOption {
   sendsUserData: boolean;
 }
 
+const GENERAL_LEAD_MCP_REFERENCES = new Set(["tavily-readonly"]);
+
+export function mcpOptionsForDraft(
+  draft: Pick<StudioDraft, "name" | "domain">,
+  options: McpOption[],
+): McpOption[] {
+  if (draft.name !== "lead-agent" || draft.domain !== "general-assistant") {
+    return options;
+  }
+  return options.filter((option) => GENERAL_LEAD_MCP_REFERENCES.has(option.id));
+}
+
 export interface StudioSkill {
   name: string;
   description: string;

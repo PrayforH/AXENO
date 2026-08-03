@@ -419,7 +419,7 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
     )
     first_session = await container.sessions.create(
         TENANT,
-        "user-a",
+        USER,
         updated.spec.name,
         None,
         agent_owner_user_id=USER,
@@ -453,7 +453,7 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
     await container.knowledge.sync_source(TENANT, USER, "handbook")
     second_session = await container.sessions.create(
         TENANT,
-        "user-b",
+        USER,
         updated.spec.name,
         None,
         agent_owner_user_id=USER,

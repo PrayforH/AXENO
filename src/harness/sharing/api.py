@@ -264,7 +264,11 @@ async def share_knowledge(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> SharedKnowledgeBase:
-    await container.knowledge.get_base(identity.tenant_id, body.reference)
+    await container.knowledge.get_base(
+        identity.tenant_id,
+        body.reference,
+        identity.user_id,
+    )
     return await container.team_spaces.share_knowledge(
         identity.tenant_id, identity.user_id, space_id, body.reference
     )

@@ -761,13 +761,13 @@ async def get_catalog(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CapabilityCatalogRecord:
-    return await service.get(actor.tenant_id)
+    return await service.get_for_user(actor.tenant_id, actor.user_id)
 
 
 @router.post("/mcp/discover", response_model=McpDiscoveryResult)
 async def discover_mcp(
     body: McpDiscoveryRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[McpDiscoveryService, Depends(get_mcp_discovery_service)],
 ) -> McpDiscoveryResult:
     try:
@@ -834,7 +834,12 @@ async def catalog_impact(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CatalogImpact:
-    return await service.impact(actor.tenant_id, resource_type, resource_id)
+    return await service.impact(
+        actor.tenant_id,
+        actor.user_id,
+        resource_type,
+        resource_id,
+    )
 
 
 @router.delete(
@@ -845,9 +850,13 @@ async def disable_catalog_resource(
     resource_type: CatalogResourceType,
     resource_id: str,
     expected_revision: int,
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    identity: Annotated[Identity, Depends(require_identity)],
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CatalogMutationResult:
+    actor = _authorize_studio_actor(
+        identity,
+        "studio:write" if resource_type == "mcp" else "studio:catalog:write",
+    )
     return await service.disable(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,
@@ -865,9 +874,13 @@ async def upsert_catalog_resource(
     resource_type: CatalogResourceType,
     resource_id: str,
     body: UpsertCatalogResourceRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    identity: Annotated[Identity, Depends(require_identity)],
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CatalogMutationResult:
+    actor = _authorize_studio_actor(
+        identity,
+        "studio:write" if resource_type == "mcp" else "studio:catalog:write",
+    )
     return await service.upsert(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,
@@ -901,7 +914,7 @@ async def capabilities(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> CapabilityCatalog:
-    return await service.capabilities(actor.tenant_id)
+    return await service.capabilities(actor.tenant_id, actor.user_id)
 
 
 @router.get("/drafts", response_model=list[AgentDraftSummary])

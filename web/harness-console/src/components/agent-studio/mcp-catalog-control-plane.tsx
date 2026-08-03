@@ -23,6 +23,8 @@ const MCP_IDENTIFIER_INPUT_PATTERN =
 
 const EMPTY_MCP: McpCapability = {
   reference: "",
+  ownerUserId: null,
+  allowedExecutionProfileIds: [],
   category: "tool",
   serverName: "",
   label: "",
@@ -86,8 +88,7 @@ export function McpCatalogControlPlane({
   const knowledgeMode = mode === "knowledge";
   const category = knowledgeMode ? "knowledge" : "tool";
   const { membership } = useAuth();
-  const canManage =
-    membership.role === "owner" || membership.role === "admin";
+  const canManage = membership.role !== "viewer";
   const [record, setRecord] = useState<StudioCapabilityCatalogRecord | null>(
     null,
   );
@@ -173,13 +174,7 @@ export function McpCatalogControlPlane({
 
   function startEdit(item: McpCapability) {
     setDraft({ ...item });
-    setAllowedProfileIds(
-      record?.catalog.executionProfiles
-        .filter((profile) =>
-          profile.allowedMcpReferences.includes(item.reference),
-        )
-        .map((profile) => profile.profileId) ?? [],
-    );
+    setAllowedProfileIds([...item.allowedExecutionProfileIds]);
     setDiscovery({
       endpointUrl: item.endpointUrl ?? "",
       transport: item.transport,
@@ -521,18 +516,18 @@ export function McpCatalogControlPlane({
         </header>
 
         <div className={styles.scopeNote}>
-          <strong>工作区共享目录</strong>
+          <strong>个人能力目录</strong>
           <span>
             {knowledgeMode
-              ? "连接信息对当前工作区成员可见，但不会自动加入任何智能体；需要在智能体草稿中显式绑定。外部资料、检索权限和凭据仍由知识服务控制。"
-              : "MCP 定义和已审核工具对当前工作区成员共享，但不会自动授权给所有智能体；每个智能体都要显式绑定，凭据按个人、团队或工作负载作用域注入。"}
+              ? "连接定义、检索工具和凭据只属于当前用户，不会因共享智能体而共享；需要在个人智能体草稿中显式绑定。"
+              : "用户注册的 MCP、已审核工具、执行授权和凭据只属于当前用户；平台内置 MCP 可见但不可修改。"}
           </span>
         </div>
 
         {!canManage && (
           <div className={styles.permissionNote}>
             <strong>当前为只读目录</strong>
-            <span>Owner / Admin 可以注册、更新和停用连接；成员可查看并在智能体中绑定已启用能力。</span>
+            <span>Viewer 只能查看；Owner、Admin 和 Member 可管理自己的连接。</span>
           </div>
         )}
         {notice && <p className={styles.notice} role="status">{notice}</p>}
@@ -643,6 +638,7 @@ export function McpCatalogControlPlane({
                   <p>{item.description}</p>
                   {item.endpointUrl && <code className={styles.endpoint}>{item.endpointUrl}</code>}
                   <div className={styles.badges}>
+                    <span>{item.ownerUserId ? "个人" : "平台内置"}</span>
                     <span>{TRANSPORT_LABELS[item.transport]}</span>
                     <span data-risk={item.risk}>{RISK_LABELS[item.risk]}</span>
                     <span>{NETWORK_LABELS[item.networkAccess]}</span>
@@ -668,7 +664,7 @@ export function McpCatalogControlPlane({
                           ? "凭据已配置"
                           : "等待配置凭据"}
                     </span>
-                    {canManage && (
+                    {canManage && item.ownerUserId && (
                       <div>
                         <button type="button" onClick={() => startEdit(item)}>
                           编辑
@@ -1104,7 +1100,7 @@ export function McpCatalogControlPlane({
           </div>
           <ol>
             <li><span>1</span><div><strong>地址检测</strong><p>服务端连接 MCP 地址，读取 initialize 与 tools/list。</p></div></li>
-            <li><span>2</span><div><strong>加密托管</strong><p>需要认证时直接在页面填写，服务端加密保存并按租户隔离。</p></div></li>
+              <li><span>2</span><div><strong>加密托管</strong><p>需要认证时直接在页面填写，服务端加密保存并按租户与用户双重隔离。</p></div></li>
             <li><span>3</span><div><strong>工具审核与绑定</strong><p>只勾选需要暴露的工具，再到智能体编辑页绑定 MCP。</p></div></li>
           </ol>
           <details>

@@ -20,9 +20,7 @@ describe("Knowledge control plane", () => {
   });
 
   it("uses governed MCP registration and manual tool discovery", () => {
-    expect(component).toContain(
-      'membership.role === "owner" || membership.role === "admin"',
-    );
+    expect(component).toContain('membership.role !== "viewer"');
     expect(component).toContain("studioClient.discoverMcp");
     expect(component).toContain("检测地址");
     expect(component).toContain("已选择 {draft.tools.length} 个");
@@ -33,9 +31,9 @@ describe("Knowledge control plane", () => {
     expect(component).toContain('category === category');
   });
 
-  it("shares only the connection directory and requires explicit agent binding", () => {
-    expect(component).toContain("连接信息对当前工作区成员可见");
-    expect(component).toContain("不会自动加入任何智能体");
-    expect(component).toContain("外部资料、检索权限和凭据仍由知识服务控制");
+  it("keeps connection definitions and credentials personal", () => {
+    expect(component).toContain("个人能力目录");
+    expect(component).toContain("只属于当前用户");
+    expect(component).toContain("不会因共享智能体而共享");
   });
 });

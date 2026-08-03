@@ -1521,7 +1521,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
 
 
 @pytest.mark.asyncio
-async def test_catalog_admin_can_discover_mcp_tools_but_member_cannot() -> None:
+async def test_each_studio_writer_can_discover_mcp_tools() -> None:
     class Connector:
         async def discover(
             self,
@@ -1590,9 +1590,89 @@ async def test_catalog_admin_can_discover_mcp_tools_but_member_cannot() -> None:
         "mcp__company__search",
         "mcp__company__open",
     ]
-    assert rejected.status_code == 403
-    assert rejected.json()["error"]["code"] == "permission_denied"
+    assert rejected.status_code == 200
     assert member_credential.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_same_tenant_users_have_private_mcp_catalogs() -> None:
+    application = app()
+    alice = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-personal-mcp",
+        "X-User-ID": "alice",
+    }
+    bob = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-personal-mcp",
+        "X-User-ID": "bob",
+    }
+
+    def resource(label: str) -> dict[str, object]:
+        return {
+            "reference": "company-search",
+            "serverName": "company-search",
+            "label": label,
+            "description": "Personal company search.",
+            "endpointUrl": "https://mcp.example.com/mcp",
+            "transport": "http",
+            "tools": ["mcp__company_search__search"],
+            "risk": "medium",
+            "networkAccess": "external",
+            "sendsUserData": True,
+            "readOnly": True,
+            "credentialManaged": True,
+            "executionLocation": "external-mcp",
+            "preflightRequired": True,
+            "authMode": "none",
+            "authKey": "authorization",
+            "enabled": True,
+        }
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://test",
+    ) as client:
+        initial = await client.get("/v1/studio/catalog", headers=alice)
+        alice_saved = await client.put(
+            "/v1/studio/catalog/mcp/company-search",
+            headers=alice,
+            json={
+                "expectedRevision": initial.json()["revision"],
+                "resource": resource("Alice search"),
+                "allowedExecutionProfileIds": ["local-development"],
+            },
+        )
+        hidden_from_bob = await client.get("/v1/studio/catalog", headers=bob)
+        bob_saved = await client.put(
+            "/v1/studio/catalog/mcp/company-search",
+            headers=bob,
+            json={
+                "expectedRevision": alice_saved.json()["record"]["revision"],
+                "resource": resource("Bob search"),
+                "allowedExecutionProfileIds": ["local-development"],
+            },
+        )
+        alice_after = await client.get("/v1/studio/catalog", headers=alice)
+
+    assert alice_saved.status_code == 200, alice_saved.text
+    assert "company-search" not in {
+        item["reference"] for item in hidden_from_bob.json()["catalog"]["mcpServers"]
+    }
+    bob_item = next(
+        item
+        for item in bob_saved.json()["record"]["catalog"]["mcpServers"]
+        if item["reference"] == "company-search"
+    )
+    alice_item = next(
+        item
+        for item in alice_after.json()["catalog"]["mcpServers"]
+        if item["reference"] == "company-search"
+    )
+    assert bob_item["label"] == "Bob search"
+    assert bob_item["ownerUserId"] == "bob"
+    assert alice_item["label"] == "Alice search"
+    assert alice_item["ownerUserId"] == "alice"
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,9 @@ import {
   DEFAULT_STUDIO_DRAFT,
   MODEL_ROUTES,
   evaluateStudioDraft,
+  mcpOptionsForDraft,
   restoreStudioDraft,
+  type McpOption,
 } from "../src/lib/agent-studio";
 
 describe("Agent Studio effective contract", () => {
@@ -61,6 +63,45 @@ describe("Agent Studio effective contract", () => {
     expect(contract.risk).toBe("high");
     expect(contract.collaborationLabel).toBe("单 Agent");
     expect(contract.subagentCount).toBe(0);
+  });
+
+  it("does not offer business MCP or knowledge services to the personal Lead", () => {
+    const options: McpOption[] = [
+      {
+        id: "tavily-readonly",
+        category: "tool",
+        label: "公网搜索",
+        description: "通用公网检索",
+        tools: ["search"],
+        network: "external",
+        sendsUserData: true,
+      },
+      {
+        id: "sentiment-query",
+        category: "tool",
+        label: "涉非舆情研判查询",
+        description: "业务查询",
+        tools: ["query"],
+        network: "external",
+        sendsUserData: true,
+      },
+      {
+        id: "weknora-judicial",
+        category: "knowledge",
+        label: "司法案例外部知识库",
+        description: "业务知识库",
+        tools: ["hybrid_search"],
+        network: "external",
+        sendsUserData: true,
+      },
+    ];
+    const visible = mcpOptionsForDraft(DEFAULT_STUDIO_DRAFT, [...options]);
+
+    expect(visible.map((item) => item.id)).toEqual(["tavily-readonly"]);
+    expect(mcpOptionsForDraft(
+      { ...DEFAULT_STUDIO_DRAFT, name: "public-opinion-agent", domain: "public-opinion" },
+      [...options],
+    )).toEqual(options);
   });
 
   it("fails closed when prompt, subagent, policy and eval coverage disagree", () => {

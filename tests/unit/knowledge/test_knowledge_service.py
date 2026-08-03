@@ -134,8 +134,37 @@ async def test_acl_filters_chunks_before_retrieval_scoring() -> None:
         knowledge_base_references=("company",),
     )
 
-    assert {item.source_reference for item in search.visible_chunks} == {"public"}
-    assert all(hit.citation.source_reference == "public" for hit in result.hits)
+    assert search.visible_chunks == ()
+    assert result.hits == ()
+
+
+@pytest.mark.asyncio
+async def test_personal_knowledge_is_hidden_from_other_users() -> None:
+    service = KnowledgeService(InMemoryKnowledgeRepository())
+    await service.create_source(
+        "tenant",
+        "owner",
+        file_source("private-source", "Private owner content."),
+    )
+    await service.create_base(
+        "tenant",
+        "owner",
+        CreateKnowledgeBaseRequest.model_validate(
+            {
+                "reference": "private-base",
+                "displayName": "Private base",
+                "sourceReferences": ["private-source"],
+            }
+        ),
+    )
+
+    assert [item.reference for item in await service.list_bases("tenant", "owner")] == [
+        "private-base"
+    ]
+    assert await service.list_bases("tenant", "other-user") == ()
+    assert await service.list_sources("tenant", "other-user") == ()
+    with pytest.raises(NotFoundError, match="Knowledge Base not found"):
+        await service.get_base("tenant", "private-base", "other-user")
 
 
 @pytest.mark.asyncio
@@ -244,7 +273,7 @@ async def test_session_binding_remains_on_old_snapshot_after_refresh() -> None:
             }
         ),
     )
-    bindings = await service.resolve_bindings("tenant", "user", ("company",))
+    bindings = await service.resolve_bindings("tenant", "owner", ("company",))
     old_snapshot = source.active_snapshot_id
     current = await service.get_source("tenant", "handbook")
     await service.replace_source(
@@ -274,13 +303,13 @@ async def test_session_binding_remains_on_old_snapshot_after_refresh() -> None:
 
     old_result = await service.search(
         "tenant",
-        "user",
+        "owner",
         "apples",
         bindings=bindings,
     )
     new_result = await service.search(
         "tenant",
-        "user",
+        "owner",
         "pears",
         knowledge_base_references=("company",),
     )

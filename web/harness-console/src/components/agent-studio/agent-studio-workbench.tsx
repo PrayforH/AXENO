@@ -7,6 +7,7 @@ import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
   evaluateStudioDraft,
+  mcpOptionsForDraft,
   type StudioDraft,
   type StudioEvalCase,
   type StudioSection,
@@ -304,6 +305,10 @@ export function AgentStudioWorkbench() {
       ? capabilityOptions(capabilities)
       : { routes: [], tools: [], mcp: [], profiles: [] },
     [capabilities],
+  );
+  const visibleMcpOptions = useMemo(
+    () => mcpOptionsForDraft(draft, options.mcp),
+    [draft.name, draft.domain, options.mcp],
   );
   const contract = useMemo(
     () => evaluateStudioDraft(draft, { routes: options.routes, mcp: options.mcp }),
@@ -2711,9 +2716,11 @@ export function AgentStudioWorkbench() {
                     <h3>数据与联网能力</h3>
                     <p>通过平台注册的逻辑 MCP，不接受任意 URL 或内联密钥。</p>
                   </div>
-                  <span>{draft.mcpServers.length} 项已启用</span>
+                  <span>
+                    {visibleMcpOptions.filter((item) => draft.mcpServers.includes(item.id)).length} 项已启用
+                  </span>
                 </div>
-                {options.mcp.filter((mcp) => mcp.category !== "knowledge").map((mcp) => {
+                {visibleMcpOptions.filter((mcp) => mcp.category !== "knowledge").map((mcp) => {
                   const enabled = draft.mcpServers.includes(mcp.id);
                   return (
                     <label key={mcp.id} className={enabled ? styles.mcpCardEnabled : styles.mcpCard}>
@@ -2742,44 +2749,46 @@ export function AgentStudioWorkbench() {
                   </InfoStrip>
                 )}
 
-                <div className={styles.groupHeading}>
-                  <div>
-                    <h3>外部知识库</h3>
-                    <p>通过已审核的 MCP 检索工具访问；资料、切片与向量均保留在外部系统。</p>
-                  </div>
-                  <span>{options.mcp.filter((item) => item.category === "knowledge" && draft.mcpServers.includes(item.id)).length} 个已绑定</span>
-                </div>
-                {options.mcp.some((item) => item.category === "knowledge") ? options.mcp.filter((item) => item.category === "knowledge").map((mcp) => {
-                  const enabled = draft.mcpServers.includes(mcp.id);
-                  return (
-                    <label
-                      key={mcp.id}
-                      className={enabled ? styles.mcpCardEnabled : styles.mcpCard}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={() => toggleMcp(mcp.id)}
-                      />
-                      <span className={styles.mcpSignal} aria-hidden="true">
-                        <i /><i /><i />
+                {visibleMcpOptions.some((item) => item.category === "knowledge") && (
+                  <>
+                    <div className={styles.groupHeading}>
+                      <div>
+                        <h3>外部知识库</h3>
+                        <p>通过已审核的 MCP 检索工具访问；资料、切片与向量均保留在外部系统。</p>
+                      </div>
+                      <span>
+                        {visibleMcpOptions.filter((item) => item.category === "knowledge" && draft.mcpServers.includes(item.id)).length} 个已绑定
                       </span>
-                      <span className={styles.mcpCopy}>
-                        <span className={styles.mcpTitleLine}>
-                          <strong>{mcp.label}</strong>
-                          <span>外部检索</span>
-                          <span>{mcp.tools.length} 个工具</span>
-                        </span>
-                        <small>{mcp.description}</small>
-                        <code>{mcp.tools.join(" · ")}</code>
-                      </span>
-                      <span className={styles.switchVisual} aria-hidden="true"><i /></span>
-                    </label>
-                  );
-                }) : (
-                  <InfoStrip tone="neutral">
-                    暂无可绑定知识库。请先在 Studio 的“知识库”页连接外部知识服务、手动检测并选择检索工具。
-                  </InfoStrip>
+                    </div>
+                    {visibleMcpOptions.filter((item) => item.category === "knowledge").map((mcp) => {
+                      const enabled = draft.mcpServers.includes(mcp.id);
+                      return (
+                        <label
+                          key={mcp.id}
+                          className={enabled ? styles.mcpCardEnabled : styles.mcpCard}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={() => toggleMcp(mcp.id)}
+                          />
+                          <span className={styles.mcpSignal} aria-hidden="true">
+                            <i /><i /><i />
+                          </span>
+                          <span className={styles.mcpCopy}>
+                            <span className={styles.mcpTitleLine}>
+                              <strong>{mcp.label}</strong>
+                              <span>外部检索</span>
+                              <span>{mcp.tools.length} 个工具</span>
+                            </span>
+                            <small>{mcp.description}</small>
+                            <code>{mcp.tools.join(" · ")}</code>
+                          </span>
+                          <span className={styles.switchVisual} aria-hidden="true"><i /></span>
+                        </label>
+                      );
+                    })}
+                  </>
                 )}
               </section>
             )}

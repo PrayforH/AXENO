@@ -22,7 +22,6 @@ from harness.knowledge.models import (
 from harness.knowledge.service import KnowledgeService
 from harness.studio.api import (
     StudioActor,
-    require_studio_deployer,
     require_studio_reader,
     require_studio_writer,
 )
@@ -49,7 +48,7 @@ async def list_knowledge_bases(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> list[KnowledgeBase]:
-    return list(await service.list_bases(actor.tenant_id))
+    return list(await service.list_bases(actor.tenant_id, actor.user_id))
 
 
 @router.post(
@@ -71,7 +70,7 @@ async def get_knowledge_base(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> KnowledgeBase:
-    return await service.get_base(actor.tenant_id, reference)
+    return await service.get_base(actor.tenant_id, reference, actor.user_id)
 
 
 @router.put("/bases/{reference}", response_model=KnowledgeBase)
@@ -96,7 +95,7 @@ async def list_knowledge_sources(
 ) -> list[KnowledgeSourceSummary]:
     return [
         KnowledgeSourceSummary.from_source(source)
-        for source in await service.list_sources(actor.tenant_id)
+        for source in await service.list_sources(actor.tenant_id, actor.user_id)
     ]
 
 
@@ -107,7 +106,7 @@ async def list_knowledge_sources(
 )
 async def create_knowledge_source(
     body: CreateKnowledgeSourceRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> CreateKnowledgeSourceResult:
     source, sync = await service.create_source(
@@ -127,14 +126,16 @@ async def get_knowledge_source(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> KnowledgeSourceSummary:
-    return KnowledgeSourceSummary.from_source(await service.get_source(actor.tenant_id, reference))
+    return KnowledgeSourceSummary.from_source(
+        await service.get_source(actor.tenant_id, reference, actor.user_id)
+    )
 
 
 @router.put("/sources/{reference}", response_model=KnowledgeSourceSummary)
 async def replace_knowledge_source(
     reference: str,
     body: ReplaceKnowledgeSourceRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> KnowledgeSourceSummary:
     return KnowledgeSourceSummary.from_source(
@@ -150,7 +151,7 @@ async def replace_knowledge_source(
 @router.post("/sources/{reference}/sync", response_model=KnowledgeSyncRun)
 async def sync_knowledge_source(
     reference: str,
-    actor: Annotated[StudioActor, Depends(require_studio_deployer)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ) -> KnowledgeSyncRun:
     return await service.sync_source(actor.tenant_id, actor.user_id, reference)
@@ -164,8 +165,9 @@ async def list_knowledge_syncs(
     limit: int = 100,
 ) -> list[KnowledgeSyncRun]:
     return list(
-        await service.repository.list_syncs(
+        await service.list_syncs(
             actor.tenant_id,
+            actor.user_id,
             source_reference=source_reference,
             limit=max(1, min(limit, 200)),
         )
@@ -180,8 +182,9 @@ async def list_knowledge_snapshots(
     limit: int = 100,
 ) -> list[KnowledgeSnapshot]:
     return list(
-        await service.repository.list_snapshots(
+        await service.list_snapshots(
             actor.tenant_id,
+            actor.user_id,
             source_reference=source_reference,
             limit=max(1, min(limit, 200)),
         )

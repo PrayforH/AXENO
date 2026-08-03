@@ -12,7 +12,7 @@ from harness.runtime.mcp_credentials import (
     McpCredentialError,
     ServerSecretReferenceProvider,
 )
-from harness.runtime.tools import ToolResolver
+from harness.runtime.tools import ToolResolutionError, ToolResolver
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.models import UpsertCatalogResourceRequest
@@ -36,10 +36,10 @@ def _manifest() -> AgentManifest:
     )
 
 
-def _identity() -> ExecutionIdentity:
+def _identity(user_id: str = "user-a") -> ExecutionIdentity:
     return ExecutionIdentity(
         tenant_id="tenant-a",
-        user_id="user-a",
+        user_id=user_id,
         project_id="web-agent",
         session_id="session-a",
         run_id="run-a",
@@ -131,7 +131,7 @@ async def test_catalog_registration_resolves_selected_tools_and_bearer_endpoint(
 
     resolved = await _factory()(provider, catalogs=catalogs).resolve(
         manifest,
-        _identity(),
+        _identity("owner-a"),
     )
 
     assert resolved.mcp_servers["company"] == {
@@ -143,3 +143,12 @@ async def test_catalog_registration_resolves_selected_tools_and_bearer_endpoint(
         "mcp__company__search",
         "mcp__company__open",
     )
+
+    with pytest.raises(
+        ToolResolutionError,
+        match="MCP tool registration is not configured: company-search",
+    ):
+        await _factory()(provider, catalogs=catalogs).resolve(
+            manifest,
+            _identity("other-user"),
+        )

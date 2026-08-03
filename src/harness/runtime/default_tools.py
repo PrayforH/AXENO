@@ -57,10 +57,11 @@ def default_tool_resolver(
 
     async def tenant_registry(
         tenant_id: str,
+        user_id: str,
     ) -> dict[str, McpServerRegistration]:
         if catalogs is None:
             return {}
-        record = await catalogs.get(tenant_id)
+        record = await catalogs.get_for_user(tenant_id, user_id)
         return {
             capability.reference: registration
             for capability in record.catalog.mcp_servers

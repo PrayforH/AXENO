@@ -87,12 +87,12 @@ async def test_knowledge_api_file_sync_search_and_citations() -> None:
 
 
 @pytest.mark.asyncio
-async def test_knowledge_source_management_requires_deployer() -> None:
+async def test_knowledge_source_management_requires_writer() -> None:
     app = create_memory_app()
     app.dependency_overrides[require_identity] = lambda: Identity(
         tenant_id="tenant-a",
-        user_id="member-a",
-        roles=frozenset({"member"}),
+        user_id="viewer-a",
+        roles=frozenset({"viewer"}),
     )
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -119,3 +119,65 @@ async def test_knowledge_source_management_requires_deployer() -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "permission_denied"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_api_hides_another_users_resources() -> None:
+    app = create_memory_app()
+    current_user = {"value": "owner-a"}
+    app.dependency_overrides[require_identity] = lambda: Identity(
+        tenant_id="tenant-a",
+        user_id=current_user["value"],
+        roles=frozenset({"owner"}),
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        source = await client.post(
+            "/v1/studio/knowledge/sources",
+            json={
+                "reference": "private-source",
+                "displayName": "Private source",
+                "kind": "file",
+                "config": {
+                    "type": "file",
+                    "documents": [
+                        {
+                            "documentId": "private-document",
+                            "title": "Private",
+                            "content": "Only the owner can search this.",
+                        }
+                    ],
+                },
+            },
+        )
+        base = await client.post(
+            "/v1/studio/knowledge/bases",
+            json={
+                "reference": "private-base",
+                "displayName": "Private base",
+                "sourceReferences": ["private-source"],
+            },
+        )
+        current_user["value"] = "other-user"
+        bases = await client.get("/v1/studio/knowledge/bases")
+        sources = await client.get("/v1/studio/knowledge/sources")
+        snapshots = await client.get("/v1/studio/knowledge/snapshots")
+        hidden = await client.get("/v1/studio/knowledge/bases/private-base")
+        searched = await client.post(
+            "/v1/studio/knowledge/search",
+            json={
+                "query": "owner",
+                "knowledgeBaseReferences": ["private-base"],
+            },
+        )
+
+    assert source.status_code == 201
+    assert base.status_code == 201
+    assert bases.json() == []
+    assert sources.json() == []
+    assert snapshots.json() == []
+    assert hidden.status_code == 404
+    assert searched.status_code == 200
+    assert searched.json()["hits"] == []

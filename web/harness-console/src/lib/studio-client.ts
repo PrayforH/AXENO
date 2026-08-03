@@ -802,6 +802,8 @@ export type StudioCapabilities = {
   }>;
   mcpServers: Array<{
     reference: string;
+    ownerUserId: string | null;
+    allowedExecutionProfileIds: string[];
     category: "tool" | "knowledge";
     serverName: string | null;
     label: string;

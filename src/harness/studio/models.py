@@ -335,6 +335,11 @@ _MCP_IDENTIFIER_PATTERN = r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$"
 
 class McpCapability(StudioModel):
     reference: str = Field(pattern=_MCP_IDENTIFIER_PATTERN)
+    owner_user_id: str | None = Field(default=None, alias="ownerUserId", min_length=1)
+    allowed_execution_profile_ids: tuple[str, ...] = Field(
+        default=(),
+        alias="allowedExecutionProfileIds",
+    )
     category: Literal["tool", "knowledge"] = "tool"
     server_name: str | None = Field(
         default=None,
@@ -392,6 +397,10 @@ class McpCapability(StudioModel):
             raise ValueError("authenticated MCP requires credentialReference")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("duplicate MCP tool")
+        if len(self.allowed_execution_profile_ids) != len(
+            set(self.allowed_execution_profile_ids)
+        ):
+            raise ValueError("duplicate MCP Execution Profile")
         return self
 
 
@@ -491,7 +500,6 @@ class CapabilityCatalog(StudioModel):
     def unique_managed_ids(self) -> CapabilityCatalog:
         collections = (
             ("model route", [item.route_id for item in self.model_routes]),
-            ("MCP", [item.reference for item in self.mcp_servers]),
             ("policy", [item.policy_id for item in self.policies]),
             (
                 "execution profile",
@@ -504,6 +512,16 @@ class CapabilityCatalog(StudioModel):
             )
             if duplicates:
                 raise ValueError(f"duplicate {label}: {', '.join(duplicates)}")
+        mcp_keys = [(item.owner_user_id, item.reference) for item in self.mcp_servers]
+        duplicate_mcp = sorted(
+            {
+                f"{owner or 'platform'}:{reference}"
+                for owner, reference in mcp_keys
+                if mcp_keys.count((owner, reference)) > 1
+            }
+        )
+        if duplicate_mcp:
+            raise ValueError(f"duplicate MCP: {', '.join(duplicate_mcp)}")
         return self
 
 

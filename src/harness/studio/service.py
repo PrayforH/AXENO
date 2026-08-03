@@ -75,16 +75,16 @@ class AgentStudioService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"draft_{uuid4().hex}")
 
-    async def capabilities(self, tenant_id: str) -> CapabilityCatalog:
+    async def capabilities(self, tenant_id: str, user_id: str) -> CapabilityCatalog:
         if self._catalogs is not None:
-            return (await self._catalogs.get(tenant_id)).catalog
+            return (await self._catalogs.get_for_user(tenant_id, user_id)).catalog
         if self._catalog is None:
             raise RuntimeError("Agent Studio capability catalog is not configured")
         return self._catalog
 
-    async def _compiler_for(self, tenant_id: str) -> AgentDraftCompiler:
+    async def _compiler_for(self, tenant_id: str, user_id: str) -> AgentDraftCompiler:
         if self._catalogs is not None:
-            record = await self._catalogs.get(tenant_id)
+            record = await self._catalogs.get_for_user(tenant_id, user_id)
             return AgentDraftCompiler(
                 record.catalog,
                 catalog_revision=record.revision,
@@ -152,7 +152,7 @@ class AgentStudioService:
     async def validate(
         self, tenant_id: str, owner_user_id: str, draft_id: str
     ) -> DraftValidationResult:
-        compiler = await self._compiler_for(tenant_id)
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
         draft = await self.get(tenant_id, owner_user_id, draft_id)
         validation = compiler.validate(draft)
         dependency_issues = await self._dependency_issues(tenant_id, owner_user_id, draft)
@@ -166,13 +166,13 @@ class AgentStudioService:
         )
 
     async def bundle(self, tenant_id: str, owner_user_id: str, draft_id: str) -> CompiledAgentDraft:
-        compiler = await self._compiler_for(tenant_id)
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
         return compiler.compile(await self.get(tenant_id, owner_user_id, draft_id))
 
     async def nexau_bundle(
         self, tenant_id: str, owner_user_id: str, draft_id: str
     ) -> NexauAgentArchive:
-        catalog = await self.capabilities(tenant_id)
+        catalog = await self.capabilities(tenant_id, owner_user_id)
         return export_nexau_agent(
             await self.get(tenant_id, owner_user_id, draft_id),
             mcp_capabilities={item.reference: item for item in catalog.mcp_servers},
@@ -197,7 +197,7 @@ class AgentStudioService:
             createdAt=now,
             updatedAt=now,
         )
-        compiler = await self._compiler_for(tenant_id)
+        compiler = await self._compiler_for(tenant_id, user_id)
         round_trip_verified = False
         try:
             compiled = compiler.compile(draft)
@@ -247,7 +247,7 @@ class AgentStudioService:
         if self._publisher is None:
             raise StudioPublisherNotConfiguredError("Agent Studio publisher is not configured")
         draft = await self.get(tenant_id, user_id, draft_id)
-        compiler = await self._compiler_for(tenant_id)
+        compiler = await self._compiler_for(tenant_id, user_id)
         try:
             if expected_revision is not None and draft.revision != expected_revision:
                 raise ConflictError(

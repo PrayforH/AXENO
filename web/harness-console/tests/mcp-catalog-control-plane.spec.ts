@@ -75,10 +75,10 @@ describe("MCP capability catalog", () => {
     expect(component).not.toContain('placeholder="sk-');
   });
 
-  it("explains tenant sharing without implying automatic agent authorization", () => {
-    expect(component).toContain("工作区共享目录");
-    expect(component).toContain("不会自动授权给所有智能体");
-    expect(component).toContain("每个智能体都要显式绑定");
-    expect(component).toContain("个人、团队或工作负载作用域");
+  it("explains personal ownership without implying agent-share inheritance", () => {
+    expect(component).toContain("个人能力目录");
+    expect(component).toContain("只属于当前用户");
+    expect(component).toContain("平台内置 MCP 可见但不可修改");
+    expect(component).toContain("按租户与用户双重隔离");
   });
 });

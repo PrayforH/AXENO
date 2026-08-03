@@ -7,13 +7,16 @@ from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.models import (
+    AgentTemplate,
     CapabilityCatalogRecord,
+    CreateAgentDraftRequest,
     McpCapability,
     ModelRouteCapability,
     NetworkAccess,
     UpsertCatalogResourceRequest,
 )
 from harness.studio.repositories import InMemoryAgentDraftRepository
+from harness.studio.service import AgentStudioService
 
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
 
@@ -223,8 +226,135 @@ async def test_mcp_upsert_atomically_authorizes_selected_execution_profiles() ->
 
     profiles = {profile.profile_id: profile for profile in result.record.catalog.execution_profiles}
     assert "knowledge-search" in profiles["local-development"].allowed_mcp_references
-    assert profiles["local-development"].version == 2
+    assert profiles["local-development"].version == 1
     assert "knowledge-search" not in profiles["isolated-default"].allowed_mcp_references
+    capability = next(
+        item for item in result.record.catalog.mcp_servers if item.reference == "knowledge-search"
+    )
+    assert capability.allowed_execution_profile_ids == ("local-development",)
+
+
+@pytest.mark.asyncio
+async def test_personal_mcp_capabilities_are_visible_only_to_their_owner() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+    resource = (
+        default_capability_catalog()
+        .mcp_servers[0]
+        .model_copy(update={"reference": "company-search", "label": "Company search"})
+    )
+
+    first = await service.upsert(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        resource_type="mcp",
+        resource_id="company-search",
+        request=UpsertCatalogResourceRequest(
+            expectedRevision=1,
+            resource=resource,
+        ),
+    )
+    await service.upsert(
+        tenant_id="tenant-a",
+        user_id="user-b",
+        resource_type="mcp",
+        resource_id="company-search",
+        request=UpsertCatalogResourceRequest(
+            expectedRevision=first.record.revision,
+            resource=resource.model_copy(update={"label": "My company search"}),
+        ),
+    )
+
+    user_a = await service.get_for_user("tenant-a", "user-a")
+    user_b = await service.get_for_user("tenant-a", "user-b")
+    visible_a = {item.reference: item for item in user_a.catalog.mcp_servers}
+    visible_b = {item.reference: item for item in user_b.catalog.mcp_servers}
+
+    assert visible_a["company-search"].label == "Company search"
+    assert visible_a["company-search"].owner_user_id == "user-a"
+    assert visible_b["company-search"].label == "My company search"
+    assert visible_b["company-search"].owner_user_id == "user-b"
+
+
+@pytest.mark.asyncio
+async def test_platform_mcp_cannot_be_mutated_as_a_personal_capability() -> None:
+    service = CapabilityCatalogService(
+        InMemoryCapabilityCatalogRepository(),
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+    platform = default_capability_catalog().mcp_servers[0]
+
+    with pytest.raises(ConflictError, match="cannot be overwritten"):
+        await service.upsert(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            resource_type="mcp",
+            resource_id=platform.reference,
+            request=UpsertCatalogResourceRequest(
+                expectedRevision=1,
+                resource=platform,
+            ),
+        )
+    with pytest.raises(ConflictError, match="cannot be disabled"):
+        await service.disable(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            resource_type="mcp",
+            resource_id=platform.reference,
+            expected_revision=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_legacy_custom_mcp_is_assigned_to_referencing_draft_owner() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    drafts = InMemoryAgentDraftRepository()
+    studio = AgentStudioService(drafts, catalog=default_capability_catalog())
+    draft = await studio.create(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        request=CreateAgentDraftRequest(
+            name="business-agent",
+            domain="business",
+            displayName="Business Agent",
+            description="Uses a legacy personal MCP.",
+            template=AgentTemplate.ANALYST,
+        ),
+    )
+    await drafts.replace(
+        draft.revision,
+        draft.model_copy(
+            update={
+                "revision": draft.revision + 1,
+                "spec": draft.spec.model_copy(update={"mcp_servers": ("legacy-business",)}),
+            }
+        ),
+    )
+    catalog = default_capability_catalog()
+    legacy = catalog.mcp_servers[0].model_copy(
+        update={"reference": "legacy-business", "label": "Legacy business"}
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=3,
+            catalog=catalog.model_copy(update={"mcp_servers": (*catalog.mcp_servers, legacy)}),
+            updatedBy="codex-deployer",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(repository, drafts, clock=lambda: NOW)
+
+    owner = await service.get_for_user("tenant-a", "user-a")
+    other = await service.get_for_user("tenant-a", "user-b")
+
+    assert "legacy-business" in {item.reference for item in owner.catalog.mcp_servers}
+    assert "legacy-business" not in {item.reference for item in other.catalog.mcp_servers}
 
 
 @pytest.mark.asyncio

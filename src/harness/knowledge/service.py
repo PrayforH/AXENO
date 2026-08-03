@@ -14,6 +14,7 @@ from harness.knowledge.connectors import (
 from harness.knowledge.models import (
     CreateKnowledgeBaseRequest,
     CreateKnowledgeSourceRequest,
+    KnowledgeAcl,
     KnowledgeBase,
     KnowledgeChunk,
     KnowledgeCitation,
@@ -24,6 +25,7 @@ from harness.knowledge.models import (
     KnowledgeSourceHealth,
     KnowledgeSyncRun,
     KnowledgeSyncStatus,
+    KnowledgeVisibility,
     ReplaceKnowledgeBaseRequest,
     ReplaceKnowledgeSourceRequest,
     SearchKnowledgeResponse,
@@ -75,7 +77,11 @@ class KnowledgeService:
         actor_id: str,
         request: CreateKnowledgeBaseRequest,
     ) -> KnowledgeBase:
-        await self._require_sources(tenant_id, request.source_references)
+        await self._require_sources(
+            tenant_id,
+            request.source_references,
+            owner_user_id=actor_id,
+        )
         now = self._clock()
         value = KnowledgeBase(
             tenantId=tenant_id,
@@ -106,10 +112,14 @@ class KnowledgeService:
         reference: str,
         request: ReplaceKnowledgeBaseRequest,
     ) -> KnowledgeBase:
-        current = await self.repository.get_base(tenant_id, reference)
+        current = await self._get_owned_base(tenant_id, actor_id, reference)
         if current.revision != request.expected_revision:
             raise ConflictError("Knowledge Base revision changed")
-        await self._require_sources(tenant_id, request.source_references)
+        await self._require_sources(
+            tenant_id,
+            request.source_references,
+            owner_user_id=actor_id,
+        )
         updated = current.model_copy(
             update={
                 "display_name": request.display_name,
@@ -131,11 +141,25 @@ class KnowledgeService:
         )
         return updated
 
-    async def list_bases(self, tenant_id: str) -> Sequence[KnowledgeBase]:
-        return await self.repository.list_bases(tenant_id)
+    async def list_bases(
+        self,
+        tenant_id: str,
+        owner_user_id: str | None = None,
+    ) -> Sequence[KnowledgeBase]:
+        values = await self.repository.list_bases(tenant_id)
+        if owner_user_id is None:
+            return values
+        return tuple(item for item in values if item.created_by == owner_user_id)
 
-    async def get_base(self, tenant_id: str, reference: str) -> KnowledgeBase:
-        return await self.repository.get_base(tenant_id, reference)
+    async def get_base(
+        self,
+        tenant_id: str,
+        reference: str,
+        owner_user_id: str | None = None,
+    ) -> KnowledgeBase:
+        if owner_user_id is None:
+            return await self.repository.get_base(tenant_id, reference)
+        return await self._get_owned_base(tenant_id, owner_user_id, reference)
 
     async def create_source(
         self,
@@ -151,7 +175,7 @@ class KnowledgeService:
             description=request.description,
             kind=request.kind,
             config=request.config,
-            acl=request.acl,
+            acl=self._personal_acl(actor_id, request.acl),
             revision=1,
             health=KnowledgeSourceHealth.PENDING,
             createdBy=actor_id,
@@ -179,7 +203,7 @@ class KnowledgeService:
         reference: str,
         request: ReplaceKnowledgeSourceRequest,
     ) -> KnowledgeSource:
-        current = await self.repository.get_source(tenant_id, reference)
+        current = await self._get_owned_source(tenant_id, actor_id, reference)
         if current.revision != request.expected_revision:
             raise ConflictError("knowledge source revision changed")
         if request.config.type != current.kind.value:
@@ -189,7 +213,7 @@ class KnowledgeService:
                 "display_name": request.display_name,
                 "description": request.description,
                 "config": request.config,
-                "acl": request.acl,
+                "acl": self._personal_acl(actor_id, request.acl),
                 "health": (
                     KnowledgeSourceHealth.PENDING
                     if request.enabled
@@ -212,11 +236,65 @@ class KnowledgeService:
         )
         return updated
 
-    async def list_sources(self, tenant_id: str) -> Sequence[KnowledgeSource]:
-        return await self.repository.list_sources(tenant_id)
+    async def list_sources(
+        self,
+        tenant_id: str,
+        owner_user_id: str | None = None,
+    ) -> Sequence[KnowledgeSource]:
+        values = await self.repository.list_sources(tenant_id)
+        if owner_user_id is None:
+            return values
+        return tuple(item for item in values if item.created_by == owner_user_id)
 
-    async def get_source(self, tenant_id: str, reference: str) -> KnowledgeSource:
-        return await self.repository.get_source(tenant_id, reference)
+    async def get_source(
+        self,
+        tenant_id: str,
+        reference: str,
+        owner_user_id: str | None = None,
+    ) -> KnowledgeSource:
+        if owner_user_id is None:
+            return await self.repository.get_source(tenant_id, reference)
+        return await self._get_owned_source(tenant_id, owner_user_id, reference)
+
+    async def list_syncs(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        *,
+        source_reference: str | None = None,
+        limit: int = 100,
+    ) -> Sequence[KnowledgeSyncRun]:
+        owned_references = {
+            item.reference for item in await self.list_sources(tenant_id, owner_user_id)
+        }
+        if source_reference is not None and source_reference not in owned_references:
+            return ()
+        values = await self.repository.list_syncs(
+            tenant_id,
+            source_reference=source_reference,
+            limit=max(limit, 10_000),
+        )
+        return tuple(item for item in values if item.source_reference in owned_references)[:limit]
+
+    async def list_snapshots(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        *,
+        source_reference: str | None = None,
+        limit: int = 100,
+    ) -> Sequence[KnowledgeSnapshot]:
+        owned_references = {
+            item.reference for item in await self.list_sources(tenant_id, owner_user_id)
+        }
+        if source_reference is not None and source_reference not in owned_references:
+            return ()
+        values = await self.repository.list_snapshots(
+            tenant_id,
+            source_reference=source_reference,
+            limit=max(limit, 10_000),
+        )
+        return tuple(item for item in values if item.source_reference in owned_references)[:limit]
 
     async def sync_source(
         self,
@@ -224,7 +302,7 @@ class KnowledgeService:
         actor_id: str,
         reference: str,
     ) -> KnowledgeSyncRun:
-        source = await self.repository.get_source(tenant_id, reference)
+        source = await self._get_owned_source(tenant_id, actor_id, reference)
         if source.health is KnowledgeSourceHealth.DISABLED:
             raise ConflictError("disabled knowledge source cannot be synchronized")
         now = self._clock()
@@ -399,6 +477,13 @@ class KnowledgeService:
         seen: set[tuple[str, str]] = set()
         for base_reference in knowledge_base_references:
             base = await self.repository.get_base(tenant_id, base_reference)
+            if not await self._allows_base(
+                tenant_id,
+                actor_id,
+                team_ids,
+                base,
+            ):
+                continue
             for source_reference in base.source_references:
                 source = await self.repository.get_source(tenant_id, source_reference)
                 key = (base_reference, source_reference)
@@ -500,13 +585,33 @@ class KnowledgeService:
         base_reference: str,
         source: KnowledgeSource,
     ) -> bool:
-        if source.acl.allows(actor_id):
+        if source.created_by == actor_id:
+            return True
+        if source.acl.visibility is KnowledgeVisibility.RESTRICTED and source.acl.allows(actor_id):
+            return True
+        return bool(
+            team_ids
+            and self._team_grant_checker is not None
+            and await self._team_grant_checker(tenant_id, actor_id, team_ids, base_reference)
+        )
+
+    async def _allows_base(
+        self,
+        tenant_id: str,
+        actor_id: str,
+        team_ids: tuple[str, ...],
+        base: KnowledgeBase,
+    ) -> bool:
+        if base.created_by == actor_id:
             return True
         return bool(
             team_ids
             and self._team_grant_checker is not None
             and await self._team_grant_checker(
-                tenant_id, actor_id, team_ids, base_reference
+                tenant_id,
+                actor_id,
+                team_ids,
+                base.reference,
             )
         )
 
@@ -522,7 +627,9 @@ class KnowledgeService:
             tenant_id,
             snapshot.source_reference,
         )
-        if not source.acl.allows(actor_id):
+        if source.created_by != actor_id and not (
+            source.acl.visibility is KnowledgeVisibility.RESTRICTED and source.acl.allows(actor_id)
+        ):
             raise NotFoundError("knowledge citation not found")
         chunks = await self.repository.list_chunks(
             tenant_id,
@@ -605,9 +712,51 @@ class KnowledgeService:
                 start = max(start + 1, stop - self._chunk_overlap)
         return tuple(chunks)
 
-    async def _require_sources(self, tenant_id: str, references: Sequence[str]) -> None:
+    async def _require_sources(
+        self,
+        tenant_id: str,
+        references: Sequence[str],
+        *,
+        owner_user_id: str | None = None,
+    ) -> None:
         for reference in references:
-            await self.repository.get_source(tenant_id, reference)
+            if owner_user_id is None:
+                await self.repository.get_source(tenant_id, reference)
+            else:
+                await self._get_owned_source(tenant_id, owner_user_id, reference)
+
+    @staticmethod
+    def _personal_acl(actor_id: str, requested: KnowledgeAcl) -> KnowledgeAcl:
+        explicitly_allowed = (
+            requested.user_ids if requested.visibility is KnowledgeVisibility.RESTRICTED else ()
+        )
+        return KnowledgeAcl(
+            visibility=KnowledgeVisibility.RESTRICTED,
+            userIds=tuple(dict.fromkeys((actor_id, *explicitly_allowed))),
+            workloadIds=requested.workload_ids,
+        )
+
+    async def _get_owned_base(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        reference: str,
+    ) -> KnowledgeBase:
+        value = await self.repository.get_base(tenant_id, reference)
+        if value.created_by != owner_user_id:
+            raise NotFoundError(f"Knowledge Base not found: {reference}")
+        return value
+
+    async def _get_owned_source(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        reference: str,
+    ) -> KnowledgeSource:
+        value = await self.repository.get_source(tenant_id, reference)
+        if value.created_by != owner_user_id:
+            raise NotFoundError(f"knowledge source not found: {reference}")
+        return value
 
     async def _record(
         self,

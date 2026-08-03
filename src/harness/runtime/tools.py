@@ -112,7 +112,7 @@ class ToolResolver:
         *,
         mcp_registry: Mapping[str, McpServerRegistration] | None = None,
         mcp_registry_provider: (
-            Callable[[str], Awaitable[Mapping[str, McpServerRegistration]]] | None
+            Callable[[str, str], Awaitable[Mapping[str, McpServerRegistration]]] | None
         ) = None,
         credential_provider: DynamicMcpCredentialProvider | None = None,
     ) -> None:
@@ -152,7 +152,10 @@ class ToolResolver:
                 )
             if identity is not None:
                 mcp_registry.update(
-                    await self._mcp_registry_provider(identity.tenant_id)
+                    await self._mcp_registry_provider(
+                        identity.tenant_id,
+                        identity.user_id,
+                    )
                 )
 
         python_tool_overrides = python_tool_overrides or {}
