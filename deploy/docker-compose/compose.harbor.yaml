@@ -52,11 +52,11 @@ services:
 
   worker:
     <<: *harbor-image
-    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-worker:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}
 
   quality-sync:
     <<: *harbor-image
-    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-quality-sync:${HARNESS_HARBOR_IMAGE_TAG:-develop}
+    image: ${HARNESS_HARBOR_REGISTRY:-172.16.102.32:5000}/${HARNESS_HARBOR_PROJECT:-agent-studio}/${HARNESS_IMAGE_ARCH:-amd64}/agent-studio-api:${HARNESS_HARBOR_IMAGE_TAG:-develop}
 
   seed:
     <<: *harbor-image
