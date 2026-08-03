@@ -191,7 +191,7 @@ describe("Codex-style activity UI", () => {
     const view = {
       runId: "run-failed",
       tools: [],
-    } as RunViewModel;
+    } as unknown as RunViewModel;
 
     expect(shouldSuppressRawToolCard(view, "stale-bash-call")).toBe(true);
     expect(shouldSuppressRawToolCard(undefined, "standalone-tool")).toBe(false);

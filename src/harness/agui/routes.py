@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
@@ -37,6 +38,25 @@ _TERMINAL_EVENT_TYPES = {
 }
 
 _RESPONSE_BOUNDARY_PREFIXES = ("approval.", "subagent.", "tool.")
+_STREAM_HEARTBEAT_SECONDS = 10.0
+
+
+def _projected_event_cursor(last_event_id: str | None) -> tuple[int, int]:
+    """Return the durable sequence and projected child count already received.
+
+    One durable Harness event can project to several AG-UI events whose IDs are
+    ``sequence:index``. Resuming after ``12:1`` must replay child 2 from durable
+    event 12 instead of skipping the whole durable event.
+    """
+
+    raw = (last_event_id or "0").strip()
+    sequence_text, separator, child_text = raw.partition(":")
+    try:
+        sequence = max(0, int(sequence_text))
+        child_count = max(0, int(child_text)) if separator else 0
+    except ValueError:
+        return 0, 0
+    return sequence, child_count
 
 
 def _final_response_text(events: list[RunEvent]) -> str:
@@ -202,6 +222,7 @@ async def run_agui_agent(
         sequence = 0
         terminal_event_seen = False
         protected_tool_call_ids: set[str] = set()
+        last_emission = time.monotonic()
         while True:
             events = await container.observed_events.list_after(
                 identity.tenant_id, run.run_id, sequence
@@ -223,17 +244,23 @@ async def run_agui_agent(
                         else f"{event.sequence}:{index + 1}"
                     )
                     yield _encode_event(event_id, item)
+                    last_emission = time.monotonic()
                 sequence = event.sequence
                 if event.type in _TERMINAL_EVENT_TYPES:
                     terminal_event_seen = True
             if terminal_event_seen:
                 break
+            if time.monotonic() - last_emission >= _STREAM_HEARTBEAT_SECONDS:
+                # Keep reverse proxies and browser transports from treating a
+                # long model/tool turn as an abandoned response.
+                yield ": keep-alive\n\n"
+                last_emission = time.monotonic()
             await asyncio.sleep(0.02)
         if worker_task is not None:
             await worker_task
 
     headers = {
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         "X-Accel-Buffering": "no",
         "X-Harness-Run-ID": run.run_id,
         "X-Harness-Canonical-Client-Run-ID": creation.canonical_client_run_id,
@@ -619,20 +646,42 @@ async def stream_agui_events(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     ensure_permission(identity, "tasks:read")
-    await require_owned_run(container, identity, run_id)
-    raw_id = (last_event_id or "0").split(":", 1)[0]
+    run = await require_owned_run(container, identity, run_id)
+    client_thread_id, client_run_id = await container.agui.client_coordinates_for_run(
+        tenant_id=identity.tenant_id,
+        user_id=identity.user_id,
+        run=run,
+    )
+    sequence, delivered_children = _projected_event_cursor(last_event_id)
     events = await container.observed_events.list_after(
-        identity.tenant_id, run_id, int(raw_id)
+        identity.tenant_id,
+        run_id,
+        sequence - 1 if delivered_children else sequence,
     )
     events = redact_internal_agent_asset_events(events)
 
     async def stream() -> AsyncIterator[str]:
         for event in events:
             projected = map_harness_event(event)
-            for index, item in enumerate(projected):
+            first_child = delivered_children if event.sequence == sequence else 0
+            for index, item in enumerate(projected[first_child:], start=first_child):
+                if isinstance(item, (RunStartedEvent, RunFinishedEvent)):
+                    item = item.model_copy(
+                        update={
+                            "thread_id": client_thread_id,
+                            "run_id": client_run_id,
+                        }
+                    )
                 event_id = (
                     str(event.sequence) if len(projected) == 1 else f"{event.sequence}:{index + 1}"
                 )
                 yield _encode_event(event_id, item)
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )

@@ -645,6 +645,12 @@ export function ActivitySummary({
     view.phase === "queued" ||
     view.phase === "running" ||
     view.phase === "waiting_approval";
+  const observedActive = useRef({ runId: view.runId, value: active });
+  if (observedActive.current.runId !== view.runId) {
+    observedActive.current = { runId: view.runId, value: active };
+  } else if (active) {
+    observedActive.current.value = true;
+  }
   const elapsedAnchor = useRef<ElapsedAnchor>({
     runId: view.runId,
     observedAt: Date.now(),
@@ -668,9 +674,12 @@ export function ActivitySummary({
     const timer = window.setInterval(tick, 1_000);
     return () => window.clearInterval(timer);
   }, [active, view.runId]);
-  // Successful work folds into the answer. Failed work stays open so the
-  // action trail and the final diagnostic are visible without another click.
-  const open = manuallyOpen ?? (active || view.phase === "failed");
+  // Do not make an in-flight transcript disappear as soon as the final answer
+  // settles. A reloaded historical run may start collapsed, while the run the
+  // user just watched stays open until they explicitly close it.
+  const open = manuallyOpen ?? (
+    active || view.phase === "failed" || observedActive.current.value
+  );
   const elapsed = activeElapsedMs(view, now, elapsedAnchor.current);
   const timeline = displayTimeline(view);
   const heading = activityHeading(view);

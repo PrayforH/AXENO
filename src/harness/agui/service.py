@@ -81,6 +81,27 @@ class AguiRunService:
             space_id=session.team_ids[0] if session.team_ids else None,
         )
 
+    async def client_coordinates_for_run(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        run: Run,
+    ) -> tuple[str, str]:
+        """Resolve durable run coordinates back to the originating AG-UI IDs."""
+
+        try:
+            binding = await self._bindings.get_by_session(
+                tenant_id,
+                user_id,
+                run.session_id,
+            )
+        except NotFoundError:
+            # Runs created through the lower-level Sessions API have no AG-UI
+            # thread binding; their durable coordinates remain the fallback.
+            return run.session_id, run.idempotency_key
+        return binding.thread_id, run.idempotency_key
+
     async def list_bindings(
         self,
         *,

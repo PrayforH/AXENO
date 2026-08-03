@@ -43,7 +43,13 @@ describe("Harness same-origin proxies", () => {
             controller.close();
           },
         }),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/event-stream",
+            "X-Harness-Run-ID": "server-run-1",
+          },
+        },
       );
     };
     const request = new Request("http://console.test/api/agui", {
@@ -66,6 +72,7 @@ describe("Harness same-origin proxies", () => {
     expect(headers.get("Cookie")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response.headers.get("X-Harness-Run-ID")).toBe("server-run-1");
     expect(await response.text()).toBe("data: first\n\ndata: second\n\n");
   });
 

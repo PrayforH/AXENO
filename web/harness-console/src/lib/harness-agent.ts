@@ -25,6 +25,146 @@ interface AssistantUiRunOptions {
   signal?: AbortSignal;
 }
 
+const terminalAguiEvents = new Set(["RUN_FINISHED", "RUN_ERROR"]);
+
+function replayUrl(requestUrl: string, serverRunId: string) {
+  const relative = requestUrl.startsWith("/");
+  const base = globalThis.location?.origin ?? "http://localhost";
+  const url = new URL(requestUrl, base);
+  url.search = "";
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/runs/${encodeURIComponent(
+    serverRunId,
+  )}/events`;
+  return relative ? `${url.pathname}${url.search}` : url.toString();
+}
+
+function abortError(signal: AbortSignal) {
+  if (signal.reason instanceof Error) return signal.reason;
+  return new DOMException("The operation was aborted", "AbortError");
+}
+
+function waitForReplay(signal: AbortSignal, milliseconds: number) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const timer = globalThis.setTimeout(done, milliseconds);
+    function done() {
+      signal.removeEventListener("abort", cancelled);
+      resolve();
+    }
+    function cancelled() {
+      globalThis.clearTimeout(timer);
+      reject(abortError(signal));
+    }
+    signal.addEventListener("abort", cancelled, { once: true });
+  });
+}
+
+function recoverInterruptedAguiStream(
+  response: Response,
+  requestUrl: string,
+  requestInit: RequestInit,
+  fetcher: (url: string, init: RequestInit) => Promise<Response>,
+) {
+  const serverRunId = response.headers.get("X-Harness-Run-ID");
+  if (
+    !response.ok ||
+    !response.body ||
+    !serverRunId ||
+    requestInit.method?.toUpperCase() !== "POST" ||
+    !response.headers.get("content-type")?.includes("text/event-stream")
+  ) {
+    return response;
+  }
+
+  const recoveryController = new AbortController();
+  const signal = requestInit.signal
+    ? AbortSignal.any([requestInit.signal, recoveryController.signal])
+    : recoveryController.signal;
+  const target = replayUrl(requestUrl, serverRunId);
+  const encoder = new TextEncoder();
+  let currentReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let lastEventId = "";
+  let terminal = false;
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        let source: Response = response;
+        let firstConnection = true;
+        while (!terminal) {
+          if (!source.body) throw new Error("AG-UI replay response has no body");
+          currentReader = source.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            if (signal.aborted) throw abortError(signal);
+            const { done, value } = await currentReader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            while (true) {
+              const boundary = buffer.match(/\r?\n\r?\n/);
+              if (!boundary || boundary.index === undefined) break;
+              const frame = buffer.slice(0, boundary.index);
+              buffer = buffer.slice(boundary.index + boundary[0].length);
+              const lines = frame.split(/\r?\n/);
+              const id = lines.find((line) => line.startsWith("id:"))
+                ?.slice(3).trim();
+              const data = lines
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).trimStart())
+                .join("\n");
+              if (id) lastEventId = id;
+              if (data) {
+                try {
+                  const event = JSON.parse(data) as { type?: string };
+                  if (event.type && terminalAguiEvents.has(event.type)) terminal = true;
+                } catch {
+                  // The AG-UI parser remains authoritative for schema errors.
+                }
+              }
+              controller.enqueue(encoder.encode(`${frame}\n\n`));
+            }
+          }
+          currentReader = undefined;
+          if (terminal) break;
+          if (!firstConnection) await waitForReplay(signal, 350);
+          firstConnection = false;
+          const headers = new Headers(requestInit.headers);
+          headers.delete("content-type");
+          headers.set("accept", "text/event-stream");
+          if (lastEventId) headers.set("last-event-id", lastEventId);
+          source = await fetcher(target, {
+            method: "GET",
+            headers,
+            cache: "no-store",
+            signal,
+          });
+          redirectOnUnauthorized(source);
+          if (!source.ok) {
+            throw new Error(`AG-UI replay failed: ${source.status}`);
+          }
+        }
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      recoveryController.abort(reason);
+      await currentReader?.cancel(reason);
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 export class HarnessHttpAgent extends HttpAgent {
   private activeInput?: Pick<RunAgentInput, "threadId" | "runId">;
   private cancelFetch: typeof fetch;
@@ -38,7 +178,7 @@ export class HarnessHttpAgent extends HttpAgent {
     } = config;
     const transportFetch = httpConfig.fetch ?? globalThis.fetch.bind(globalThis);
     const sessionAwareFetch: typeof transportFetch = async (url, init) => {
-      const response = await transportFetch(url, init);
+      let response = await transportFetch(url, init);
       redirectOnUnauthorized(response);
       if (response.headers.get("X-Harness-Run-Reused") === "true") {
         const runId = response.headers.get("X-Harness-Run-ID");
@@ -51,6 +191,12 @@ export class HarnessHttpAgent extends HttpAgent {
       } else {
         runReuseStore.clear();
       }
+      response = recoverInterruptedAguiStream(
+        response,
+        String(url),
+        init ?? {},
+        sessionAwareFetch,
+      );
       return response;
     };
     super({ ...httpConfig, fetch: sessionAwareFetch });

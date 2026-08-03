@@ -224,6 +224,8 @@ describe("Studio typed API mapping", () => {
 
     const resource = {
       reference: "company-search",
+      ownerUserId: null,
+      allowedExecutionProfileIds: ["local-development"],
       category: "tool" as const,
       serverName: "company",
       label: "企业搜索",

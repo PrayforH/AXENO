@@ -25,6 +25,10 @@ const RESPONSE_HEADERS = [
   "x-accel-buffering",
   "x-agent-content-sha256",
   "x-agent-package-sha256",
+  "x-harness-canonical-client-run-id",
+  "x-harness-run-deduplicated",
+  "x-harness-run-id",
+  "x-harness-run-reused",
 ];
 
 const TRACE_HEADERS = ["traceparent", "tracestate", "baggage"] as const;

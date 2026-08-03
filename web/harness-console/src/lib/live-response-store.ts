@@ -24,10 +24,10 @@ const emptySnapshot: LiveResponseSnapshot = Object.freeze({
   visible: false,
 });
 
-// The provider does not label text as "commentary" or "final" up front. Render
-// a candidate immediately so Markdown can update while deltas arrive. If a
-// tool call follows, hide that provisional text and let Activity retain it as
-// part of the processing trace.
+// The provider does not label text as "commentary" or "final" up front. Keep a
+// short candidate out of the response slot because these are normally progress
+// prefaces followed by a tool. Once it grows into a substantive answer, stream
+// it; if a tool still follows, Activity retains it as processing commentary.
 
 type MessageDisposition = "idle" | "candidate" | "response" | "activity";
 
@@ -36,7 +36,10 @@ const listeners = new Set<() => void>();
 let pendingMessageId: string | undefined;
 let pendingDelta = "";
 let scheduledFrame: number | undefined;
+let scheduledWatchdog: ReturnType<typeof setTimeout> | undefined;
 let disposition: MessageDisposition = "idle";
+const FRAME_WATCHDOG_MS = 120;
+const RESPONSE_CANDIDATE_MIN_CHARS = 160;
 
 function publish(next: LiveResponseSnapshot) {
   if (
@@ -56,19 +59,28 @@ function flushPendingDelta(visible = true) {
   const frame = scheduledFrame;
   scheduledFrame = undefined;
   if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
+  if (scheduledWatchdog !== undefined) {
+    globalThis.clearTimeout(scheduledWatchdog);
+    scheduledWatchdog = undefined;
+  }
   if (!pendingMessageId || !pendingDelta) return;
   const messageId = pendingMessageId;
   const delta = pendingDelta;
   pendingMessageId = undefined;
   pendingDelta = "";
   const sameMessage = snapshot.messageId === messageId;
+  const text = `${sameMessage ? snapshot.text : ""}${delta}`;
+  const candidateReady =
+    disposition !== "candidate" ||
+    snapshot.visible ||
+    text.trim().length >= RESPONSE_CANDIDATE_MIN_CHARS;
   publish({
     threadId: snapshot.threadId,
     runId: snapshot.runId,
     messageId,
-    text: `${sameMessage ? snapshot.text : ""}${delta}`,
+    text,
     status: snapshot.status === "complete" ? "complete" : "streaming",
-    visible,
+    visible: visible && candidateReady,
   });
 }
 
@@ -82,9 +94,14 @@ function promoteCandidate() {
 }
 
 function cancelScheduledFrame() {
-  if (scheduledFrame === undefined) return;
-  globalThis.cancelAnimationFrame?.(scheduledFrame);
-  scheduledFrame = undefined;
+  if (scheduledFrame !== undefined) {
+    globalThis.cancelAnimationFrame?.(scheduledFrame);
+    scheduledFrame = undefined;
+  }
+  if (scheduledWatchdog !== undefined) {
+    globalThis.clearTimeout(scheduledWatchdog);
+    scheduledWatchdog = undefined;
+  }
 }
 
 function schedulePendingDelta() {
@@ -95,6 +112,12 @@ function schedulePendingDelta() {
   }
   scheduledFrame = globalThis.requestAnimationFrame(() =>
     flushPendingDelta(disposition !== "activity"),
+  );
+  // Browsers can heavily throttle or stop animation frames for a busy or
+  // backgrounded tab. Never let the only copy of streamed text wait on paint.
+  scheduledWatchdog = globalThis.setTimeout(
+    () => flushPendingDelta(disposition !== "activity"),
+    FRAME_WATCHDOG_MS,
   );
 }
 

@@ -245,9 +245,10 @@ describe("HarnessHttpAgent", () => {
     const firstChunk = new Promise<void>((resolve) => {
       resolveFirstChunk = resolve;
     });
+    const substantialFirstChunk = "第一段".repeat(60);
     liveResponseStore.clear();
     const unsubscribe = liveResponseStore.subscribe(() => {
-      if (liveResponseStore.getSnapshot().text === "第一段") {
+      if (liveResponseStore.getSnapshot().text === substantialFirstChunk) {
         resolveFirstChunk?.();
       }
     });
@@ -263,7 +264,7 @@ describe("HarnessHttpAgent", () => {
                   "",
                   'data: {"type":"TEXT_MESSAGE_START","messageId":"message-live","role":"assistant"}',
                   "",
-                  'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-live","delta":"第一段"}',
+                  `data: ${JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", messageId: "message-live", delta: substantialFirstChunk })}`,
                   "",
                   "",
                 ].join("\n"),
@@ -282,13 +283,13 @@ describe("HarnessHttpAgent", () => {
     await firstChunk;
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "第一段",
+      text: substantialFirstChunk,
       status: "streaming",
       visible: true,
     });
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "第一段",
+      text: substantialFirstChunk,
       status: "streaming",
       visible: true,
     });
@@ -310,11 +311,78 @@ describe("HarnessHttpAgent", () => {
     await run;
 
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "第一段第二段",
+      text: `${substantialFirstChunk}第二段`,
       status: "complete",
       visible: true,
     });
     unsubscribe();
     vi.useRealTimers();
+  });
+
+  it("recovers a prematurely closed live stream without refreshing", async () => {
+    liveResponseStore.clear();
+    runStreamStore.clear();
+    const calls: Array<{ url: string; lastEventId: string | null }> = [];
+    const streamFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      calls.push({
+        url,
+        lastEventId: new Headers(init?.headers).get("last-event-id"),
+      });
+      if (calls.length === 1) {
+        return new Response(
+          [
+            'id: 1\ndata: {"type":"RUN_STARTED","threadId":"thread-recover","runId":"run-recover"}',
+            'id: 2\ndata: {"type":"TEXT_MESSAGE_START","messageId":"message-recover","role":"assistant"}',
+            'id: 3\ndata: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-recover","delta":"第一段"}',
+            "",
+            "",
+          ].join("\n\n"),
+          {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "X-Harness-Run-ID": "server-run-recover",
+            },
+          },
+        );
+      }
+      return new Response(
+        [
+          'id: 4\ndata: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-recover","delta":"第二段"}',
+          'id: 5\ndata: {"type":"TEXT_MESSAGE_END","messageId":"message-recover"}',
+          'id: 6:2\ndata: {"type":"RUN_FINISHED","threadId":"thread-recover","runId":"run-recover"}',
+          "",
+          "",
+        ].join("\n\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    };
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+      fetch: streamFetch,
+      threadId: "thread-recover",
+    });
+
+    await agent.runAgent({ runId: "run-recover" });
+
+    expect(calls).toEqual([
+      {
+        url: "http://harness/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+        lastEventId: null,
+      },
+      {
+        url: "http://harness/v1/agui/runs/server-run-recover/events",
+        lastEventId: "3",
+      },
+    ]);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: "第一段第二段",
+      status: "complete",
+      visible: true,
+    });
+    expect(runStreamStore.getSnapshot()).toMatchObject({
+      runId: "run-recover",
+      status: "complete",
+    });
   });
 });

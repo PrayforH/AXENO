@@ -57,9 +57,14 @@ async def test_post_agui_runs_agent_and_streams_standard_events() -> None:
             json=_request(thread_id="thread-a", run_id="client-run-1", prompt="hello"),
             headers=HEADERS,
         )
+        replay = await client.get(
+            f"/v1/agui/runs/{response.headers['x-harness-run-id']}/events",
+            headers=HEADERS,
+        )
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.headers["cache-control"] == "no-cache, no-transform"
     events = _events(response.text)
     assert events[0] == {
         "type": "RUN_STARTED",
@@ -77,6 +82,9 @@ async def test_post_agui_runs_agent_and_streams_standard_events() -> None:
         "threadId": "thread-a",
         "runId": "client-run-1",
     }
+    replay_events = _events(replay.text)
+    assert replay_events[0] == events[0]
+    assert replay_events[-1] == events[-1]
 
 
 @pytest.mark.asyncio

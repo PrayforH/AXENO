@@ -12,7 +12,7 @@ describe("liveResponseStore", () => {
     vi.unstubAllGlobals();
   });
 
-  it("streams a candidate immediately and hides it when a tool follows", () => {
+  it("keeps a short progress preface out of the response when a tool follows", () => {
     liveResponseStore.startRun("run-1");
     liveResponseStore.startMessage("commentary");
     liveResponseStore.append("commentary", "先检索资料");
@@ -20,7 +20,7 @@ describe("liveResponseStore", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "先检索资料",
       status: "streaming",
-      visible: true,
+      visible: false,
     });
 
     liveResponseStore.hideForTool();
@@ -37,7 +37,7 @@ describe("liveResponseStore", () => {
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       text: "最终回答",
       status: "complete",
-      visible: true,
+      visible: false,
     });
 
     liveResponseStore.completeRun();
@@ -89,15 +89,15 @@ describe("liveResponseStore", () => {
 
     liveResponseStore.startRun("run-smooth");
     liveResponseStore.startMessage("message-smooth");
-    liveResponseStore.append("message-smooth", "平");
-    liveResponseStore.append("message-smooth", "滑");
+    liveResponseStore.append("message-smooth", "平".repeat(80));
+    liveResponseStore.append("message-smooth", "滑".repeat(80));
 
     expect(requestFrame).toHaveBeenCalledTimes(1);
     expect(liveResponseStore.getSnapshot().text).toBe("");
 
     paint?.(16);
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "平滑",
+      text: `${"平".repeat(80)}${"滑".repeat(80)}`,
       status: "streaming",
       visible: true,
     });
@@ -105,7 +105,7 @@ describe("liveResponseStore", () => {
     liveResponseStore.append("message-smooth", "完成");
     liveResponseStore.completeMessage("message-smooth");
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "平滑完成",
+      text: `${"平".repeat(80)}${"滑".repeat(80)}完成`,
       status: "complete",
       visible: true,
     });
@@ -115,11 +115,29 @@ describe("liveResponseStore", () => {
     liveResponseStore.completeRun();
     expect(notification).not.toHaveBeenCalled();
     expect(liveResponseStore.getSnapshot()).toMatchObject({
-      text: "平滑完成",
+      text: `${"平".repeat(80)}${"滑".repeat(80)}完成`,
       status: "complete",
       visible: true,
     });
     unsubscribe();
+  });
+
+  it("flushes pending text when animation frames are throttled", () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 21));
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    liveResponseStore.startRun("run-throttled");
+    liveResponseStore.startMessage("message-throttled");
+    const answer = "无需刷新即可看到".repeat(24);
+    liveResponseStore.append("message-throttled", answer);
+
+    expect(liveResponseStore.getSnapshot().text).toBe("");
+    vi.advanceTimersByTime(120);
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      text: answer,
+      status: "streaming",
+      visible: true,
+    });
   });
 
   it("streams a substantial active message before the run finishes", () => {
