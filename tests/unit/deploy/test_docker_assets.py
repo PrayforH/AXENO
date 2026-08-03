@@ -154,9 +154,10 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "LANGFUSE_SECRET_KEY=" in values
     assert "LANGFUSE_ENVIRONMENT=" in values
     assert "LANGFUSE_AUTHORIZATION=" not in values
-    assert "HARNESS_AGENT_VERSION=0.4.1" in values
+    assert "HARNESS_AGENT_NAME=lead-agent" in values
+    assert "HARNESS_AGENT_VERSION=1.0.0" in values
     assert compose()["services"]["web"]["environment"]["HARNESS_AGENT_VERSION"] == (
-        "${HARNESS_AGENT_VERSION:-0.4.1}"
+        "${HARNESS_AGENT_VERSION:-1.0.0}"
     )
     services = cast(dict[str, Any], compose()["services"])
     for name in ("api", "seed", "web"):

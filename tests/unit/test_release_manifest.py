@@ -84,4 +84,4 @@ def test_release_manifest_rejects_changed_bundle_and_sbom(tmp_path: Path) -> Non
 def test_every_reference_agent_bundle_is_byte_deterministic() -> None:
     hashes = verify(Path("agents"))
 
-    assert len(hashes) == 8
+    assert len(hashes) == 9

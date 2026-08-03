@@ -26,7 +26,7 @@ describe("assistant-ui AG-UI runtime", () => {
 
     expect(page).not.toContain("echo-agent");
     expect(page).not.toContain("0.4.0");
-    expect(config).toContain('environment.HARNESS_AGENT_NAME ?? "echo-agent"');
-    expect(config).toContain('environment.HARNESS_AGENT_VERSION ?? "0.4.1"');
+    expect(config).toContain('environment.HARNESS_AGENT_NAME ?? "lead-agent"');
+    expect(config).toContain('environment.HARNESS_AGENT_VERSION ?? "1.0.0"');
   });
 });

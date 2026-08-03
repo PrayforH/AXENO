@@ -77,6 +77,30 @@ async def test_exact_release_retry_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provisions_an_isolated_default_for_each_user() -> None:
+    registry = InMemoryAgentRegistry()
+    service = AgentService(
+        registry,
+        clock=lambda: NOW,
+        environment="production",
+        default_manifest_path="agents/lead-agent/agent.yaml",
+    )
+
+    first = await service.ensure_user_default("tenant-a", "user-1")
+    repeated = await service.ensure_user_default("tenant-a", "user-1")
+    second_user = await service.ensure_user_default("tenant-a", "user-2")
+
+    assert first is not None
+    assert first.name == "lead-agent"
+    assert first.package_hash is not None
+    assert repeated == first
+    assert second_user is not None
+    assert second_user.owner_user_id == "user-2"
+    assert await registry.list_for_user("tenant-a", "user-1") == [first]
+    assert await registry.list_for_user("tenant-a", "user-2") == [second_user]
+
+
+@pytest.mark.asyncio
 async def test_same_release_identity_rejects_different_content(tmp_path: Path) -> None:
     package = tmp_path / "echo-agent"
     copytree(FIXTURE.parent, package)

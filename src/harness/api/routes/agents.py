@@ -52,6 +52,7 @@ async def list_agents(
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[AgentCatalogItem]:
     ensure_permission(identity, "tasks:read")
+    await container.agents.ensure_user_default(identity.tenant_id, identity.user_id)
     versions = await container.agents.list_published(identity.tenant_id, identity.user_id)
     dependency_coordinates = {
         coordinate for version in versions for coordinate in _subagent_coordinates(version)

@@ -665,7 +665,15 @@ def build_production_container(
         clock=clock,
     )
 
-    agent_service = AgentService(registry, clock=clock, environment="production")
+    default_agent_manifest = Path("/app/agents/lead-agent/agent.yaml")
+    if not default_agent_manifest.exists():
+        default_agent_manifest = Path("agents/lead-agent/agent.yaml")
+    agent_service = AgentService(
+        registry,
+        clock=clock,
+        environment="production",
+        default_manifest_path=default_agent_manifest,
+    )
     capability_catalogs = CapabilityCatalogService(
         capability_catalog_repository,
         agent_drafts,

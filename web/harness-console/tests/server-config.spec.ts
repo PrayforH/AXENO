@@ -6,7 +6,7 @@ describe("Harness server configuration", () => {
     const config = getHarnessServerConfig({});
 
     expect(config.aguiUrl).toBe(
-      "http://127.0.0.1:8000/v1/agui?agent_name=echo-agent&agent_version=0.4.1",
+      "http://127.0.0.1:8000/v1/agui?agent_name=lead-agent&agent_version=1.0.0",
     );
     expect(config.serviceHeaders).toEqual({});
     expect(config.aguiUrl).not.toContain("local");

@@ -71,7 +71,7 @@ docker compose \
   up -d --build --wait
 ```
 
-启动顺序由健康检查控制：PostgreSQL → migration，MinIO → bucket 初始化，然后 API/Worker → seed → Web。seed 会先把 `helper-agent`、`echo-agent` 和 `public-opinion-agent` 构建成可复现 bundle，再通过生产 bundle API 幂等发布；生产 API 不接受服务器本地路径。默认入口：
+启动顺序由健康检查控制：PostgreSQL → migration，MinIO → bucket 初始化，然后 API/Worker → seed → Web。seed 会先把通用 `lead-agent`、运行依赖和各业务 Agent 构建成可复现 bundle，再通过生产 bundle API 幂等发布；生产 API 不接受服务器本地路径。每个用户首次读取 Agent 目录时，平台会在其私有作用域内幂等创建一份 `lead-agent`，不会把租户管理员的业务 Agent 共享给其他用户。默认入口：
 
 - Web：<http://127.0.0.1:3000>
 - API：<http://127.0.0.1:8000>
@@ -83,8 +83,8 @@ docker compose \
 控制台当前按部署配置固定一个 Agent，不在浏览器中动态修改生产绑定。编辑忽略提交的 `deploy/docker-compose/.env.docker`：
 
 ```dotenv
-HARNESS_AGENT_NAME=public-opinion-agent
-HARNESS_AGENT_VERSION=0.1.1
+HARNESS_AGENT_NAME=lead-agent
+HARNESS_AGENT_VERSION=1.0.0
 HARNESS_MCP_SECRET_REFERENCES_JSON={"tavily-readonly":{"api_key":"TAVILY_API_KEY"}}
 HARNESS_MCP_SERVER_SECRETS_JSON={"TAVILY_API_KEY":"replace-with-tavily-api-key"}
 ```
@@ -98,7 +98,7 @@ docker compose --env-file deploy/docker-compose/.env.docker \
   -f deploy/docker-compose/compose.yaml up -d --force-recreate worker web
 ```
 
-在页面中新建对话后生效；已经存在的 Session 继续绑定创建时的 Agent 版本。Tavily token 只进入 Worker，不会进入 API、Web 或浏览器。`public-opinion-agent` 不是未经修改的模板产物，而是按相同脚手架契约迁移并补全了舆情 prompt、Skill、只读 MCP、输出规范和评测集的领域参考实现。
+在页面中新建对话后生效；已经存在的 Session 继续绑定创建时的 Agent 版本。Tavily token 只进入 Worker，不会进入 API、Web 或浏览器。`public-opinion-agent` 是按相同脚手架契约迁移的具体业务实现，不属于平台模板，也不会成为新用户默认 Agent。
 
 ## 4. 黑盒验收
 

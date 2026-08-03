@@ -24,6 +24,7 @@ class AgentService:
         clock: Clock,
         environment: Literal["local", "test", "production"] = "local",
         allow_path_publication: bool | None = None,
+        default_manifest_path: str | Path | None = None,
     ) -> None:
         self._registry = registry
         self._clock = clock
@@ -32,6 +33,9 @@ class AgentService:
             environment != "production"
             if allow_path_publication is None
             else allow_path_publication
+        )
+        self._default_manifest_path = (
+            Path(default_manifest_path) if default_manifest_path is not None else None
         )
 
     def validate(
@@ -53,6 +57,33 @@ class AgentService:
             for version in await self._registry.list_for_user(tenant_id, owner_user_id)
             if version.status is AgentVersionStatus.PUBLISHED
         ]
+
+    async def ensure_user_default(
+        self, tenant_id: str, owner_user_id: str
+    ) -> AgentVersion | None:
+        """Idempotently provision the platform default into a user's private catalog."""
+
+        if self._default_manifest_path is None:
+            return None
+        report = check_agent_package(
+            self._default_manifest_path, environment="production"
+        )
+        snapshot = report.snapshot
+        name = snapshot.manifest.metadata.name
+        version = snapshot.manifest.metadata.version
+        for existing in await self._registry.list_for_user(tenant_id, owner_user_id):
+            if (
+                existing.name == name
+                and existing.version == version
+                and existing.status is AgentVersionStatus.PUBLISHED
+            ):
+                return existing
+        return await self._publish_snapshot(
+            tenant_id,
+            owner_user_id,
+            snapshot,
+            package_hash=report.package_hash,
+        )
 
     async def publish(
         self,

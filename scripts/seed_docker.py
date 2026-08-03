@@ -364,6 +364,7 @@ def main() -> None:
     raw_manifests = os.getenv(
         "HARNESS_SEED_AGENT_MANIFESTS",
         (
+            "/app/agents/lead-agent/agent.yaml,"
             "/app/agents/helper-agent/agent.yaml,"
             "/app/agents/echo-agent/agent.yaml,"
             "/app/agents/archive-file-classifier-agent/agent.yaml"

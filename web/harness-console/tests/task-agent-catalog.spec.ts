@@ -9,16 +9,22 @@ describe("task agent catalog", () => {
     vi.unstubAllGlobals();
   });
 
-  it("offers published Studio versions and keeps the configured runtime first-class", async () => {
+  it("keeps the neutral Lead default while offering business Agents explicitly", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         if (url.includes("runtime-config")) {
-          return Response.json({ name: "public-opinion-agent", version: "0.2.0" });
+          return Response.json({ name: "lead-agent", version: "1.0.0" });
         }
         if (url.includes("/api/harness/agents")) {
           return Response.json([
+            {
+              name: "lead-agent",
+              version: "1.0.0",
+              display_name: "通用 Lead Agent",
+              domain: "general-assistant",
+            },
             {
               name: "public-opinion-agent",
               version: "0.2.0",
@@ -56,11 +62,12 @@ describe("task agent catalog", () => {
 
     const catalog = await loadTaskAgentCatalog();
 
-    expect(catalog.defaultAgent.displayName).toBe("舆情研判 Agent");
-    expect(catalog.agents).toHaveLength(1);
+    expect(catalog.defaultAgent.displayName).toBe("通用 Lead Agent");
+    expect(catalog.agents).toHaveLength(2);
     expect(agentCoordinate(catalog.agents[0])).toBe(
-      "public-opinion-agent@0.2.0",
+      "lead-agent@1.0.0",
     );
+    expect(agentCoordinate(catalog.agents[1])).toBe("public-opinion-agent@0.2.0");
   });
 
   it("falls back to the configured runtime when Studio is unavailable", async () => {

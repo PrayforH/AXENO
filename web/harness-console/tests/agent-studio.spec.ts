@@ -7,6 +7,27 @@ import {
 } from "../src/lib/agent-studio";
 
 describe("Agent Studio effective contract", () => {
+  const specialists = [
+    {
+      alias: "researcher",
+      ref: "helper-agent@1.0.0",
+      responsibility: "核验事实并返回依据。",
+      background: true,
+    },
+    {
+      alias: "reviewer",
+      ref: "helper-agent@1.0.0",
+      responsibility: "复核结论和遗漏。",
+      background: true,
+    },
+    {
+      alias: "writer",
+      ref: "helper-agent@1.0.0",
+      responsibility: "整理最终交付。",
+      background: true,
+    },
+  ];
+
   it("offers DeepSeek V4 models as distinct executable routes", () => {
     const flash = MODEL_ROUTES.find((item) => item.id === "deepseek-v4-flash");
     const pro = MODEL_ROUTES.find((item) => item.id === "deepseek-v4-pro");
@@ -15,50 +36,38 @@ describe("Agent Studio effective contract", () => {
     expect(pro?.models).toEqual(["deepseek-v4-pro"]);
   });
 
-  it("keeps the full public-opinion prompt, workflow and reference files", () => {
+  it("uses a neutral general Lead instead of a business Agent template", () => {
     const skill = DEFAULT_STUDIO_DRAFT.skills[0];
 
-    expect(DEFAULT_STUDIO_DRAFT.version).toBe("0.3.5");
+    expect(DEFAULT_STUDIO_DRAFT.name).toBe("lead-agent");
+    expect(DEFAULT_STUDIO_DRAFT.domain).toBe("general-assistant");
+    expect(DEFAULT_STUDIO_DRAFT.version).toBe("1.0.0");
     expect(DEFAULT_STUDIO_DRAFT.model).toBe("deepseek-v4-pro");
-    expect(DEFAULT_STUDIO_DRAFT.systemPrompt.length).toBeGreaterThan(1_000);
-    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain("专用舆情 MCP");
-    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain(
-      ".claude/skills/public-opinion-analysis/references/",
-    );
-    expect(skill.instructions.length).toBeGreaterThan(700);
-    expect(skill.instructions).toContain("建立证据台账");
-    expect(skill.instructions).toContain("低风险的隔离沙箱只读 Bash");
-    expect(skill.instructions).not.toContain("读取 `references/");
-    expect(skill.files?.map((file) => file.path)).toEqual([
-      "references/report-contract.md",
-      "references/query-contract.md",
-      "references/report-rendering.md",
-      "references/risk-rubric.md",
-    ]);
-    expect(skill.files?.[0].content).toContain("10. **来源清单**");
-    expect(skill.files?.[1].content).toContain("region_codes");
-    expect(skill.files?.[2].content).toContain("base64");
-    expect(skill.files?.[2].content).toContain("低风险只读 Bash");
-    expect(skill.files?.[3].content).toContain("## Level 3 — critical");
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).toContain("通用任务入口");
+    expect(DEFAULT_STUDIO_DRAFT.systemPrompt).not.toContain("专用舆情 MCP");
+    expect(skill.name).toBe("general-task-orchestration");
+    expect(skill.instructions).toContain("专用流程");
+    expect(DEFAULT_STUDIO_DRAFT.mcpServers).toEqual([]);
+    expect(DEFAULT_STUDIO_DRAFT.subagents).toEqual([]);
   });
 
-  it("models Tavily as controlled MCP egress while keeping sandbox mandatory", () => {
+  it("keeps the default Lead isolated and offline until users add capabilities", () => {
     const contract = evaluateStudioDraft(DEFAULT_STUDIO_DRAFT);
 
     expect(contract.ready).toBe(true);
-    expect(contract.network).toBe("external");
-    expect(contract.networkLabel).toBe("受控外部 MCP");
+    expect(contract.network).toBe("none");
+    expect(contract.networkLabel).toBe("不联网");
     expect(contract.sandboxLabel).toBe("隔离执行 · 平台托管");
     expect(contract.risk).toBe("high");
-    expect(contract.collaborationLabel).toBe("1 Lead + 3 Sub");
-    expect(contract.subagentCount).toBe(3);
-    expect(contract.backgroundSubagentCount).toBe(3);
+    expect(contract.collaborationLabel).toBe("单 Agent");
+    expect(contract.subagentCount).toBe(0);
   });
 
   it("fails closed when prompt, subagent, policy and eval coverage disagree", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,
       systemPrompt: "Only a short prompt",
+      builtinTools: [...DEFAULT_STUDIO_DRAFT.builtinTools, "Task"],
       subagents: [],
       policy: "production-read-only",
       evalCases: DEFAULT_STUDIO_DRAFT.evalCases.filter(
@@ -74,7 +83,7 @@ describe("Agent Studio effective contract", () => {
     expect(contract.issues).toContain("评测集缺少 safety 场景");
   });
 
-  it("does not treat no Tavily as permission for arbitrary network", () => {
+  it("does not treat no MCP as permission for arbitrary network", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,
       mcpServers: [],
@@ -108,10 +117,10 @@ describe("Agent Studio effective contract", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,
       subagents: [
-        DEFAULT_STUDIO_DRAFT.subagents[0],
+        specialists[0],
         {
-          ...DEFAULT_STUDIO_DRAFT.subagents[1],
-          alias: DEFAULT_STUDIO_DRAFT.subagents[0].alias,
+          ...specialists[1],
+          alias: specialists[0].alias,
           ref: "helper-agent",
         },
       ],
@@ -124,15 +133,15 @@ describe("Agent Studio effective contract", () => {
     );
   });
 
-  it("keeps template Sub Agent references immutable while live options come from API", () => {
-    for (const agent of DEFAULT_STUDIO_DRAFT.subagents) {
-      expect(agent.ref).toMatch(/^[a-z][a-z0-9-]*@[^@]+$/);
-    }
+  it("does not bind business or helper Sub Agents in the default template", () => {
+    expect(DEFAULT_STUDIO_DRAFT.subagents).toEqual([]);
+    expect(DEFAULT_STUDIO_DRAFT.builtinTools).not.toContain("Task");
   });
 
   it("fails closed when the Studio collaboration graph exceeds runtime limits", () => {
     const contract = evaluateStudioDraft({
       ...DEFAULT_STUDIO_DRAFT,
+      subagents: specialists,
       maxSubagents: 2,
       maxConcurrentSubagents: 3,
     });
@@ -160,10 +169,10 @@ describe("Agent Studio effective contract", () => {
 
     expect(contract.ready).toBe(false);
     expect(contract.issues).toContain(
-      "评测 evidence-backed-brief 的必需与禁止工具冲突：Bash",
+      "评测 general-readonly-task 的必需与禁止工具冲突：Bash",
     );
     expect(contract.issues).toContain(
-      "评测 evidence-backed-brief 要求未启用工具：UnknownTool",
+      "评测 general-readonly-task 要求未启用工具：UnknownTool",
     );
   });
 
@@ -173,6 +182,8 @@ describe("Agent Studio effective contract", () => {
       restoreSession: undefined,
       archiveOnComplete: undefined,
       toolExposureMode: undefined,
+      builtinTools: [...DEFAULT_STUDIO_DRAFT.builtinTools, "Task"],
+      policy: "production-orchestrator",
       subagents: ["helper-agent@1.0.0"],
       evalCases: DEFAULT_STUDIO_DRAFT.evalCases.map(({ expect: _expect, ...testCase }) =>
         testCase,
@@ -187,7 +198,7 @@ describe("Agent Studio effective contract", () => {
     expect(restored?.toolExposureMode).toBe("eager");
     expect(restored?.subagents[0]).toMatchObject({
       ref: "helper-agent@1.0.0",
-      alias: "fact-researcher",
+      alias: "specialist-1",
     });
     expect(restored?.evalCases[0].expect.requiredTools).toEqual([]);
     expect(evaluateStudioDraft(restored as typeof DEFAULT_STUDIO_DRAFT).ready).toBe(true);

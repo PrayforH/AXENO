@@ -337,7 +337,7 @@ services:
       HARNESS_API_BEARER_TOKEN: ${HARNESS_API_BEARER_TOKEN:?set HARNESS_API_BEARER_TOKEN}
       HARNESS_TENANT_ID: ${HARNESS_TENANT_ID:-local}
       HARNESS_USER_ID: ${HARNESS_USER_ID:-system}
-      HARNESS_SEED_AGENT_MANIFESTS: /app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/archive-file-classifier-agent/agent.yaml
+      HARNESS_SEED_AGENT_MANIFESTS: /app/agents/lead-agent/agent.yaml,/app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/archive-file-classifier-agent/agent.yaml
       HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml,/app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml
       HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS: /app/agents/networked-knowledge-research-agent/agent.yaml
     depends_on:
@@ -357,8 +357,8 @@ services:
     environment:
       HARNESS_API_URL: http://api:8000
       HARNESS_API_BEARER_TOKEN: ${HARNESS_API_BEARER_TOKEN:?set HARNESS_API_BEARER_TOKEN}
-      HARNESS_AGENT_NAME: ${HARNESS_AGENT_NAME:-echo-agent}
-      HARNESS_AGENT_VERSION: ${HARNESS_AGENT_VERSION:-0.4.1}
+      HARNESS_AGENT_NAME: ${HARNESS_AGENT_NAME:-lead-agent}
+      HARNESS_AGENT_VERSION: ${HARNESS_AGENT_VERSION:-1.0.0}
       AUTH_PUBLIC_URL: ${AUTH_PUBLIC_URL:-http://localhost:3000}
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
       AUTH_REFRESH_COOKIE_DAYS: ${HARNESS_AUTH_REFRESH_TOKEN_DAYS:-30}
