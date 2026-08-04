@@ -54,10 +54,16 @@ export interface StudioSkill {
   name: string;
   description: string;
   instructions: string;
+  fileCount?: number | null;
+  filesTruncated?: boolean;
   files?: Array<{
     path: string;
     content?: string | null;
     contentBase64?: string | null;
+    retained?: boolean;
+    sizeBytes?: number | null;
+    contentSha256?: string | null;
+    binary?: boolean;
   }>;
 }
 
@@ -127,6 +133,27 @@ export interface StudioDraft {
   maxSubagentUsageUnits: number | null;
   evaluationEnabled: boolean;
   evalCases: StudioEvalCase[];
+}
+
+export function nextPatchVersion(version: string): string | null {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version.trim());
+  if (!match) return null;
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+}
+
+export function applyStudioDraftUpdate(
+  current: StudioDraft,
+  update: Partial<StudioDraft>,
+): StudioDraft {
+  const next = { ...current, ...update };
+  if (
+    !("version" in update) &&
+    current.publishedVersion &&
+    current.version === current.publishedVersion
+  ) {
+    next.version = nextPatchVersion(current.publishedVersion) ?? current.version;
+  }
+  return next;
 }
 
 export interface StudioContract {

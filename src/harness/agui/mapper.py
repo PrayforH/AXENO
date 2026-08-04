@@ -176,9 +176,26 @@ def _map_standard_event(event: RunEvent) -> Sequence[BaseEvent]:
     return []
 
 
-def map_harness_event(event: RunEvent) -> Sequence[BaseEvent]:
-    standard = list(_map_standard_event(event))
-    activity = activity_projection(event)
+def map_harness_event(
+    event: RunEvent,
+    *,
+    project_response_text: bool = True,
+    project_artifact: bool = True,
+    project_activity: bool = True,
+) -> Sequence[BaseEvent]:
+    """Project one durable event with explicit channel controls.
+
+    Live AG-UI streams keep progress prose in Activity and defer assistant text
+    plus artifact cards until the terminal projection.  The defaults preserve
+    the standalone mapper contract used by non-stream consumers.
+    """
+
+    suppress_standard = (
+        not project_response_text
+        and event.type in {"message.start", "message.delta", "message.completed"}
+    ) or (not project_artifact and event.type == "artifact.ready")
+    standard = [] if suppress_standard else list(_map_standard_event(event))
+    activity = activity_projection(event) if project_activity else []
     if event.type in {
         "run.succeeded",
         "run.failed",

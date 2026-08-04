@@ -22,7 +22,6 @@ export const workspaceItems: ReadonlyArray<{
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
   { id: "spaces", href: "/studio/spaces", label: "共享空间" },
   { id: "data", href: "/studio/data", label: "数据" },
-  { id: "usage", href: "/studio/usage", label: "用量" },
 ];
 
 export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {

@@ -166,6 +166,17 @@ export type StudioImportedSkill = {
   warnings: string[];
 };
 
+export type StudioInstalledSkill = {
+  draft: ApiAgentDraft;
+  skillName: string;
+  sourceContentHash: string;
+  riskLevel: "low" | "review";
+  findings: string[];
+  warnings: string[];
+  fileCount: number;
+  binaryFileCount: number;
+};
+
 type ApiEvalCase = {
   id: string;
   tags: string[];
@@ -197,7 +208,13 @@ type ApiDraftSpec = {
       path: string;
       content?: string | null;
       contentBase64?: string | null;
+      retained?: boolean;
+      sizeBytes?: number | null;
+      contentSha256?: string | null;
+      binary?: boolean;
     }>;
+    fileCount?: number | null;
+    filesTruncated?: boolean;
   }>;
   builtinTools: string[];
   pythonTools: StudioDraft["pythonTools"];
@@ -1378,6 +1395,30 @@ export const studioClient = {
     );
     if (!response.ok) throw await errorFrom(response);
     return response.json() as Promise<StudioImportedSkill>;
+  },
+  async installSkill(
+    draftId: string,
+    expectedRevision: number,
+    file: File,
+  ): Promise<StudioInstalledSkill> {
+    const markdown = file.name.toLowerCase().endsWith(".md");
+    const response = requireAuthenticatedResponse(
+      await fetch(
+        `/api/studio/drafts/${encodeURIComponent(draftId)}/skills/import`
+          + `?filename=${encodeURIComponent(file.name)}`
+          + `&expectedRevision=${expectedRevision}`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": markdown ? "text/markdown" : "application/zip",
+          },
+          body: file,
+        },
+      ),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    return response.json() as Promise<StudioInstalledSkill>;
   },
   replaceDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draft.id)}`, {

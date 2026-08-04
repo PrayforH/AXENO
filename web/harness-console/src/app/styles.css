@@ -4921,6 +4921,13 @@ textarea:not(.aui-composer-input):focus-visible,
   flex-direction: column;
 }
 
+/* Generated files are response deliverables.  AG-UI tool parts can arrive
+   before the terminal text during a live Run, so keep every artifact after
+   assistant prose regardless of transport timing. */
+.aui-assistant-message-content > .artifact-domain-card {
+  order: 50;
+}
+
 .turn-activity-summary {
   order: -10;
   width: 100%;

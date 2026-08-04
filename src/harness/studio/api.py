@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, Request, status
 from fastapi.responses import Response
 
 from harness.agent_package import (
@@ -79,6 +79,7 @@ from harness.studio.models import (
     DraftValidationResult,
     ImportedAgentBundle,
     ImportedSkill,
+    InstalledSkill,
     McpDiscoveryRequest,
     McpDiscoveryResult,
     PublishAgentDraftRequest,
@@ -95,6 +96,7 @@ from harness.studio.service import (
     AgentStudioService,
     StudioPublicationConflictError,
     StudioPublisherNotConfiguredError,
+    compact_draft_for_editor,
 )
 from harness.studio.skill_builder import (
     SkillConversationReply,
@@ -954,6 +956,17 @@ async def import_skill_file(
     _actor: Annotated[StudioActor, Depends(require_studio_writer)],
     filename: str = "skill.zip",
 ) -> ImportedSkill:
+    content = await _read_skill_upload(request)
+    try:
+        return import_skill(content, filename=filename)
+    except SkillImportError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "skill_import_invalid", "message": str(error)},
+        ) from error
+
+
+async def _read_skill_upload(request: Request) -> bytes:
     media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type not in {
         "application/zip",
@@ -993,13 +1006,48 @@ async def import_skill_file(
                     "message": "Skill 上传文件不能超过 100 MiB",
                 },
             )
+    return bytes(content)
+
+
+@router.post("/drafts/{draft_id}/skills/import", response_model=InstalledSkill)
+async def install_skill_file(
+    draft_id: str,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    filename: str = "skill.zip",
+    expected_revision: int = Query(alias="expectedRevision", ge=1),
+) -> InstalledSkill:
     try:
-        return import_skill(bytes(content), filename=filename)
+        imported = import_skill(await _read_skill_upload(request), filename=filename)
+        draft = await service.install_skill(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+            imported=imported,
+        )
     except SkillImportError as error:
         raise HTTPException(
             status_code=422,
             detail={"code": "skill_import_invalid", "message": str(error)},
         ) from error
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    compact = compact_draft_for_editor(draft)
+    compact_skill = next(
+        skill for skill in compact.spec.skills if skill.name == imported.skill.name
+    )
+    return InstalledSkill(
+        draft=compact,
+        skillName=compact_skill.name,
+        sourceContentHash=imported.source_content_hash,
+        riskLevel=imported.risk_level,
+        findings=imported.findings,
+        warnings=imported.warnings,
+        fileCount=len(imported.skill.files),
+        binaryFileCount=sum(file.content_base64 is not None for file in imported.skill.files),
+    )
 
 
 @router.post(
@@ -1104,10 +1152,12 @@ async def create_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return await service.create(
-            tenant_id=actor.tenant_id,
-            user_id=actor.user_id,
-            request=body,
+        return compact_draft_for_editor(
+            await service.create(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                request=body,
+            )
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
@@ -1162,10 +1212,13 @@ async def import_draft_bundle(
                 },
             )
     try:
-        return await service.import_bundle(
+        imported = await service.import_bundle(
             tenant_id=actor.tenant_id,
             user_id=actor.user_id,
             content=bytes(content),
+        )
+        return imported.model_copy(
+            update={"draft": compact_draft_for_editor(imported.draft)}
         )
     except (AgentBundleValidationError, AgentBundleImportError) as error:
         raise HTTPException(
@@ -1190,7 +1243,9 @@ async def get_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return await service.get(actor.tenant_id, actor.user_id, draft_id)
+        return compact_draft_for_editor(
+            await service.get(actor.tenant_id, actor.user_id, draft_id)
+        )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -1203,11 +1258,13 @@ async def replace_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return await service.replace(
-            tenant_id=actor.tenant_id,
-            user_id=actor.user_id,
-            draft_id=draft_id,
-            request=body,
+        return compact_draft_for_editor(
+            await service.replace(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                draft_id=draft_id,
+                request=body,
+            )
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error

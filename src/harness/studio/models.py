@@ -66,6 +66,14 @@ class DraftSkillFile(StudioModel):
         alias="contentBase64",
         max_length=90 * 1024 * 1024,
     )
+    retained: bool = False
+    size_bytes: int | None = Field(default=None, alias="sizeBytes", ge=0)
+    content_sha256: str | None = Field(
+        default=None,
+        alias="contentSha256",
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    binary: bool = False
 
     @model_validator(mode="after")
     def safe_relative_path(self) -> DraftSkillFile:
@@ -77,7 +85,14 @@ class DraftSkillFile(StudioModel):
             or path.as_posix() == "SKILL.md"
         ):
             raise ValueError("Skill file path must be safe and cannot replace SKILL.md")
-        if (self.content is None) == (self.content_base64 is None):
+        content_count = int(self.content is not None) + int(self.content_base64 is not None)
+        if self.retained:
+            if content_count or self.size_bytes is None or self.content_sha256 is None:
+                raise ValueError(
+                    "Retained Skill file requires sizeBytes and contentSha256 without content"
+                )
+            return self
+        if content_count != 1:
             raise ValueError("Skill file must contain exactly one of content or contentBase64")
         if self.content_base64 is not None:
             try:
@@ -94,6 +109,8 @@ class DraftSkill(StudioModel):
     description: str = Field(min_length=1, max_length=500)
     instructions: str = Field(min_length=1, max_length=512 * 1024)
     files: tuple[DraftSkillFile, ...] = ()
+    file_count: int | None = Field(default=None, alias="fileCount", ge=0)
+    files_truncated: bool = Field(default=False, alias="filesTruncated")
 
     @model_validator(mode="after")
     def unique_file_paths(self) -> DraftSkill:
@@ -235,6 +252,17 @@ class AgentDraft(StudioModel):
     published_package_hash: str | None = Field(
         default=None, alias="publishedPackageHash", pattern=r"^[a-f0-9]{64}$"
     )
+
+
+class InstalledSkill(StudioModel):
+    draft: AgentDraft
+    skill_name: str = Field(alias="skillName")
+    source_content_hash: str = Field(alias="sourceContentHash", min_length=64, max_length=64)
+    risk_level: Literal["low", "review"] = Field(alias="riskLevel")
+    findings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    file_count: int = Field(alias="fileCount", ge=0)
+    binary_file_count: int = Field(alias="binaryFileCount", ge=0)
 
 
 class CreateAgentDraftRequest(StudioModel):

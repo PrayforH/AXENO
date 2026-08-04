@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from harness.core.errors import ConflictError, NotFoundError
 from harness.storage.database import SessionFactory
 from harness.storage.models import AgentDraftRow
-from harness.studio.models import AgentDraft
+from harness.studio.models import AgentDraft, AgentDraftSummary
 
 AGENT_DRAFT_SCHEMA_VERSION = 1
 
@@ -81,6 +81,44 @@ class PostgresAgentDraftRepository:
         async with self._sessions() as session:
             rows = (await session.scalars(statement)).all()
             return [_load_draft(row) for row in rows]
+
+    async def list_summaries(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentDraftSummary]:
+        statement = (
+            select(
+                AgentDraftRow.draft_id,
+                AgentDraftRow.name,
+                AgentDraftRow.payload["spec"]["displayName"].as_string(),
+                AgentDraftRow.payload["spec"]["domain"].as_string(),
+                AgentDraftRow.payload["spec"]["version"].as_string(),
+                AgentDraftRow.payload["spec"]["template"].as_string(),
+                AgentDraftRow.revision,
+                AgentDraftRow.updated_at,
+                AgentDraftRow.payload["publishedVersion"].as_string(),
+            )
+            .where(
+                AgentDraftRow.tenant_id == tenant_id,
+                AgentDraftRow.owner_user_id == owner_user_id,
+            )
+            .order_by(AgentDraftRow.updated_at.desc(), AgentDraftRow.draft_id.desc())
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).all()
+        return [
+            AgentDraftSummary(
+                draftId=row[0],
+                name=row[1],
+                displayName=row[2],
+                domain=row[3],
+                version=row[4],
+                template=row[5],
+                revision=row[6],
+                updatedAt=row[7],
+                publishedVersion=row[8],
+            )
+            for row in rows
+        ]
 
     async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
         statement = (

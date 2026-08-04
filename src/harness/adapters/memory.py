@@ -504,6 +504,10 @@ class InMemoryAguiThreadBindingRepository:
         except KeyError as error:
             raise NotFoundError(f"AG-UI session binding not found: {session_id}") from error
 
+    def _store_session_aliases(self, binding: AguiThreadBinding) -> None:
+        for session_id in binding.session_ids:
+            self._by_session[(binding.tenant_id, binding.user_id, session_id)] = binding
+
     async def list_for_user(
         self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]:
@@ -547,7 +551,7 @@ class InMemoryAguiThreadBindingRepository:
                 }
             )
             self._by_thread[thread_key] = updated
-            self._by_session[(tenant_id, user_id, binding.session_id)] = updated
+            self._store_session_aliases(updated)
             return updated
 
     async def set_archived(
@@ -573,7 +577,38 @@ class InMemoryAguiThreadBindingRepository:
                 }
             )
             self._by_thread[thread_key] = updated
-            self._by_session[(tenant_id, user_id, binding.session_id)] = updated
+            self._store_session_aliases(updated)
+            return updated
+
+    async def rebind_session(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        session_id: str,
+        updated_at: datetime,
+    ) -> AguiThreadBinding:
+        thread_key = (tenant_id, user_id, thread_id)
+        async with self._lock:
+            try:
+                binding = self._by_thread[thread_key]
+            except KeyError as error:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}") from error
+            session_key = (tenant_id, user_id, session_id)
+            existing = self._by_session.get(session_key)
+            if existing is not None and existing.thread_id != thread_id:
+                raise ConflictError("AG-UI session binding already exists")
+            previous = tuple(dict.fromkeys((*binding.previous_session_ids, binding.session_id)))
+            updated = binding.model_copy(
+                update={
+                    "session_id": session_id,
+                    "previous_session_ids": previous,
+                    "updated_at": max(binding.updated_at, updated_at),
+                }
+            )
+            self._by_thread[thread_key] = updated
+            self._store_session_aliases(updated)
             return updated
 
 

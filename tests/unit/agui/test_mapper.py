@@ -40,6 +40,24 @@ def test_maps_run_and_text_lifecycle_to_standard_events() -> None:
     ]
 
 
+def test_can_keep_message_text_and_artifacts_activity_only() -> None:
+    text = map_harness_event(
+        event("message.delta", {"text": "处理中"}, 2),
+        project_response_text=False,
+    )
+    artifact = map_harness_event(
+        event("artifact.ready", {"artifact_id": "artifact-1"}, 3),
+        project_artifact=False,
+    )
+
+    assert [item.model_dump(by_alias=True)["type"] for item in text] == [
+        "ACTIVITY_DELTA"
+    ]
+    assert [item.model_dump(by_alias=True)["type"] for item in artifact] == [
+        "ACTIVITY_DELTA"
+    ]
+
+
 def test_historical_provider_diagnostic_is_sanitized_in_text_replay() -> None:
     projected = map_harness_event(
         event("message.delta", {"text": "API Error: 400 Content Exists Risk"})

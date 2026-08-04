@@ -114,7 +114,7 @@ export function StudioSidebar({
         visible={
           collapsed
             ? undefined
-            : ["agents", "capabilities", "knowledge", "spaces", "data", "usage"]
+            : ["agents", "capabilities", "knowledge", "spaces", "data"]
         }
       />
 

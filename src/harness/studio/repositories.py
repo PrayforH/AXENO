@@ -6,7 +6,7 @@ import asyncio
 from typing import Protocol
 
 from harness.core.errors import ConflictError, NotFoundError
-from harness.studio.models import AgentDraft
+from harness.studio.models import AgentDraft, AgentDraftSummary
 
 
 class AgentDraftRepository(Protocol):
@@ -15,6 +15,10 @@ class AgentDraftRepository(Protocol):
     async def get(self, tenant_id: str, owner_user_id: str, draft_id: str) -> AgentDraft: ...
 
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentDraft]: ...
+
+    async def list_summaries(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentDraftSummary]: ...
 
     async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]: ...
 
@@ -51,6 +55,14 @@ class InMemoryAgentDraftRepository:
             key=lambda draft: (draft.updated_at, draft.draft_id),
             reverse=True,
         )
+
+    async def list_summaries(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentDraftSummary]:
+        return [
+            AgentDraftSummary.from_draft(draft)
+            for draft in await self.list_for_user(tenant_id, owner_user_id)
+        ]
 
     async def list_all_for_tenant(self, tenant_id: str) -> list[AgentDraft]:
         return sorted(

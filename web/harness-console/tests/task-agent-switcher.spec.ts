@@ -57,7 +57,7 @@ describe("task agent switcher", () => {
     expect(component).toContain('role="listbox"');
     expect(component).toContain('role="option"');
     expect(component).toContain('type="search"');
-    expect(component).toContain("切换后新建任务");
+    expect(component).toContain("同 Agent 换版本可续聊");
     expect(component).toContain("<select");
     expect(component).toContain("task-agent-version-select");
     expect(component).toContain("group.agents.length > 1");

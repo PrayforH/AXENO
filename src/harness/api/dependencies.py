@@ -325,6 +325,7 @@ def build_memory_container(
         clock=clock,
         id_generator=id_generator,
     )
+    enforced_quotas = quotas if resolved_settings.quota_enforcement_enabled else None
     lifecycle_repository = InMemoryDataLifecycleRepository()
     lifecycle_adapters = tuple(
         EmptyLifecycleAdapter(name)
@@ -407,7 +408,7 @@ def build_memory_container(
         audit=audit,
         clock=clock,
         id_generator=lambda: id_generator("preview"),
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     event_service = EventService(
         raw_events,
@@ -444,7 +445,7 @@ def build_memory_container(
         id_generator=id_generator,
         observability=observability,
         metrics=reliability_metrics,
-        admission=quotas,
+        admission=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
     )
     session_service = SessionService(
@@ -480,7 +481,7 @@ def build_memory_container(
         id_generator=id_generator,
         max_file_bytes=resolved_settings.output_artifact_max_bytes,
         sessions=sessions,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     file_catalog_service = FileCatalogService(
         thread_file_repository,
@@ -546,7 +547,7 @@ def build_memory_container(
         quality_gate=quality_service.require_promotion_allowed,
         capability_catalog_resolver=capability_catalogs.get,
         knowledge_reference_validator=knowledge.require_bases,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     session_service.configure_deployment_resolver(deployment_service.resolve)
     trigger_service.configure_deployment_resolver(deployment_service.resolve)
@@ -590,7 +591,7 @@ def build_memory_container(
         max_archive_bytes=resolved_settings.workspace_archive_max_bytes,
         max_archive_members=resolved_settings.workspace_archive_max_members,
         sessions=sessions,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
 
     async def workspace_policy_resolver(
@@ -759,7 +760,7 @@ def build_memory_container(
                 profiles=policy_profiles,
                 approvals=approval_service,
                 events=event_service,
-                quotas=quotas,
+                quotas=enforced_quotas,
                 observability=observability,
             ),
             memory_service=memory_service,
@@ -792,7 +793,7 @@ def build_memory_container(
         ),
         heartbeat_seconds=resolved_settings.worker_task_heartbeat_seconds,
         clock=clock,
-        quotas=quotas,
+        quotas=enforced_quotas,
     )
     worker = RunOrchestrator(
         sessions=sessions,
@@ -815,7 +816,7 @@ def build_memory_container(
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
         quality_hook=quality_service.record_terminal_run,
-        quotas=quotas,
+        quotas=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
         metrics=reliability_metrics,
     )
@@ -867,7 +868,7 @@ def build_memory_container(
             RunStatus.CANCELLING: resolved_settings.stuck_cancelling_seconds,
         },
         maintenance=maintenance,
-        quotas=quotas,
+        quotas=enforced_quotas,
         clock=clock,
         id_generator=id_generator,
     )

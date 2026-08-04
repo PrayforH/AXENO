@@ -50,7 +50,7 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     )
     for name in ("api", "worker"):
         assert services[name]["environment"]["HARNESS_QUOTA_ENFORCEMENT_ENABLED"] == (
-            "${HARNESS_QUOTA_ENFORCEMENT_ENABLED:-true}"
+            "${HARNESS_QUOTA_ENFORCEMENT_ENABLED:-false}"
         )
     # The control plane uses the compatible model route for semantic task titles.
     # Sandbox and business MCP credentials remain worker-only. The control plane
@@ -144,7 +144,7 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "HARNESS_ALLOW_UNSAFE_LOCAL_SANDBOX=false" in values
     assert "HARNESS_SANDBOX_PROVIDER=daytona" in values
     assert "HARNESS_PREFLIGHT_TIMEOUT_SECONDS=180" in values
-    assert "HARNESS_QUOTA_ENFORCEMENT_ENABLED=true" in values
+    assert "HARNESS_QUOTA_ENFORCEMENT_ENABLED=false" in values
     assert "HARNESS_MCP_DISCOVERY_PROXY_URL=" in values
     assert "MINIO_ROOT_PASSWORD=" in values
     assert "LANGFUSE_OTLP_ENDPOINT=" in values

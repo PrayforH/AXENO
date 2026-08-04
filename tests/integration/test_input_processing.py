@@ -150,3 +150,49 @@ async def test_processor_failure_preserves_original_and_records_failure(
     assert files[0].metadata["processing_status"] == "failed"
     assert files[0].metadata["processing_error_code"] == "ValueError"
     assert "private parser detail" not in repr(files)
+
+
+@pytest.mark.asyncio
+async def test_restaging_replaces_read_only_input_from_restored_workspace(
+    tmp_path: Path,
+) -> None:
+    sequence = 0
+
+    def ids(prefix: str) -> str:
+        nonlocal sequence
+        sequence += 1
+        return f"{prefix}_{sequence}"
+
+    service = InputArtifactService(
+        repository=InMemoryInputArtifactRepository(),
+        store=InMemoryArtifactStore(),
+        id_generator=ids,
+        clock=lambda: NOW,
+    )
+    uploaded = await service.upload(
+        tenant_id="tenant-a",
+        user_id="alice",
+        name="image.png",
+        media_type="image/png",
+        content=b"image-content",
+    )
+
+    first = await service.stage_for_run(
+        tenant_id="tenant-a",
+        user_id="alice",
+        input_artifact_ids=[uploaded.input_artifact_id],
+        workspace=tmp_path,
+    )
+    target = tmp_path / first[0].path
+    assert target.stat().st_mode & 0o777 == 0o444
+
+    second = await service.stage_for_run(
+        tenant_id="tenant-a",
+        user_id="alice",
+        input_artifact_ids=[uploaded.input_artifact_id],
+        workspace=tmp_path,
+    )
+
+    assert second[0].path == first[0].path
+    assert target.read_bytes() == b"image-content"
+    assert target.stat().st_mode & 0o777 == 0o444

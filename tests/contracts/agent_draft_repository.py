@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from harness.core.errors import ConflictError, NotFoundError
 from harness.studio.factory import create_draft_spec
-from harness.studio.models import AgentDraft, AgentTemplate
+from harness.studio.models import AgentDraft, AgentDraftSummary, AgentTemplate
 from harness.studio.repositories import AgentDraftRepository
 
 NOW = datetime(2026, 7, 16, tzinfo=UTC)
@@ -52,6 +52,11 @@ async def exercise_repository_contract(repository: AgentDraftRepository) -> None
     assert await repository.list_for_user("tenant-a", "builder-a") == [newer, tenant_a]
     assert await repository.list_for_user("tenant-b", "builder-a") == [tenant_b]
     assert await repository.list_for_user("tenant-c", "builder-a") == []
+    assert await repository.list_summaries("tenant-a", "builder-a") == [
+        AgentDraftSummary.from_draft(newer),
+        AgentDraftSummary.from_draft(tenant_a),
+    ]
+    assert await repository.list_summaries("tenant-c", "builder-a") == []
 
     try:
         await repository.get("tenant-c", "builder-a", tenant_a.draft_id)

@@ -690,13 +690,13 @@ function HarnessAssistantMessage() {
         hasDurableProjection={hasRunActivityToolCall(content)}
         messageId={messageId}
       />
+      <LiveAssistantResponse live={live} ownsMessage={ownsLive} />
       <AssistantMessage.Content
         components={{
           Text: HarnessAssistantText,
           Reasoning: ReasoningPart,
         }}
       />
-      <LiveAssistantResponse live={live} ownsMessage={ownsLive} />
       {isIncomplete ? (
         <div className="aui-message-error">
           <span>{incompleteRunGuidance(isLast)}</span>

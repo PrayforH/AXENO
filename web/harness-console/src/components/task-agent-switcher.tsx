@@ -113,8 +113,8 @@ export function TaskAgentSwitcher({
         aria-expanded={open}
         aria-controls={listboxId}
         aria-haspopup="listbox"
-        aria-label="切换任务智能体；切换后创建新任务"
-        title="切换智能体会创建一个新任务，历史任务仍使用原版本"
+        aria-label="切换任务智能体或版本"
+        title="同一智能体可在当前任务切换版本；切换其他智能体会创建新任务"
         onClick={() => {
           setQuery("");
           setOpen((current) => !current);
@@ -142,7 +142,7 @@ export function TaskAgentSwitcher({
               <strong>选择智能体</strong>
               <small>{agents.length} 个已发布版本</small>
             </div>
-            <span>切换后新建任务</span>
+            <span>同 Agent 换版本可续聊</span>
           </header>
           <label className="task-agent-search">
             <span aria-hidden="true" />

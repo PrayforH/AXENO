@@ -132,13 +132,28 @@ async def test_agui_binding_round_trips_in_both_directions() -> None:
     assert await repository.get_by_session(
         "tenant-a", "user-a", "session-a"
     ) == titled
+    rebound = await repository.rebind_session(
+        "tenant-a",
+        "user-a",
+        "thread-a",
+        session_id="session-b",
+        updated_at=NOW + timedelta(seconds=2),
+    )
+    assert rebound.session_id == "session-b"
+    assert rebound.previous_session_ids == ("session-a",)
+    assert await repository.get_by_session(
+        "tenant-a", "user-a", "session-a"
+    ) == rebound
+    assert await repository.get_by_session(
+        "tenant-a", "user-a", "session-b"
+    ) == rebound
     archived = await repository.set_archived(
         "tenant-a",
         "user-a",
         "thread-a",
-        archived_at=NOW + timedelta(seconds=2),
+        archived_at=NOW + timedelta(seconds=3),
     )
-    assert archived.archived_at == NOW + timedelta(seconds=2)
+    assert archived.archived_at == NOW + timedelta(seconds=3)
     assert await repository.list_for_user(
         "tenant-a", "user-a", limit=10
     ) == []

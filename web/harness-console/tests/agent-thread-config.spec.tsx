@@ -297,6 +297,9 @@ it("uses one stable native assistant message for streaming output", () => {
   expect(agentThreadSource).toContain(
     "<LiveAssistantResponse live={live} ownsMessage={ownsLive} />",
   );
+  expect(agentThreadSource).toMatch(
+    /<LiveAssistantResponse live=\{live\} ownsMessage=\{ownsLive\} \/>[\s\S]*?<AssistantMessage\.Content/,
+  );
   expect(agentThreadSource).toContain("<TextMessagePartProvider");
   expect(agentThreadSource).not.toContain("hasCurrentTurnAssistantText");
 });

@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     worker_task_retry_delay_seconds: float = Field(default=1, ge=0)
     worker_task_heartbeat_seconds: float = Field(default=20, gt=0)
     run_reservation_ttl_seconds: int = Field(default=86_400, ge=300, le=604_800)
-    quota_enforcement_enabled: bool = True
+    quota_enforcement_enabled: bool = False
     preflight_timeout_seconds: float = Field(default=180, ge=30, le=900)
 
     daytona_api_key: SecretStr = SecretStr("")

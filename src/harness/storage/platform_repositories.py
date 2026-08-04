@@ -517,16 +517,25 @@ class PostgresAguiThreadBindingRepository:
     async def get_by_session(
         self, tenant_id: str, user_id: str, session_id: str
     ) -> AguiThreadBinding:
-        statement = select(AguiThreadBindingRow.payload).where(
+        current_statement = select(AguiThreadBindingRow.payload).where(
             AguiThreadBindingRow.tenant_id == tenant_id,
             AguiThreadBindingRow.user_id == user_id,
             AguiThreadBindingRow.session_id == session_id,
         )
         async with self._sessions() as session:
-            payload = (await session.execute(statement)).scalar_one_or_none()
-            if payload is None:
-                raise NotFoundError(f"AG-UI session binding not found: {session_id}")
-            return AguiThreadBinding.model_validate(payload)
+            current = (await session.execute(current_statement)).scalar_one_or_none()
+            if current is not None:
+                return AguiThreadBinding.model_validate(current)
+            history_statement = select(AguiThreadBindingRow.payload).where(
+                AguiThreadBindingRow.tenant_id == tenant_id,
+                AguiThreadBindingRow.user_id == user_id,
+            )
+            payloads = (await session.execute(history_statement)).scalars().all()
+            for payload in payloads:
+                binding = AguiThreadBinding.model_validate(payload)
+                if session_id in binding.previous_session_ids:
+                    return binding
+            raise NotFoundError(f"AG-UI session binding not found: {session_id}")
 
     async def list_for_user(
         self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
@@ -596,4 +605,35 @@ class PostgresAguiThreadBindingRepository:
             )
             row.payload = updated.model_dump(mode="json")
             await session.commit()
+            return updated
+
+    async def rebind_session(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        session_id: str,
+        updated_at: datetime,
+    ) -> AguiThreadBinding:
+        async with self._sessions() as session:
+            row = await session.get(AguiThreadBindingRow, (tenant_id, user_id, thread_id))
+            if row is None:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
+            binding = AguiThreadBinding.model_validate(row.payload)
+            previous = tuple(dict.fromkeys((*binding.previous_session_ids, binding.session_id)))
+            updated = binding.model_copy(
+                update={
+                    "session_id": session_id,
+                    "previous_session_ids": previous,
+                    "updated_at": max(binding.updated_at, updated_at),
+                }
+            )
+            row.session_id = session_id
+            row.payload = updated.model_dump(mode="json")
+            try:
+                await session.commit()
+            except IntegrityError as error:
+                await session.rollback()
+                raise ConflictError("AG-UI session binding already exists") from error
             return updated

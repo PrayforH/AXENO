@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -22,17 +25,136 @@ from harness.studio.compiler import (
 from harness.studio.factory import create_draft_spec
 from harness.studio.models import (
     AgentDraft,
+    AgentDraftSpec,
     AgentDraftSummary,
     CapabilityCatalog,
     CreateAgentDraftRequest,
+    DraftSkill,
+    DraftSkillFile,
     DraftValidationResult,
     ImportedAgentBundle,
+    ImportedSkill,
     ReplaceAgentDraftRequest,
     ValidationIssue,
     ValidationSeverity,
 )
 from harness.studio.nexau_export import NexauAgentArchive, export_nexau_agent
 from harness.studio.repositories import AgentDraftRepository
+
+_EDITOR_SKILL_FILE_LIMIT = 200
+_EDITOR_INLINE_TEXT_BYTES = 64 * 1024
+_SEMVER = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+
+
+def _next_patch_version(version: str) -> str:
+    match = _SEMVER.fullmatch(version)
+    if match is None:
+        return version
+    return f"{match[1]}.{match[2]}.{int(match[3]) + 1}"
+
+
+def _auto_version_modified_release(
+    current: AgentDraft,
+    candidate: AgentDraftSpec,
+) -> AgentDraftSpec:
+    if (
+        current.published_version is not None
+        and candidate.version == current.published_version
+        and candidate != current.spec
+    ):
+        return candidate.model_copy(
+            update={"version": _next_patch_version(candidate.version)}
+        )
+    return candidate
+
+
+def _skill_file_bytes(file: DraftSkillFile) -> bytes:
+    if file.content is not None:
+        return file.content.encode("utf-8")
+    if file.content_base64 is not None:
+        return base64.b64decode(file.content_base64, validate=True)
+    raise ValueError(f"Retained Skill file has no inline content: {file.path}")
+
+
+def _retained_skill_file(file: DraftSkillFile) -> DraftSkillFile:
+    payload = _skill_file_bytes(file)
+    return DraftSkillFile(
+        path=file.path,
+        retained=True,
+        sizeBytes=len(payload),
+        contentSha256=hashlib.sha256(payload).hexdigest(),
+        binary=file.content_base64 is not None,
+    )
+
+
+def compact_draft_for_editor(draft: AgentDraft) -> AgentDraft:
+    """Bound editor payload size while retaining every server-side Skill file."""
+
+    skills: list[DraftSkill] = []
+    for skill in draft.spec.skills:
+        visible: list[DraftSkillFile] = []
+        for file in skill.files[:_EDITOR_SKILL_FILE_LIMIT]:
+            if file.retained:
+                visible.append(file)
+                continue
+            if (
+                file.content is not None
+                and len(file.content.encode("utf-8")) <= _EDITOR_INLINE_TEXT_BYTES
+            ):
+                visible.append(file)
+            else:
+                visible.append(_retained_skill_file(file))
+        skills.append(
+            skill.model_copy(
+                update={
+                    "files": tuple(visible),
+                    "file_count": len(skill.files),
+                    "files_truncated": len(skill.files) > len(visible),
+                }
+            )
+        )
+    return draft.model_copy(
+        update={"spec": draft.spec.model_copy(update={"skills": tuple(skills)})}
+    )
+
+
+def _merge_editor_skill(current: DraftSkill | None, incoming: DraftSkill) -> DraftSkill:
+    current_files = {file.path: file for file in current.files} if current else {}
+    incoming_files: dict[str, DraftSkillFile] = {}
+    for file in incoming.files:
+        if not file.retained:
+            incoming_files[file.path] = file
+            continue
+        retained = current_files.get(file.path)
+        if retained is None:
+            raise ConflictError(
+                f"Retained Skill file no longer exists: {incoming.name}/{file.path}"
+            )
+        payload = _skill_file_bytes(retained)
+        if (
+            len(payload) != file.size_bytes
+            or hashlib.sha256(payload).hexdigest() != file.content_sha256
+        ):
+            raise ConflictError(f"Retained Skill file changed: {incoming.name}/{file.path}")
+        incoming_files[file.path] = retained
+
+    if incoming.files_truncated:
+        if current is None:
+            raise ConflictError(f"Truncated Skill has no stored source: {incoming.name}")
+        merged = [incoming_files.get(file.path, file) for file in current.files]
+    else:
+        merged = [incoming_files[file.path] for file in incoming.files]
+    return incoming.model_copy(
+        update={
+            "files": tuple(merged),
+            "file_count": None,
+            "files_truncated": False,
+        }
+    )
 
 
 class AgentBundlePublisher(Protocol):
@@ -124,10 +246,7 @@ class AgentStudioService:
         return await self._repository.get(tenant_id, owner_user_id, draft_id)
 
     async def list(self, tenant_id: str, owner_user_id: str) -> list[AgentDraftSummary]:
-        return [
-            AgentDraftSummary.from_draft(draft)
-            for draft in await self._repository.list_for_user(tenant_id, owner_user_id)
-        ]
+        return await self._repository.list_summaries(tenant_id, owner_user_id)
 
     async def replace(
         self,
@@ -138,15 +257,55 @@ class AgentStudioService:
         request: ReplaceAgentDraftRequest,
     ) -> AgentDraft:
         current = await self._repository.get(tenant_id, user_id, draft_id)
+        current_skills = {skill.name: skill for skill in current.spec.skills}
+        merged_skills = tuple(
+            _merge_editor_skill(current_skills.get(skill.name), skill)
+            for skill in request.spec.skills
+        )
+        candidate_spec = _auto_version_modified_release(
+            current,
+            request.spec.model_copy(update={"skills": merged_skills}),
+        )
         updated = current.model_copy(
             update={
                 "revision": current.revision + 1,
-                "spec": request.spec,
+                "spec": candidate_spec,
                 "updated_by": user_id,
                 "updated_at": self._clock(),
             }
         )
         await self._repository.replace(request.expected_revision, updated)
+        return updated
+
+    async def install_skill(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_revision: int,
+        imported: ImportedSkill,
+    ) -> AgentDraft:
+        current = await self._repository.get(tenant_id, user_id, draft_id)
+        skills = tuple(
+            imported.skill if skill.name == imported.skill.name else skill
+            for skill in current.spec.skills
+        )
+        if all(skill.name != imported.skill.name for skill in current.spec.skills):
+            skills = (*skills, imported.skill)
+        candidate_spec = _auto_version_modified_release(
+            current,
+            current.spec.model_copy(update={"skills": skills}),
+        )
+        updated = current.model_copy(
+            update={
+                "revision": current.revision + 1,
+                "spec": candidate_spec,
+                "updated_by": user_id,
+                "updated_at": self._clock(),
+            }
+        )
+        await self._repository.replace(expected_revision, updated)
         return updated
 
     async def validate(

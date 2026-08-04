@@ -205,6 +205,16 @@ class AguiThreadBindingRepository(Protocol):
         archived_at: datetime | None,
     ) -> AguiThreadBinding: ...
 
+    async def rebind_session(
+        self,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        *,
+        session_id: str,
+        updated_at: datetime,
+    ) -> AguiThreadBinding: ...
+
 
 class TaskQueue(Protocol):
     async def enqueue(self, task: RunTask) -> None: ...

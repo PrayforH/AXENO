@@ -6,6 +6,7 @@ import { StudioSidebar } from "./studio-sidebar";
 import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
+  applyStudioDraftUpdate,
   evaluateStudioDraft,
   mcpOptionsForDraft,
   type StudioDraft,
@@ -462,13 +463,19 @@ export function AgentStudioWorkbench() {
   }, [canEdit]);
 
   function updateDraft(update: Partial<StudioDraft>) {
-    setDraft((current) => ({ ...current, ...update }));
+    const next = applyStudioDraftUpdate(draft, update);
+    const versionAutoBumped = next.version !== draft.version && !("version" in update);
+    setDraft(next);
     setInspected(false);
     setServerValidation(null);
     setDirty(true);
     setConflict(false);
     setVersionConflict(false);
-    setNotice("有尚未保存的修改");
+    setNotice(
+      versionAutoBumped
+        ? `检测到已发布版本发生修改，版本已自动递增为 ${next.version}（仍可手动编辑）`
+        : "有尚未保存的修改"
+    );
   }
 
   function updateSkill(name: string, nextSkill: StudioDraft["skills"][number]) {
@@ -870,42 +877,44 @@ export function AgentStudioWorkbench() {
   async function installSkill(file: File) {
     setImportingSkill(true);
     try {
-      const imported = await studioClient.importSkill(file);
-      const duplicate = draft.skills.some(
-        (candidate) => candidate.name === imported.skill.name,
+      const current = dirty || !draft.id ? await saveDraft() : draft;
+      if (!current?.id) return;
+      const installed = await studioClient.installSkill(
+        current.id,
+        current.revision,
+        file,
       );
-      const skills = duplicate
-        ? draft.skills.map((candidate) =>
-            candidate.name === imported.skill.name ? imported.skill : candidate
-          )
-        : [...draft.skills, imported.skill];
-      const saved = await saveDraft({ ...draft, skills });
-      if (!saved) return;
-      setActiveSkillName(imported.skill.name);
+      const saved = apiDraftToStudioDraft(installed.draft);
+      const duplicate = current.skills.some(
+        (candidate) => candidate.name === installed.skillName,
+      );
+      setDraft(saved);
+      setDrafts(await studioClient.listDrafts());
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setActiveSkillName(installed.skillName);
       setActiveSection("skills");
       setSkillImportReport({
-        skillName: imported.skill.name,
-        findings: imported.findings,
-        warnings: imported.warnings,
+        skillName: installed.skillName,
+        findings: installed.findings,
+        warnings: installed.warnings,
       });
-      const scriptCount = imported.findings.filter((item) =>
+      const scriptCount = installed.findings.filter((item) =>
         item.startsWith("包含可执行脚本：")
       ).length;
-      const dependencyCount = imported.findings.filter((item) =>
+      const dependencyCount = installed.findings.filter((item) =>
         item.startsWith("包含依赖声明：")
       ).length;
-      const binaryCount = imported.skill.files?.filter(
-        (item) => Boolean(item.contentBase64),
-      ).length ?? 0;
       const summary = [
-        `${(imported.skill.files?.length ?? 0).toLocaleString("zh-CN")} 个文件`,
+        `${installed.fileCount.toLocaleString("zh-CN")} 个文件`,
         scriptCount ? `${scriptCount} 个脚本` : "",
         dependencyCount ? `${dependencyCount} 个依赖声明` : "",
-        binaryCount ? `${binaryCount} 个二进制资源` : "",
+        installed.binaryFileCount ? `${installed.binaryFileCount} 个二进制资源` : "",
       ].filter(Boolean).join(" · ");
       setNotice(
-        `${duplicate ? "已更新" : "已安装"} Skill：${imported.skill.name} · ${summary}`
-        + (imported.findings.length ? " · 需审阅" : ""),
+        `${duplicate ? "已更新" : "已安装"} Skill：${installed.skillName} · ${summary}`
+        + (installed.findings.length ? " · 需审阅" : ""),
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Skill 安装失败");
@@ -1988,7 +1997,7 @@ export function AgentStudioWorkbench() {
                       onChange={(event) => updateDraft({ domain: event.target.value })}
                     />
                   </Field>
-                  <Field label="版本">
+                  <Field label="版本" hint="修改已发布配置时自动递增补丁号，也可手动填写">
                     <input
                       className={styles.monoInput}
                       value={draft.version}
@@ -2472,7 +2481,7 @@ export function AgentStudioWorkbench() {
                       <h3>Skill 附加文件</h3>
                       <p>风险规则、报告契约等内容会随 Skill 一起进入不可变 Bundle。</p>
                     </div>
-                    <span>{skill.files?.length ?? 0} 个文件</span>
+                    <span>{skill.fileCount ?? skill.files?.length ?? 0} 个文件</span>
                   </div>
                   {(skill.files ?? []).slice(0, 200).map((file, index) => (
                     <article className={styles.skillFileCard} key={file.path}>
@@ -2498,25 +2507,29 @@ export function AgentStudioWorkbench() {
                         />
                       ) : (
                         <div className={styles.skillBinaryFile}>
-                          <span>BIN</span>
+                          <span>{(file.binary ?? Boolean(file.contentBase64)) ? "BIN" : "REF"}</span>
                           <div>
-                            <strong>二进制 asset</strong>
+                            <strong>
+                              {(file.binary ?? Boolean(file.contentBase64))
+                                ? "二进制 asset"
+                                : "服务端保留文件"}
+                            </strong>
                             <small>
-                              约 {Math.ceil((file.contentBase64?.length ?? 0) * 0.75 / 1024).toLocaleString("zh-CN")} KiB
-                              · 随 Skill 发布，不在文本编辑器中展开
+                              约 {Math.ceil((file.sizeBytes ?? (file.contentBase64?.length ?? 0) * 0.75) / 1024).toLocaleString("zh-CN")} KiB
+                              · 随 Skill 完整保存，不在编辑器中加载内容
                             </small>
                           </div>
                         </div>
                       )}
                     </article>
                   ))}
-                  {(skill.files?.length ?? 0) > 200 && (
+                  {skill.filesTruncated && (
                     <div className={styles.skillFilesEmpty}>
-                      当前 Skill 共 {skill.files?.length.toLocaleString("zh-CN")} 个附加文件；
-                      为保证编辑器流畅，仅展开前 200 个，其余文件仍会完整保存并随版本发布。
+                      当前 Skill 共 {(skill.fileCount ?? 0).toLocaleString("zh-CN")} 个附加文件；
+                      为保证编辑器流畅，仅加载前 200 个文件的元数据，其余文件仍完整保存在服务端并随版本发布。
                     </div>
                   )}
-                  {(skill.files?.length ?? 0) === 0 && (
+                  {(skill.fileCount ?? skill.files?.length ?? 0) === 0 && (
                     <div className={styles.skillFilesEmpty}>
                       当前 Skill 没有 references、scripts 或 assets。
                     </div>

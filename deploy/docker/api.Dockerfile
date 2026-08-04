@@ -1,7 +1,8 @@
 ARG KUBECTL_IMAGE=registry.k8s.io/kubectl:v1.33.1
+ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm
 FROM ${KUBECTL_IMAGE} AS kubectl
 
-FROM python:3.12.11-slim-bookworm AS builder
+FROM ${PYTHON_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -35,7 +36,7 @@ RUN .venv/bin/pip install --no-cache-dir \
     --no-deps \
     .
 
-FROM python:3.12.11-slim-bookworm AS runtime
+FROM ${PYTHON_IMAGE} AS runtime
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

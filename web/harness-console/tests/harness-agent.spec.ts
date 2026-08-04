@@ -237,6 +237,91 @@ describe("HarnessHttpAgent", () => {
     unsubscribe();
   });
 
+  it("keeps final text visible when a generated artifact follows it", async () => {
+    liveResponseStore.clear();
+    const streamFetch: typeof fetch = async () =>
+      new Response(
+        [
+          'data: {"type":"RUN_STARTED","threadId":"thread-artifact","runId":"run-artifact"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_START","messageId":"message-final","role":"assistant"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"message-final","delta":"文件已经生成。"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"message-final"}',
+          "",
+          'data: {"type":"TOOL_CALL_START","toolCallId":"artifact-1","toolCallName":"harness_present_artifact","parentMessageId":"message-final"}',
+          "",
+          'data: {"type":"TOOL_CALL_ARGS","toolCallId":"artifact-1","delta":"{\\"artifact_id\\":\\"artifact-1\\"}"}',
+          "",
+          'data: {"type":"TOOL_CALL_END","toolCallId":"artifact-1"}',
+          "",
+          'data: {"type":"TOOL_CALL_RESULT","messageId":"artifact-result-1","toolCallId":"artifact-1","content":"{\\"status\\":\\"ready\\"}","role":"tool"}',
+          "",
+          'data: {"type":"RUN_FINISHED","threadId":"thread-artifact","runId":"run-artifact"}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+    });
+
+    await agent.runAgent({ runId: "run-artifact" });
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-artifact",
+      messageId: "message-final",
+      text: "文件已经生成。",
+      status: "complete",
+      visible: true,
+    });
+  });
+
+  it("shows a terminal-only response after tools reused the stable message", async () => {
+    liveResponseStore.clear();
+    const streamFetch: typeof fetch = async () =>
+      new Response(
+        [
+          'data: {"type":"RUN_STARTED","threadId":"thread-terminal","runId":"run-terminal"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_START","messageId":"assistant-server-run","role":"assistant"}',
+          "",
+          'data: {"type":"TOOL_CALL_START","toolCallId":"tool-1","toolCallName":"search","parentMessageId":"assistant-server-run"}',
+          "",
+          'data: {"type":"TOOL_CALL_ARGS","toolCallId":"tool-1","delta":"{}"}',
+          "",
+          'data: {"type":"TOOL_CALL_END","toolCallId":"tool-1"}',
+          "",
+          'data: {"type":"TOOL_CALL_RESULT","messageId":"tool-result-1","toolCallId":"tool-1","content":"ok","role":"tool"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"assistant-server-run","delta":"## 查询结论\\n\\n最终回答。"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"assistant-server-run"}',
+          "",
+          'data: {"type":"RUN_FINISHED","threadId":"thread-terminal","runId":"run-terminal"}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+    });
+
+    await agent.runAgent({ runId: "run-terminal" });
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      messageId: "assistant-server-run",
+      text: "## 查询结论\n\n最终回答。",
+      status: "complete",
+      visible: true,
+    });
+  });
+
   it("publishes the first text chunk before the response stream finishes", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();

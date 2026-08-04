@@ -265,7 +265,12 @@ export class HarnessHttpAgent extends HttpAgent {
         return subscriber?.onTextMessageEndEvent?.(params);
       },
       onToolCallStartEvent: async (params) => {
-        liveResponseStore.hideForTool(runtimeThreadId);
+        // Artifact presentation is a response deliverable, not another model
+        // action. Keeping the final response active also lets the UI render
+        // that prose immediately before the generated file card.
+        if (params.event.toolCallName !== "harness_present_artifact") {
+          liveResponseStore.hideForTool(runtimeThreadId);
+        }
         return subscriber?.onToolCallStartEvent?.(params);
       },
       onRunFinishedEvent: async (params) => {

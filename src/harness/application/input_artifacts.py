@@ -4,6 +4,7 @@ import asyncio
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,6 +19,19 @@ from harness.core.models import (
 )
 from harness.core.ports import ArtifactStore, InputArtifactRepository
 from harness.inputs.base import InputProcessingResult, InputProcessor
+
+
+def _replace_read_only_file(target: Path, content: bytes) -> None:
+    """Atomically restage an immutable input restored from a prior snapshot."""
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(content)
+        temporary.chmod(0o444)
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class StagedInputArtifact(BaseModel):
@@ -167,8 +181,7 @@ class InputArtifactService:
             root = workspace.resolve()
             if not target.resolve().is_relative_to(root):
                 raise ValueError("input artifact path escaped the workspace")
-            await asyncio.to_thread(target.write_bytes, content)
-            await asyncio.to_thread(target.chmod, 0o444)
+            await asyncio.to_thread(_replace_read_only_file, target, content)
             processed_paths: list[str] = []
             if self._processor is not None:
                 if identity is None or self._file_catalog is None:
@@ -210,10 +223,8 @@ class InputArtifactService:
                     if not derived_target.resolve().is_relative_to(root):
                         raise ValueError("processed input path escaped the workspace")
                     await asyncio.to_thread(
-                        derived_target.parent.mkdir, parents=True, exist_ok=True
+                        _replace_read_only_file, derived_target, derived.content
                     )
-                    await asyncio.to_thread(derived_target.write_bytes, derived.content)
-                    await asyncio.to_thread(derived_target.chmod, 0o444)
                     derived_path = derived_target.relative_to(workspace).as_posix()
                     processed_paths.append(derived_path)
                     await self._file_catalog.record_derived(

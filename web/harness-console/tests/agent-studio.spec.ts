@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_STUDIO_DRAFT,
   MODEL_ROUTES,
+  applyStudioDraftUpdate,
   evaluateStudioDraft,
   mcpOptionsForDraft,
   restoreStudioDraft,
@@ -29,6 +30,22 @@ describe("Agent Studio effective contract", () => {
       background: true,
     },
   ];
+
+  it("auto-increments the patch version on the first edit after publish", () => {
+    const published = {
+      ...DEFAULT_STUDIO_DRAFT,
+      version: "1.4.7",
+      publishedVersion: "1.4.7",
+    };
+
+    const edited = applyStudioDraftUpdate(published, { description: "新说明" });
+    const editedAgain = applyStudioDraftUpdate(edited, { domain: "new-domain" });
+    const manual = applyStudioDraftUpdate(editedAgain, { version: "2.0.0" });
+
+    expect(edited.version).toBe("1.4.8");
+    expect(editedAgain.version).toBe("1.4.8");
+    expect(manual.version).toBe("2.0.0");
+  });
 
   it("offers DeepSeek V4 models as distinct executable routes", () => {
     const flash = MODEL_ROUTES.find((item) => item.id === "deepseek-v4-flash");

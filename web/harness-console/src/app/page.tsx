@@ -176,6 +176,17 @@ export default function Home() {
     ) {
       return;
     }
+    const sameAgent = Boolean(
+      selectedAgent &&
+      selectedAgent.name === nextAgent.name &&
+      selectedAgent.ownerUserId === nextAgent.ownerUserId &&
+      selectedAgent.spaceId === nextAgent.spaceId
+    );
+    if (sameAgent) {
+      bindThreadAgent(window.localStorage, threadId, nextAgent);
+      setSelectedAgent(nextAgent);
+      return;
+    }
     const nextThreadId = createNewThread(window.localStorage);
     bindThreadAgent(window.localStorage, nextThreadId, nextAgent);
     setSelectedAgent(nextAgent);

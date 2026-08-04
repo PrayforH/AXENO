@@ -232,3 +232,17 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     assert (
         await binding_repository.get_by_thread("tenant-a", "user-a", "thread-a")
     ).title == "生成可下载报告"
+    rebound = await binding_repository.rebind_session(
+        "tenant-a",
+        "user-a",
+        "thread-a",
+        session_id="session-b",
+        updated_at=now,
+    )
+    assert rebound.previous_session_ids == ("session-a",)
+    assert await binding_repository.get_by_session(
+        "tenant-a", "user-a", "session-a"
+    ) == rebound
+    assert await binding_repository.get_by_session(
+        "tenant-a", "user-a", "session-b"
+    ) == rebound

@@ -64,7 +64,7 @@ describe("full-page agent workbench", () => {
     expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
     expect(studioSidebar).toContain(
-      ': ["agents", "capabilities", "knowledge", "spaces", "data", "usage"]',
+      ': ["agents", "capabilities", "knowledge", "spaces", "data"]',
     );
     expect(workspaceNavigation).toContain('aria-label="工作模式"');
     expect(workspaceNavigation).toContain("<span>Studio</span>");
@@ -74,7 +74,6 @@ describe("full-page agent workbench", () => {
       ["/studio/capabilities", "MCP"],
       ["/studio/knowledge", "知识库"],
       ["/studio/data", "数据"],
-      ["/studio/usage", "用量"],
     ]) {
       expect(workspaceNavigation).toContain(`href: "${href}"`);
       expect(workspaceNavigation).toContain(`label: "${label}"`);
@@ -272,6 +271,12 @@ describe("full-page agent workbench", () => {
   it("keeps restored per-turn processing above the answer and collapsed", () => {
     expect(styles).toMatch(
       /\.turn-activity-summary\s*\{[^}]*order:\s*-10;[^}]*width:\s*100%;/s,
+    );
+  });
+
+  it("keeps generated file cards after the response text", () => {
+    expect(styles).toMatch(
+      /\.aui-assistant-message-content > \.artifact-domain-card\s*\{[^}]*order:\s*50;/s,
     );
   });
 

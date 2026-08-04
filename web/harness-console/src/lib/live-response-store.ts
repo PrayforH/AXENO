@@ -170,9 +170,13 @@ export const liveResponseStore = {
   },
   hideForTool(threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
-    disposition = "activity";
     flushPendingDelta(false);
+    // A tool can start before the provider has emitted any assistant prose.
+    // In that case there is no response candidate to reclassify. Keeping the
+    // candidate disposition lets the terminal-only response projection reuse
+    // the stable message and become visible when the Run finishes.
     if (!snapshot.text) return;
+    disposition = "activity";
     publish({ ...snapshot, visible: false });
   },
   completeMessage(messageId: string, threadId?: string) {

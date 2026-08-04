@@ -38,6 +38,11 @@ class AguiThreadBinding:
     agent_version: str
     agent_owner_user_id: str
     space_id: str | None = None
+    previous_session_ids: tuple[str, ...] = ()
+
+    @property
+    def session_ids(self) -> tuple[str, ...]:
+        return (*self.previous_session_ids, self.session_id)
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,7 @@ class AguiRunService:
             agent_version=session.agent_version,
             agent_owner_user_id=session.resolved_agent_owner_user_id,
             space_id=session.team_ids[0] if session.team_ids else None,
+            previous_session_ids=stored.previous_session_ids,
         )
 
     async def client_coordinates_for_run(
@@ -343,11 +349,15 @@ class AguiRunService:
             run_id = self._run_bindings.get(key)
         if run_id is None:
             binding = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
-            run = await self._run_service.find_by_idempotency_key(
-                tenant_id,
-                binding.session_id,
-                client_run_id,
-            )
+            run = None
+            for session_id in reversed(binding.session_ids):
+                run = await self._run_service.find_by_idempotency_key(
+                    tenant_id,
+                    session_id,
+                    client_run_id,
+                )
+                if run is not None:
+                    break
             if run is None:
                 raise NotFoundError(
                     f"AG-UI run is not bound: {thread_id}/{client_run_id}"
@@ -383,15 +393,47 @@ class AguiRunService:
                     space_id=session.team_ids[0] if session.team_ids else None,
                 )
                 resolved_owner = agent_owner_user_id or user_id
-                if (
+                same_agent = (
                     existing.agent_name,
-                    existing.agent_version,
                     existing.agent_owner_user_id,
                     existing.space_id,
-                ) != (agent_name, agent_version, resolved_owner, space_id):
+                ) == (agent_name, resolved_owner, space_id)
+                if not same_agent:
                     raise ConflictError(
                         f"AG-UI thread {thread_id} is already bound to "
                         f"{existing.agent_name}@{existing.agent_version}"
+                    )
+                if existing.agent_version != agent_version:
+                    active_runs = await self._run_service.list_for_sessions(
+                        tenant_id,
+                        list(stored.session_ids),
+                        limit=200,
+                    )
+                    if any(not run.status.is_terminal for run in active_runs):
+                        raise ConflictError(
+                            "cannot switch Agent version while this task has an active run"
+                        )
+                    next_session = await self._sessions.create(
+                        tenant_id,
+                        user_id,
+                        agent_name,
+                        agent_version,
+                        agent_owner_user_id=agent_owner_user_id,
+                        team_ids=(space_id,) if space_id else (),
+                    )
+                    await self._bindings.rebind_session(
+                        tenant_id,
+                        user_id,
+                        thread_id,
+                        session_id=next_session.session_id,
+                        updated_at=datetime.now(UTC),
+                    )
+                    existing = AguiThreadBinding(
+                        session_id=next_session.session_id,
+                        agent_name=agent_name,
+                        agent_version=agent_version,
+                        agent_owner_user_id=next_session.resolved_agent_owner_user_id,
+                        space_id=space_id,
                     )
                 if stored.archived_at is not None:
                     await self._bindings.set_archived(

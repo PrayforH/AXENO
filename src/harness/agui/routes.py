@@ -7,7 +7,15 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 
-from ag_ui.core import RunAgentInput, RunFinishedEvent, RunStartedEvent
+from ag_ui.core import (
+    BaseEvent,
+    RunAgentInput,
+    RunFinishedEvent,
+    RunStartedEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+)
 from fastapi import APIRouter, Depends, Header, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,6 +34,7 @@ from harness.core.errors import ConflictError
 from harness.core.events import RunEvent
 from harness.core.models import ApprovalRequest, ApprovalStatus, Run
 from harness.runtime.input_redaction import redact_internal_agent_asset_events
+from harness.runtime.message_mapper import safe_model_text
 
 router = APIRouter(prefix="/agui", tags=["ag-ui"])
 
@@ -59,7 +68,7 @@ def _projected_event_cursor(last_event_id: str | None) -> tuple[int, int]:
     return sequence, child_count
 
 
-def _final_response_text(events: list[RunEvent]) -> str:
+def final_response_text(events: list[RunEvent]) -> str:
     """Return only the answer emitted after the last auditable action.
 
     Providers stream progress commentary and final prose through the same
@@ -72,10 +81,72 @@ def _final_response_text(events: list[RunEvent]) -> str:
         if event.type.startswith(_RESPONSE_BOUNDARY_PREFIXES):
             last_action_index = index
     return "".join(
-        str(event.payload.get("text", ""))
+        safe_model_text(str(event.payload.get("text", "")))
         for index, event in enumerate(events)
         if index > last_action_index and event.type == "message.delta"
     )
+
+
+def _stream_response_message_id(run_id: str) -> str:
+    """Return the stable assistant message that owns one Harness Run."""
+
+    return f"assistant-{run_id}"
+
+
+def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[BaseEvent]:
+    """Keep progress in Activity; emit final prose then files at success."""
+
+    projected = list(
+        map_harness_event(
+            event,
+            project_response_text=False,
+            project_artifact=False,
+        )
+    )
+    message_id = _stream_response_message_id(event.run_id)
+    if event.type == "run.queued":
+        # Mount the assistant turn immediately so Activity deltas have a
+        # visible owner while model prose remains deferred until completion.
+        return [
+            *projected[:1],
+            TextMessageStartEvent(message_id=message_id, role="assistant"),
+            *projected[1:],
+        ]
+
+    if event.type in {"run.failed", "run.rejected", "run.timed_out"}:
+        # Keep the AG-UI message lifecycle balanced on every terminal path.
+        return [*projected[:-1], TextMessageEndEvent(message_id=message_id), projected[-1]]
+
+    if event.type == "run.cancelled":
+        return [*projected, TextMessageEndEvent(message_id=message_id)]
+
+    if event.type != "run.succeeded":
+        return projected
+
+    final_text = final_response_text(run_events)
+    final_projection: list[BaseEvent] = []
+    if final_text.strip():
+        final_projection.append(
+            TextMessageContentEvent(message_id=message_id, delta=final_text)
+        )
+    final_projection.append(TextMessageEndEvent(message_id=message_id))
+
+    for artifact_event in (
+        item for item in run_events if item.type == "artifact.ready"
+    ):
+        payload = dict(artifact_event.payload)
+        payload["message_id"] = message_id
+        final_projection.extend(
+            map_harness_event(
+                artifact_event.model_copy(update={"payload": payload}),
+                project_response_text=False,
+                project_activity=False,
+            )
+        )
+
+    # Activity marks the Run complete first; the standard RUN_FINISHED remains
+    # the terminal frame after the response and every generated file card.
+    return [*projected[:-1], *final_projection, projected[-1]]
 
 
 class AguiThreadSummary(BaseModel):
@@ -221,6 +292,7 @@ async def run_agui_agent(
     async def stream() -> AsyncIterator[str]:
         sequence = 0
         terminal_event_seen = False
+        run_events: list[RunEvent] = []
         protected_tool_call_ids: set[str] = set()
         last_emission = time.monotonic()
         while True:
@@ -232,7 +304,8 @@ async def run_agui_agent(
                 protected_tool_call_ids=protected_tool_call_ids,
             )
             for event in events:
-                projected = map_harness_event(event)
+                run_events.append(event)
+                projected = project_stream_event(event, run_events)
                 for index, item in enumerate(projected):
                     if isinstance(item, (RunStartedEvent, RunFinishedEvent)):
                         item = item.model_copy(
@@ -296,9 +369,14 @@ async def list_agui_threads(
         )
         for binding in bindings
     }
+    all_session_ids = [
+        session_id
+        for binding in bindings
+        for session_id in binding.session_ids
+    ]
     runs = await container.runs.list_for_sessions(
         identity.tenant_id,
-        [binding.session_id for binding in bindings],
+        all_session_ids,
         limit=max(limit * 20, 200),
     )
     runs_by_session: dict[str, list[Run]] = {}
@@ -316,7 +394,11 @@ async def list_agui_threads(
 
     summaries: list[AguiThreadSummary] = []
     for binding in bindings:
-        thread_runs = runs_by_session.get(binding.session_id, [])
+        thread_runs = [
+            run
+            for session_id in binding.session_ids
+            for run in runs_by_session.get(session_id, [])
+        ]
         visible_runs = _visible_thread_runs(thread_runs)
         latest = max(
             visible_runs,
@@ -389,7 +471,7 @@ async def update_agui_thread(
     )
     if body.archived:
         runs = await container.runs.list_for_sessions(
-            identity.tenant_id, [binding.session_id], limit=200
+            identity.tenant_id, list(binding.session_ids), limit=200
         )
         active = next(
             (run for run in _visible_thread_runs(runs) if not run.status.is_terminal),
@@ -428,7 +510,7 @@ async def get_agui_thread_history(
         thread_id=thread_id,
     )
     runs = await container.runs.list_for_sessions(
-        identity.tenant_id, [binding.session_id], limit=200
+        identity.tenant_id, list(binding.session_ids), limit=200
     )
     runs = _visible_thread_runs(runs)
     messages: list[AguiHistoryMessage] = []
@@ -483,7 +565,7 @@ async def get_agui_thread_history(
             identity.tenant_id, run.run_id, 0
         )
         events = redact_internal_agent_asset_events(events)
-        response = _final_response_text(events)
+        response = final_response_text(events)
         artifacts = await container.artifacts.list_for_run(
             identity.tenant_id, run.run_id
         )
@@ -659,10 +741,16 @@ async def stream_agui_events(
         sequence - 1 if delivered_children else sequence,
     )
     events = redact_internal_agent_asset_events(events)
+    all_events = await container.observed_events.list_after(
+        identity.tenant_id,
+        run_id,
+        0,
+    )
+    all_events = redact_internal_agent_asset_events(all_events)
 
     async def stream() -> AsyncIterator[str]:
         for event in events:
-            projected = map_harness_event(event)
+            projected = project_stream_event(event, all_events)
             first_child = delivered_children if event.sequence == sequence else 0
             for index, item in enumerate(projected[first_child:], start=first_child):
                 if isinstance(item, (RunStartedEvent, RunFinishedEvent)):

@@ -249,12 +249,17 @@ class AguiThreadBinding(FrozenModel):
     user_id: str
     thread_id: str
     session_id: str
+    previous_session_ids: tuple[str, ...] = ()
     title: str | None = None
     title_source: Literal["fallback", "model"] | None = None
     title_updated_at: datetime | None = None
     archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+    @property
+    def session_ids(self) -> tuple[str, ...]:
+        return (*self.previous_session_ids, self.session_id)
 
 
 class WorkspaceSnapshot(FrozenModel):

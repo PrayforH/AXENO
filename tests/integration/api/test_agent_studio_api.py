@@ -19,6 +19,7 @@ from harness.api.app import create_app
 from harness.api.dependencies import ApiContainer, build_memory_container
 from harness.auth.models import Membership
 from harness.auth.repositories import InMemoryAuthRepository
+from harness.config import Settings
 from harness.core.errors import NotFoundError
 from harness.core.manifest import ToolDirectorySnapshot
 from harness.evals.models import EvalRunStatus
@@ -280,6 +281,73 @@ async def test_studio_imports_a_skill_archive_without_executing_its_scripts() ->
     assert response.json()["skill"]["name"] == "ppt-master"
     assert response.json()["riskLevel"] == "review"
     assert response.json()["findings"] == ["包含可执行脚本：scripts/render.py"]
+
+
+@pytest.mark.asyncio
+async def test_studio_installs_large_skill_without_returning_every_file_content() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "builder-a",
+    }
+    archive = BytesIO()
+    with ZipFile(archive, "w") as bundle:
+        bundle.writestr(
+            "ppt-master/SKILL.md",
+            (
+                "---\nname: ppt-master\ndescription: Build presentations.\n---\n\n"
+                "Generate and verify a presentation in the workspace.\n"
+            ),
+        )
+        for index in range(205):
+            bundle.writestr(f"ppt-master/references/item-{index:03d}.md", f"item {index}\n")
+        bundle.writestr("ppt-master/assets/preview.png", b"\x89PNG\r\n\x1a\npreview")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app()),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("large-skill-agent"),
+        )
+        installed = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/skills/import"
+            "?filename=ppt-master.zip&expectedRevision=1",
+            headers={**headers, "Content-Type": "application/zip"},
+            content=archive.getvalue(),
+        )
+        payload = installed.json()
+        installed_skill = next(
+            skill for skill in payload["draft"]["spec"]["skills"]
+            if skill["name"] == "ppt-master"
+        )
+        installed_skill["description"] = "Updated without resending hidden files."
+        saved = await client.put(
+            f"/v1/studio/drafts/{created.json()['draftId']}",
+            headers=headers,
+            json={
+                "expectedRevision": payload["draft"]["revision"],
+                "spec": payload["draft"]["spec"],
+            },
+        )
+        exported = await client.get(
+            f"/v1/studio/drafts/{created.json()['draftId']}/bundle",
+            headers=headers,
+        )
+
+    assert installed.status_code == 200, installed.text
+    assert payload["fileCount"] == 206
+    assert payload["binaryFileCount"] == 1
+    assert installed_skill["fileCount"] == 206
+    assert installed_skill["filesTruncated"] is True
+    assert len(installed_skill["files"]) == 200
+    assert saved.status_code == 200, saved.text
+    with ZipFile(BytesIO(exported.content)) as bundle:
+        names = set(bundle.namelist())
+    assert "skills/ppt-master/references/item-204.md" in names
+    assert "skills/ppt-master/assets/preview.png" in names
 
 
 @pytest.mark.asyncio
@@ -1113,7 +1181,7 @@ async def test_publish_is_idempotent_and_writes_secret_free_domain_audit() -> No
 
 
 @pytest.mark.asyncio
-async def test_changed_content_reusing_version_is_rejected_and_audited() -> None:
+async def test_changed_published_content_auto_increments_patch_version() -> None:
     application, container = app_and_container()
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
@@ -1139,7 +1207,7 @@ async def test_changed_content_reusing_version_is_rejected_and_audited() -> None
             headers=headers,
             json={"expectedRevision": 2, "spec": changed_spec},
         )
-        conflicting = await client.post(
+        republished = await client.post(
             f"/v1/studio/drafts/{draft_id}/publish",
             headers=headers,
             json={"expectedRevision": 3},
@@ -1147,19 +1215,14 @@ async def test_changed_content_reusing_version_is_rejected_and_audited() -> None
 
     assert first.status_code == 200
     assert changed.status_code == 200
-    assert conflicting.status_code == 409
-    assert conflicting.json()["error"]["code"] == "version_conflict"
+    assert changed.json()["spec"]["version"] == "0.1.1"
+    assert republished.status_code == 200
+    assert republished.json()["version"] == "0.1.1"
     audits = await container.audit.list_for_tenant("tenant-a", limit=20)
-    denied = next(
-        entry for entry in audits if entry.action == "studio.publish" and entry.outcome == "denied"
+    assert not any(
+        entry.action == "studio.publish" and entry.outcome == "denied"
+        for entry in audits
     )
-    assert denied.details["error_code"] == "version_conflict"
-    assert set(denied.details) == {
-        "name",
-        "version",
-        "draft_revision",
-        "error_code",
-    }
 
 
 @pytest.mark.asyncio
@@ -1392,7 +1455,12 @@ async def test_quota_usage_is_readable_but_only_admin_roles_can_change_policy() 
 
 @pytest.mark.asyncio
 async def test_preview_quota_rejection_does_not_create_a_half_preview() -> None:
-    application, container = app_and_container()
+    container = replace(
+        build_memory_container(settings=Settings(quota_enforcement_enabled=True)),
+        environment="production",
+        api_bearer_token=SecretStr(SERVICE_TOKEN),
+    )
+    application = create_app(container)
     await container.quotas.replace_policy(
         tenant_id="tenant-a",
         user_id="owner-a",

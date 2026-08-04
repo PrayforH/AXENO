@@ -77,6 +77,23 @@ describe("liveResponseStore", () => {
     unsubscribe();
   });
 
+  it("keeps a stable empty message eligible for the final response after tools", () => {
+    liveResponseStore.startRun("run-terminal-response");
+    liveResponseStore.startMessage("stable-message");
+    liveResponseStore.hideForTool();
+    liveResponseStore.append("stable-message", "最终查询结论");
+    liveResponseStore.completeMessage("stable-message");
+    liveResponseStore.completeRun();
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-terminal-response",
+      messageId: "stable-message",
+      text: "最终查询结论",
+      status: "complete",
+      visible: true,
+    });
+  });
+
   it("publishes a stable candidate on each animation frame", () => {
     let paint: FrameRequestCallback | undefined;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {

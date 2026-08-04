@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -135,6 +136,61 @@ async def test_post_agui_reuses_harness_session_for_same_thread() -> None:
     assert first.session_id == second.session_id
     assert first.agent_name == "echo-agent"
     assert first.agent_version == "0.1.0"
+
+
+@pytest.mark.asyncio
+async def test_same_agent_can_switch_version_and_keep_thread_history(
+    tmp_path: Path,
+) -> None:
+    app = create_memory_app(auto_execute=True)
+    next_agent = tmp_path / "echo-agent"
+    shutil.copytree(FIXTURE_MANIFEST.parent, next_agent)
+    manifest = next_agent / "agent.yaml"
+    manifest.write_text(
+        manifest.read_text().replace("version: 0.1.0", "version: 0.1.1"),
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        for path in (FIXTURE_MANIFEST, manifest):
+            published = await client.post(
+                "/v1/agents", json={"path": str(path)}, headers=HEADERS
+            )
+            assert published.status_code == 201
+
+        first = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json=_request(thread_id="thread-upgrade", run_id="run-old", prompt="old"),
+            headers=HEADERS,
+        )
+        second = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.1",
+            json=_request_with_prompts(
+                thread_id="thread-upgrade",
+                run_id="run-new",
+                prompts=["old", "new"],
+            ),
+            headers=HEADERS,
+        )
+        history = await client.get(
+            "/v1/agui/threads/thread-upgrade/history", headers=HEADERS
+        )
+        listed = await client.get("/v1/agui/threads", headers=HEADERS)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    binding = await app.state.container.agui._bindings.get_by_thread(
+        "tenant-a", "user-1", "thread-upgrade"
+    )
+    assert len(binding.previous_session_ids) == 1
+    assert binding.session_id not in binding.previous_session_ids
+    assert [
+        message["content"]
+        for message in history.json()["messages"]
+        if message["role"] == "user"
+    ] == ["old", "new"]
+    task = next(item for item in listed.json() if item["thread_id"] == "thread-upgrade")
+    assert task["agent_version"] == "0.1.1"
 
 
 @pytest.mark.asyncio
