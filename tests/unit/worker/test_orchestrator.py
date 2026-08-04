@@ -625,6 +625,37 @@ async def test_workspace_outputs_are_published_as_artifacts_for_every_sandbox(
 
 
 @pytest.mark.asyncio
+async def test_workspace_archive_failure_after_model_success_is_non_terminal(
+    tmp_path: Path,
+) -> None:
+    workspaces = WorkspaceService(
+        InMemoryArtifactStore(),
+        snapshots=InMemoryWorkspaceSnapshotRepository(),
+        max_archive_members=1,
+    )
+    orchestrator, _, _, events = await arrange(
+        tmp_path,
+        runtime_override=WorkspaceOutputRuntime(),
+        enable_artifacts=True,
+        workspaces=workspaces,
+    )
+
+    completed = await orchestrator.execute("tenant-a", "run-1")
+    recorded = await events.list_after("tenant-a", "run-1", 0)
+
+    assert completed.status is RunStatus.SUCCEEDED
+    assert any(event.type == "artifact.ready" for event in recorded)
+    archive_failure = next(
+        event for event in recorded if event.type == "workspace.archive.failed"
+    )
+    assert archive_failure.payload == {
+        "error_code": "workspace_archive_failed",
+        "error_type": "ValueError",
+    }
+    assert recorded[-1].type == "run.succeeded"
+
+
+@pytest.mark.asyncio
 async def test_workspace_outputs_survive_a_model_failure(tmp_path: Path) -> None:
     artifact_store = InMemoryArtifactStore()
     snapshots = InMemoryWorkspaceSnapshotRepository()

@@ -94,6 +94,22 @@ describe("liveResponseStore", () => {
     });
   });
 
+  it("keeps a completed provider response visible when post-processing fails", () => {
+    liveResponseStore.startRun("run-post-processing-error");
+    liveResponseStore.startMessage("stable-message");
+    liveResponseStore.append("stable-message", "图谱已经生成。可下载查看。");
+    liveResponseStore.completeMessage("stable-message");
+    liveResponseStore.failRun();
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-post-processing-error",
+      messageId: "stable-message",
+      text: "图谱已经生成。可下载查看。",
+      status: "error",
+      visible: true,
+    });
+  });
+
   it("publishes a stable candidate on each animation frame", () => {
     let paint: FrameRequestCallback | undefined;
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {

@@ -1383,20 +1383,42 @@ class RunOrchestrator:
                     message_id=final_response_message_id,
                 )
             if self._workspaces is not None and workspace_policy.archive_on_complete:
-                with self._stage("harness.workspace.archive", {"run.id": run_id}):
-                    snapshot = await self._workspaces.archive(
+                try:
+                    with self._stage("harness.workspace.archive", {"run.id": run_id}):
+                        snapshot = await self._workspaces.archive(
+                            tenant_id=tenant_id,
+                            session_id=run.session_id,
+                            workspace=handle.path,
+                        )
+                    await self._events.append(
                         tenant_id=tenant_id,
+                        run_id=run_id,
                         session_id=run.session_id,
-                        workspace=handle.path,
+                        event_type="workspace.archived",
+                        payload=snapshot.model_dump(mode="json"),
                     )
-                await self._events.append(
-                    tenant_id=tenant_id,
-                    run_id=run_id,
-                    session_id=run.session_id,
-                    event_type="workspace.archived",
-                    payload=snapshot.model_dump(mode="json"),
-                )
-            workspace_durable = True
+                    workspace_durable = True
+                except Exception as error:  # noqa: BLE001 - model result is already durable
+                    workspace_durable = False
+                    logger.warning(
+                        "workspace archive failed after successful runtime "
+                        "run_id=%s error_type=%s message=%s",
+                        run_id,
+                        type(error).__name__,
+                        error,
+                    )
+                    await self._events.append(
+                        tenant_id=tenant_id,
+                        run_id=run_id,
+                        session_id=run.session_id,
+                        event_type="workspace.archive.failed",
+                        payload={
+                            "error_code": "workspace_archive_failed",
+                            "error_type": type(error).__name__,
+                        },
+                    )
+            else:
+                workspace_durable = True
             latest = await self._runs.get(tenant_id, run_id)
             if latest.status is RunStatus.CANCELLING:
                 return await self._move(latest, RunStatus.CANCELLED)

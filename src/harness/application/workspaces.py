@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 import tarfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +16,23 @@ from harness.core.models import WorkspaceSnapshot
 from harness.core.ports import ArtifactStore, SessionRepository, WorkspaceSnapshotRepository
 from harness.quota.models import QuotaResource, ResourceReservation
 from harness.quota.service import QuotaService
+
+_TRANSIENT_ROOTS = frozenset(
+    {".claude", ".git", ".harness-runtime", ".tmp", "inputs"}
+)
+_DEPENDENCY_DIRECTORIES = frozenset(
+    {
+        ".cache",
+        ".npm",
+        ".pnpm-store",
+        ".venv",
+        ".yarn",
+        "__pycache__",
+        "node_modules",
+        "vendor",
+        "venv",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -61,7 +79,9 @@ class WorkspaceService:
         def pack() -> bytes:
             paths: list[Path] = []
             total_size = 0
-            for path in workspace.rglob("*"):
+
+            def retain(path: Path) -> None:
+                nonlocal total_size
                 if len(paths) >= self._max_archive_members:
                     raise ValueError("workspace archive exceeds member limit")
                 if path.is_symlink():
@@ -73,6 +93,33 @@ class WorkspaceService:
                     if total_size > self._max_archive_bytes:
                         raise ValueError("workspace archive exceeds size limit")
                 paths.append(path)
+
+            # Runtime assets, immutable inputs and package caches are staged
+            # independently on every Run. Archiving them bloats a conversational
+            # workspace and can make a single npm install exhaust the member
+            # limit even though the user's files are small.
+            for root, directory_names, file_names in os.walk(
+                workspace,
+                topdown=True,
+                followlinks=False,
+            ):
+                root_path = Path(root)
+                retained_directories: list[str] = []
+                for name in sorted(directory_names):
+                    path = root_path / name
+                    if path.is_symlink():
+                        raise ValueError("workspace contains an unsafe symlink")
+                    relative = path.relative_to(workspace)
+                    if (
+                        relative.parts[0] in _TRANSIENT_ROOTS
+                        or name in _DEPENDENCY_DIRECTORIES
+                    ):
+                        continue
+                    retain(path)
+                    retained_directories.append(name)
+                directory_names[:] = retained_directories
+                for name in sorted(file_names):
+                    retain(root_path / name)
             buffer = BytesIO()
             with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
                 for path in sorted(paths):

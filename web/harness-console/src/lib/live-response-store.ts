@@ -200,7 +200,11 @@ export const liveResponseStore = {
   failRun(threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
     cancelScheduledFrame();
-    flushPendingDelta(disposition === "response");
+    // A complete provider answer can be followed by a post-processing error
+    // (for example, workspace snapshot persistence). Treat that terminal text
+    // as a response before marking the Run error so it remains visible.
+    if (disposition === "candidate") promoteCandidate();
+    else flushPendingDelta(disposition === "response");
     publish({
       ...snapshot,
       status: "error",

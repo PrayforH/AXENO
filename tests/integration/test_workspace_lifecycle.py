@@ -104,6 +104,41 @@ async def test_archive_rejects_oversize_and_excessive_member_workspaces(
 
 
 @pytest.mark.asyncio
+async def test_archive_omits_recreated_runtime_assets_and_dependency_trees(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    snapshots = InMemoryWorkspaceSnapshotRepository()
+    service = WorkspaceService(
+        store,
+        snapshots=snapshots,
+        max_archive_members=2,
+    )
+    source = tmp_path / "source"
+    output = source / "outputs"
+    output.mkdir(parents=True)
+    (output / "graph.html").write_text("<canvas></canvas>")
+    for root_name in ("node_modules", ".claude", "inputs"):
+        for index in range(10):
+            generated = source / root_name / f"package-{index}"
+            generated.mkdir(parents=True)
+            (generated / "generated.js").write_text("generated")
+
+    snapshot = await service.archive(
+        tenant_id="tenant-a",
+        session_id="session-a",
+        workspace=source,
+    )
+    restored = tmp_path / "restored"
+    await service.restore(snapshot, workspace=restored)
+
+    assert (restored / "outputs/graph.html").read_text() == "<canvas></canvas>"
+    assert not (restored / "node_modules").exists()
+    assert not (restored / ".claude").exists()
+    assert not (restored / "inputs").exists()
+
+
+@pytest.mark.asyncio
 async def test_snapshot_quota_rejects_before_object_and_metadata_are_persisted(
     tmp_path: Path,
 ) -> None:

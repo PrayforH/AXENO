@@ -322,6 +322,40 @@ describe("HarnessHttpAgent", () => {
     });
   });
 
+  it("shows a completed response before a post-processing run error", async () => {
+    liveResponseStore.clear();
+    const streamFetch: typeof fetch = async () =>
+      new Response(
+        [
+          'data: {"type":"RUN_STARTED","threadId":"thread-error","runId":"run-error"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_START","messageId":"assistant-run-error","role":"assistant"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"assistant-run-error","delta":"图谱已经生成。可下载查看。"}',
+          "",
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"assistant-run-error"}',
+          "",
+          'data: {"type":"RUN_ERROR","threadId":"thread-error","runId":"run-error","message":"工作区保存失败"}',
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui",
+      fetch: streamFetch,
+    });
+
+    await agent.runAgent({ runId: "run-error" });
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      messageId: "assistant-run-error",
+      text: "图谱已经生成。可下载查看。",
+      status: "error",
+      visible: true,
+    });
+  });
+
   it("publishes the first text chunk before the response stream finishes", async () => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();

@@ -93,6 +93,35 @@ def _stream_response_message_id(run_id: str) -> str:
     return f"assistant-{run_id}"
 
 
+def _terminal_response_projection(
+    event: RunEvent,
+    run_events: list[RunEvent],
+) -> list[BaseEvent]:
+    """Project every durable answer even when post-processing later fails."""
+
+    message_id = _stream_response_message_id(event.run_id)
+    projection: list[BaseEvent] = []
+    final_text = final_response_text(run_events)
+    if final_text.strip():
+        projection.append(
+            TextMessageContentEvent(message_id=message_id, delta=final_text)
+        )
+    projection.append(TextMessageEndEvent(message_id=message_id))
+    for artifact_event in (
+        item for item in run_events if item.type == "artifact.ready"
+    ):
+        payload = dict(artifact_event.payload)
+        payload["message_id"] = message_id
+        projection.extend(
+            map_harness_event(
+                artifact_event.model_copy(update={"payload": payload}),
+                project_response_text=False,
+                project_activity=False,
+            )
+        )
+    return projection
+
+
 def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[BaseEvent]:
     """Keep progress in Activity; emit final prose then files at success."""
 
@@ -114,8 +143,14 @@ def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[Ba
         ]
 
     if event.type in {"run.failed", "run.rejected", "run.timed_out"}:
-        # Keep the AG-UI message lifecycle balanced on every terminal path.
-        return [*projected[:-1], TextMessageEndEvent(message_id=message_id), projected[-1]]
+        # A provider may finish successfully before artifact/workspace
+        # post-processing fails. Preserve its durable answer and generated
+        # files before surfacing the terminal error.
+        return [
+            *projected[:-1],
+            *_terminal_response_projection(event, run_events),
+            projected[-1],
+        ]
 
     if event.type == "run.cancelled":
         return [*projected, TextMessageEndEvent(message_id=message_id)]
@@ -123,30 +158,13 @@ def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[Ba
     if event.type != "run.succeeded":
         return projected
 
-    final_text = final_response_text(run_events)
-    final_projection: list[BaseEvent] = []
-    if final_text.strip():
-        final_projection.append(
-            TextMessageContentEvent(message_id=message_id, delta=final_text)
-        )
-    final_projection.append(TextMessageEndEvent(message_id=message_id))
-
-    for artifact_event in (
-        item for item in run_events if item.type == "artifact.ready"
-    ):
-        payload = dict(artifact_event.payload)
-        payload["message_id"] = message_id
-        final_projection.extend(
-            map_harness_event(
-                artifact_event.model_copy(update={"payload": payload}),
-                project_response_text=False,
-                project_activity=False,
-            )
-        )
-
     # Activity marks the Run complete first; the standard RUN_FINISHED remains
     # the terminal frame after the response and every generated file card.
-    return [*projected[:-1], *final_projection, projected[-1]]
+    return [
+        *projected[:-1],
+        *_terminal_response_projection(event, run_events),
+        projected[-1],
+    ]
 
 
 class AguiThreadSummary(BaseModel):

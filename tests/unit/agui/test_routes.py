@@ -118,3 +118,41 @@ def test_live_projection_closes_started_message_before_run_error() -> None:
         "RUN_ERROR",
     ]
     assert terminal[1]["messageId"] == "assistant-run-1"
+
+
+def test_live_projection_preserves_completed_response_when_post_processing_fails() -> None:
+    events = [
+        _event("run.queued", 1),
+        _event("tool.request", 2, tool_call_id="write-1", name="Write"),
+        _event("tool.result", 3, tool_call_id="write-1"),
+        _event("message.start", 4, message_id="provider-final"),
+        _event("message.delta", 5, message_id="provider-final", text="图谱已生成。"),
+        _event("message.completed", 6, message_id="provider-final"),
+        _event(
+            "artifact.ready",
+            7,
+            artifact_id="artifact-graph",
+            name="graph.html",
+            media_type="text/html",
+        ),
+        _event("runtime.result", 8, subtype="success", stop_reason="end_turn"),
+        _event("run.failed", 9, error_code="workspace_archive_failed"),
+    ]
+
+    terminal = [
+        item.model_dump(by_alias=True)
+        for item in project_stream_event(events[-1], events)
+    ]
+
+    assert [item["type"] for item in terminal] == [
+        "ACTIVITY_DELTA",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+        "RUN_ERROR",
+    ]
+    assert terminal[1]["delta"] == "图谱已生成。"
+    assert terminal[3]["parentMessageId"] == "assistant-run-1"
