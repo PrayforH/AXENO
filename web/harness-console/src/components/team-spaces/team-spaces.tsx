@@ -33,16 +33,58 @@ type CatalogAgent = {
   owner_user_id: string;
   scope: "personal" | "team";
 };
-type SharedAgent = {
-  grant: {
+type WorkspaceAgent = {
+  tenantId: string;
+  agentId: string;
+  scope: "personal" | "workspace";
+  ownerUserId: string | null;
+  spaceId: string | null;
+  name: string;
+  displayName: string;
+  description: string;
+  status: "active" | "archived";
+  currentVersion: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+type AgentPermissions = {
+  agent: WorkspaceAgent;
+  permissions: string[];
+  canView: boolean;
+  canChat: boolean;
+  canEdit: boolean;
+  canPublish: boolean;
+  canManage: boolean;
+};
+type ReleaseItem = {
+  release: {
+    tenantId: string;
     spaceId: string;
-    agentOwnerUserId: string;
-    agentName: string;
-    agentVersion: string;
-    sharedBy: string;
+    agentId: string;
+    version: string;
+    sourceOwnerUserId: string;
+    sourceName: string;
+    promotedBy: string;
     runnableByViewer: boolean;
+    connectionMode: "caller_owned" | "service_owned";
+    createdAt: string;
   };
-  agent: CatalogAgent;
+  agent: CatalogAgent & {
+    agent_id?: string | null;
+    current_version?: string | null;
+    can_view?: boolean;
+    can_chat?: boolean;
+  };
+};
+type AgentAcl = {
+  tenantId: string;
+  agentId: string;
+  granteeType: "user" | "group" | "space_role";
+  granteeId: string;
+  permission: string;
+  grantedBy: string;
+  createdAt: string;
 };
 type KnowledgeBase = { reference: string; displayName: string; description: string };
 type SharedKnowledge = {
@@ -57,6 +99,14 @@ const ROLE_LABELS: Record<SpaceRole, string> = {
   admin: "管理员",
   contributor: "贡献者",
   viewer: "查看者",
+};
+
+const PERMISSION_LABELS: Record<string, string> = {
+  view: "查看",
+  chat: "对话",
+  edit: "编辑",
+  publish: "发布",
+  manage: "管理",
 };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -81,7 +131,9 @@ export function TeamSpaces() {
   const [members, setMembers] = useState<SpaceMember[]>([]);
   const [directory, setDirectory] = useState<TenantMember[]>([]);
   const [personalAgents, setPersonalAgents] = useState<CatalogAgent[]>([]);
-  const [sharedAgents, setSharedAgents] = useState<SharedAgent[]>([]);
+  const [workspaceAgents, setWorkspaceAgents] = useState<AgentPermissions[]>([]);
+  const [releasesByAgent, setReleasesByAgent] = useState<Record<string, ReleaseItem[]>>({});
+  const [aclsByAgent, setAclsByAgent] = useState<Record<string, AgentAcl[]>>({});
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [sharedKnowledge, setSharedKnowledge] = useState<SharedKnowledge[]>([]);
   const [spaceName, setSpaceName] = useState("");
@@ -90,6 +142,8 @@ export function TeamSpaces() {
   const [memberRole, setMemberRole] = useState<SpaceRole>("contributor");
   const [agentSelection, setAgentSelection] = useState("");
   const [viewerRunnable, setViewerRunnable] = useState(true);
+  const [aclGrantee, setAclGrantee] = useState("");
+  const [aclPermission, setAclPermission] = useState("chat");
   const [knowledgeSelection, setKnowledgeSelection] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -117,22 +171,24 @@ export function TeamSpaces() {
     if (!spaceId) {
       setMembers([]);
       setDirectory([]);
-      setSharedAgents([]);
+      setWorkspaceAgents([]);
+      setReleasesByAgent({});
+      setAclsByAgent({});
       setSharedKnowledge([]);
       return;
     }
     const summary = spaces.find((item) => item.space.spaceId === spaceId);
     const manageable = summary?.membership.role === "owner" || summary?.membership.role === "admin";
-    const [nextMembers, nextShared, nextKnowledge, nextDirectory] = await Promise.all([
+    const [nextMembers, nextAgents, nextKnowledge, nextDirectory] = await Promise.all([
       request<SpaceMember[]>(`/api/spaces/${encodeURIComponent(spaceId)}/members`),
-      request<SharedAgent[]>(`/api/spaces/${encodeURIComponent(spaceId)}/agents`),
+      request<AgentPermissions[]>(`/api/spaces/${encodeURIComponent(spaceId)}/agents`),
       request<SharedKnowledge[]>(`/api/spaces/${encodeURIComponent(spaceId)}/knowledge`),
       manageable
         ? request<TenantMember[]>(`/api/spaces/${encodeURIComponent(spaceId)}/member-directory`)
         : Promise.resolve([]),
     ]);
     setMembers(nextMembers);
-    setSharedAgents(nextShared);
+    setWorkspaceAgents(nextAgents);
     setSharedKnowledge(nextKnowledge);
     setDirectory(nextDirectory);
     setMemberUserId((current) =>
@@ -140,6 +196,32 @@ export function TeamSpaces() {
         ? current
         : nextDirectory[0]?.user.user_id ?? "",
     );
+    const agents = nextAgents.map((item) => item.agent);
+    setAclGrantee((current) =>
+      nextDirectory.some((item) => item.user.user_id === current)
+        ? current
+        : nextDirectory[0]?.user.user_id ?? "",
+    );
+    const [releases, acls] = await Promise.all([
+      Promise.all(
+        agents.map(async (agent) => [
+          agent.agentId,
+          await request<ReleaseItem[]>(
+            `/api/spaces/${encodeURIComponent(spaceId)}/agents/${encodeURIComponent(agent.agentId)}/releases`,
+          ),
+        ] as const),
+      ),
+      Promise.all(
+        agents.map(async (agent) => [
+          agent.agentId,
+          await request<AgentAcl[]>(
+            `/api/spaces/${encodeURIComponent(spaceId)}/agents/${encodeURIComponent(agent.agentId)}/acl`,
+          ),
+        ] as const),
+      ),
+    ]);
+    setReleasesByAgent(Object.fromEntries(releases));
+    setAclsByAgent(Object.fromEntries(acls));
   }, [spaces]);
 
   useEffect(() => {
@@ -215,40 +297,90 @@ export function TeamSpaces() {
         }),
       });
       await loadSpace(selectedId);
-      setNotice(`${agent.display_name} ${agent.version} 已发布到团队空间。`);
+      setNotice(`${agent.display_name} ${agent.version} 已发布为工作区 Agent Release。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "发布失败");
     } finally { setBusy(""); }
   }
 
-  async function forkAgent(item: SharedAgent) {
-    const grant = item.grant;
-    setBusy(`fork:${grant.agentName}`); setError(""); setNotice("");
+  async function promoteRelease(agentId: string, version: string) {
+    if (!selectedId) return;
+    setBusy(`promote:${agentId}`); setError(""); setNotice("");
     try {
       await request(
-        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(grant.agentOwnerUserId)}/${encodeURIComponent(grant.agentName)}/${encodeURIComponent(grant.agentVersion)}/fork`,
+        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(agentId)}/releases/${encodeURIComponent(version)}/promote`,
+        { method: "POST" },
+      );
+      await loadSpace(selectedId);
+      setNotice(`当前发布版本已切换为 ${version}，Agent 身份不变。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "切换版本失败");
+    } finally { setBusy(""); }
+  }
+
+  async function forkAgent(agentId: string) {
+    if (!selectedId) return;
+    setBusy(`fork:${agentId}`); setError(""); setNotice("");
+    try {
+      await request(
+        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(agentId)}/fork`,
         { method: "POST" },
       );
       const agents = await request<CatalogAgent[]>("/api/harness/agents");
       setPersonalAgents(agents.filter((agent) => agent.scope === "personal"));
-      setNotice("已复制到个人智能体；团队版本及其他成员任务未发生变化。");
+      setNotice("已按当前发布版本复制到个人智能体；团队 Release 未发生变化。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "复制失败");
     } finally { setBusy(""); }
   }
 
-  async function unshareAgent(item: SharedAgent) {
-    const grant = item.grant;
-    setBusy(`remove:${grant.agentName}`); setError(""); setNotice("");
+  async function unshareRelease(agentId: string, version: string) {
+    if (!selectedId) return;
+    setBusy(`remove:${agentId}:${version}`); setError(""); setNotice("");
     try {
       await request(
-        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(grant.agentOwnerUserId)}/${encodeURIComponent(grant.agentName)}/${encodeURIComponent(grant.agentVersion)}`,
+        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(agentId)}/releases/${encodeURIComponent(version)}`,
         { method: "DELETE" },
       );
       await loadSpace(selectedId);
-      setNotice("共享授权已撤销；既有任务仍保留其历史快照和记录。");
+      setNotice("Release 授权已撤销；既有任务仍保留其历史快照和记录。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "撤销失败");
+    } finally { setBusy(""); }
+  }
+
+  async function addAcl(agentId: string) {
+    if (!selectedId || !aclGrantee) return;
+    setBusy(`acl:${agentId}`); setError(""); setNotice("");
+    try {
+      await request(`/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(agentId)}/acl`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          grantee_type: "user",
+          grantee_id: aclGrantee,
+          permission: aclPermission,
+        }),
+      });
+      await loadSpace(selectedId);
+      setNotice("Agent 权限已加授。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "权限保存失败");
+    } finally { setBusy(""); }
+  }
+
+  async function removeAcl(agentId: string, granteeId: string, permission: string) {
+    if (!selectedId) return;
+    setBusy(`acl-remove:${agentId}`); setError(""); setNotice("");
+    try {
+      await request(
+        `/api/spaces/${encodeURIComponent(selectedId)}/agents/${encodeURIComponent(agentId)}/acl/user/${encodeURIComponent(granteeId)}/${permission}`,
+        { method: "DELETE" },
+      );
+      await loadSpace(selectedId);
+      setNotice("Agent 权限已撤销。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "权限撤销失败");
     } finally { setBusy(""); }
   }
 
@@ -288,12 +420,12 @@ export function TeamSpaces() {
       <StudioSidebar active="spaces">
         <div className={styles.railCopy}>
           <strong>个人与团队边界</strong>
-          <p>共享不可变 Agent 版本；任务、对话、文件和 MCP 凭据始终属于运行用户。</p>
+          <p>工作区 Agent 拥有稳定身份；Release 切换版本不改变 Agent。</p>
         </div>
       </StudioSidebar>
       <section className={styles.content}>
         <header className={styles.hero}>
-          <div><p>Team collaboration</p><h1>共享空间</h1><span>把可复用能力发布给团队，而不是共享个人运行记录。</span></div>
+          <div><p>Team collaboration</p><h1>共享空间</h1><span>把可复用能力发布为工作区 Agent，而不是共享个人运行记录。</span></div>
           <form onSubmit={createSpace} className={styles.createForm}>
             <input value={spaceName} onChange={(event) => setSpaceName(event.target.value)} placeholder="空间名称" maxLength={160} required />
             <input value={spaceDescription} onChange={(event) => setSpaceDescription(event.target.value)} placeholder="用途说明（可选）" maxLength={1000} />
@@ -315,7 +447,7 @@ export function TeamSpaces() {
           {selected ? <div className={styles.detail}>
             <section className={styles.summary}>
               <div><p>当前空间</p><h2>{selected.space.name}</h2><span>{selected.space.description || "用于团队共享可运行的 Agent 版本。"}</span></div>
-              <div className={styles.boundaries}><span><b>{members.length}</b> 成员</span><span><b>{sharedAgents.length}</b> Agent</span><span><b>{sharedKnowledge.length}</b> 知识库</span><span><b>0</b> 共享任务</span></div>
+              <div className={styles.boundaries}><span><b>{members.length}</b> 成员</span><span><b>{workspaceAgents.length}</b> Agent</span><span><b>{sharedKnowledge.length}</b> 知识库</span><span><b>0</b> 共享任务</span></div>
             </section>
 
             <section className={styles.panel}>
@@ -336,19 +468,53 @@ export function TeamSpaces() {
             </section>
 
             <section className={styles.panel}>
-              <header><div><p>Immutable releases</p><h3>共享智能体版本</h3></div><span>共享定义，不共享凭据和任务</span></header>
+              <header><div><p>Workspace Agents</p><h3>共享智能体</h3></div><span>稳定身份 + 不可变 Release</span></header>
               {canShare && <form className={styles.shareForm} onSubmit={shareAgent}>
                 <select value={agentSelection} onChange={(event) => setAgentSelection(event.target.value)}>
                   {personalAgents.map((agent) => <option key={agentKey(agent)} value={agentKey(agent)}>{agent.display_name} · {agent.version}</option>)}
                 </select>
                 <label><input type="checkbox" checked={viewerRunnable} onChange={(event) => setViewerRunnable(event.target.checked)} />允许 Viewer 运行</label>
-                <button disabled={!agentSelection || busy === "share"}>发布到空间</button>
+                <button disabled={!agentSelection || busy === "share"}>发布 Release</button>
               </form>}
-              <div className={styles.agentList}>{sharedAgents.length === 0 ? <p>尚未发布共享版本。</p> : sharedAgents.map((item) => <article key={`${item.grant.agentOwnerUserId}:${item.grant.agentName}@${item.grant.agentVersion}`}>
-                <div><strong>{item.agent.display_name}</strong><span>{item.grant.agentName}@{item.grant.agentVersion}</span></div>
-                <small>{item.grant.runnableByViewer ? "所有成员可运行" : "Viewer 仅查看"}</small>
-                <div className={styles.actions}><button onClick={() => void forkAgent(item)} disabled={busy.startsWith("fork:")}>复制到个人</button>{canShare && <button className={styles.danger} onClick={() => void unshareAgent(item)} disabled={busy.startsWith("remove:")}>撤销共享</button>}</div>
-              </article>)}</div>
+              <div className={styles.agentList}>{workspaceAgents.length === 0 ? <p>尚未发布共享 Agent。</p> : workspaceAgents.map((item) => {
+                const agent = item.agent;
+                const releases = releasesByAgent[agent.agentId] ?? [];
+                const acls = aclsByAgent[agent.agentId] ?? [];
+                return <article key={agent.agentId} className={styles.agentCard}>
+                  <div><strong>{agent.displayName || agent.name}</strong><span>{agent.name} · 当前 {agent.currentVersion ?? "未发布"}</span></div>
+                  <small>{item.permissions.map((permission) => PERMISSION_LABELS[permission] ?? permission).join(" / ") || "仅查看"}</small>
+                  <div className={styles.releaseList}>
+                    {releases.map((entry) => (
+                      <div key={entry.release.version} className={`${styles.releaseRow}${entry.release.version === agent.currentVersion ? ` ${styles.releaseCurrent}` : ""}`}>
+                        <span>{entry.release.version}{entry.release.version === agent.currentVersion ? " · 当前" : ""}</span>
+                        <span>{entry.release.connectionMode === "service_owned" ? "共享凭据" : "个人凭据"}</span>
+                        <div className={styles.actions}>
+                          {item.canPublish && entry.release.version !== agent.currentVersion && <button onClick={() => void promoteRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("promote:")}>设为当前</button>}
+                          {item.canPublish && <button className={styles.danger} onClick={() => void unshareRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("remove:")}>撤销</button>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className={styles.actions}>
+                    {item.canChat && <button onClick={() => void forkAgent(agent.agentId)} disabled={busy.startsWith("fork:")}>复制到个人</button>}
+                  </div>
+                  {item.canManage && (
+                    <form className={styles.inlineForm} onSubmit={(event) => { event.preventDefault(); void addAcl(agent.agentId); }}>
+                      <select value={aclGrantee} onChange={(event) => setAclGrantee(event.target.value)} aria-label="加授成员">
+                        {directory.map((entry) => <option value={entry.user.user_id} key={entry.user.user_id}>{entry.user.display_name}</option>)}
+                      </select>
+                      <select value={aclPermission} onChange={(event) => setAclPermission(event.target.value)} aria-label="权限">
+                        <option value="chat">对话</option><option value="view">查看</option><option value="edit">编辑</option><option value="publish">发布</option>
+                      </select>
+                      <button disabled={!aclGrantee || busy.startsWith("acl:")}>加授权限</button>
+                    </form>
+                  )}
+                  {acls.length > 0 && <div className={styles.aclList}>{acls.map((acl) => {
+                    const profile = memberById.get(acl.granteeId)?.user;
+                    return <span key={`${acl.granteeId}:${acl.permission}`}>{profile?.display_name || acl.granteeId} · {PERMISSION_LABELS[acl.permission] ?? acl.permission}{item.canManage && <button className={styles.danger} onClick={() => void removeAcl(agent.agentId, acl.granteeId, acl.permission)} disabled={busy.startsWith("acl-remove:")}>撤销</button>}</span>;
+                  })}</div>}
+                </article>;
+              })}</div>
             </section>
 
             <section className={styles.panel}>

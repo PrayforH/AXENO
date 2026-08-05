@@ -57,8 +57,9 @@ describe("task agent catalog", () => {
     expect(agentIdentity(personal)).toBe(agentIdentity({ ...personal, version: "0.4.0" }));
     expect(agentItemKey(personal)).not.toBe(agentItemKey({ ...personal, version: "0.4.0" }));
     // A stable agentId wins over coordinates once the workspace model lands.
-    expect(agentIdentity({ ...personal, agentId: "agent_abc" })).toBe("agent_abc");
-    expect(agentItemKey({ ...personal, agentId: "agent_abc" })).toBe("agent_abc@0.3.11");
+    const withId = { ...personal, agentId: "agent_abc" } as typeof personal & { agentId: string };
+    expect(agentIdentity(withId)).toBe("agent_abc");
+    expect(agentItemKey(withId)).toBe("agent_abc@0.3.11");
   });
 
   it("filters the task selector by can_chat while keeping revoked historical Agents", () => {
