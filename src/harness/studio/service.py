@@ -13,7 +13,7 @@ from uuid import uuid4
 from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import AgentVersion, AgentVersionStatus
-from harness.core.ports import AgentRegistry
+from harness.core.ports import AgentIdentityProvider, AgentRegistry
 from harness.knowledge.service import KnowledgeService
 from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
@@ -159,7 +159,12 @@ def _merge_editor_skill(current: DraftSkill | None, incoming: DraftSkill) -> Dra
 
 class AgentBundlePublisher(Protocol):
     async def publish_bundle(
-        self, tenant_id: str, owner_user_id: str, content: bytes
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        content: bytes,
+        *,
+        agent_id: str | None = None,
     ) -> AgentVersion: ...
 
 
@@ -183,6 +188,7 @@ class AgentStudioService:
         registry: AgentRegistry | None = None,
         knowledge: KnowledgeService | None = None,
         audit: AuditService | None = None,
+        agent_ids: AgentIdentityProvider | None = None,
         clock: Callable[[], datetime] | None = None,
         id_generator: Callable[[], str] | None = None,
     ) -> None:
@@ -194,6 +200,7 @@ class AgentStudioService:
         self._registry = registry
         self._knowledge = knowledge
         self._audit = audit
+        self._agent_ids = agent_ids
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or (lambda: f"draft_{uuid4().hex}")
 
@@ -214,6 +221,16 @@ class AgentStudioService:
         if self._compiler is None:
             raise RuntimeError("Agent Studio compiler is not configured")
         return self._compiler
+
+    async def _resolve_agent_id(
+        self, tenant_id: str, user_id: str, name: str
+    ) -> str | None:
+        """Stable Agent identity for a new personal draft, when configured."""
+        if self._agent_ids is None:
+            return None
+        return await self._agent_ids.get_or_create_personal_agent_id(
+            tenant_id, user_id, name
+        )
 
     async def create(
         self,
@@ -238,6 +255,7 @@ class AgentStudioService:
             updatedBy=user_id,
             createdAt=now,
             updatedAt=now,
+            agentId=await self._resolve_agent_id(tenant_id, user_id, request.name),
         )
         await self._repository.add(draft)
         return draft
@@ -355,6 +373,7 @@ class AgentStudioService:
             updatedBy=user_id,
             createdAt=now,
             updatedAt=now,
+            agentId=await self._resolve_agent_id(tenant_id, user_id, parsed.spec.name),
         )
         compiler = await self._compiler_for(tenant_id, user_id)
         round_trip_verified = False
@@ -430,7 +449,12 @@ class AgentStudioService:
                 )
                 return existing
             try:
-                version = await self._publisher.publish_bundle(tenant_id, user_id, compiled.bundle)
+                version = await self._publisher.publish_bundle(
+                    tenant_id,
+                    user_id,
+                    compiled.bundle,
+                    agent_id=draft.agent_id,
+                )
             except ConflictError as error:
                 raise StudioPublicationConflictError(
                     f"Agent version content conflicts with existing immutable release: "

@@ -92,6 +92,7 @@ class AgentVersionRow(Base):
     owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -136,6 +137,67 @@ class SharedAgentVersionRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class WorkspaceAgentRow(Base):
+    __tablename__ = "workspace_agents"
+    __table_args__ = (
+        Index("ix_workspace_agents_tenant_scope_owner", "tenant_id", "scope", "owner_user_id"),
+        Index("ix_workspace_agents_tenant_space_name", "tenant_id", "space_id", "name"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16))
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    space_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    name: Mapped[str] = mapped_column(String(128))
+    current_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class AgentReleaseRow(Base):
+    __tablename__ = "agent_releases"
+    __table_args__ = (
+        Index("ix_agent_releases_space_agent", "tenant_id", "space_id", "agent_id"),
+        Index(
+            "ix_agent_releases_space_source",
+            "tenant_id",
+            "space_id",
+            "source_owner_user_id",
+            "source_name",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    space_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_owner_user_id: Mapped[str] = mapped_column(String(128))
+    source_name: Mapped[str] = mapped_column(String(128))
+    promoted_by: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class AgentAclRow(Base):
+    __tablename__ = "agent_acls"
+    __table_args__ = (
+        Index("ix_agent_acls_agent", "tenant_id", "agent_id"),
+        Index("ix_agent_acls_grantee", "tenant_id", "grantee_type", "grantee_id"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    grantee_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    grantee_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    permission: Mapped[str] = mapped_column(String(16), primary_key=True)
+    granted_by: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SharedKnowledgeBaseRow(Base):
     __tablename__ = "shared_knowledge_bases"
     __table_args__ = (
@@ -174,6 +236,8 @@ class AgentDraftRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     owner_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     draft_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    space_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name: Mapped[str] = mapped_column(String(128))
     revision: Mapped[int] = mapped_column(Integer)
     schema_version: Mapped[int] = mapped_column(Integer)

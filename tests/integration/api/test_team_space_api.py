@@ -173,3 +173,112 @@ async def test_removing_member_revokes_run_access_for_existing_shared_session() 
 
     assert removed.status_code == 204
     assert run.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_workspace_agent_releases_promote_and_acl_endpoints() -> None:
+    container = build_memory_container()
+    alice_session = await container.auth.register(
+        email="alice-release@example.com", password="Long-password-1", display_name="Alice"
+    )
+    bob_session = await container.auth.register(
+        email="bob-release@example.com", password="Long-password-2", display_name="Bob"
+    )
+    alice_id = alice_session.user.user_id
+    bob_id = bob_session.user.user_id
+    version_v1 = await container.agents.publish(
+        "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
+    )
+    app = cast(FastAPI, create_app(container))
+    token = container.api_bearer_token.get_secret_value()
+    base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
+    alice = {**base, "X-User-ID": alice_id}
+    bob = {**base, "X-User-ID": bob_id}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/v1/spaces", headers=alice, json={"name": "发布验收组"})
+        space_id = created.json()["space"]["spaceId"]
+        await client.put(
+            f"/v1/spaces/{space_id}/members",
+            headers=alice,
+            json={"user_id": bob_id, "role": "viewer"},
+        )
+        shared = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=alice,
+            json={
+                "owner_user_id": alice_id,
+                "name": version_v1.name,
+                "version": version_v1.version,
+                "runnable_by_viewer": False,
+            },
+        )
+        assert shared.status_code == 201
+        agent_id = shared.json()["release"]["agentId"]
+        assert shared.json()["agent"]["agent_id"] == agent_id
+
+        agents = await client.get(f"/v1/spaces/{space_id}/agents", headers=bob)
+        assert agents.status_code == 200
+        viewer_item = next(item for item in agents.json() if item["agent"]["agentId"] == agent_id)
+        assert viewer_item["can_view"] is True
+        assert viewer_item["can_chat"] is False
+        assert viewer_item["can_manage"] is False
+
+        # ACL grants chat to the viewer even with runnable_by_viewer=false.
+        acl = await client.put(
+            f"/v1/spaces/{space_id}/agents/{agent_id}/acl",
+            headers=alice,
+            json={"grantee_type": "user", "grantee_id": bob_id, "permission": "chat"},
+        )
+        assert acl.status_code == 201
+        session = await client.post(
+            "/v1/sessions",
+            headers=bob,
+            json={
+                "agent_name": version_v1.name,
+                "agent_version": version_v1.version,
+                "agent_owner_user_id": alice_id,
+                "space_id": space_id,
+            },
+        )
+        assert session.status_code == 201
+
+        # Release history lists the shared immutable version.
+        releases = await client.get(
+            f"/v1/spaces/{space_id}/agents/{agent_id}/releases", headers=bob
+        )
+        assert releases.status_code == 200
+        assert [item["release"]["version"] for item in releases.json()] == [version_v1.version]
+
+        # Promote is allowed for the owner and refuses viewers/contributors of
+        # someone else's release.
+        denied = await client.post(
+            f"/v1/spaces/{space_id}/agents/{agent_id}/releases/{version_v1.version}/promote",
+            headers=bob,
+        )
+        assert denied.status_code == 403
+        promoted = await client.post(
+            f"/v1/spaces/{space_id}/agents/{agent_id}/releases/{version_v1.version}/promote",
+            headers=alice,
+        )
+        assert promoted.status_code == 200
+        assert promoted.json()["agent"]["currentVersion"] == version_v1.version
+
+        # Deleting the ACL row revokes the viewer chat grant again.
+        removed_acl = await client.delete(
+            f"/v1/spaces/{space_id}/agents/{agent_id}/acl/user/{bob_id}/chat",
+            headers=alice,
+        )
+        assert removed_acl.status_code == 204
+        denied_session = await client.post(
+            "/v1/sessions",
+            headers=bob,
+            json={
+                "agent_name": version_v1.name,
+                "agent_version": version_v1.version,
+                "agent_owner_user_id": alice_id,
+                "space_id": space_id,
+            },
+        )
+        assert denied_session.status_code == 403
+

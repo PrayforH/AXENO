@@ -104,6 +104,7 @@ from harness.sandbox.kubernetes import (
 )
 from harness.sandbox.local import LocalSandboxProvider
 from harness.sharing.service import TeamSpaceService
+from harness.sharing.workspace_repositories import AgentIdentityService
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.database import create_database
 from harness.storage.deployment_repository import (
@@ -148,6 +149,7 @@ from harness.storage.repositories import PostgresEventRepository, PostgresRunRep
 from harness.storage.sharing_repository import PostgresTeamSpaceRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
 from harness.storage.trigger_repository import PostgresAgentTriggerRepository
+from harness.storage.workspace_repository import PostgresWorkspaceAgentRepository
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.mcp_credential_store import (
@@ -671,14 +673,22 @@ def build_production_container(
     default_agent_manifest = Path("/app/agents/lead-agent/agent.yaml")
     if not default_agent_manifest.exists():
         default_agent_manifest = Path("agents/lead-agent/agent.yaml")
+    workspace_agent_repository = PostgresWorkspaceAgentRepository(sessions)
+    agent_ids = AgentIdentityService(
+        workspace_agent_repository,
+        clock=clock,
+        id_generator=ids,
+    )
     agent_service = AgentService(
         registry,
         clock=clock,
         environment="production",
         default_manifest_path=default_agent_manifest,
+        agent_ids=agent_ids,
     )
     team_spaces = TeamSpaceService(
         team_space_repository,
+        workspace_agent_repository,
         registry,
         clock=clock,
         id_generator=ids,
@@ -715,6 +725,7 @@ def build_production_container(
         registry=registry,
         knowledge=knowledge,
         audit=audit,
+        agent_ids=agent_ids,
         clock=clock,
         id_generator=lambda: ids("draft"),
     )
@@ -1289,6 +1300,7 @@ def build_production_container(
         reliability_controller=reliability_controller,
         agents=agent_service,
         team_spaces=team_spaces,
+        workspace_agents=workspace_agent_repository,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,

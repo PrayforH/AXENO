@@ -13,7 +13,7 @@ from harness.application.types import Clock
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot, load_manifest
 from harness.core.models import AgentVersion, AgentVersionStatus
-from harness.core.ports import AgentRegistry
+from harness.core.ports import AgentIdentityProvider, AgentRegistry
 
 
 class AgentService:
@@ -25,6 +25,7 @@ class AgentService:
         environment: Literal["local", "test", "production"] = "local",
         allow_path_publication: bool | None = None,
         default_manifest_path: str | Path | None = None,
+        agent_ids: AgentIdentityProvider | None = None,
     ) -> None:
         self._registry = registry
         self._clock = clock
@@ -37,6 +38,7 @@ class AgentService:
         self._default_manifest_path = (
             Path(default_manifest_path) if default_manifest_path is not None else None
         )
+        self._agent_ids = agent_ids
 
     def validate(
         self,
@@ -97,7 +99,12 @@ class AgentService:
         return await self._publish_snapshot(tenant_id, owner_user_id, snapshot)
 
     async def publish_bundle(
-        self, tenant_id: str, owner_user_id: str, content: bytes
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        content: bytes,
+        *,
+        agent_id: str | None = None,
     ) -> AgentVersion:
         with TemporaryDirectory(prefix="harness-agent-bundle-") as directory:
             manifest, claimed_hash, claimed_package_hash = extract_agent_bundle(
@@ -118,6 +125,7 @@ class AgentService:
                 owner_user_id,
                 snapshot,
                 package_hash=report.package_hash,
+                agent_id=agent_id,
             )
 
     async def _publish_snapshot(
@@ -127,8 +135,14 @@ class AgentService:
         snapshot: AgentManifestSnapshot,
         *,
         package_hash: str | None = None,
+        agent_id: str | None = None,
     ) -> AgentVersion:
         manifest = snapshot.manifest
+        resolved_agent_id = agent_id
+        if resolved_agent_id is None and self._agent_ids is not None:
+            resolved_agent_id = await self._agent_ids.get_or_create_personal_agent_id(
+                tenant_id, owner_user_id, manifest.metadata.name
+            )
         version = AgentVersion(
             tenant_id=tenant_id,
             owner_user_id=owner_user_id,
@@ -139,6 +153,7 @@ class AgentService:
             package_hash=package_hash,
             snapshot=snapshot.model_dump(mode="json"),
             created_at=self._clock(),
+            agent_id=resolved_agent_id,
         )
         try:
             await self._registry.add(version)

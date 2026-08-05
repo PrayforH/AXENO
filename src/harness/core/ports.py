@@ -50,6 +50,14 @@ class AgentRegistry(Protocol):
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]: ...
 
 
+class AgentIdentityProvider(Protocol):
+    """Assigns stable personal Agent identities to publications."""
+
+    async def get_or_create_personal_agent_id(
+        self, tenant_id: str, owner_user_id: str, name: str
+    ) -> str: ...
+
+
 class SessionRepository(Protocol):
     async def add(self, session: Session) -> None: ...
 

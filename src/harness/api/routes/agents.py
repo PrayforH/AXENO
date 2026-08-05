@@ -12,6 +12,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
+from harness.sharing.models import AgentPermission
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -57,27 +58,49 @@ async def list_agents(
     dependency_coordinates = {
         coordinate for version in versions for coordinate in _subagent_coordinates(version)
     }
+    personal_by_name = {
+        agent.name: agent
+        for agent in await container.workspace_agents.list_personal_agents(
+            identity.tenant_id, identity.user_id
+        )
+    }
     personal = [
-        AgentCatalogItem.from_version(version, can_edit=True)
+        AgentCatalogItem.from_version(
+            version,
+            can_edit=True,
+            agent_id=personal_by_name.get(version.name).agent_id
+            if version.name in personal_by_name
+            else None,
+            current_version=version.version,
+        )
         for version in versions
         if f"{version.name}@{version.version}" not in dependency_coordinates
         and not _is_internal(version)
     ]
-    shared = [
-        AgentCatalogItem.from_version(
-            version,
-            scope="team",
-            space_id=space.space_id,
-            space_name=space.name,
-            runnable_by_viewer=grant.runnable_by_viewer,
-            can_chat=member.role.value != "viewer" or grant.runnable_by_viewer,
-        )
-        for space, member, grant, version in await container.team_spaces.list_accessible_agents(
+    shared = []
+    for space, member, agent, release, version in (
+        await container.team_spaces.list_accessible_agents(
             identity.tenant_id, identity.user_id
         )
-        if not _is_internal(version)
-        and (member.role.value != "viewer" or grant.runnable_by_viewer)
-    ]
+    ):
+        if _is_internal(version):
+            continue
+        permissions = await container.team_spaces.effective_permissions(
+            identity.tenant_id, identity.user_id, space.space_id, agent.agent_id
+        )
+        shared.append(
+            AgentCatalogItem.from_version(
+                version,
+                scope="team",
+                space_id=space.space_id,
+                space_name=space.name,
+                runnable_by_viewer=release.runnable_by_viewer,
+                agent_id=agent.agent_id,
+                current_version=agent.current_version,
+                connection_mode=release.connection_mode,
+                can_chat=AgentPermission.CHAT in permissions,
+            )
+        )
     return [*personal, *shared]
 
 

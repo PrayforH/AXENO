@@ -53,6 +53,7 @@ class PostgresAgentRegistry:
                     owner_user_id=version.owner_user_id,
                     name=version.name,
                     version=version.version,
+                    agent_id=version.agent_id,
                     payload=version.model_dump(mode="json"),
                 )
             )
@@ -68,11 +69,16 @@ class PostgresAgentRegistry:
             row = await session.get(AgentVersionRow, (tenant_id, owner_user_id, name, version))
             if row is None:
                 raise NotFoundError(f"agent version not found: {name}@{version}")
-            return AgentVersion.model_validate(row.payload)
+            loaded = AgentVersion.model_validate(row.payload)
+            if loaded.agent_id is None and row.agent_id is not None:
+                # Legacy rows backfilled by migration 0023 carry the identity in
+                # the envelope column only.
+                loaded = loaded.model_copy(update={"agent_id": row.agent_id})
+            return loaded
 
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         statement = (
-            select(AgentVersionRow.payload)
+            select(AgentVersionRow.payload, AgentVersionRow.agent_id)
             .where(
                 AgentVersionRow.tenant_id == tenant_id,
                 AgentVersionRow.owner_user_id == owner_user_id,
@@ -80,8 +86,14 @@ class PostgresAgentRegistry:
             .order_by(AgentVersionRow.name, AgentVersionRow.version)
         )
         async with self._sessions() as session:
-            payloads = (await session.scalars(statement)).all()
-            return [AgentVersion.model_validate(payload) for payload in payloads]
+            rows = (await session.execute(statement)).all()
+            result: list[AgentVersion] = []
+            for payload, envelope_agent_id in rows:
+                loaded = AgentVersion.model_validate(payload)
+                if loaded.agent_id is None and envelope_agent_id is not None:
+                    loaded = loaded.model_copy(update={"agent_id": envelope_agent_id})
+                result.append(loaded)
+            return result
 
 
 class PostgresSessionRepository:

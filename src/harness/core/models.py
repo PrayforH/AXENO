@@ -109,6 +109,9 @@ class AgentVersion(FrozenModel):
     package_hash: str | None = None
     snapshot: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+    # Stable Agent identity assigned by the workspace model. None only for
+    # versions persisted before the 0023 migration backfill.
+    agent_id: str | None = None
 
 
 class Session(FrozenModel):

@@ -245,6 +245,11 @@ class AgentDraft(StudioModel):
     updated_by: str = Field(alias="updatedBy", min_length=1)
     created_at: datetime = Field(alias="createdAt")
     updated_at: datetime = Field(alias="updatedAt")
+    # Stable Agent identity this draft belongs to. None only for drafts
+    # persisted before the 0023 migration backfill.
+    agent_id: str | None = Field(default=None, alias="agentId")
+    # Team space of a shared draft (None for personal drafts).
+    space_id: str | None = Field(default=None, alias="spaceId")
     published_version: str | None = Field(default=None, alias="publishedVersion")
     published_hash: str | None = Field(
         default=None, alias="publishedHash", pattern=r"^[a-f0-9]{64}$"
@@ -309,6 +314,7 @@ class ImportedAgentBundle(StudioModel):
 
 class AgentDraftSummary(StudioModel):
     draft_id: str = Field(alias="draftId")
+    agent_id: str | None = Field(default=None, alias="agentId")
     name: str
     display_name: str = Field(alias="displayName")
     domain: str
@@ -322,6 +328,7 @@ class AgentDraftSummary(StudioModel):
     def from_draft(cls, draft: AgentDraft) -> AgentDraftSummary:
         return cls(
             draftId=draft.draft_id,
+            agentId=draft.agent_id,
             name=draft.spec.name,
             displayName=draft.spec.display_name,
             domain=draft.spec.domain,

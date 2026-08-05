@@ -9,11 +9,17 @@ from harness.api.dependencies import ApiContainer, Identity, get_container, requ
 from harness.api.schemas import AgentCatalogItem
 from harness.auth.models import TenantMember
 from harness.sharing.models import (
-    SharedAgentVersion,
+    AgentAcl,
+    AgentPermission,
+    AgentRelease,
+    AgentScope,
+    ConnectionMode,
+    GranteeType,
     SharedKnowledgeBase,
     SpaceRole,
     TeamSpace,
     TeamSpaceMember,
+    WorkspaceAgent,
 )
 
 router = APIRouter(prefix="/spaces", tags=["team spaces"])
@@ -39,15 +45,47 @@ class ShareAgentRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     version: str = Field(min_length=1, max_length=64)
     runnable_by_viewer: bool = True
+    connection_mode: ConnectionMode = ConnectionMode.CALLER_OWNED
+
+
+class WorkspaceAgentItem(BaseModel):
+    agent: WorkspaceAgent
+    permissions: tuple[AgentPermission, ...] = ()
+    can_view: bool = True
+    can_chat: bool = True
+    can_edit: bool = False
+    can_publish: bool = False
+    can_manage: bool = False
 
 
 class SharedAgentItem(BaseModel):
-    grant: SharedAgentVersion
+    release: AgentRelease
     agent: AgentCatalogItem
+
+
+class PutAgentAclRequest(BaseModel):
+    grantee_type: GranteeType
+    grantee_id: str = Field(min_length=1)
+    permission: AgentPermission
 
 
 class ShareKnowledgeRequest(BaseModel):
     reference: str = Field(min_length=1, max_length=128)
+
+
+def _workspace_item(
+    agent: WorkspaceAgent,
+    permissions: frozenset[AgentPermission],
+) -> WorkspaceAgentItem:
+    return WorkspaceAgentItem(
+        agent=agent,
+        permissions=tuple(sorted(permissions, key=lambda item: item.value)),
+        can_view=AgentPermission.VIEW in permissions,
+        can_chat=AgentPermission.CHAT in permissions,
+        can_edit=AgentPermission.EDIT in permissions,
+        can_publish=AgentPermission.PUBLISH in permissions,
+        can_manage=AgentPermission.MANAGE in permissions,
+    )
 
 
 @router.get("", response_model=list[SpaceSummary])
@@ -152,36 +190,29 @@ async def remove_space_member(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/{space_id}/agents", response_model=list[SharedAgentItem])
-async def list_shared_agents(
+@router.get("/{space_id}/agents", response_model=list[WorkspaceAgentItem])
+async def list_workspace_agents(
     space_id: str,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
-) -> list[SharedAgentItem]:
-    _, membership = await container.team_spaces.get_for_user(
+) -> list[WorkspaceAgentItem]:
+    agents = await container.team_spaces.list_agents(
         identity.tenant_id, identity.user_id, space_id
     )
-    can_chat = membership.role is not SpaceRole.VIEWER
     return [
-        SharedAgentItem(
-            grant=grant,
-            agent=AgentCatalogItem.from_version(
-                version,
-                scope="team",
-                space_id=space_id,
-                runnable_by_viewer=grant.runnable_by_viewer,
-                can_chat=can_chat or grant.runnable_by_viewer,
+        _workspace_item(
+            agent,
+            await container.team_spaces.effective_permissions(
+                identity.tenant_id, identity.user_id, space_id, agent.agent_id
             ),
         )
-        for grant, version in await container.team_spaces.list_agents(
-            identity.tenant_id, identity.user_id, space_id
-        )
+        for agent in agents
     ]
 
 
 @router.post(
     "/{space_id}/agents",
-    response_model=SharedAgentVersion,
+    response_model=SharedAgentItem,
     status_code=status.HTTP_201_CREATED,
 )
 async def share_agent(
@@ -189,8 +220,8 @@ async def share_agent(
     body: ShareAgentRequest,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
-) -> SharedAgentVersion:
-    return await container.team_spaces.share_agent(
+) -> SharedAgentItem:
+    agent, release = await container.team_spaces.share_agent(
         identity.tenant_id,
         identity.user_id,
         space_id,
@@ -198,17 +229,84 @@ async def share_agent(
         body.name,
         body.version,
         runnable_by_viewer=body.runnable_by_viewer,
+        connection_mode=body.connection_mode,
+    )
+    _, version = await container.team_spaces.get_release_version(
+        identity.tenant_id,
+        identity.user_id,
+        space_id,
+        agent.agent_id,
+        release.version,
+    )
+    return SharedAgentItem(
+        release=release,
+        agent=AgentCatalogItem.from_version(
+            version,
+            scope="team",
+            space_id=space_id,
+            agent_id=agent.agent_id,
+            current_version=agent.current_version,
+            connection_mode=release.connection_mode,
+        ),
     )
 
 
+@router.get(
+    "/{space_id}/agents/{agent_id}/releases", response_model=list[SharedAgentItem]
+)
+async def list_agent_releases(
+    space_id: str,
+    agent_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[SharedAgentItem]:
+    result: list[SharedAgentItem] = []
+    for release, version in await container.team_spaces.list_releases(
+        identity.tenant_id, identity.user_id, space_id, agent_id
+    ):
+        result.append(
+            SharedAgentItem(
+                release=release,
+                agent=AgentCatalogItem.from_version(
+                    version,
+                    scope="team",
+                    space_id=space_id,
+                    agent_id=agent_id,
+                    current_version=release.version,
+                    connection_mode=release.connection_mode,
+                ),
+            )
+        )
+    return result
+
+
+@router.post(
+    "/{space_id}/agents/{agent_id}/releases/{version}/promote",
+    response_model=WorkspaceAgentItem,
+)
+async def promote_agent_release(
+    space_id: str,
+    agent_id: str,
+    version: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> WorkspaceAgentItem:
+    agent = await container.team_spaces.promote_release(
+        identity.tenant_id, identity.user_id, space_id, agent_id, version
+    )
+    permissions = await container.team_spaces.effective_permissions(
+        identity.tenant_id, identity.user_id, space_id, agent_id
+    )
+    return _workspace_item(agent, permissions)
+
+
 @router.delete(
-    "/{space_id}/agents/{owner_user_id}/{name}/{version}",
+    "/{space_id}/agents/{agent_id}/releases/{version}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def unshare_agent(
     space_id: str,
-    owner_user_id: str,
-    name: str,
+    agent_id: str,
     version: str,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
@@ -217,23 +315,20 @@ async def unshare_agent(
         identity.tenant_id,
         identity.user_id,
         space_id,
-        owner_user_id,
-        name,
+        agent_id,
         version,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(
-    "/{space_id}/agents/{owner_user_id}/{name}/{version}/fork",
+    "/{space_id}/agents/{agent_id}/fork",
     response_model=AgentCatalogItem,
     status_code=status.HTTP_201_CREATED,
 )
-async def fork_shared_agent(
+async def fork_workspace_agent(
     space_id: str,
-    owner_user_id: str,
-    name: str,
-    version: str,
+    agent_id: str,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> AgentCatalogItem:
@@ -241,11 +336,69 @@ async def fork_shared_agent(
         identity.tenant_id,
         identity.user_id,
         space_id,
-        owner_user_id,
-        name,
-        version,
+        agent_id,
     )
     return AgentCatalogItem.from_version(fork, scope="personal", can_edit=True)
+
+
+@router.get("/{space_id}/agents/{agent_id}/acl", response_model=list[AgentAcl])
+async def list_agent_acls(
+    space_id: str,
+    agent_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[AgentAcl]:
+    return await container.team_spaces.list_acls(
+        identity.tenant_id, identity.user_id, space_id, agent_id
+    )
+
+
+@router.put(
+    "/{space_id}/agents/{agent_id}/acl",
+    response_model=AgentAcl,
+    status_code=status.HTTP_201_CREATED,
+)
+async def put_agent_acl(
+    space_id: str,
+    agent_id: str,
+    body: PutAgentAclRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> AgentAcl:
+    return await container.team_spaces.put_acl(
+        identity.tenant_id,
+        identity.user_id,
+        space_id,
+        agent_id,
+        body.grantee_type,
+        body.grantee_id,
+        body.permission,
+    )
+
+
+@router.delete(
+    "/{space_id}/agents/{agent_id}/acl/{grantee_type}/{grantee_id}/{permission}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_agent_acl(
+    space_id: str,
+    agent_id: str,
+    grantee_type: GranteeType,
+    grantee_id: str,
+    permission: AgentPermission,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> Response:
+    await container.team_spaces.delete_acl(
+        identity.tenant_id,
+        identity.user_id,
+        space_id,
+        agent_id,
+        grantee_type,
+        grantee_id,
+        permission,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{space_id}/knowledge", response_model=list[SharedKnowledgeBase])

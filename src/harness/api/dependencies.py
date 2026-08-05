@@ -130,6 +130,11 @@ from harness.sandbox.kubernetes import KubectlKubernetesClient, KubernetesSandbo
 from harness.sandbox.local import LocalSandboxProvider
 from harness.sharing.repositories import InMemoryTeamSpaceRepository
 from harness.sharing.service import TeamSpaceService
+from harness.sharing.workspace_repositories import (
+    AgentIdentityService,
+    InMemoryWorkspaceAgentRepository,
+    WorkspaceAgentRepository,
+)
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.mcp_credential_store import (
@@ -213,6 +218,7 @@ class ApiContainer:
     reliability_controller: ReliabilityController
     agents: AgentService
     team_spaces: TeamSpaceService
+    workspace_agents: WorkspaceAgentRepository
     sessions: SessionService
     runs: RunService
     triggers: AgentTriggerService
@@ -251,6 +257,7 @@ def build_memory_container(
     resolved_settings = settings or Settings()
     registry = InMemoryAgentRegistry()
     team_space_repository = InMemoryTeamSpaceRepository()
+    workspace_agent_repository = InMemoryWorkspaceAgentRepository()
     sessions = InMemorySessionRepository()
     runs = InMemoryRunRepository()
     approvals = InMemoryApprovalRepository()
@@ -359,9 +366,20 @@ def build_memory_container(
         clock=clock,
     )
 
-    agent_service = AgentService(registry, clock=clock, environment=resolved_settings.environment)
+    agent_ids = AgentIdentityService(
+        workspace_agent_repository,
+        clock=clock,
+        id_generator=id_generator,
+    )
+    agent_service = AgentService(
+        registry,
+        clock=clock,
+        environment=resolved_settings.environment,
+        agent_ids=agent_ids,
+    )
     team_spaces = TeamSpaceService(
         team_space_repository,
+        workspace_agent_repository,
         registry,
         clock=clock,
         id_generator=id_generator,
@@ -398,6 +416,7 @@ def build_memory_container(
         registry=registry,
         knowledge=knowledge,
         audit=audit,
+        agent_ids=agent_ids,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
     )
@@ -904,6 +923,7 @@ def build_memory_container(
         reliability_controller=reliability_controller,
         agents=agent_service,
         team_spaces=team_spaces,
+        workspace_agents=workspace_agent_repository,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,
