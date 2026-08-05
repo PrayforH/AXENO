@@ -281,7 +281,23 @@ async def test_personal_mcp_capabilities_are_visible_only_to_their_owner() -> No
 
 
 @pytest.mark.asyncio
-async def test_platform_mcp_cannot_be_mutated_as_a_personal_capability() -> None:
+async def test_new_users_do_not_inherit_platform_mcp_capabilities() -> None:
+    service = CapabilityCatalogService(
+        InMemoryCapabilityCatalogRepository(),
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+    catalog = await service.get_for_user("tenant-a", "new-user")
+
+    assert catalog.catalog.mcp_servers == ()
+    assert all(
+        "tavily-readonly" not in profile.allowed_mcp_references
+        for profile in catalog.catalog.execution_profiles
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_can_register_a_personal_version_of_a_platform_mcp() -> None:
     service = CapabilityCatalogService(
         InMemoryCapabilityCatalogRepository(),
         InMemoryAgentDraftRepository(),
@@ -289,25 +305,20 @@ async def test_platform_mcp_cannot_be_mutated_as_a_personal_capability() -> None
     )
     platform = default_capability_catalog().mcp_servers[0]
 
-    with pytest.raises(ConflictError, match="cannot be overwritten"):
-        await service.upsert(
-            tenant_id="tenant-a",
-            user_id="user-a",
-            resource_type="mcp",
-            resource_id=platform.reference,
-            request=UpsertCatalogResourceRequest(
-                expectedRevision=1,
-                resource=platform,
-            ),
-        )
-    with pytest.raises(ConflictError, match="cannot be disabled"):
-        await service.disable(
-            tenant_id="tenant-a",
-            user_id="user-a",
-            resource_type="mcp",
-            resource_id=platform.reference,
-            expected_revision=1,
-        )
+    saved = await service.upsert(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        resource_type="mcp",
+        resource_id=platform.reference,
+        request=UpsertCatalogResourceRequest(
+            expectedRevision=1,
+            resource=platform,
+            allowedExecutionProfileIds=("isolated-default",),
+        ),
+    )
+
+    assert len(saved.record.catalog.mcp_servers) == 1
+    assert saved.record.catalog.mcp_servers[0].owner_user_id == "user-a"
 
 
 @pytest.mark.asyncio

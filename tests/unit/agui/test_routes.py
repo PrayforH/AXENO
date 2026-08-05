@@ -41,13 +41,19 @@ def test_final_response_excludes_progress_commentary_before_last_action() -> Non
     assert final_response_text(events) == "检查完成：工作区正常。"
 
 
-def test_live_projection_emits_only_final_response_then_artifact() -> None:
+def test_live_projection_streams_response_then_emits_terminal_artifact() -> None:
     events = [
         _event("run.queued", 1),
         _event("message.start", 2, message_id="progress"),
         _event("message.delta", 3, message_id="progress", text="我先生成文件。"),
         _event("message.completed", 4, message_id="progress"),
-        _event("tool.request", 5, tool_call_id="publish-1", name="publish_artifact"),
+        _event(
+            "tool.request",
+            5,
+            tool_call_id="publish-1",
+            name="publish_artifact",
+            message_id="progress",
+        ),
         _event("tool.result", 6, tool_call_id="publish-1"),
         _event("message.start", 7, message_id="final"),
         _event("message.delta", 8, message_id="final", text="文件已经生成。"),
@@ -73,8 +79,8 @@ def test_live_projection_emits_only_final_response_then_artifact() -> None:
     ]
     assert queued[1]["messageId"] == "assistant-run-1"
 
-    progress_types = [
-        item.model_dump(by_alias=True)["type"]
+    progress = [
+        item.model_dump(by_alias=True)
         for event in events[1:-1]
         for item in project_stream_event(event, events[: event.sequence])
     ]
@@ -83,7 +89,31 @@ def test_live_projection_emits_only_final_response_then_artifact() -> None:
         for item in project_stream_event(events[-1], events)
     ]
 
-    assert "TEXT_MESSAGE_CONTENT" not in progress_types
+    progress_types = [item["type"] for item in progress]
+    assert "TEXT_MESSAGE_CONTENT" in progress_types
+    assert [
+        item["messageId"]
+        for item in progress
+        if item["type"] == "TEXT_MESSAGE_START"
+    ] == ["progress", "final"]
+    assert [
+        item["messageId"]
+        for item in progress
+        if item["type"] == "TEXT_MESSAGE_END"
+    ] == ["progress", "final"]
+    assert [
+        (item["messageId"], item["delta"])
+        for item in progress
+        if item["type"] == "TEXT_MESSAGE_CONTENT"
+    ] == [
+        ("progress", "我先生成文件。"),
+        ("final", "文件已经生成。"),
+    ]
+    assert [
+        item["parentMessageId"]
+        for item in progress
+        if item["type"] == "TOOL_CALL_START"
+    ] == ["progress"]
     assert "TOOL_CALL_START" not in [
         item.model_dump(by_alias=True)["type"]
         for item in project_stream_event(events[-2], events[:-1])
@@ -91,7 +121,6 @@ def test_live_projection_emits_only_final_response_then_artifact() -> None:
     terminal_types = [item["type"] for item in terminal]
     assert terminal_types == [
         "ACTIVITY_DELTA",
-        "TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_END",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
@@ -99,11 +128,11 @@ def test_live_projection_emits_only_final_response_then_artifact() -> None:
         "TOOL_CALL_RESULT",
         "RUN_FINISHED",
     ]
-    assert terminal[1]["delta"] == "文件已经生成。"
-    assert terminal[3]["parentMessageId"] == "assistant-run-1"
+    assert terminal[1]["messageId"] == "assistant-run-1"
+    assert terminal[2]["parentMessageId"] == "final"
 
 
-def test_live_projection_closes_started_message_before_run_error() -> None:
+def test_live_projection_does_not_invent_response_text_before_run_error() -> None:
     queued = _event("run.queued", 1)
     failed = _event("run.failed", 2, message="模型调用失败")
 
@@ -146,7 +175,6 @@ def test_live_projection_preserves_completed_response_when_post_processing_fails
 
     assert [item["type"] for item in terminal] == [
         "ACTIVITY_DELTA",
-        "TEXT_MESSAGE_CONTENT",
         "TEXT_MESSAGE_END",
         "TOOL_CALL_START",
         "TOOL_CALL_ARGS",
@@ -154,5 +182,5 @@ def test_live_projection_preserves_completed_response_when_post_processing_fails
         "TOOL_CALL_RESULT",
         "RUN_ERROR",
     ]
-    assert terminal[1]["delta"] == "图谱已生成。"
-    assert terminal[3]["parentMessageId"] == "assistant-run-1"
+    assert terminal[1]["messageId"] == "assistant-run-1"
+    assert terminal[2]["parentMessageId"] == "provider-final"

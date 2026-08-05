@@ -1,12 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentCoordinate,
+  findTaskAgent,
   loadTaskAgentCatalog,
 } from "../src/lib/task-agent-catalog";
 
 describe("task agent catalog", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("does not resolve another user's personal Agent from a stale binding", () => {
+    const agents = [
+      {
+        name: "public-opinion-agent",
+        version: "0.3.11",
+        displayName: "舆情分析",
+        domain: "public-opinion",
+        ownerUserId: "new-user",
+        scope: "personal" as const,
+      },
+    ];
+
+    expect(
+      findTaskAgent(agents, {
+        name: "public-opinion-agent",
+        version: "0.3.11",
+        ownerUserId: "previous-user",
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps the neutral Lead default while offering business Agents explicitly", async () => {

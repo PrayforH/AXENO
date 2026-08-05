@@ -80,6 +80,7 @@ from harness.studio.models import (
     ImportedAgentBundle,
     ImportedSkill,
     InstalledSkill,
+    McpCapability,
     McpDiscoveryRequest,
     McpDiscoveryResult,
     PublishAgentDraftRequest,
@@ -878,11 +879,25 @@ async def upsert_catalog_resource(
     body: UpsertCatalogResourceRequest,
     identity: Annotated[Identity, Depends(require_identity)],
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+    credentials: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
 ) -> CatalogMutationResult:
     actor = _authorize_studio_actor(
         identity,
         "studio:write" if resource_type == "mcp" else "studio:catalog:write",
     )
+    if (
+        resource_type == "mcp"
+        and isinstance(body.resource, McpCapability)
+        and body.resource.auth_mode != "none"
+        and not await credentials.is_configured(
+            actor.tenant_id,
+            actor.user_id,
+            resource_id,
+        )
+    ):
+        raise ConflictError(
+            "Authenticated MCP registration requires the current user's credential"
+        )
     return await service.upsert(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,

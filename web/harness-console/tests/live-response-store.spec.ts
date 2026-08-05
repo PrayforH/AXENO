@@ -14,6 +14,7 @@ describe("liveResponseStore", () => {
 
   it("keeps a short progress preface out of the response when a tool follows", () => {
     liveResponseStore.startRun("run-1");
+    liveResponseStore.startMessage("assistant-run-1");
     liveResponseStore.startMessage("commentary");
     liveResponseStore.append("commentary", "先检索资料");
 
@@ -43,8 +44,50 @@ describe("liveResponseStore", () => {
     liveResponseStore.completeRun();
     expect(liveResponseStore.getSnapshot()).toMatchObject({
       runId: "run-1",
-      messageId: "final",
+      messageId: "assistant-run-1",
       text: "最终回答",
+      status: "complete",
+      visible: true,
+    });
+  });
+
+  it("keeps the durable turn owner when provider text parts change around tools", () => {
+    liveResponseStore.startRun("run-boundaries");
+    liveResponseStore.startMessage("assistant-run-boundaries");
+    liveResponseStore.startMessage("provider-progress");
+    liveResponseStore.append("provider-progress", "继续核验。 ");
+    liveResponseStore.hideForTool();
+    liveResponseStore.completeMessage("provider-progress");
+
+    liveResponseStore.startMessage("provider-final");
+    liveResponseStore.append("provider-final", "## 核验结果\n\n完整回答");
+    liveResponseStore.completeMessage("provider-final");
+    liveResponseStore.completeMessage("assistant-run-boundaries");
+    liveResponseStore.completeRun();
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-boundaries",
+      messageId: "assistant-run-boundaries",
+      text: "## 核验结果\n\n完整回答",
+      status: "complete",
+      visible: true,
+    });
+  });
+
+  it("reuses one durable message while replacing pre-tool progress with the final answer", () => {
+    liveResponseStore.startRun("run-stable");
+    liveResponseStore.startMessage("assistant-run-stable");
+    liveResponseStore.append("assistant-run-stable", "先检索并核实资料。");
+    liveResponseStore.hideForTool();
+
+    liveResponseStore.append("assistant-run-stable", "## 最终结论\n\n完整回答");
+    liveResponseStore.completeMessage("assistant-run-stable");
+    liveResponseStore.completeRun();
+
+    expect(liveResponseStore.getSnapshot()).toMatchObject({
+      runId: "run-stable",
+      messageId: "assistant-run-stable",
+      text: "## 最终结论\n\n完整回答",
       status: "complete",
       visible: true,
     });

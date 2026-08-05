@@ -41,6 +41,20 @@ export interface TaskAgentCatalog {
   defaultAgent: TaskAgent;
 }
 
+export function findTaskAgent(
+  agents: readonly TaskAgent[],
+  coordinates: Pick<TaskAgent, "name" | "version"> &
+    Partial<Pick<TaskAgent, "ownerUserId" | "spaceId">>,
+): TaskAgent | undefined {
+  return agents.find(
+    (agent) =>
+      agent.name === coordinates.name &&
+      agent.version === coordinates.version &&
+      (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
+      (!coordinates.spaceId || agent.spaceId === coordinates.spaceId),
+  );
+}
+
 async function json<T>(url: string): Promise<T> {
   const response = requireAuthenticatedResponse(
     await fetch(url, { cache: "no-store" }),

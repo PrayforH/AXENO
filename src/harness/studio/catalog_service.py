@@ -176,7 +176,7 @@ class CapabilityCatalogService:
         tenant_id: str,
         user_id: str,
     ) -> CapabilityCatalogRecord:
-        """Return platform capabilities plus the current user's personal MCP overlay."""
+        """Return platform controls plus only the current user's personal MCP entries."""
 
         return self._record_for_user(await self.get(tenant_id), user_id)
 
@@ -229,10 +229,13 @@ class CapabilityCatalogService:
         visible = tuple(
             item
             for item in record.catalog.mcp_servers
-            if item.owner_user_id is None or item.owner_user_id == user_id
+            if item.owner_user_id == user_id
         )
         personal_references = {
             item.reference for item in record.catalog.mcp_servers if item.owner_user_id is not None
+        }
+        platform_mcp_references = {
+            item.reference for item in record.catalog.mcp_servers if item.owner_user_id is None
         }
         personal_by_profile: dict[str, list[str]] = {}
         for item in visible:
@@ -250,6 +253,7 @@ class CapabilityCatalogService:
                                     reference
                                     for reference in profile.allowed_mcp_references
                                     if reference not in personal_references
+                                    and reference not in platform_mcp_references
                                 ),
                                 *personal_by_profile.get(profile.profile_id, ()),
                             )
@@ -345,13 +349,6 @@ class CapabilityCatalogService:
                 None,
             )
             if own_entry is None:
-                if any(
-                    item.reference == resource_id and item.owner_user_id is None
-                    for item in current.catalog.mcp_servers
-                ):
-                    raise ConflictError(
-                        "Platform MCP capabilities cannot be disabled"
-                    )
                 raise NotFoundError(f"Catalog resource not found: mcp/{resource_id}")
         impact = await self.impact(tenant_id, user_id, resource_type, resource_id)
         field = {
@@ -426,16 +423,6 @@ class CapabilityCatalogService:
         current = await self.get(tenant_id)
         entries = getattr(current.catalog, field)
         if resource_type == "mcp":
-            platform_entry = next(
-                (
-                    entry
-                    for entry in entries
-                    if entry.reference == resource_id and entry.owner_user_id is None
-                ),
-                None,
-            )
-            if platform_entry is not None:
-                raise ConflictError("Platform MCP capabilities cannot be overwritten")
             existing = next(
                 (
                     entry

@@ -12,7 +12,6 @@ from ag_ui.core import (
     RunAgentInput,
     RunFinishedEvent,
     RunStartedEvent,
-    TextMessageContentEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
 )
@@ -93,20 +92,29 @@ def _stream_response_message_id(run_id: str) -> str:
     return f"assistant-{run_id}"
 
 
-def _terminal_response_projection(
+def _response_message_id(
+    run_id: str,
+    run_events: list[RunEvent],
+) -> str:
+    """Return the latest provider text part for terminal deliverables."""
+
+    for item in reversed(run_events):
+        if item.type not in {"message.start", "message.delta", "message.completed"}:
+            continue
+        message_id = str(item.payload.get("message_id", "")).strip()
+        if message_id:
+            return message_id
+    return _stream_response_message_id(run_id)
+
+
+def _terminal_artifact_projection(
     event: RunEvent,
     run_events: list[RunEvent],
 ) -> list[BaseEvent]:
-    """Project every durable answer even when post-processing later fails."""
+    """Attach generated files after the already-streamed provider response."""
 
-    message_id = _stream_response_message_id(event.run_id)
+    message_id = _response_message_id(event.run_id, run_events)
     projection: list[BaseEvent] = []
-    final_text = final_response_text(run_events)
-    if final_text.strip():
-        projection.append(
-            TextMessageContentEvent(message_id=message_id, delta=final_text)
-        )
-    projection.append(TextMessageEndEvent(message_id=message_id))
     for artifact_event in (
         item for item in run_events if item.type == "artifact.ready"
     ):
@@ -123,19 +131,19 @@ def _terminal_response_projection(
 
 
 def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[BaseEvent]:
-    """Keep progress in Activity; emit final prose then files at success."""
+    """Keep one durable turn while preserving provider text-part boundaries."""
 
+    message_id = _stream_response_message_id(event.run_id)
     projected = list(
         map_harness_event(
             event,
-            project_response_text=False,
             project_artifact=False,
         )
     )
-    message_id = _stream_response_message_id(event.run_id)
     if event.type == "run.queued":
-        # Mount the assistant turn immediately so Activity deltas have a
-        # visible owner while model prose remains deferred until completion.
+        # Keep one stable assistant message across provider commentary, tools,
+        # and final prose. History reconstructs the same ID, so a later turn
+        # cannot orphan or hide the previous response.
         return [
             *projected[:1],
             TextMessageStartEvent(message_id=message_id, role="assistant"),
@@ -143,17 +151,20 @@ def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[Ba
         ]
 
     if event.type in {"run.failed", "run.rejected", "run.timed_out"}:
-        # A provider may finish successfully before artifact/workspace
-        # post-processing fails. Preserve its durable answer and generated
-        # files before surfacing the terminal error.
+        # Provider text has already reached the browser. Generated artifacts
+        # still belong before the terminal error when post-processing fails.
         return [
             *projected[:-1],
-            *_terminal_response_projection(event, run_events),
+            TextMessageEndEvent(message_id=message_id),
+            *_terminal_artifact_projection(event, run_events),
             projected[-1],
         ]
 
     if event.type == "run.cancelled":
-        return [*projected, TextMessageEndEvent(message_id=message_id)]
+        return [
+            *projected,
+            TextMessageEndEvent(message_id=message_id),
+        ]
 
     if event.type != "run.succeeded":
         return projected
@@ -162,7 +173,8 @@ def project_stream_event(event: RunEvent, run_events: list[RunEvent]) -> list[Ba
     # the terminal frame after the response and every generated file card.
     return [
         *projected[:-1],
-        *_terminal_response_projection(event, run_events),
+        TextMessageEndEvent(message_id=message_id),
+        *_terminal_artifact_projection(event, run_events),
         projected[-1],
     ]
 

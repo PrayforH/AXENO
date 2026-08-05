@@ -185,9 +185,9 @@ def map_harness_event(
 ) -> Sequence[BaseEvent]:
     """Project one durable event with explicit channel controls.
 
-    Live AG-UI streams keep progress prose in Activity and defer assistant text
-    plus artifact cards until the terminal projection.  The defaults preserve
-    the standalone mapper contract used by non-stream consumers.
+    Live AG-UI streams preserve provider text-part boundaries beneath one
+    durable assistant turn while deferring artifact cards until the terminal
+    projection. The defaults preserve the contract used by other consumers.
     """
 
     suppress_standard = (

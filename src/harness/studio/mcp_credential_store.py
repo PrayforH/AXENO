@@ -190,6 +190,11 @@ class McpCredentialService:
         items = await self.repository.list_for_user(tenant_id, owner_user_id)
         return tuple(self._status(item) for item in items)
 
+    async def is_configured(
+        self, tenant_id: str, owner_user_id: str, reference: str
+    ) -> bool:
+        return await self.repository.get(tenant_id, owner_user_id, reference) is not None
+
     async def configure(
         self,
         tenant_id: str,

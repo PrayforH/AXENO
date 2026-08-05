@@ -35,6 +35,8 @@ let snapshot = emptySnapshot;
 const listeners = new Set<() => void>();
 let pendingMessageId: string | undefined;
 let pendingDelta = "";
+let activeMessageId: string | undefined;
+let displayedMessageId: string | undefined;
 let scheduledFrame: number | undefined;
 let scheduledWatchdog: ReturnType<typeof setTimeout> | undefined;
 let disposition: MessageDisposition = "idle";
@@ -68,8 +70,9 @@ function flushPendingDelta(visible = true) {
   const delta = pendingDelta;
   pendingMessageId = undefined;
   pendingDelta = "";
-  const sameMessage = snapshot.messageId === messageId;
+  const sameMessage = displayedMessageId === messageId;
   const text = `${sameMessage ? snapshot.text : ""}${delta}`;
+  displayedMessageId = messageId;
   const candidateReady =
     disposition !== "candidate" ||
     snapshot.visible ||
@@ -77,7 +80,7 @@ function flushPendingDelta(visible = true) {
   publish({
     threadId: snapshot.threadId,
     runId: snapshot.runId,
-    messageId,
+    messageId: snapshot.messageId ?? messageId,
     text,
     status: snapshot.status === "complete" ? "complete" : "streaming",
     visible: visible && candidateReady,
@@ -127,6 +130,8 @@ export const liveResponseStore = {
     cancelScheduledFrame();
     pendingMessageId = undefined;
     pendingDelta = "";
+    activeMessageId = undefined;
+    displayedMessageId = undefined;
     disposition = "idle";
     if (snapshot === emptySnapshot) return;
     publish(emptySnapshot);
@@ -136,6 +141,8 @@ export const liveResponseStore = {
     cancelScheduledFrame();
     pendingMessageId = undefined;
     pendingDelta = "";
+    activeMessageId = undefined;
+    displayedMessageId = undefined;
     disposition = "idle";
     publish({
       threadId,
@@ -148,11 +155,15 @@ export const liveResponseStore = {
   startMessage(messageId: string, threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
     flushPendingDelta(false);
+    activeMessageId = messageId;
+    displayedMessageId = messageId;
     disposition = "candidate";
     publish({
       threadId: snapshot.threadId ?? threadId,
       runId: snapshot.runId,
-      messageId,
+      // The first server message ID owns the assistant-ui turn. Later IDs are
+      // text-part boundaries around tools and must not steal that ownership.
+      messageId: snapshot.messageId ?? messageId,
       text: "",
       status: "streaming",
       visible: false,
@@ -161,10 +172,31 @@ export const liveResponseStore = {
   append(messageId: string, delta: string, threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
     if (!delta) return;
+    if (disposition === "activity") {
+      // The server keeps one stable assistant message for the whole Run. Text
+      // arriving after a tool therefore starts a new response candidate even
+      // though AG-UI does not open a second message. Drop the hidden progress
+      // preface so only the post-tool answer occupies the durable response.
+      cancelScheduledFrame();
+      pendingMessageId = undefined;
+      pendingDelta = "";
+      activeMessageId = messageId;
+      displayedMessageId = messageId;
+      disposition = "candidate";
+      publish({
+        threadId: snapshot.threadId ?? threadId,
+        runId: snapshot.runId,
+        messageId: snapshot.messageId ?? messageId,
+        text: "",
+        status: "streaming",
+        visible: false,
+      });
+    }
     if (pendingMessageId && pendingMessageId !== messageId) {
-      flushPendingDelta(disposition !== "activity");
+      flushPendingDelta(true);
     }
     pendingMessageId = messageId;
+    activeMessageId = messageId;
     pendingDelta += delta;
     schedulePendingDelta();
   },
@@ -182,7 +214,7 @@ export const liveResponseStore = {
   completeMessage(messageId: string, threadId?: string) {
     if (!isActiveRuntimeThread(threadId)) return;
     flushPendingDelta(disposition !== "activity");
-    if (snapshot.messageId !== messageId) return;
+    if (activeMessageId !== messageId && snapshot.messageId !== messageId) return;
     publish({ ...snapshot, status: "complete" });
   },
   completeRun(threadId?: string) {

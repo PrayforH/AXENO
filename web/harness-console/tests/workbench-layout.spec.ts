@@ -64,7 +64,7 @@ describe("full-page agent workbench", () => {
     expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
     expect(studioSidebar).toContain(
-      ': ["agents", "capabilities", "knowledge", "spaces", "data"]',
+      ': ["agents", "capabilities", "knowledge", "data"]',
     );
     expect(workspaceNavigation).toContain('aria-label="工作模式"');
     expect(workspaceNavigation).toContain("<span>Studio</span>");
@@ -78,6 +78,8 @@ describe("full-page agent workbench", () => {
       expect(workspaceNavigation).toContain(`href: "${href}"`);
       expect(workspaceNavigation).toContain(`label: "${label}"`);
     }
+    expect(workspaceNavigation).not.toContain('href: "/studio/spaces"');
+    expect(workspaceNavigation).not.toContain('label: "共享空间"');
     expect(workspaceNavigationStyles).toContain(".navigationActive");
     expect(workspaceNavigationStyles).toContain(".modeSwitcher");
     expect(workspaceNavigationStyles).toContain(".modeActive");

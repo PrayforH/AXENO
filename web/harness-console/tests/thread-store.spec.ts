@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bindThreadAgent,
+  createUserScopedStorage,
   createNewThread,
   loadOrCreateThread,
   loadThreadAgent,
@@ -22,6 +23,25 @@ function memoryStorage(initial?: string) {
 }
 
 describe("thread store", () => {
+  it("isolates the active task and Agent binding for each signed-in user", () => {
+    const storage = memoryStorage();
+    const firstUser = createUserScopedStorage(storage, "user-1");
+    const secondUser = createUserScopedStorage(storage, "user-2");
+
+    const firstThread = createNewThread(firstUser, () => "thread-user-1");
+    bindThreadAgent(firstUser, firstThread, {
+      name: "public-opinion-agent",
+      version: "0.3.11",
+      ownerUserId: "user-1",
+    });
+
+    expect(loadOrCreateThread(secondUser, () => "thread-user-2")).toBe(
+      "thread-user-2",
+    );
+    expect(loadThreadAgent(secondUser, firstThread)).toBeNull();
+    expect(loadThreadAgent(firstUser, firstThread)?.ownerUserId).toBe("user-1");
+  });
+
   it("restores the existing thread after refresh", () => {
     const storage = memoryStorage("thread-existing");
 

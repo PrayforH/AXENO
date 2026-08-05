@@ -20,7 +20,6 @@ export const workspaceItems: ReadonlyArray<{
   { id: "agents", href: "/studio/agents", label: "智能体" },
   { id: "capabilities", href: "/studio/capabilities", label: "MCP" },
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
-  { id: "spaces", href: "/studio/spaces", label: "共享空间" },
   { id: "data", href: "/studio/data", label: "数据" },
 ];
 

@@ -2,19 +2,21 @@
 
 import { useEffect, useState } from "react";
 import { AgentThread } from "../components/agent-thread";
-import { AuthProvider } from "../components/auth-provider";
+import { AuthProvider, useAuth } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
 import { LangfuseTraceLink } from "../components/langfuse-trace-link";
 import { TaskAgentSwitcher } from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
 import {
   bindThreadAgent,
+  createUserScopedStorage,
   createNewThread,
   loadOrCreateThread,
   loadThreadAgent,
   selectThread,
 } from "../lib/thread-store";
 import {
+  findTaskAgent,
   loadTaskAgentCatalog,
   type TaskAgent,
 } from "../lib/task-agent-catalog";
@@ -27,6 +29,15 @@ import {
 } from "../lib/task-model-catalog";
 
 export default function Home() {
+  return (
+    <AuthProvider>
+      <AuthenticatedHome />
+    </AuthProvider>
+  );
+}
+
+function AuthenticatedHome() {
+  const { user } = useAuth();
   const [threadId, setThreadId] = useState("");
   const [taskAgents, setTaskAgents] = useState<TaskAgent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<TaskAgent | null>(null);
@@ -44,7 +55,8 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
-    const currentThreadId = loadOrCreateThread(window.localStorage);
+    const storage = createUserScopedStorage(window.localStorage, user.user_id);
+    const currentThreadId = loadOrCreateThread(storage);
     setThreadId(currentThreadId);
     async function loadAgentBinding() {
       setAgentsLoading(true);
@@ -58,7 +70,10 @@ export default function Home() {
         const currentTask = tasks.find(
           (task) => task.thread_id === currentThreadId,
         );
-        const stored = loadThreadAgent(window.localStorage, currentThreadId);
+        const stored = loadThreadAgent(storage, currentThreadId);
+        const storedAgent = stored
+          ? findTaskAgent(catalog.agents, stored)
+          : undefined;
         const coordinates = currentTask
           ? {
               name: currentTask.agent_name,
@@ -67,34 +82,33 @@ export default function Home() {
               scope: currentTask.space_id ? "team" as const : "personal" as const,
               spaceId: currentTask.space_id ?? undefined,
             }
-          : stored ?? catalog.defaultAgent;
-        const selected =
-          catalog.agents.find((agent) =>
-            agent.name === coordinates.name &&
-            agent.version === coordinates.version &&
-            (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
-            (!coordinates.spaceId || agent.spaceId === coordinates.spaceId),
-          ) ?? {
-            name: coordinates.name,
-            version: coordinates.version,
-            displayName: stored?.displayName ?? coordinates.name,
-            domain: stored?.domain ?? "historical",
-            ownerUserId: coordinates.ownerUserId,
-            scope: coordinates.scope,
-            spaceId: coordinates.spaceId,
-          };
+          : storedAgent ?? catalog.defaultAgent;
+        const selected = findTaskAgent(catalog.agents, coordinates) ??
+          (currentTask
+            ? {
+                name: coordinates.name,
+                version: coordinates.version,
+                displayName: coordinates.name,
+                domain: "historical",
+                ownerUserId: coordinates.ownerUserId,
+                scope: coordinates.scope,
+                spaceId: coordinates.spaceId,
+              }
+            : catalog.defaultAgent);
         const agents = catalog.agents.some(
           (agent) =>
             agent.name === selected.name && agent.version === selected.version &&
             agent.ownerUserId === selected.ownerUserId && agent.spaceId === selected.spaceId,
         )
           ? catalog.agents
-          : [selected, ...catalog.agents];
+          : currentTask
+            ? [selected, ...catalog.agents]
+            : catalog.agents;
         setTaskAgents(agents);
         setModelRoutes(routes);
         setSelectedAgent(selected);
         const storedModelRoute = loadTaskModelOverride(
-          window.localStorage,
+          storage,
           currentThreadId,
         );
         setModelRouteOverride(
@@ -102,7 +116,7 @@ export default function Home() {
             ? storedModelRoute
             : null,
         );
-        bindThreadAgent(window.localStorage, currentThreadId, selected);
+        bindThreadAgent(storage, currentThreadId, selected);
         setAgentsError("");
       } catch (error) {
         if (!active) return;
@@ -117,12 +131,17 @@ export default function Home() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [user.user_id]);
+
+  function taskStorage() {
+    return createUserScopedStorage(window.localStorage, user.user_id);
+  }
 
   function startNewTask() {
     if (!selectedAgent) return;
-    const nextThreadId = createNewThread(window.localStorage);
-    bindThreadAgent(window.localStorage, nextThreadId, selectedAgent);
+    const storage = taskStorage();
+    const nextThreadId = createNewThread(storage);
+    bindThreadAgent(storage, nextThreadId, selectedAgent);
     setThreadId(nextThreadId);
     setModelRouteOverride(null);
   }
@@ -152,10 +171,11 @@ export default function Home() {
     ) {
       setTaskAgents((current) => [nextAgent, ...current]);
     }
-    bindThreadAgent(window.localStorage, task.thread_id, nextAgent);
+    const storage = taskStorage();
+    bindThreadAgent(storage, task.thread_id, nextAgent);
     setSelectedAgent(nextAgent);
     const storedModelRoute = loadTaskModelOverride(
-      window.localStorage,
+      storage,
       task.thread_id,
     );
     setModelRouteOverride(
@@ -163,7 +183,7 @@ export default function Home() {
         ? storedModelRoute
         : null,
     );
-    setThreadId(selectThread(window.localStorage, task.thread_id));
+    setThreadId(selectThread(storage, task.thread_id));
   }
 
   function switchAgent(nextAgent: TaskAgent) {
@@ -183,19 +203,19 @@ export default function Home() {
       selectedAgent.spaceId === nextAgent.spaceId
     );
     if (sameAgent) {
-      bindThreadAgent(window.localStorage, threadId, nextAgent);
+      bindThreadAgent(taskStorage(), threadId, nextAgent);
       setSelectedAgent(nextAgent);
       return;
     }
-    const nextThreadId = createNewThread(window.localStorage);
-    bindThreadAgent(window.localStorage, nextThreadId, nextAgent);
+    const storage = taskStorage();
+    const nextThreadId = createNewThread(storage);
+    bindThreadAgent(storage, nextThreadId, nextAgent);
     setSelectedAgent(nextAgent);
     setModelRouteOverride(null);
     setThreadId(nextThreadId);
   }
 
   return (
-    <AuthProvider>
     <main className="console-shell" id="main-content">
       <div
         className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""}`}
@@ -234,7 +254,7 @@ export default function Home() {
                   modelRoutes={modelRoutes}
                   modelRouteOverride={modelRouteOverride}
                   onModelRouteOverrideChange={(routeId) => {
-                    saveTaskModelOverride(window.localStorage, threadId, routeId);
+                    saveTaskModelOverride(taskStorage(), threadId, routeId);
                     setModelRouteOverride(routeId);
                   }}
                 >
@@ -260,6 +280,5 @@ export default function Home() {
         </div>
       </div>
     </main>
-    </AuthProvider>
   );
 }

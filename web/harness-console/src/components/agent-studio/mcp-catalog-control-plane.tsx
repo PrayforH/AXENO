@@ -238,6 +238,14 @@ export function McpCatalogControlPlane({
       const previous = record.catalog.mcpServers.find(
         (item) => item.reference === reference,
       );
+      let nextCredentialStatus = credentialStatuses[reference];
+      if (draft.authMode !== "none" && credentialValue.trim()) {
+        nextCredentialStatus = await studioClient.configureMcpCredential(
+          reference,
+          draft.authKey,
+          credentialValue,
+        );
+      }
       const result = await studioClient.upsertMcp(
         reference,
         record.revision,
@@ -259,17 +267,10 @@ export function McpCatalogControlPlane({
         allowedProfileIds,
       );
       setRecord(result.record);
-      let nextCredentialStatus = credentialStatuses[reference];
       if (draft.authMode === "none") {
         if (nextCredentialStatus?.configured) {
           nextCredentialStatus = await studioClient.deleteMcpCredential(reference);
         }
-      } else if (credentialValue.trim()) {
-        nextCredentialStatus = await studioClient.configureMcpCredential(
-          reference,
-          draft.authKey,
-          credentialValue,
-        );
       }
       if (nextCredentialStatus) {
         setCredentialStatuses((current) => ({

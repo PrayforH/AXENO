@@ -6,6 +6,21 @@ const THREAD_AGENT_STORAGE_PREFIX = "harness-console-thread-agent:";
 export interface ThreadStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+const USER_STORAGE_PREFIX = "harness-console-user:";
+
+export function createUserScopedStorage(
+  storage: ThreadStorage,
+  userId: string,
+): ThreadStorage {
+  const prefix = `${USER_STORAGE_PREFIX}${encodeURIComponent(userId)}:`;
+  return {
+    getItem: (key) => storage.getItem(`${prefix}${key}`),
+    setItem: (key, value) => storage.setItem(`${prefix}${key}`, value),
+    removeItem: (key) => storage.removeItem(`${prefix}${key}`),
+  };
 }
 
 export interface ThreadAgentBinding {

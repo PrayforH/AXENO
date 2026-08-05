@@ -24,6 +24,7 @@ from harness.core.errors import NotFoundError
 from harness.core.manifest import ToolDirectorySnapshot
 from harness.evals.models import EvalRunStatus
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.studio.catalog import default_capability_catalog
 from harness.studio.mcp_discovery import (
     DiscoveredServer,
     McpDiscoveryService,
@@ -73,6 +74,15 @@ def draft_request(name: str = "policy-researcher") -> dict[str, str]:
     }
 
 
+def tavily_resource() -> dict[str, Any]:
+    return cast(
+        dict[str, Any],
+        default_capability_catalog().mcp_servers[0].model_dump(
+            mode="json", by_alias=True
+        ),
+    )
+
+
 async def drain_eval(container: ApiContainer, eval_run_id: str) -> None:
     for _ in range(40):
         await container.eval_controller.process_once()
@@ -119,7 +129,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
     assert capabilities.status_code == 200
-    assert capabilities.json()["mcpServers"][0]["reference"] == "tavily-readonly"
+    assert capabilities.json()["mcpServers"] == []
     assert created.status_code == 201
     assert created.json()["tenantId"] == "tenant-a"
     assert created.json()["createdBy"] == "builder-a"
@@ -187,6 +197,43 @@ async def test_studio_manages_mcp_credentials_without_returning_secret_values() 
     }
     assert secret not in configured.text
     assert secret not in listed.text
+
+
+@pytest.mark.asyncio
+async def test_authenticated_mcp_requires_the_current_users_credential() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-personal-required",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        initial = await client.get("/v1/studio/catalog", headers=headers)
+        body = {
+            "expectedRevision": initial.json()["revision"],
+            "resource": tavily_resource(),
+            "allowedExecutionProfileIds": ["isolated-default"],
+        }
+        rejected = await client.put(
+            "/v1/studio/catalog/mcp/tavily-readonly",
+            headers=headers,
+            json=body,
+        )
+        configured = await client.put(
+            "/v1/studio/mcp/tavily-readonly/credentials",
+            headers=headers,
+            json={"authKey": "api_key", "value": "personal-tavily-key"},
+        )
+        saved = await client.put(
+            "/v1/studio/catalog/mcp/tavily-readonly",
+            headers=headers,
+            json=body,
+        )
+
+    assert rejected.status_code == 409
+    assert "current user's credential" in rejected.text
+    assert configured.status_code == 200
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["record"]["catalog"]["mcpServers"][0]["ownerUserId"] == "builder-a"
 
 
 @pytest.mark.asyncio
@@ -361,6 +408,21 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
         transport=ASGITransport(app=app()),
         base_url="http://test",
     ) as client:
+        catalog = await client.get("/v1/studio/catalog", headers=headers)
+        credential = await client.put(
+            "/v1/studio/mcp/tavily-readonly/credentials",
+            headers=headers,
+            json={"authKey": "api_key", "value": "personal-tavily-key"},
+        )
+        registered = await client.put(
+            "/v1/studio/catalog/mcp/tavily-readonly",
+            headers=headers,
+            json={
+                "expectedRevision": catalog.json()["revision"],
+                "resource": tavily_resource(),
+                "allowedExecutionProfileIds": ["isolated-default"],
+            },
+        )
         created = await client.post(
             "/v1/studio/drafts",
             headers=headers,
@@ -393,6 +455,8 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
             headers=headers,
         )
 
+    assert credential.status_code == 200, credential.text
+    assert registered.status_code == 200, registered.text
     assert replaced.status_code == 200, replaced.text
     assert replaced.json()["spec"]["toolExposureMode"] == "on_demand"
     assert validation.status_code == 200, validation.text
@@ -1529,7 +1593,6 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
 
         rejected_secret = catalog.json()["catalog"]
         rejected_secret["modelRoutes"][0]["apiKey"] = "must-never-be-stored"
-        rejected_secret["mcpServers"][0]["url"] = "https://unreviewed.example/mcp"
         secret_response = await client.put(
             "/v1/studio/catalog",
             headers=owner_headers,
@@ -1569,9 +1632,7 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
     assert secret_response.status_code == 422
     assert secret_response.json()["error"]["code"] == "request_invalid"
     assert "must-never-be-stored" not in secret_response.text
-    assert "unreviewed.example" not in secret_response.text
     assert "must-never-be-stored" not in current.text
-    assert "unreviewed.example" not in current.text
     assert member_response.status_code == 403
     assert member_response.json()["error"]["code"] == "permission_denied"
     assert member_registration.status_code == 403
