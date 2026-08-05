@@ -58,7 +58,7 @@ async def list_agents(
         coordinate for version in versions for coordinate in _subagent_coordinates(version)
     }
     personal = [
-        AgentCatalogItem.from_version(version)
+        AgentCatalogItem.from_version(version, can_edit=True)
         for version in versions
         if f"{version.name}@{version.version}" not in dependency_coordinates
         and not _is_internal(version)
@@ -70,6 +70,7 @@ async def list_agents(
             space_id=space.space_id,
             space_name=space.name,
             runnable_by_viewer=grant.runnable_by_viewer,
+            can_chat=member.role.value != "viewer" or grant.runnable_by_viewer,
         )
         for space, member, grant, version in await container.team_spaces.list_accessible_agents(
             identity.tenant_id, identity.user_id

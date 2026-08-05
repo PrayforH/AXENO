@@ -2,6 +2,7 @@ import { requireAuthenticatedResponse } from "./client-auth";
 import type { StudioDraftSummary } from "./studio-client";
 
 export interface TaskAgent {
+  agentId?: string;
   name: string;
   version: string;
   displayName: string;
@@ -14,6 +15,11 @@ export interface TaskAgent {
   spaceId?: string;
   spaceName?: string;
   runnableByViewer?: boolean;
+  currentVersion?: string;
+  connectionMode?: "caller_owned" | "service_owned";
+  canView?: boolean;
+  canChat?: boolean;
+  canEdit?: boolean;
 }
 
 interface RuntimeAgent {
@@ -22,6 +28,7 @@ interface RuntimeAgent {
 }
 
 interface PublishedAgent {
+  agent_id?: string | null;
   name: string;
   version: string;
   display_name: string;
@@ -34,6 +41,11 @@ interface PublishedAgent {
   space_id?: string | null;
   space_name?: string | null;
   runnable_by_viewer?: boolean;
+  current_version?: string | null;
+  connection_mode?: "caller_owned" | "service_owned";
+  can_view?: boolean;
+  can_chat?: boolean;
+  can_edit?: boolean;
 }
 
 export interface TaskAgentCatalog {
@@ -41,18 +53,59 @@ export interface TaskAgentCatalog {
   defaultAgent: TaskAgent;
 }
 
+/**
+ * Stable identity of an Agent (version-independent): agentId once the
+ * workspace model provides it, otherwise the coordinate without the version
+ * suffix. Used to decide whether switching versions continues a thread.
+ */
+export function agentIdentity(agent: Pick<TaskAgent, "name" | "version">): string {
+  const withId = agent as Partial<TaskAgent>;
+  if (withId.agentId) return withId.agentId;
+  return agentCoordinate(agent).split("@")[0];
+}
+
+/**
+ * Stable key of a concrete catalog item (version-sensitive) for caching,
+ * deduplication and React keys: agentId + version once available, otherwise
+ * the full coordinate `scope:spaceId:ownerUserId:name@version`. `name@version`
+ * alone is never a unique identity.
+ */
+export function agentItemKey(agent: Pick<TaskAgent, "name" | "version">): string {
+  const withId = agent as Partial<TaskAgent>;
+  if (withId.agentId) return `${withId.agentId}@${agent.version}`;
+  return agentCoordinate(agent);
+}
+
+/** Legacy full-coordinate form: `scope:spaceId:ownerUserId:name@version`. */
+export function agentCoordinate(agent: Pick<TaskAgent, "name" | "version">) {
+  const scoped = agent as Pick<
+    TaskAgent,
+    "name" | "version" | "ownerUserId" | "spaceId" | "scope"
+  >;
+  if (!scoped.scope && !scoped.spaceId && !scoped.ownerUserId) {
+    return `${agent.name}@${agent.version}`;
+  }
+  return `${scoped.scope ?? "personal"}:${scoped.spaceId ?? "-"}:${scoped.ownerUserId ?? "-"}:${agent.name}@${agent.version}`;
+}
+
 export function findTaskAgent(
   agents: readonly TaskAgent[],
   coordinates: Pick<TaskAgent, "name" | "version"> &
-    Partial<Pick<TaskAgent, "ownerUserId" | "spaceId">>,
+    Partial<Pick<TaskAgent, "agentId" | "ownerUserId" | "spaceId">>,
 ): TaskAgent | undefined {
   return agents.find(
     (agent) =>
-      agent.name === coordinates.name &&
-      agent.version === coordinates.version &&
-      (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
-      (!coordinates.spaceId || agent.spaceId === coordinates.spaceId),
+      (Boolean(coordinates.agentId) && agent.agentId === coordinates.agentId) ||
+      (agent.name === coordinates.name &&
+        agent.version === coordinates.version &&
+        (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
+        (!coordinates.spaceId || agent.spaceId === coordinates.spaceId)),
   );
+}
+
+/** Agents the requesting user may actually chat with (task selector). */
+export function chatUsableAgents(agents: readonly TaskAgent[]): TaskAgent[] {
+  return agents.filter((agent) => agent.canChat !== false);
 }
 
 async function json<T>(url: string): Promise<T> {
@@ -65,7 +118,29 @@ async function json<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
+function studioCoordinate(
+  draft: Pick<StudioDraftSummary, "name" | "version">,
+  currentUserId: string | null,
+): string {
+  return currentUserId
+    ? `personal:-:${currentUserId}:${draft.name}@${draft.version}`
+    : `${draft.name}@${draft.version}`;
+}
+
+function registryCoordinate(
+  agent: Pick<PublishedAgent, "name" | "version" | "owner_user_id" | "scope" | "space_id">,
+  currentUserId: string | null,
+): string {
+  const owner = agent.owner_user_id ?? "";
+  if (!currentUserId || !owner || agent.scope !== "personal") {
+    return `${agent.name}@${agent.version}`;
+  }
+  return `personal:-:${owner}:${agent.name}@${agent.version}`;
+}
+
+export async function loadTaskAgentCatalog(
+  currentUserId: string | null = null,
+): Promise<TaskAgentCatalog> {
   const runtime = await json<RuntimeAgent>("/api/harness/runtime-config");
   let registry: PublishedAgent[] = [];
   try {
@@ -91,16 +166,27 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
       domain: draft.domain,
     }));
   const studioByCoordinate = new Map(
-    studioVersions.map((agent) => [`${agent.name}@${agent.version}`, agent]),
+    studioVersions.map((agent) => [
+      studioCoordinate(agent, currentUserId),
+      agent,
+    ]),
   );
   const registryVersions = registry.map((agent) => {
-    const studio = studioByCoordinate.get(`${agent.name}@${agent.version}`);
+    const studio = studioByCoordinate.get(
+      registryCoordinate(agent, currentUserId),
+    );
     const sharing = {
+      agentId: agent.agent_id ?? undefined,
       ownerUserId: agent.owner_user_id,
       scope: agent.scope,
       spaceId: agent.space_id ?? undefined,
       spaceName: agent.space_name ?? undefined,
       runnableByViewer: agent.runnable_by_viewer ?? true,
+      currentVersion: agent.current_version ?? undefined,
+      connectionMode: agent.connection_mode ?? "caller_owned",
+      canView: agent.can_view ?? true,
+      canChat: agent.can_chat ?? true,
+      canEdit: agent.can_edit ?? false,
     } as const;
     return (
       studio
@@ -129,7 +215,7 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
   const published = [...registryVersions, ...studioVersions].filter(
     (agent, index, values) =>
       values.findIndex(
-        (candidate) => agentCoordinate(candidate) === agentCoordinate(agent),
+        (candidate) => agentItemKey(candidate) === agentItemKey(agent),
       ) === index,
   );
   const runtimeMatch = published.find(
@@ -149,20 +235,8 @@ export async function loadTaskAgentCatalog(): Promise<TaskAgentCatalog> {
     agents: agents.filter(
       (agent, index, values) =>
         values.findIndex(
-          (candidate) =>
-            candidate.name === agent.name && candidate.version === agent.version,
+          (candidate) => agentItemKey(candidate) === agentItemKey(agent),
         ) === index,
     ),
   };
-}
-
-export function agentCoordinate(agent: Pick<TaskAgent, "name" | "version">) {
-  const scoped = agent as Pick<
-    TaskAgent,
-    "name" | "version" | "ownerUserId" | "spaceId" | "scope"
-  >;
-  if (!scoped.scope && !scoped.spaceId && !scoped.ownerUserId) {
-    return `${agent.name}@${agent.version}`;
-  }
-  return `${scoped.scope ?? "personal"}:${scoped.spaceId ?? "-"}:${scoped.ownerUserId ?? "-"}:${agent.name}@${agent.version}`;
 }

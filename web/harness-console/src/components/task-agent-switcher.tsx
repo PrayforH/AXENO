@@ -2,11 +2,13 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  agentCoordinate,
+  agentIdentity,
+  agentItemKey,
   type TaskAgent,
 } from "../lib/task-agent-catalog";
 
 export interface TaskAgentGroup {
+  key: string;
   name: string;
   displayName: string;
   domain: string;
@@ -28,12 +30,13 @@ export function groupTaskAgents(
     : agents;
   const groups = new Map<string, TaskAgentGroup>();
   for (const agent of matching) {
-    const groupKey = `${agent.scope ?? "personal"}:${agent.spaceId ?? "-"}:${agent.ownerUserId ?? "-"}:${agent.name}`;
+    const groupKey = agentIdentity(agent);
     const group = groups.get(groupKey);
     if (group) {
       group.agents.push(agent);
     } else {
       groups.set(groupKey, {
+        key: groupKey,
         name: agent.name,
         displayName: agent.displayName,
         domain: agent.domain,
@@ -99,7 +102,10 @@ export function TaskAgentSwitcher({
   const choose = (agent: TaskAgent) => {
     setOpen(false);
     setQuery("");
-    if (agentCoordinate(agent) !== (selected ? agentCoordinate(selected) : "")) {
+    if (
+      agentItemKey(agent) !==
+      (selected ? agentItemKey(selected) : "")
+    ) {
       onChange(agent);
     }
   };
@@ -160,11 +166,11 @@ export function TaskAgentSwitcher({
               <p className="task-agent-empty">没有匹配的智能体</p>
             ) : (
               groups.map((group) => (
-                <section className="task-agent-group" key={group.name}>
+                <section className="task-agent-group" key={group.key}>
                   {(() => {
-                    const selectedCoordinate = selected ? agentCoordinate(selected) : "";
+                    const selectedKey = selected ? agentItemKey(selected) : "";
                     const activeAgent = group.agents.find(
-                      (agent) => agentCoordinate(agent) === selectedCoordinate,
+                      (agent) => agentItemKey(agent) === selectedKey,
                     );
                     const preferred = activeAgent ?? group.agents[0];
                     const groupActive = Boolean(activeAgent);
@@ -192,18 +198,18 @@ export function TaskAgentSwitcher({
                           <label className="task-agent-version-select">
                             <select
                               aria-label={`${group.displayName} 版本`}
-                              value={agentCoordinate(preferred)}
+                              value={agentItemKey(preferred)}
                               onChange={(event) => {
                                 const next = group.agents.find(
-                                  (agent) => agentCoordinate(agent) === event.target.value,
+                                  (agent) => agentItemKey(agent) === event.target.value,
                                 );
                                 if (next) choose(next);
                               }}
                             >
                               {group.agents.map((agent) => (
-                                <option key={agentCoordinate(agent)} value={agentCoordinate(agent)}>
+                                <option key={agentItemKey(agent)} value={agentItemKey(agent)}>
                                   {agent.version}
-                                  {agentCoordinate(agent) === selectedCoordinate ? " · 当前" : ""}
+                                  {agentItemKey(agent) === selectedKey ? " · 当前" : ""}
                                 </option>
                               ))}
                             </select>

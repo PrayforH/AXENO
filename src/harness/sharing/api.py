@@ -158,6 +158,10 @@ async def list_shared_agents(
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[SharedAgentItem]:
+    _, membership = await container.team_spaces.get_for_user(
+        identity.tenant_id, identity.user_id, space_id
+    )
+    can_chat = membership.role is not SpaceRole.VIEWER
     return [
         SharedAgentItem(
             grant=grant,
@@ -165,6 +169,8 @@ async def list_shared_agents(
                 version,
                 scope="team",
                 space_id=space_id,
+                runnable_by_viewer=grant.runnable_by_viewer,
+                can_chat=can_chat or grant.runnable_by_viewer,
             ),
         )
         for grant, version in await container.team_spaces.list_agents(
@@ -239,7 +245,7 @@ async def fork_shared_agent(
         name,
         version,
     )
-    return AgentCatalogItem.from_version(fork, scope="personal")
+    return AgentCatalogItem.from_version(fork, scope="personal", can_edit=True)
 
 
 @router.get("/{space_id}/knowledge", response_model=list[SharedKnowledgeBase])

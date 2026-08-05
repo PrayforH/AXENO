@@ -16,6 +16,9 @@ import {
   selectThread,
 } from "../lib/thread-store";
 import {
+  agentIdentity,
+  agentItemKey,
+  chatUsableAgents,
   findTaskAgent,
   loadTaskAgentCatalog,
   type TaskAgent,
@@ -62,7 +65,7 @@ function AuthenticatedHome() {
       setAgentsLoading(true);
       try {
         const [catalog, routes, tasks] = await Promise.all([
-          loadTaskAgentCatalog(),
+          loadTaskAgentCatalog(user.user_id),
           loadTaskModelRoutes().catch(() => []),
           loadTasks().catch(() => []),
         ]);
@@ -95,15 +98,18 @@ function AuthenticatedHome() {
                 spaceId: coordinates.spaceId,
               }
             : catalog.defaultAgent);
-        const agents = catalog.agents.some(
-          (agent) =>
-            agent.name === selected.name && agent.version === selected.version &&
-            agent.ownerUserId === selected.ownerUserId && agent.spaceId === selected.spaceId,
-        )
-          ? catalog.agents
+        // Task selector lists agents the user may chat with (can_chat). The
+        // selected historical agent stays visible even when its grant was
+        // revoked so the thread can still be read.
+        const chatUsable = chatUsableAgents(catalog.agents);
+        const selectedUsable = chatUsable.some(
+          (agent) => agentItemKey(agent) === agentItemKey(selected),
+        );
+        const agents = selectedUsable
+          ? chatUsable
           : currentTask
-            ? [selected, ...catalog.agents]
-            : catalog.agents;
+            ? [selected, ...chatUsable]
+            : chatUsable;
         setTaskAgents(agents);
         setModelRoutes(routes);
         setSelectedAgent(selected);
@@ -164,9 +170,7 @@ function AuthenticatedHome() {
       };
     if (
       !taskAgents.some(
-        (agent) =>
-          agent.name === nextAgent.name && agent.version === nextAgent.version &&
-          agent.ownerUserId === nextAgent.ownerUserId && agent.spaceId === nextAgent.spaceId,
+        (agent) => agentItemKey(agent) === agentItemKey(nextAgent),
       )
     ) {
       setTaskAgents((current) => [nextAgent, ...current]);
@@ -189,18 +193,14 @@ function AuthenticatedHome() {
   function switchAgent(nextAgent: TaskAgent) {
     if (
       selectedAgent &&
-      selectedAgent.name === nextAgent.name &&
-      selectedAgent.version === nextAgent.version &&
-      selectedAgent.ownerUserId === nextAgent.ownerUserId &&
-      selectedAgent.spaceId === nextAgent.spaceId
+      agentIdentity(selectedAgent) === agentIdentity(nextAgent) &&
+      selectedAgent.version === nextAgent.version
     ) {
       return;
     }
     const sameAgent = Boolean(
       selectedAgent &&
-      selectedAgent.name === nextAgent.name &&
-      selectedAgent.ownerUserId === nextAgent.ownerUserId &&
-      selectedAgent.spaceId === nextAgent.spaceId
+      agentIdentity(selectedAgent) === agentIdentity(nextAgent),
     );
     if (sameAgent) {
       bindThreadAgent(taskStorage(), threadId, nextAgent);
@@ -244,7 +244,7 @@ function AuthenticatedHome() {
             <div className="chat-surface">
               {threadId && selectedAgent ? (
                 <AssistantRuntimeShell
-                  key={`${threadId}:${selectedAgent.spaceId ?? "personal"}:${selectedAgent.ownerUserId ?? "self"}:${selectedAgent.name}:${selectedAgent.version}`}
+                  key={`${threadId}:${agentItemKey(selectedAgent)}`}
                   threadId={threadId}
                   agentName={selectedAgent.name}
                   agentVersion={selectedAgent.version}

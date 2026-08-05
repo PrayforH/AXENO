@@ -24,6 +24,17 @@ class AgentCatalogItem(BaseModel):
     space_id: str | None = None
     space_name: str | None = None
     runnable_by_viewer: bool = True
+    # Stable Agent identity. Before migration this is absent and frontends must
+    # fall back to the full coordinate scope:spaceId:ownerUserId:name@version.
+    agent_id: str | None = None
+    current_version: str | None = None
+    connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned"
+    # Permission projection for the requesting user. can_view gates the space
+    # page listing; can_chat gates the task selector; can_edit gates shared
+    # draft editing.
+    can_view: bool = True
+    can_chat: bool = True
+    can_edit: bool = False
 
     @classmethod
     def from_version(
@@ -34,6 +45,12 @@ class AgentCatalogItem(BaseModel):
         space_id: str | None = None,
         space_name: str | None = None,
         runnable_by_viewer: bool = True,
+        agent_id: str | None = None,
+        current_version: str | None = None,
+        connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
+        can_view: bool = True,
+        can_chat: bool = True,
+        can_edit: bool = False,
     ) -> "AgentCatalogItem":
         manifest = version.snapshot.get("manifest")
         metadata = (
@@ -65,6 +82,12 @@ class AgentCatalogItem(BaseModel):
             space_id=space_id,
             space_name=space_name,
             runnable_by_viewer=runnable_by_viewer,
+            agent_id=agent_id,
+            current_version=current_version,
+            connection_mode=connection_mode,
+            can_view=can_view,
+            can_chat=can_chat,
+            can_edit=can_edit,
         )
 
 

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentCoordinate,
+  agentIdentity,
+  agentItemKey,
+  chatUsableAgents,
   findTaskAgent,
   loadTaskAgentCatalog,
 } from "../src/lib/task-agent-catalog";
@@ -29,6 +32,69 @@ describe("task agent catalog", () => {
         ownerUserId: "previous-user",
       }),
     ).toBeUndefined();
+  });
+
+  it("never deduplicates or keys by name@version alone", () => {
+    const personal = {
+      name: "public-opinion-agent",
+      version: "0.3.11",
+      displayName: "舆情分析",
+      domain: "public-opinion",
+      ownerUserId: "user-a",
+      scope: "personal" as const,
+    };
+    const team = {
+      ...personal,
+      ownerUserId: "user-b",
+      scope: "team" as const,
+      spaceId: "space-1",
+      spaceName: "法务空间",
+    };
+    expect(agentItemKey(personal)).toBe("personal:-:user-a:public-opinion-agent@0.3.11");
+    expect(agentItemKey(team)).toBe("team:space-1:user-b:public-opinion-agent@0.3.11");
+    expect(agentItemKey(personal)).not.toBe(agentItemKey(team));
+    // Same Agent, different versions -> same identity, different item keys.
+    expect(agentIdentity(personal)).toBe(agentIdentity({ ...personal, version: "0.4.0" }));
+    expect(agentItemKey(personal)).not.toBe(agentItemKey({ ...personal, version: "0.4.0" }));
+    // A stable agentId wins over coordinates once the workspace model lands.
+    expect(agentIdentity({ ...personal, agentId: "agent_abc" })).toBe("agent_abc");
+    expect(agentItemKey({ ...personal, agentId: "agent_abc" })).toBe("agent_abc@0.3.11");
+  });
+
+  it("filters the task selector by can_chat while keeping revoked historical Agents", () => {
+    const agents = [
+      {
+        name: "lead-agent",
+        version: "1.0.0",
+        displayName: "通用 Lead",
+        domain: "general-assistant",
+        canChat: true,
+      },
+      {
+        name: "shared-agent",
+        version: "1.2.0",
+        displayName: "共享 Agent",
+        domain: "shared",
+        ownerUserId: "user-a",
+        scope: "team" as const,
+        spaceId: "space-1",
+        canChat: false,
+      },
+      {
+        name: "historical-agent",
+        version: "0.9.0",
+        displayName: "历史 Agent",
+        domain: "historical",
+        ownerUserId: "user-c",
+        scope: "team" as const,
+        spaceId: "space-2",
+      },
+    ];
+    const usable = chatUsableAgents(agents);
+    expect(usable.map((agent) => agent.name)).toEqual([
+      "lead-agent",
+      "historical-agent",
+    ]);
   });
 
   it("keeps the neutral Lead default while offering business Agents explicitly", async () => {
