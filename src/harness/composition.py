@@ -728,6 +728,7 @@ def build_production_container(
         knowledge=knowledge,
         audit=audit,
         agent_ids=agent_ids,
+        draft_permissions=team_spaces,
         clock=clock,
         id_generator=lambda: ids("draft"),
     )

@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Path, Response, status
 from pydantic import BaseModel, Field
 
 from harness.api.dependencies import ApiContainer, Identity, get_container, require_identity
@@ -19,6 +19,11 @@ from harness.sharing.models import (
     TeamSpace,
     TeamSpaceMember,
     WorkspaceAgent,
+)
+from harness.studio.mcp_credential_store import (
+    ConfigureMcpCredentialRequest,
+    McpCredentialStatus,
+    _space_credential_owner,
 )
 
 router = APIRouter(prefix="/spaces", tags=["team spaces"])
@@ -70,6 +75,74 @@ class PutAgentAclRequest(BaseModel):
 
 class ShareKnowledgeRequest(BaseModel):
     reference: str = Field(min_length=1, max_length=128)
+
+
+_MCP_REFERENCE_PATTERN = r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$"
+
+
+@router.get(
+    "/{space_id}/mcp/credentials",
+    response_model=tuple[McpCredentialStatus, ...],
+)
+async def list_space_mcp_credentials(
+    space_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> tuple[McpCredentialStatus, ...]:
+    await container.team_spaces.require_manage(
+        identity.tenant_id, identity.user_id, space_id
+    )
+    return await container.mcp_credentials.list(
+        identity.tenant_id, _space_credential_owner(space_id)
+    )
+
+
+@router.put(
+    "/{space_id}/mcp/{reference}/credentials",
+    response_model=McpCredentialStatus,
+)
+async def configure_space_mcp_credential(
+    space_id: str,
+    reference: Annotated[str, Path(pattern=_MCP_REFERENCE_PATTERN)],
+    body: ConfigureMcpCredentialRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> McpCredentialStatus:
+    """Configure workspace-provided (service_owned) MCP credentials.
+
+    Members running a service_owned shared Agent resolve credentials by the
+    space, never by their personal store.
+    """
+    await container.team_spaces.require_manage(
+        identity.tenant_id, identity.user_id, space_id
+    )
+    return await container.mcp_credentials.configure(
+        identity.tenant_id,
+        _space_credential_owner(space_id),
+        reference,
+        body,
+    )
+
+
+@router.delete(
+    "/{space_id}/mcp/{reference}/credentials",
+    response_model=McpCredentialStatus,
+)
+async def delete_space_mcp_credential(
+    space_id: str,
+    reference: Annotated[str, Path(pattern=_MCP_REFERENCE_PATTERN)],
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> McpCredentialStatus:
+    await container.team_spaces.require_manage(
+        identity.tenant_id, identity.user_id, space_id
+    )
+    await container.mcp_credentials.delete(
+        identity.tenant_id,
+        _space_credential_owner(space_id),
+        reference,
+    )
+    return McpCredentialStatus(reference=reference, configured=False)
 
 
 def _workspace_item(

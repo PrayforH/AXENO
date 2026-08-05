@@ -283,19 +283,34 @@ user_groups (tenant_id, group_id) / group_members (tenant_id, group_id, user_id)
 
 - 共享草稿乐观锁：草稿 GET/PUT 返回 `ETag: "rev-N"`，PUT 支持 `If-Match`
   （412 冲突），与 `expectedRevision` CAS 双保险。
+- 工作区共享草稿（本提交补齐）：`agent_drafts.space_id` 启用——
+  `POST /v1/studio/drafts` 带 `agentId+spaceId` 创建共享草稿（EDIT 要求，
+  名称必须等于工作区 Agent 身份）；空间成员按 `AgentPermission.EDIT`
+  （角色基线 + 用户/组 ACL）读写，VIEWER 只读；`GET /drafts?spaceId=` 列出
+  空间草稿；共享草稿 publish 需 PUBLISH 权限，发布后自动作为 Release
+  发布并 promote 为当前版本；草稿名不可变更（身份即名称）。
 - 发布审计：`agent.share/agent.promote/agent.transfer` 写入 audit_logs。
 - 用户组：迁移 0024 新增 `user_groups/group_members`；`/v1/groups` CRUD API；
   ACL 支持 `group` 主体（组内任一成员继承授权，移出组即撤销）。
 - 连接模式：`AgentRelease.connection_mode`（caller_owned/service_owned）经
-  Session 快照贯穿运行链路（sessions API 与 AG-UI 均固定到 Session）。
+  Session 快照贯穿运行链路（sessions API 与 AG-UI 均固定到 Session），并
+  透传到 `ExecutionIdentity`（runtime 与 worker 构造处）。
+- service_owned 运行时凭据解析（本提交补齐）：Worker 凭据解析在
+  `StoredMcpCredentialProvider` 按 `connection_mode` 分流——service_owned
+  时按 `team_ids[0]` 解析 `space:{space_id}` 空间级凭据（`mcp_credentials`
+  表 owner 命名空间复用，无需迁移），**绝不回退到调用者个人凭据**；
+  空间凭据由 `PUT/DELETE /v1/spaces/{space_id}/mcp/{reference}/credentials`
+  管理（Owner/Admin）。
 - 生命周期：`POST /v1/agents/{agent_id}/transfer` 支持 personal→personal
   （版本与草稿整体 re-key，`agent_id` 不变）与 personal→workspace 上缴；
   成员退出/撤权 fail-closed 已有测试覆盖。
 
 ### 验证结论
 
-- 后端：882+ 用例通过；sharing 13 例、迁移 0024 往返、目录/空间/Studio API
-  全部通过；`make verify` 子集（ruff/pyright）通过。
+- 后端：新增共享草稿集成测试（成员读写/权限矩阵/组 ACL/发布 promote/非成员
+  404）与 service_owned 凭据解析测试（空间凭据优先、个人凭据不泄漏、删除后
+  fail closed）；完整套件 884+ 通过，仅剩既有/环境失败。
+- 前端：297/298 通过（唯一失败 workbench-layout 为既有问题）；`next build` 通过。
 - 前端：297/298 通过（唯一失败 workbench-layout 为既有问题）；`next build` 通过。
 - 剩余失败均为环境/既有问题（Redis/MinIO/知识库搜索/配额用例），在干净分支
   上同样失败，与本次改动无关。

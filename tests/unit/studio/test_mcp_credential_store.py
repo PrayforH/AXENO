@@ -78,6 +78,61 @@ async def test_credentials_are_encrypted_user_scoped_and_never_audited() -> None
     assert await repository.get("tenant-a", "owner-a", "company-search") is None
 
 
+@pytest.mark.asyncio
+async def test_service_owned_mode_resolves_space_credentials_without_leaking_personal() -> None:
+    repository = InMemoryMcpCredentialRepository()
+    service = McpCredentialService(
+        repository,
+        McpCredentialCipher(SecretStr("encryption-key-for-tests")),
+    )
+    provider = StoredMcpCredentialProvider(service, EmptyMcpCredentialProvider())
+    # The running user has personal credentials that must NOT leak into a
+    # service_owned shared run.
+    await service.configure(
+        "tenant-a",
+        "member-a",
+        "company-search",
+        ConfigureMcpCredentialRequest(authKey="authorization", value=SecretStr("personal-token")),
+    )
+    # The space provides the shared credential under its own owner identity.
+    await service.configure(
+        "tenant-a",
+        "space:space-1",
+        "company-search",
+        ConfigureMcpCredentialRequest(authKey="authorization", value=SecretStr("shared-token")),
+    )
+    service_owned = ExecutionIdentity(
+        tenant_id="tenant-a",
+        user_id="member-a",
+        team_ids=("space-1",),
+        project_id="agent-a",
+        session_id="session-a",
+        run_id="run-a",
+        agent_name="agent-a",
+        agent_version="1",
+        connection_mode="service_owned",
+    )
+    resolved = await provider.resolve(
+        "company-search", service_owned, frozenset({"authorization"})
+    )
+    assert resolved["authorization"].get_secret_value() == "shared-token"
+
+    # A caller_owned identity keeps resolving the caller's personal store.
+    caller_owned = service_owned.model_copy(update={"connection_mode": "caller_owned"})
+    resolved = await provider.resolve(
+        "company-search", caller_owned, frozenset({"authorization"})
+    )
+    assert resolved["authorization"].get_secret_value() == "personal-token"
+
+    # Removing the space credential makes service_owned runs fail closed even
+    # though the caller still has personal credentials.
+    await service.delete("tenant-a", "space:space-1", "company-search")
+    with pytest.raises(McpCredentialError, match="missing MCP credentials"):
+        await provider.resolve(
+            "company-search", service_owned, frozenset({"authorization"})
+        )
+
+
 def test_cipher_can_read_pre_isolation_tenant_scoped_ciphertext() -> None:
     secret = "encryption-key-for-tests"
     cipher = McpCredentialCipher(SecretStr(secret))

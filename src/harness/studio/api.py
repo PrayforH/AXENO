@@ -21,7 +21,7 @@ from harness.api.dependencies import (
     ensure_permission,
     require_identity,
 )
-from harness.core.errors import ConflictError, NotFoundError
+from harness.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from harness.deployments.controller import DeploymentController
 from harness.deployments.models import (
     DeploymentSnapshot,
@@ -938,7 +938,15 @@ async def capabilities(
 async def list_drafts(
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    space_id: Annotated[str | None, Query(alias="spaceId")] = None,
 ) -> list[AgentDraftSummary]:
+    if space_id is not None:
+        try:
+            return await service.list_workspace_drafts(
+                actor.tenant_id, actor.user_id, space_id
+            )
+        except (ConflictError, NotFoundError, PermissionDeniedError) as error:
+            raise _translate_domain_error(error) from error
     return await service.list(actor.tenant_id, actor.user_id)
 
 
@@ -1167,14 +1175,22 @@ async def create_draft(
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return compact_draft_for_editor(
-            await service.create(
+        if body.space_id is not None and body.agent_id is not None:
+            draft = await service.create_workspace_draft(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                space_id=body.space_id,
+                agent_id=body.agent_id,
+                request=body,
+            )
+        else:
+            draft = await service.create(
                 tenant_id=actor.tenant_id,
                 user_id=actor.user_id,
                 request=body,
             )
-        )
-    except (ConflictError, NotFoundError) as error:
+        return compact_draft_for_editor(draft)
+    except (ConflictError, NotFoundError, PermissionDeniedError) as error:
         raise _translate_domain_error(error) from error
 
 

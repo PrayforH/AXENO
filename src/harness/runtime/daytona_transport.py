@@ -13,8 +13,8 @@ from typing import Any, Protocol, cast
 
 import anyio
 from claude_agent_sdk import ClaudeAgentOptions, Transport
-from claude_agent_sdk._version import __version__ as CLAUDE_AGENT_SDK_VERSION
 from claude_agent_sdk._internal.session_resume import materialize_resume_session
+from claude_agent_sdk._version import __version__ as CLAUDE_AGENT_SDK_VERSION
 
 from harness.runtime.audit_redaction import redact_text
 

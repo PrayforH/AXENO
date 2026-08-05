@@ -395,6 +395,56 @@ class TeamSpaceService:
         agents = await self._workspace_agents.list_agents_for_space(tenant_id, space_id)
         return [agent for agent in agents if agent.status is WorkspaceAgentStatus.ACTIVE]
 
+    async def get_space_agent(
+        self, tenant_id: str, user_id: str, space_id: str, agent_id: str
+    ) -> WorkspaceAgent:
+        """Workspace Agent scoped to its space for a member."""
+        await self._require_member(tenant_id, space_id, user_id)
+        agent = await self._workspace_agents.get_agent(tenant_id, agent_id)
+        if agent.space_id != space_id or agent.scope is not AgentScope.WORKSPACE:
+            raise NotFoundError(f"workspace agent not found: {agent_id}")
+        return agent
+
+    async def share_release(
+        self,
+        tenant_id: str,
+        user_id: str,
+        space_id: str,
+        name: str,
+        version: str,
+    ) -> None:
+        """Release a freshly published version into a space (used by shared
+        draft publish). The version is owned by the publishing member."""
+        await self.share_agent(
+            tenant_id,
+            user_id,
+            space_id,
+            user_id,
+            name,
+            version,
+        )
+
+    async def require_draft_permission(
+        self,
+        tenant_id: str,
+        user_id: str,
+        space_id: str,
+        agent_id: str,
+        permission: AgentPermission,
+    ) -> None:
+        """Gate shared draft access: the user must be a member of the space and
+        hold the permission (role baseline or ACL, including user groups)."""
+        member = await self._require_member(tenant_id, space_id, user_id)
+        agent = await self._workspace_agents.get_agent(tenant_id, agent_id)
+        if agent.space_id != space_id:
+            raise NotFoundError(f"workspace agent not found: {agent_id}")
+        if agent.scope is not AgentScope.WORKSPACE:
+            raise ConflictError("only workspace Agents have shared drafts")
+        if not await self._effective(tenant_id, member, agent, permission):
+            raise PermissionDeniedError(
+                f"space role does not allow {permission.value} on this Agent"
+            )
+
     async def list_releases(
         self, tenant_id: str, user_id: str, space_id: str, agent_id: str
     ) -> list[tuple[AgentRelease, AgentVersion]]:

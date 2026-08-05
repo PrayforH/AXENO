@@ -93,6 +93,9 @@ class ExecutionIdentity(FrozenModel):
     run_id: str
     agent_name: str
     agent_version: str
+    # caller_owned resolves MCP credentials by the running user;
+    # service_owned resolves them by the pinned team space.
+    connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned"
 
     @property
     def resolved_agent_owner_user_id(self) -> str:

@@ -419,6 +419,7 @@ def build_memory_container(
         knowledge=knowledge,
         audit=audit,
         agent_ids=agent_ids,
+        draft_permissions=team_spaces,
         clock=clock,
         id_generator=lambda: id_generator("draft"),
     )

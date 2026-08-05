@@ -276,6 +276,15 @@ class CreateAgentDraftRequest(StudioModel):
     display_name: str = Field(alias="displayName", min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=500)
     template: AgentTemplate = AgentTemplate.ANALYST
+    # Workspace shared draft binding: both must be provided together.
+    agent_id: str | None = Field(default=None, alias="agentId", min_length=1)
+    space_id: str | None = Field(default=None, alias="spaceId", min_length=1)
+
+    @model_validator(mode="after")
+    def shared_draft_binding(self) -> CreateAgentDraftRequest:
+        if (self.agent_id is None) != (self.space_id is None):
+            raise ValueError("agentId and spaceId must be provided together")
+        return self
 
 
 class ReplaceAgentDraftRequest(StudioModel):

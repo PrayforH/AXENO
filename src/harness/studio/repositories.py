@@ -24,6 +24,14 @@ class AgentDraftRepository(Protocol):
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None: ...
 
+    async def get_by_agent(
+        self, tenant_id: str, agent_id: str
+    ) -> AgentDraft | None:
+        """The shared draft of a workspace Agent, if one exists."""
+
+    async def get_shared(self, tenant_id: str, draft_id: str) -> AgentDraft | None:
+        """A space-bound draft resolved across creators by draft_id."""
+
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
     ) -> int:
@@ -94,6 +102,24 @@ class InMemoryAgentDraftRepository:
             if draft.revision != expected_revision + 1:
                 raise ConflictError("Agent draft replacement must increment revision once")
             self._items[key] = draft
+
+    async def get_by_agent(
+        self, tenant_id: str, agent_id: str
+    ) -> AgentDraft | None:
+        for draft in self._items.values():
+            if draft.tenant_id == tenant_id and draft.agent_id == agent_id:
+                return draft
+        return None
+
+    async def get_shared(self, tenant_id: str, draft_id: str) -> AgentDraft | None:
+        for draft in self._items.values():
+            if (
+                draft.tenant_id == tenant_id
+                and draft.draft_id == draft_id
+                and draft.space_id is not None
+            ):
+                return draft
+        return None
 
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str

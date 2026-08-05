@@ -24,6 +24,10 @@ def _load_draft(row: AgentDraftRow) -> AgentDraft:
             f"{row.schema_version}; expected={AGENT_DRAFT_SCHEMA_VERSION}"
         )
     draft = AgentDraft.model_validate(row.payload)
+    if draft.agent_id is None and row.agent_id is not None:
+        draft = draft.model_copy(update={"agent_id": row.agent_id})
+    if draft.space_id is None and row.space_id is not None:
+        draft = draft.model_copy(update={"space_id": row.space_id})
     if (
         draft.tenant_id != row.tenant_id
         or draft.created_by != row.owner_user_id
@@ -143,6 +147,8 @@ class PostgresAgentDraftRepository:
             )
             .values(
                 name=draft.spec.name,
+                agent_id=draft.agent_id,
+                space_id=draft.space_id,
                 revision=draft.revision,
                 schema_version=AGENT_DRAFT_SCHEMA_VERSION,
                 updated_at=draft.updated_at,
@@ -169,6 +175,27 @@ class PostgresAgentDraftRepository:
                 f"expected={expected_revision} actual={actual_revision}"
             )
 
+
+    async def get_by_agent(
+        self, tenant_id: str, agent_id: str
+    ) -> AgentDraft | None:
+        statement = select(AgentDraftRow).where(
+            AgentDraftRow.tenant_id == tenant_id,
+            AgentDraftRow.agent_id == agent_id,
+        )
+        async with self._sessions() as session:
+            row = (await session.scalars(statement)).first()
+            return None if row is None else _load_draft(row)
+
+    async def get_shared(self, tenant_id: str, draft_id: str) -> AgentDraft | None:
+        statement = select(AgentDraftRow).where(
+            AgentDraftRow.tenant_id == tenant_id,
+            AgentDraftRow.draft_id == draft_id,
+            AgentDraftRow.space_id.is_not(None),
+        )
+        async with self._sessions() as session:
+            row = (await session.scalars(statement)).first()
+            return None if row is None else _load_draft(row)
 
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str

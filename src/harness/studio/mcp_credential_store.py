@@ -259,17 +259,36 @@ class StoredMcpCredentialProvider:
         identity: ExecutionIdentity,
         required_keys: frozenset[str],
     ) -> Mapping[str, SecretStr]:
-        stored = await self._service.repository.get(
-            identity.tenant_id,
-            identity.user_id,
-            server_reference,
-        )
-        if stored is not None:
-            values = self._service.cipher.decrypt(stored)
-            if required_keys.issubset(values):
-                return MappingProxyType({key: values[key] for key in required_keys})
+        if identity.connection_mode == "service_owned" and identity.team_ids:
+            # Workspace-provided credentials: resolve by the pinned space.
+            # Caller-owned personal credentials are never leaked into a
+            # service-owned shared run.
+            stored = await self._service.repository.get(
+                identity.tenant_id,
+                _space_credential_owner(identity.team_ids[0]),
+                server_reference,
+            )
+            if stored is not None:
+                values = self._service.cipher.decrypt(stored)
+                if required_keys.issubset(values):
+                    return MappingProxyType({key: values[key] for key in required_keys})
+        else:
+            stored = await self._service.repository.get(
+                identity.tenant_id,
+                identity.user_id,
+                server_reference,
+            )
+            if stored is not None:
+                values = self._service.cipher.decrypt(stored)
+                if required_keys.issubset(values):
+                    return MappingProxyType({key: values[key] for key in required_keys})
         try:
             return await self._fallback.resolve(server_reference, identity, required_keys)
         except McpCredentialError:
             names = ", ".join(f"{server_reference}.{key}" for key in sorted(required_keys))
             raise McpCredentialError(f"missing MCP credentials: {names}") from None
+
+
+def _space_credential_owner(space_id: str) -> str:
+    """Owner identity of space-scoped MCP credentials in the shared store."""
+    return f"space:{space_id}"

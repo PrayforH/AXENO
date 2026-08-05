@@ -85,6 +85,7 @@ class RuntimeContext(BaseModel):
                     run_id=self.run.run_id,
                     agent_name=self.session.agent_name,
                     agent_version=self.session.agent_version,
+                    connection_mode=self.session.connection_mode,
                 ),
             )
         assert self.identity is not None

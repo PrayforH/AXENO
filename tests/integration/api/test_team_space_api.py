@@ -385,3 +385,87 @@ async def test_agent_transfer_and_draft_etag_endpoints() -> None:
         deleted = await client.delete(f"/v1/groups/{group_id}", headers=alice)
         assert deleted.status_code == 204
 
+
+
+@pytest.mark.asyncio
+async def test_space_credentials_and_service_owned_session_mode() -> None:
+    container = build_memory_container()
+    alice_session = await container.auth.register(
+        email="alice-cred@example.com", password="Long-password-1", display_name="Alice"
+    )
+    bob_session = await container.auth.register(
+        email="bob-cred@example.com", password="Long-password-2", display_name="Bob"
+    )
+    alice_id = alice_session.user.user_id
+    bob_id = bob_session.user.user_id
+    version = await container.agents.publish(
+        "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
+    )
+    app = cast(FastAPI, create_app(container))
+    token = container.api_bearer_token.get_secret_value()
+    base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
+    alice = {**base, "X-User-ID": alice_id}
+    bob = {**base, "X-User-ID": bob_id}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/v1/spaces", headers=alice, json={"name": "凭据协作组"})
+        space_id = created.json()["space"]["spaceId"]
+        await client.put(
+            f"/v1/spaces/{space_id}/members",
+            headers=alice,
+            json={"user_id": bob_id, "role": "contributor"},
+        )
+        shared = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=alice,
+            json={
+                "owner_user_id": alice_id,
+                "name": version.name,
+                "version": version.version,
+                "connection_mode": "service_owned",
+            },
+        )
+        assert shared.status_code == 201
+        assert shared.json()["release"]["connectionMode"] == "service_owned"
+
+        # Only managers configure workspace-provided credentials.
+        denied = await client.put(
+            f"/v1/spaces/{space_id}/mcp/tavily-readonly/credentials",
+            headers=bob,
+            json={"authKey": "authorization", "value": "bob-token"},
+        )
+        assert denied.status_code == 403
+        configured = await client.put(
+            f"/v1/spaces/{space_id}/mcp/tavily-readonly/credentials",
+            headers=alice,
+            json={"authKey": "authorization", "value": "shared-token"},
+        )
+        assert configured.status_code == 200
+        assert configured.json()["configured"] is True
+        listed = await client.get(
+            f"/v1/spaces/{space_id}/mcp/credentials", headers=alice
+        )
+        assert [item["reference"] for item in listed.json()] == ["tavily-readonly"]
+
+        # A session against the service_owned release pins the mode so the
+        # worker resolves credentials by the space, never by the caller.
+        session = await client.post(
+            "/v1/sessions",
+            headers=bob,
+            json={
+                "agent_name": version.name,
+                "agent_version": version.version,
+                "agent_owner_user_id": alice_id,
+                "space_id": space_id,
+            },
+        )
+        assert session.status_code == 201
+        assert session.json()["connection_mode"] == "service_owned"
+        assert session.json()["team_ids"] == [space_id]
+
+        removed = await client.delete(
+            f"/v1/spaces/{space_id}/mcp/tavily-readonly/credentials",
+            headers=alice,
+        )
+        assert removed.status_code == 200
+        assert removed.json()["configured"] is False

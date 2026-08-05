@@ -940,6 +940,7 @@ class RunOrchestrator:
                 run_id=run.run_id,
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
+                connection_mode=session.connection_mode,
             )
             with self._stage("harness.memory.load", {"run.id": run_id}):
                 memory_projection = (
