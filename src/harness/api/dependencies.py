@@ -381,6 +381,8 @@ def build_memory_container(
         team_space_repository,
         workspace_agent_repository,
         registry,
+        drafts=agent_drafts,
+        audit=audit,
         clock=clock,
         id_generator=id_generator,
     )

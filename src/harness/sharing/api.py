@@ -12,7 +12,6 @@ from harness.sharing.models import (
     AgentAcl,
     AgentPermission,
     AgentRelease,
-    AgentScope,
     ConnectionMode,
     GranteeType,
     SharedKnowledgeBase,

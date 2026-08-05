@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from harness.application.types import Clock, IdGenerator
+from harness.auth.audit import AuditService
 from harness.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from harness.core.models import AgentVersion, AgentVersionStatus
 from harness.core.ports import AgentRegistry
@@ -15,15 +16,18 @@ from harness.sharing.models import (
     AgentScope,
     ConnectionMode,
     GranteeType,
+    GroupMember,
     SharedKnowledgeBase,
     SpaceRole,
     TeamSpace,
     TeamSpaceMember,
+    UserGroup,
     WorkspaceAgent,
     WorkspaceAgentStatus,
 )
 from harness.sharing.repositories import TeamSpaceRepository
 from harness.sharing.workspace_repositories import WorkspaceAgentRepository
+from harness.studio.repositories import AgentDraftRepository
 
 _MANAGE_ROLES = frozenset({SpaceRole.OWNER, SpaceRole.ADMIN})
 _PUBLISH_ROLES = frozenset({SpaceRole.OWNER, SpaceRole.ADMIN, SpaceRole.CONTRIBUTOR})
@@ -73,14 +77,44 @@ class TeamSpaceService:
         workspace_agents: WorkspaceAgentRepository,
         agents: AgentRegistry,
         *,
+        drafts: AgentDraftRepository | None = None,
+        audit: AuditService | None = None,
         clock: Clock | None = None,
         id_generator: IdGenerator | None = None,
     ) -> None:
         self.repository = repository
         self._workspace_agents = workspace_agents
         self._agents = agents
+        self._drafts = drafts
+        self._audit = audit
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._ids: IdGenerator = id_generator or _id
+
+    async def _record_audit(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        details: dict[str, object],
+    ) -> None:
+        if self._audit is None:
+            return
+        try:
+            await self._audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                outcome="success",
+                details=details,
+            )
+        except Exception:
+            # Audit failure must never break the authorization flow itself.
+            pass
 
     # ------------------------------------------------------------------
     # Spaces and members
@@ -248,6 +282,21 @@ class TeamSpaceService:
             # The most recently shared Release becomes the current version.
             if release.created_at >= current.created_at:
                 agent = await self._promote_locked(tenant_id, agent, version, actor_id)
+        await self._record_audit(
+            tenant_id=tenant_id,
+            user_id=actor_id,
+            action="agent.share",
+            resource_type="agent_release",
+            resource_id=f"{agent.agent_id}@{version}",
+            details={
+                "agent_id": agent.agent_id,
+                "space_id": space_id,
+                "name": name,
+                "version": version,
+                "runnable_by_viewer": runnable_by_viewer,
+                "connection_mode": connection_mode.value,
+            },
+        )
         return agent, release
 
     async def unshare_agent(
@@ -310,7 +359,21 @@ class TeamSpaceService:
             raise PermissionDeniedError(
                 "contributors can only promote their own Agent releases"
             )
-        return await self._promote_locked(tenant_id, agent, version, actor_id)
+        promoted = await self._promote_locked(tenant_id, agent, version, actor_id)
+        await self._record_audit(
+            tenant_id=tenant_id,
+            user_id=actor_id,
+            action="agent.promote",
+            resource_type="workspace_agent",
+            resource_id=agent.agent_id,
+            details={
+                "space_id": space_id,
+                "name": agent.name,
+                "version": version,
+                "previous_version": agent.current_version,
+            },
+        )
+        return promoted
 
     async def _promote_locked(
         self, tenant_id: str, agent: WorkspaceAgent, version: str, actor_id: str
@@ -474,6 +537,8 @@ class TeamSpaceService:
                 raise NotFoundError(
                     f"grantee is not a member of this space: {grantee_id}"
                 )
+        if grantee_type is GranteeType.GROUP:
+            await self._workspace_agents.get_group(tenant_id, grantee_id)
         acl = AgentAcl(
             tenantId=tenant_id,
             agentId=agent_id,
@@ -524,12 +589,9 @@ class TeamSpaceService:
         if agent.space_id != space_id:
             raise NotFoundError(f"workspace agent not found: {agent_id}")
         baseline = _ROLE_PERMISSIONS[member.role]
-        explicit: set[AgentPermission] = set()
-        for acl in await self._workspace_agents.list_acls(tenant_id, agent_id):
-            if acl.grantee_type is GranteeType.USER and acl.grantee_id == member.user_id:
-                explicit.add(acl.permission)
-            elif acl.grantee_type is GranteeType.SPACE_ROLE and acl.grantee_id == member.role.value:
-                explicit.add(acl.permission)
+        explicit = await self._explicit_permissions(
+            tenant_id, member, agent_id
+        )
         return frozenset(baseline.union(explicit))
 
     async def _effective(
@@ -543,14 +605,27 @@ class TeamSpaceService:
         baseline = _ROLE_PERMISSIONS[member.role]
         if permission in baseline:
             return True
-        for acl in await self._workspace_agents.list_acls(tenant_id, agent.agent_id):
-            if acl.permission is not permission:
-                continue
+        return permission in await self._explicit_permissions(
+            tenant_id, member, agent.agent_id
+        )
+
+    async def _explicit_permissions(
+        self, tenant_id: str, member: TeamSpaceMember, agent_id: str
+    ) -> set[AgentPermission]:
+        """ACL rows granted to this user directly, via their space role, or
+        via tenant user groups."""
+        explicit: set[AgentPermission] = set()
+        group_ids = await self._workspace_agents.list_groups_for_user(
+            tenant_id, member.user_id
+        )
+        for acl in await self._workspace_agents.list_acls(tenant_id, agent_id):
             if acl.grantee_type is GranteeType.USER and acl.grantee_id == member.user_id:
-                return True
-            if acl.grantee_type is GranteeType.SPACE_ROLE and acl.grantee_id == member.role.value:
-                return True
-        return False
+                explicit.add(acl.permission)
+            elif acl.grantee_type is GranteeType.SPACE_ROLE and acl.grantee_id == member.role.value:
+                explicit.add(acl.permission)
+            elif acl.grantee_type is GranteeType.GROUP and acl.grantee_id in group_ids:
+                explicit.add(acl.permission)
+        return explicit
 
     # ------------------------------------------------------------------
     # Forking
@@ -641,6 +716,157 @@ class TeamSpaceService:
             ):
                 return True
         return False
+
+    # ------------------------------------------------------------------
+    # User groups
+    # ------------------------------------------------------------------
+
+    async def create_group(
+        self, tenant_id: str, actor_id: str, name: str, description: str = ""
+    ) -> UserGroup:
+        now = self._clock()
+        group = UserGroup(
+            tenantId=tenant_id,
+            groupId=self._ids("group"),
+            name=name.strip(),
+            description=description.strip(),
+            createdBy=actor_id,
+            createdAt=now,
+        )
+        if not group.name:
+            raise ConflictError("user group name must not be empty")
+        await self._workspace_agents.add_group(group)
+        return group
+
+    async def list_groups(self, tenant_id: str) -> list[UserGroup]:
+        return await self._workspace_agents.list_groups(tenant_id)
+
+    async def get_group(
+        self, tenant_id: str, group_id: str
+    ) -> tuple[UserGroup, list[GroupMember]]:
+        group = await self._workspace_agents.get_group(tenant_id, group_id)
+        members = await self._workspace_agents.list_group_members(tenant_id, group_id)
+        return group, members
+
+    async def delete_group(self, tenant_id: str, group_id: str) -> None:
+        if not await self._workspace_agents.delete_group(tenant_id, group_id):
+            raise NotFoundError(f"user group not found: {group_id}")
+
+    async def add_group_member(
+        self, tenant_id: str, group_id: str, user_id: str
+    ) -> GroupMember:
+        await self._workspace_agents.get_group(tenant_id, group_id)
+        member = GroupMember(
+            tenantId=tenant_id,
+            groupId=group_id,
+            userId=user_id,
+            createdAt=self._clock(),
+        )
+        try:
+            await self._workspace_agents.add_group_member(member)
+        except ConflictError:
+            # Group membership is idempotent.
+            return member
+        return member
+
+    async def remove_group_member(
+        self, tenant_id: str, group_id: str, user_id: str
+    ) -> None:
+        if not await self._workspace_agents.delete_group_member(
+            tenant_id, group_id, user_id
+        ):
+            raise NotFoundError(f"group member not found: {group_id}:{user_id}")
+
+    # ------------------------------------------------------------------
+    # Lifecycle: ownership transfer
+    # ------------------------------------------------------------------
+
+    async def transfer_agent(
+        self,
+        tenant_id: str,
+        actor_id: str,
+        agent_id: str,
+        *,
+        to_user_id: str | None = None,
+        to_space_id: str | None = None,
+    ) -> WorkspaceAgent:
+        """Transfer a personal Agent to another user or hand it up to a space.
+
+        personal -> personal re-keys immutable versions and drafts to the new
+        owner while keeping the stable agent_id. personal -> workspace (上缴)
+        moves the identity into the space; immutable versions keep their
+        creator coordinates because Releases resolve them by source owner.
+        """
+        if (to_user_id is None) == (to_space_id is None):
+            raise ConflictError("provide exactly one of to_user_id or to_space_id")
+        agent = await self._workspace_agents.get_agent(tenant_id, agent_id)
+        if agent.scope is not AgentScope.PERSONAL:
+            raise ConflictError("only personal Agents can be transferred")
+        if agent.owner_user_id != actor_id:
+            raise PermissionDeniedError("only the current owner can transfer an Agent")
+        assert agent.owner_user_id is not None
+        now = self._clock()
+        if to_user_id is not None:
+            if to_user_id == agent.owner_user_id:
+                return agent
+            existing = await self._workspace_agents.get_personal_agent(
+                tenant_id, to_user_id, agent.name
+            )
+            if existing is not None:
+                raise ConflictError(
+                    f"target user already owns an Agent named {agent.name}"
+                )
+            moved_versions = await self._agents.move_owner(
+                tenant_id, agent.owner_user_id, to_user_id, agent.name
+            )
+            moved_drafts = 0
+            if self._drafts is not None:
+                moved_drafts = await self._drafts.move_owner(
+                    tenant_id, agent.owner_user_id, to_user_id, agent.name
+                )
+            updated = agent.model_copy(
+                update={
+                    "owner_user_id": to_user_id,
+                    "updated_at": now,
+                }
+            )
+        else:
+            assert to_space_id is not None
+            await self._require_member(tenant_id, to_space_id, actor_id)
+            existing = await self._workspace_agents.get_workspace_agent(
+                tenant_id, to_space_id, agent.name
+            )
+            if existing is not None:
+                raise ConflictError(
+                    f"target space already owns an Agent named {agent.name}"
+                )
+            moved_versions = 0
+            moved_drafts = 0
+            updated = agent.model_copy(
+                update={
+                    "scope": AgentScope.WORKSPACE,
+                    "owner_user_id": None,
+                    "space_id": to_space_id,
+                    "updated_at": now,
+                }
+            )
+        await self._workspace_agents.update_agent(updated)
+        await self._record_audit(
+            tenant_id=tenant_id,
+            user_id=actor_id,
+            action="agent.transfer",
+            resource_type="workspace_agent",
+            resource_id=agent.agent_id,
+            details={
+                "name": agent.name,
+                "from_owner": agent.owner_user_id,
+                "to_user_id": to_user_id,
+                "to_space_id": to_space_id,
+                "moved_versions": moved_versions,
+                "moved_drafts": moved_drafts,
+            },
+        )
+        return updated
 
     # ------------------------------------------------------------------
     # Guards

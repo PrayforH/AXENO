@@ -1251,29 +1251,65 @@ async def import_draft_bundle(
         ) from error
 
 
+def _draft_etag(draft: AgentDraft) -> str:
+    return f'"rev-{draft.revision}"'
+
+
+def _require_if_match(request: Request, draft: AgentDraft) -> None:
+    """ETag optimistic lock: If-Match must match the current revision.
+
+    The body-level expectedRevision CAS remains authoritative; If-Match adds
+    HTTP-native preconditions for shared-draft editors.
+    """
+    if_match = request.headers.get("if-match")
+    if if_match is None or if_match.strip() == "*":
+        return
+    if if_match.strip() != _draft_etag(draft):
+        raise HTTPException(
+            status_code=status.HTTP_412_PRECONDITION_FAILED,
+            detail={
+                "code": "draft_revision_changed",
+                "message": (
+                    "Agent draft was updated by another editor; "
+                    f"expected {if_match.strip()} actual {_draft_etag(draft)}"
+                ),
+            },
+        )
+
+
 @router.get("/drafts/{draft_id}", response_model=AgentDraft)
 async def get_draft(
     draft_id: str,
+    response: Response,
     actor: Annotated[StudioActor, Depends(require_studio_reader)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return compact_draft_for_editor(
+        draft = compact_draft_for_editor(
             await service.get(actor.tenant_id, actor.user_id, draft_id)
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
+    response.headers["ETag"] = _draft_etag(draft)
+    return draft
 
 
 @router.put("/drafts/{draft_id}", response_model=AgentDraft)
 async def replace_draft(
     draft_id: str,
     body: ReplaceAgentDraftRequest,
+    request: Request,
+    response: Response,
     actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[AgentStudioService, Depends(get_studio_service)],
 ) -> AgentDraft:
     try:
-        return compact_draft_for_editor(
+        current = await service.get(actor.tenant_id, actor.user_id, draft_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+    _require_if_match(request, current)
+    try:
+        draft = compact_draft_for_editor(
             await service.replace(
                 tenant_id=actor.tenant_id,
                 user_id=actor.user_id,
@@ -1283,6 +1319,8 @@ async def replace_draft(
         )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
+    response.headers["ETag"] = _draft_etag(draft)
+    return draft
 
 
 @router.post("/drafts/{draft_id}/validate", response_model=DraftValidationResult)

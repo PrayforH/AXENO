@@ -67,6 +67,36 @@ class InMemoryAgentRegistry:
             key=lambda version: (version.name, version.version),
         )
 
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        if from_user_id == to_user_id:
+            return 0
+        moved_keys = [
+            key
+            for key in self._items
+            if key[0] == tenant_id
+            and key[1] == from_user_id
+            and key[2] == name
+        ]
+        async with self._lock:
+            conflicts = [
+                (key[2], key[3])
+                for key in moved_keys
+                if (tenant_id, to_user_id, key[2], key[3]) in self._items
+            ]
+            if conflicts:
+                joined = ", ".join(f"{item[0]}@{item[1]}" for item in sorted(conflicts))
+                raise ConflictError(
+                    f"target user already owns an Agent version: {joined}"
+                )
+            for key in moved_keys:
+                version = self._items.pop(key)
+                self._items[(tenant_id, to_user_id, name, key[3])] = version.model_copy(
+                    update={"owner_user_id": to_user_id}
+                )
+        return len(moved_keys)
+
 
 class InMemorySessionRepository:
     def __init__(self) -> None:

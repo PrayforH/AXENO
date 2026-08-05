@@ -13,6 +13,8 @@ from harness.sharing.models import (
     AgentRelease,
     AgentScope,
     GranteeType,
+    GroupMember,
+    UserGroup,
     WorkspaceAgent,
 )
 
@@ -61,6 +63,16 @@ class WorkspaceAgentRepository(Protocol):
         grantee_id: str,
         permission: AgentPermission,
     ) -> bool: ...
+    async def add_group(self, group: UserGroup) -> None: ...
+    async def get_group(self, tenant_id: str, group_id: str) -> UserGroup: ...
+    async def list_groups(self, tenant_id: str) -> list[UserGroup]: ...
+    async def delete_group(self, tenant_id: str, group_id: str) -> bool: ...
+    async def add_group_member(self, member: GroupMember) -> None: ...
+    async def list_group_members(self, tenant_id: str, group_id: str) -> list[GroupMember]: ...
+    async def list_groups_for_user(self, tenant_id: str, user_id: str) -> list[str]: ...
+    async def delete_group_member(
+        self, tenant_id: str, group_id: str, user_id: str
+    ) -> bool: ...
 
 
 class InMemoryWorkspaceAgentRepository:
@@ -68,6 +80,8 @@ class InMemoryWorkspaceAgentRepository:
         self._agents: dict[tuple[str, str], WorkspaceAgent] = {}
         self._releases: dict[tuple[str, str, str, str], AgentRelease] = {}
         self._acls: dict[tuple[str, str, str, str, str], AgentAcl] = {}
+        self._groups: dict[tuple[str, str], UserGroup] = {}
+        self._group_members: dict[tuple[str, str, str], GroupMember] = {}
         self._lock = asyncio.Lock()
 
     async def add_agent(self, agent: WorkspaceAgent) -> None:
@@ -244,6 +258,72 @@ class InMemoryWorkspaceAgentRepository:
             )
             is not None
         )
+
+    async def add_group(self, group: UserGroup) -> None:
+        key = (group.tenant_id, group.group_id)
+        async with self._lock:
+            if key in self._groups:
+                raise ConflictError(f"user group already exists: {group.group_id}")
+            self._groups[key] = group
+
+    async def get_group(self, tenant_id: str, group_id: str) -> UserGroup:
+        try:
+            return self._groups[(tenant_id, group_id)]
+        except KeyError as error:
+            raise NotFoundError(f"user group not found: {group_id}") from error
+
+    async def list_groups(self, tenant_id: str) -> list[UserGroup]:
+        return sorted(
+            [
+                group
+                for (stored_tenant, _group_id), group in self._groups.items()
+                if stored_tenant == tenant_id
+            ],
+            key=lambda item: (item.name, item.group_id),
+        )
+
+    async def delete_group(self, tenant_id: str, group_id: str) -> bool:
+        deleted = self._groups.pop((tenant_id, group_id), None) is not None
+        if deleted:
+            self._group_members = {
+                key: member
+                for key, member in self._group_members.items()
+                if not (key[0] == tenant_id and key[1] == group_id)
+            }
+        return deleted
+
+    async def add_group_member(self, member: GroupMember) -> None:
+        key = (member.tenant_id, member.group_id, member.user_id)
+        async with self._lock:
+            if key in self._group_members:
+                raise ConflictError(
+                    f"group member already exists: {member.group_id}:{member.user_id}"
+                )
+            self._group_members[key] = member
+
+    async def list_group_members(
+        self, tenant_id: str, group_id: str
+    ) -> list[GroupMember]:
+        return sorted(
+            [
+                member
+                for (stored_tenant, stored_group, _), member in self._group_members.items()
+                if stored_tenant == tenant_id and stored_group == group_id
+            ],
+            key=lambda item: item.user_id,
+        )
+
+    async def list_groups_for_user(self, tenant_id: str, user_id: str) -> list[str]:
+        return sorted(
+            group_id
+            for (stored_tenant, group_id, stored_user) in self._group_members
+            if stored_tenant == tenant_id and stored_user == user_id
+        )
+
+    async def delete_group_member(
+        self, tenant_id: str, group_id: str, user_id: str
+    ) -> bool:
+        return self._group_members.pop((tenant_id, group_id, user_id), None) is not None
 
 
 class AgentIdentityService:

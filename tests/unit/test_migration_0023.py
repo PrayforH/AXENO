@@ -2,7 +2,6 @@ from importlib import import_module
 from typing import Any
 
 import pytest
-
 import sqlalchemy as sa
 
 
@@ -113,7 +112,9 @@ def _run_migration(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str
     return executed, dropped
 
 
-def test_0023_creates_tables_backfills_identities_and_reverses(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_0023_creates_tables_backfills_identities_and_reverses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     executed, dropped = _run_migration(monkeypatch)
 
     # Tables are created before columns are added.

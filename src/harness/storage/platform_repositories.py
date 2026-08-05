@@ -95,6 +95,48 @@ class PostgresAgentRegistry:
                 result.append(loaded)
             return result
 
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        if from_user_id == to_user_id:
+            return 0
+        async with self._sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(AgentVersionRow)
+                    .where(
+                        AgentVersionRow.tenant_id == tenant_id,
+                        AgentVersionRow.owner_user_id == from_user_id,
+                        AgentVersionRow.name == name,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+            for row in rows:
+                conflict = await session.get(
+                    AgentVersionRow, (tenant_id, to_user_id, name, row.version)
+                )
+                if conflict is not None:
+                    raise ConflictError(
+                        f"target user already owns an Agent version: {name}@{row.version}"
+                    )
+            for row in rows:
+                payload = dict(row.payload)
+                payload["owner_user_id"] = to_user_id
+                session.add(
+                    AgentVersionRow(
+                        tenant_id=tenant_id,
+                        owner_user_id=to_user_id,
+                        name=name,
+                        version=row.version,
+                        agent_id=row.agent_id,
+                        payload=payload,
+                    )
+                )
+                await session.delete(row)
+            await session.commit()
+            return len(rows)
+
 
 class PostgresSessionRepository:
     def __init__(self, sessions: SessionFactory) -> None:

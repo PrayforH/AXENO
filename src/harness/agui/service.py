@@ -4,7 +4,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import cast, Literal
 
 from ag_ui.core import (
     AudioInputContent,
@@ -168,6 +168,7 @@ class AguiRunService:
         request: RunAgentInput,
         agent_owner_user_id: str | None = None,
         space_id: str | None = None,
+        connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
     ) -> AguiRunCreation:
         prompt, input_artifact_ids = _latest_user_input(request)
         conversation_prompts = _user_prompts(request)
@@ -184,6 +185,7 @@ class AguiRunService:
             agent_version=agent_version,
             agent_owner_user_id=agent_owner_user_id,
             space_id=space_id,
+            connection_mode=connection_mode,
         )
         creation = await self._run_service.create_with_result(
             tenant_id,
@@ -377,6 +379,7 @@ class AguiRunService:
         agent_version: str,
         agent_owner_user_id: str | None,
         space_id: str | None,
+        connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
     ) -> AguiThreadBinding:
         async with self._lock:
             try:
@@ -420,6 +423,7 @@ class AguiRunService:
                         agent_version,
                         agent_owner_user_id=agent_owner_user_id,
                         team_ids=(space_id,) if space_id else (),
+                        connection_mode=connection_mode,
                     )
                     await self._bindings.rebind_session(
                         tenant_id,
@@ -450,6 +454,7 @@ class AguiRunService:
                 agent_version,
                 agent_owner_user_id=agent_owner_user_id,
                 team_ids=(space_id,) if space_id else (),
+                connection_mode=connection_mode,
             )
             binding = AguiThreadBinding(
                 session_id=session.session_id,

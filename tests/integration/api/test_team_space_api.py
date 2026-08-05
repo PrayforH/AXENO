@@ -282,3 +282,106 @@ async def test_workspace_agent_releases_promote_and_acl_endpoints() -> None:
         )
         assert denied_session.status_code == 403
 
+
+@pytest.mark.asyncio
+async def test_agent_transfer_and_draft_etag_endpoints() -> None:
+    container = build_memory_container()
+    alice_session = await container.auth.register(
+        email="alice-transfer@example.com", password="Long-password-1", display_name="Alice"
+    )
+    bob_session = await container.auth.register(
+        email="bob-transfer@example.com", password="Long-password-2", display_name="Bob"
+    )
+    alice_id = alice_session.user.user_id
+    bob_id = bob_session.user.user_id
+    version = await container.agents.publish(
+        "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
+    )
+    app = cast(FastAPI, create_app(container))
+    token = container.api_bearer_token.get_secret_value()
+    base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
+    alice = {**base, "X-User-ID": alice_id}
+    bob = {**base, "X-User-ID": bob_id}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Draft GET returns an ETag and PUT with a stale If-Match fails 412.
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=alice,
+            json={
+                "name": "transfer-agent",
+                "domain": "transfer",
+                "display_name": "Transfer Agent",
+                "description": "transfer test",
+                "template": "analyst",
+            },
+        )
+        assert created.status_code == 201
+        draft_id = created.json()["draftId"]
+        fetched = await client.get(f"/v1/studio/drafts/{draft_id}", headers=alice)
+        assert fetched.headers.get("etag") == '"rev-1"'
+        stale = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers={**alice, "If-Match": '"rev-99"'},
+            json={
+                "expectedRevision": 1,
+                "spec": created.json()["spec"],
+            },
+        )
+        assert stale.status_code == 412
+        fresh = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers={**alice, "If-Match": '"rev-1"'},
+            json={
+                "expectedRevision": 1,
+                "spec": created.json()["spec"],
+            },
+        )
+        assert fresh.status_code == 200
+        assert fresh.headers.get("etag") == '"rev-2"'
+
+        # Only the owner can transfer; the new owner inherits the catalog row.
+        personal_agent_id = version.agent_id
+        assert personal_agent_id is not None
+        denied = await client.post(
+            f"/v1/agents/{personal_agent_id}/transfer",
+            headers=bob,
+            json={"to_user_id": bob_id},
+        )
+        assert denied.status_code == 403
+        transferred = await client.post(
+            f"/v1/agents/{personal_agent_id}/transfer",
+            headers=alice,
+            json={"to_user_id": bob_id},
+        )
+        assert transferred.status_code == 200
+        assert transferred.json()["ownerUserId"] == bob_id
+        assert transferred.json()["agentId"] == personal_agent_id
+        # The immutable version moved with the identity.
+        catalog = await client.get("/v1/agents", headers=bob)
+        assert any(
+            item["name"] == version.name and item["agent_id"] == personal_agent_id
+            for item in catalog.json()
+        )
+
+        # User group management endpoints.
+        group = await client.post(
+            "/v1/groups",
+            headers=alice,
+            json={"name": "transfer-group", "description": ""},
+        )
+        assert group.status_code == 201
+        group_id = group.json()["groupId"]
+        member = await client.put(
+            f"/v1/groups/{group_id}/members",
+            headers=alice,
+            json={"user_id": bob_id},
+        )
+        assert member.status_code == 201
+        removed = await client.delete(
+            f"/v1/groups/{group_id}/members/{bob_id}", headers=alice
+        )
+        assert removed.status_code == 204
+        deleted = await client.delete(f"/v1/groups/{group_id}", headers=alice)
+        assert deleted.status_code == 204
+

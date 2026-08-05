@@ -12,11 +12,19 @@ from harness.sharing.models import (
     AgentRelease,
     AgentScope,
     GranteeType,
+    GroupMember,
+    UserGroup,
     WorkspaceAgent,
 )
 from harness.sharing.workspace_repositories import WorkspaceAgentRepository
 from harness.storage.database import SessionFactory
-from harness.storage.models import AgentAclRow, AgentReleaseRow, WorkspaceAgentRow
+from harness.storage.models import (
+    AgentAclRow,
+    AgentReleaseRow,
+    GroupMemberRow,
+    UserGroupRow,
+    WorkspaceAgentRow,
+)
 
 
 async def _commit_add(session: Any, *, message: str) -> None:
@@ -292,6 +300,108 @@ class PostgresWorkspaceAgentRepository(WorkspaceAgentRepository):
                     AgentAclRow.grantee_type == grantee_type.value,
                     AgentAclRow.grantee_id == grantee_id,
                     AgentAclRow.permission == permission.value,
+                )
+            )
+            await session.commit()
+            return bool(cast(CursorResult[Any], result).rowcount)
+
+    async def add_group(self, group: UserGroup) -> None:
+        async with self._sessions() as session:
+            session.add(
+                UserGroupRow(
+                    tenant_id=group.tenant_id,
+                    group_id=group.group_id,
+                    name=group.name,
+                    created_at=group.created_at,
+                    payload=group.model_dump(mode="json", by_alias=True),
+                )
+            )
+            await _commit_add(session, message=f"user group already exists: {group.group_id}")
+
+    async def get_group(self, tenant_id: str, group_id: str) -> UserGroup:
+        async with self._sessions() as session:
+            row = await session.get(UserGroupRow, (tenant_id, group_id))
+            if row is None:
+                raise NotFoundError(f"user group not found: {group_id}")
+            return UserGroup.model_validate(row.payload)
+
+    async def list_groups(self, tenant_id: str) -> list[UserGroup]:
+        statement = (
+            select(UserGroupRow.payload)
+            .where(UserGroupRow.tenant_id == tenant_id)
+            .order_by(UserGroupRow.name, UserGroupRow.group_id)
+        )
+        async with self._sessions() as session:
+            return [
+                UserGroup.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
+    async def delete_group(self, tenant_id: str, group_id: str) -> bool:
+        async with self._sessions() as session:
+            result = await session.execute(
+                delete(UserGroupRow).where(
+                    UserGroupRow.tenant_id == tenant_id,
+                    UserGroupRow.group_id == group_id,
+                )
+            )
+            await session.commit()
+            return bool(cast(CursorResult[Any], result).rowcount)
+
+    async def add_group_member(self, member: GroupMember) -> None:
+        async with self._sessions() as session:
+            session.add(
+                GroupMemberRow(
+                    tenant_id=member.tenant_id,
+                    group_id=member.group_id,
+                    user_id=member.user_id,
+                    created_at=member.created_at,
+                    payload=member.model_dump(mode="json", by_alias=True),
+                )
+            )
+            await _commit_add(
+                session,
+                message=f"group member already exists: {member.group_id}:{member.user_id}",
+            )
+
+    async def list_group_members(
+        self, tenant_id: str, group_id: str
+    ) -> list[GroupMember]:
+        statement = (
+            select(GroupMemberRow.payload)
+            .where(
+                GroupMemberRow.tenant_id == tenant_id,
+                GroupMemberRow.group_id == group_id,
+            )
+            .order_by(GroupMemberRow.user_id)
+        )
+        async with self._sessions() as session:
+            return [
+                GroupMember.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
+    async def list_groups_for_user(self, tenant_id: str, user_id: str) -> list[str]:
+        statement = (
+            select(GroupMemberRow.group_id)
+            .where(
+                GroupMemberRow.tenant_id == tenant_id,
+                GroupMemberRow.user_id == user_id,
+            )
+            .order_by(GroupMemberRow.group_id)
+        )
+        async with self._sessions() as session:
+            return list((await session.scalars(statement)).all())
+
+    async def delete_group_member(
+        self, tenant_id: str, group_id: str, user_id: str
+    ) -> bool:
+        async with self._sessions() as session:
+            result = await session.execute(
+                delete(GroupMemberRow).where(
+                    GroupMemberRow.tenant_id == tenant_id,
+                    GroupMemberRow.group_id == group_id,
+                    GroupMemberRow.user_id == user_id,
                 )
             )
             await session.commit()

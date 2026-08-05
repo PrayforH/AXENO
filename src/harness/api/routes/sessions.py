@@ -26,10 +26,11 @@ async def create_session(
     ensure_permission(identity, "tasks:write")
     resolved_owner = body.agent_owner_user_id or identity.user_id
     team_ids: tuple[str, ...] = ()
+    connection_mode = "caller_owned"
     if body.space_id is not None:
         if body.agent_version is None:
             raise ConflictError("shared Agents require an immutable agent_version")
-        await container.team_spaces.require_agent_access(
+        release = await container.team_spaces.require_agent_access(
             identity.tenant_id,
             identity.user_id,
             body.space_id,
@@ -38,6 +39,7 @@ async def create_session(
             body.agent_version,
         )
         team_ids = (body.space_id,)
+        connection_mode = release.connection_mode.value
     elif resolved_owner != identity.user_id:
         raise ConflictError("agent_owner_user_id requires a team space grant")
     return await container.sessions.create(
@@ -48,4 +50,5 @@ async def create_session(
         environment=(EnvironmentName(body.environment) if body.environment else None),
         team_ids=team_ids,
         agent_owner_user_id=resolved_owner,
+        connection_mode=connection_mode,
     )

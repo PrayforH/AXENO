@@ -198,6 +198,31 @@ class AgentAclRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class UserGroupRow(Base):
+    __tablename__ = "user_groups"
+    __table_args__ = (Index("ix_user_groups_tenant_name", "tenant_id", "name"),)
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class GroupMemberRow(Base):
+    __tablename__ = "group_members"
+    __table_args__ = (
+        Index("ix_group_members_group", "tenant_id", "group_id", "user_id"),
+        Index("ix_group_members_user", "tenant_id", "user_id"),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    group_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class SharedKnowledgeBaseRow(Base):
     __tablename__ = "shared_knowledge_bases"
     __table_args__ = (

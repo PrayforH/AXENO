@@ -49,6 +49,17 @@ class AgentRegistry(Protocol):
 
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]: ...
 
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        """Re-key every immutable version of one personal Agent to a new owner.
+
+        The stable agent_id is preserved, so version history follows the
+        identity. Raises ConflictError when the target already owns a version
+        with the same name@version coordinate. Returns the number of moved
+        rows.
+        """
+
 
 class AgentIdentityProvider(Protocol):
     """Assigns stable personal Agent identities to publications."""

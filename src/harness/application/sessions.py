@@ -1,6 +1,7 @@
 """Session lifecycle use cases."""
 
 from collections.abc import Awaitable, Callable, Sequence
+from typing import Literal
 
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.types import Clock, IdGenerator
@@ -57,6 +58,7 @@ class SessionService:
         team_ids: tuple[str, ...] = (),
         api_key_id: str | None = None,
         agent_owner_user_id: str | None = None,
+        connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
     ) -> Session:
         if (agent_version is None) == (environment is None):
             raise ConflictError("provide exactly one of agent_version or environment")
@@ -131,6 +133,7 @@ class SessionService:
             deployment_snapshot_id=deployment_snapshot_id,
             environment_snapshot=environment_snapshot,
             knowledge_snapshot_bindings=knowledge_bindings,
+            connection_mode=connection_mode,
         )
         try:
             await self._sessions.add(session)

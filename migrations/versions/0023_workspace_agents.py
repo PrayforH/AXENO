@@ -20,7 +20,6 @@ keeps ``shared_agent_versions`` untouched.
 """
 
 from collections.abc import Sequence
-from typing import Any
 
 import sqlalchemy as sa
 from alembic import op

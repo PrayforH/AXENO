@@ -130,6 +130,10 @@ class Session(FrozenModel):
     deployment_snapshot_id: str | None = None
     environment_snapshot: dict[str, Any] | None = None
     knowledge_snapshot_bindings: tuple[dict[str, Any], ...] = ()
+    # Credential resolution mode of the pinned shared Agent: caller_owned
+    # resolves MCP credentials by the running user; service_owned uses
+    # workspace-provided shared credentials.
+    connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned"
 
     @property
     def resolved_agent_owner_user_id(self) -> str:

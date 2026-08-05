@@ -294,6 +294,7 @@ class PublishedAgentVersion(StudioModel):
     status: Literal["published"]
     manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     package_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    agent_id: str | None = None
     created_at: datetime
 
 

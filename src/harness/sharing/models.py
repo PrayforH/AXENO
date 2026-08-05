@@ -121,6 +121,24 @@ class AgentAcl(SharingModel):
     created_at: datetime = Field(alias="createdAt")
 
 
+class UserGroup(SharingModel):
+    """Tenant-scoped group used for batch Agent ACL grants."""
+
+    tenant_id: str = Field(alias="tenantId")
+    group_id: str = Field(alias="groupId")
+    name: str = Field(min_length=1)
+    description: str = ""
+    created_by: str = Field(alias="createdBy")
+    created_at: datetime = Field(alias="createdAt")
+
+
+class GroupMember(SharingModel):
+    tenant_id: str = Field(alias="tenantId")
+    group_id: str = Field(alias="groupId")
+    user_id: str = Field(alias="userId")
+    created_at: datetime = Field(alias="createdAt")
+
+
 class SharedKnowledgeBase(SharingModel):
     tenant_id: str = Field(alias="tenantId")
     space_id: str = Field(alias="spaceId")

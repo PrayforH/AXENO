@@ -1,7 +1,7 @@
 # 工作空间 Agent 模型与多人协作设计
 
 日期：2026-08-05
-状态：设计定稿，进入分步实施
+状态：设计定稿，三步均已实现并通过验证（见第 9 节实施记录）
 
 ## 1. 现状权限模型分析
 
@@ -252,3 +252,50 @@ user_groups (tenant_id, group_id) / group_members (tenant_id, group_id, user_id)
 | 1 | 前端身份收敛 + can_view/can_chat 字段 | 前端测试通过；同名不同 owner 不再串扰 |
 | 2 | agents/agent_releases/agent_acls + 迁移 0023 + API | 后端测试通过；迁移往返可逆 |
 | 3 | 共享草稿 ETag、版本历史/promote、用户组、连接模式、生命周期 | 后端测试通过；e2e 通过 |
+
+## 9. 实施记录（分支 feat/workspace-agent-model）
+
+### 第一步（已提交 532d67f）
+
+- `task-agent-catalog.ts` 新增 `agentIdentity`（同 Agent 判定）与 `agentItemKey`
+  （版本敏感的去重/React key）；修复按 `name@version` 去重导致的跨用户串扰；
+  Studio 草稿与注册表合并改为按 owner 匹配。
+- `AgentCatalogItem` 增加 `agent_id/current_version/connection_mode/can_view/
+  can_chat/can_edit`；目录与空间 API 输出权限投影。
+- 任务选择器按 `canChat` 过滤；空间页展示共享 Agent。
+
+### 第二步（已提交 4041839）
+
+- 迁移 0023：`workspace_agents`（稳定 agent_id，personal/workspace 两种 scope）、
+  `agent_releases`、`agent_acls`；为 `agent_versions/agent_drafts` 回填 `agent_id`；
+  把存量 `shared_agent_versions` 授权迁移为工作区 Agent + Release，
+  新 Release 成为当前发布版本。upgrade/downgrade/upgrade 已在真实 PostgreSQL 上
+  验证幂等。
+- 发布链路：`AgentService`/`AgentStudioService` 通过 `AgentIdentityService`
+  分配个人 Agent 身份，草稿与版本共享 `agent_id`。
+- 共享模型：`share_agent` 创建/复用工作区 Agent 并追加 Release；
+  `promote_release` 切换 `current_version` 不改变身份；`unshare` 清理当前版本；
+  `fork` 以当前 Release 为源；运行门禁 `require_agent_access` 经 Release 解析。
+- Agent ACL：空间角色基线 + 显式 ACL 行（user/space_role 主体）；
+  viewer 的 CHAT 需 `runnable_by_viewer` 或显式授权。
+
+### 第三步（本提交）
+
+- 共享草稿乐观锁：草稿 GET/PUT 返回 `ETag: "rev-N"`，PUT 支持 `If-Match`
+  （412 冲突），与 `expectedRevision` CAS 双保险。
+- 发布审计：`agent.share/agent.promote/agent.transfer` 写入 audit_logs。
+- 用户组：迁移 0024 新增 `user_groups/group_members`；`/v1/groups` CRUD API；
+  ACL 支持 `group` 主体（组内任一成员继承授权，移出组即撤销）。
+- 连接模式：`AgentRelease.connection_mode`（caller_owned/service_owned）经
+  Session 快照贯穿运行链路（sessions API 与 AG-UI 均固定到 Session）。
+- 生命周期：`POST /v1/agents/{agent_id}/transfer` 支持 personal→personal
+  （版本与草稿整体 re-key，`agent_id` 不变）与 personal→workspace 上缴；
+  成员退出/撤权 fail-closed 已有测试覆盖。
+
+### 验证结论
+
+- 后端：882+ 用例通过；sharing 13 例、迁移 0024 往返、目录/空间/Studio API
+  全部通过；`make verify` 子集（ruff/pyright）通过。
+- 前端：297/298 通过（唯一失败 workbench-layout 为既有问题）；`next build` 通过。
+- 剩余失败均为环境/既有问题（Redis/MinIO/知识库搜索/配额用例），在干净分支
+  上同样失败，与本次改动无关。

@@ -32,6 +32,7 @@ from harness.platform_mcp import api as platform_mcp_routes
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
 from harness.sharing import api as sharing_routes
+from harness.sharing import groups_api as group_routes
 from harness.studio import api as studio_routes
 from harness.triggers import a2a as a2a_routes
 from harness.triggers import api as trigger_routes
@@ -304,6 +305,7 @@ def create_app(container: ApiContainer) -> FastAPI:
         memory_bank_routes.router,
         reliability_routes.router,
         sharing_routes.router,
+        group_routes.router,
         agui_routes.router,
     ):
         app.include_router(router, prefix="/v1")

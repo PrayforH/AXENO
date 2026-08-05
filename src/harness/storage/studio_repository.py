@@ -168,3 +168,43 @@ class PostgresAgentDraftRepository:
                 "Agent draft revision changed: "
                 f"expected={expected_revision} actual={actual_revision}"
             )
+
+
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        if from_user_id == to_user_id:
+            return 0
+        async with self._sessions() as session:
+            rows = (
+                await session.scalars(
+                    select(AgentDraftRow)
+                    .where(
+                        AgentDraftRow.tenant_id == tenant_id,
+                        AgentDraftRow.owner_user_id == from_user_id,
+                        AgentDraftRow.name == name,
+                    )
+                    .with_for_update()
+                )
+            ).all()
+            for row in rows:
+                payload = dict(row.payload)
+                payload["createdBy"] = to_user_id
+                payload["updatedBy"] = to_user_id
+                session.add(
+                    AgentDraftRow(
+                        tenant_id=tenant_id,
+                        owner_user_id=to_user_id,
+                        draft_id=row.draft_id,
+                        agent_id=row.agent_id,
+                        space_id=row.space_id,
+                        name=row.name,
+                        revision=row.revision,
+                        schema_version=row.schema_version,
+                        updated_at=row.updated_at,
+                        payload=payload,
+                    )
+                )
+                await session.delete(row)
+            await session.commit()
+            return len(rows)

@@ -24,6 +24,11 @@ class AgentDraftRepository(Protocol):
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None: ...
 
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        """Re-key drafts of one personal Agent to a new owner."""
+
 
 class InMemoryAgentDraftRepository:
     """Optimistic tenant-and-owner-scoped storage used by tests and previews."""
@@ -89,3 +94,25 @@ class InMemoryAgentDraftRepository:
             if draft.revision != expected_revision + 1:
                 raise ConflictError("Agent draft replacement must increment revision once")
             self._items[key] = draft
+
+    async def move_owner(
+        self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
+    ) -> int:
+        if from_user_id == to_user_id:
+            return 0
+        moved_keys = [
+            key
+            for key in self._items
+            if key[0] == tenant_id and key[1] == from_user_id
+            and self._items[key].spec.name == name
+        ]
+        async with self._lock:
+            for key in moved_keys:
+                draft = self._items.pop(key)
+                self._items[(tenant_id, to_user_id, key[2])] = draft.model_copy(
+                    update={
+                        "created_by": to_user_id,
+                        "updated_by": to_user_id,
+                    }
+                )
+        return len(moved_keys)

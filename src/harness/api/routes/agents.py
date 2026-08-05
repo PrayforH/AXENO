@@ -1,6 +1,7 @@
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from harness.agent_package import MAX_AGENT_BUNDLE_UPLOAD_BYTES
 from harness.api.dependencies import (
@@ -12,9 +13,14 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
-from harness.sharing.models import AgentPermission
+from harness.sharing.models import AgentPermission, WorkspaceAgent
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+class TransferAgentRequest(BaseModel):
+    to_user_id: str | None = Field(default=None, min_length=1)
+    to_space_id: str | None = Field(default=None, min_length=1)
 
 
 def _manifest_mapping(version: AgentVersion) -> dict[str, object]:
@@ -78,7 +84,7 @@ async def list_agents(
         and not _is_internal(version)
     ]
     shared = []
-    for space, member, agent, release, version in (
+    for space, _member, agent, release, version in (
         await container.team_spaces.list_accessible_agents(
             identity.tenant_id, identity.user_id
         )
@@ -120,6 +126,25 @@ async def publish_agent(
             },
         )
     return await container.agents.publish(identity.tenant_id, identity.user_id, body.path)
+
+
+@router.post(
+    "/{agent_id}/transfer",
+    response_model=WorkspaceAgent,
+)
+async def transfer_agent(
+    agent_id: str,
+    body: TransferAgentRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> WorkspaceAgent:
+    return await container.team_spaces.transfer_agent(
+        identity.tenant_id,
+        identity.user_id,
+        agent_id,
+        to_user_id=body.to_user_id,
+        to_space_id=body.to_space_id,
+    )
 
 
 @router.post(

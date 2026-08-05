@@ -292,8 +292,9 @@ async def run_agui_agent(
 ) -> StreamingResponse:
     ensure_permission(identity, "tasks:write")
     resolved_owner = agent_owner_user_id or identity.user_id
+    connection_mode = "caller_owned"
     if space_id is not None:
-        await container.team_spaces.require_agent_access(
+        release = await container.team_spaces.require_agent_access(
             identity.tenant_id,
             identity.user_id,
             space_id,
@@ -301,6 +302,7 @@ async def run_agui_agent(
             agent_name,
             agent_version,
         )
+        connection_mode = release.connection_mode.value
     elif resolved_owner != identity.user_id:
         raise ConflictError("agent_owner_user_id requires a team space grant")
     creation = await container.agui.create_run_with_result(
@@ -311,6 +313,7 @@ async def run_agui_agent(
         request=body,
         agent_owner_user_id=resolved_owner,
         space_id=space_id,
+        connection_mode=connection_mode,
     )
     run = creation.run
     worker_task = (
