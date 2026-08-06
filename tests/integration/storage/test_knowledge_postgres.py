@@ -52,9 +52,11 @@ async def test_postgres_knowledge_snapshot_is_durable_and_tenant_scoped(
     )
 
     restarted = KnowledgeService(PostgresKnowledgeRepository(sessions))
+    # Sources are created with a personal ACL (RESTRICTED to their creator), so
+    # only the owning actor can retrieve them; tenant isolation is asserted below.
     result = await restarted.search(
         "tenant-a",
-        "user-a",
+        "owner-a",
         "annual leave",
         knowledge_base_references=("company-policy",),
     )
