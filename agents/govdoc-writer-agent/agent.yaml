@@ -1,0 +1,42 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: govdoc-writer-agent
+  version: 0.1.0
+  labels:
+    domain: government-document-writing
+    template: operator
+    display-name: 公文写作
+    description: 根据上传材料和公文规范起草内容，并在沙箱条件满足时生成可下载的标准 Word 文档。
+    source: nexau-import
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: deepseek-v4-flash
+    model: deepseek-v4-flash
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/pdf-to-md
+    - skills/govdoc-writing
+    - skills/docx-report
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+    - builtin: Bash
+  subagents: []
+  hooks: []
+  permissions:
+    policy: production-standard
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 40
+    timeoutSeconds: 2400
+    maxBudgetUsd: 5
+    maxModelTokens: 500000

@@ -1,0 +1,61 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: public-opinion-agent
+  version: 0.3.5
+  labels:
+    domain: public-opinion
+    template: orchestrator
+    display-name: 舆情分析
+    description: 基于专用舆情数据、用户材料与受控公网搜索，生成可追溯的中文舆情研判和报告。
+    execution-profile: isolated-default
+    source: legacy-public-opinion-migration
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: deepseek-v4-pro
+    model: deepseek-v4-pro
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/public-opinion-analysis
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - builtin: Write
+    - builtin: Edit
+    - builtin: Bash
+    - builtin: Task
+    - mcp: tavily-readonly
+  subagents:
+    - ref: helper-agent@1.0.0
+      alias: fact-researcher
+      description: 只读核验工作区材料中的关键事实，整理原始来源、时间线、转载关系和证据缺口。
+      background: true
+    - ref: helper-agent@1.0.0
+      alias: audience-analyst
+      description: 只读分析工作区材料中的公众观点、争议焦点和情绪表达，不推断总体比例。
+      background: true
+    - ref: helper-agent@1.0.0
+      alias: industry-analyst
+      description: 只读分析工作区材料中的行业背景、利益相关者与传播节点。
+      background: true
+  hooks: []
+  permissions:
+    policy: production-orchestrator
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 36
+    timeoutSeconds: 2400
+    maxBudgetUsd: 4
+    maxModelTokens: 400000
+    maxSubagents: 8
+    maxSubagentTasks: 16
+    maxConcurrentSubagents: 4
+    maxSubagentDepth: 1
+    maxSubagentUsageUnits: 300000

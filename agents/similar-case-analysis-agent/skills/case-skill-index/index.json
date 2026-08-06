@@ -1,0 +1,71 @@
+{
+  "version": "0.1.0",
+  "description": "通用类案分析 POC 的 Skills 化检索规则。规则仅描述通用检索意图，不绑定任何特定语料、行业或业务领域。",
+  "skills": [
+    {
+      "id": "case_scope_lookup",
+      "name": "样本范围检索",
+      "description": "根据用户问题中的对象名称、标题词、编号或范围条件召回候选类案。",
+      "trigger": {
+        "intents": ["case_scope_filter", "evidence_lookup", "compare_cases"],
+        "required_any_keywords": []
+      },
+      "search_logic": {
+        "keyword_fields": ["title", "metadata", "chunks"],
+        "boost_keywords": []
+      }
+    },
+    {
+      "id": "factor_evidence_lookup",
+      "name": "关键因素证据检索",
+      "description": "围绕用户提出的因素、原因、条件、影响、风险、争议点等主题召回原文证据。",
+      "trigger": {
+        "intents": ["factor_extract", "reason_extract", "issue_filter", "evidence_lookup"],
+        "required_any_keywords": []
+      },
+      "search_logic": {
+        "keyword_fields": ["title", "metadata", "chunks"],
+        "boost_keywords": ["原因", "因素", "条件", "影响", "结果", "依据", "认定", "说明", "显示", "导致"]
+      }
+    },
+    {
+      "id": "result_reason_lookup",
+      "name": "结果与理由检索",
+      "description": "检索与处理结果、判断结论、支持/不支持理由、成败原因等相关的原文片段。",
+      "trigger": {
+        "intents": ["result_filter", "reason_extract", "evidence_lookup"],
+        "required_any_keywords": []
+      },
+      "search_logic": {
+        "keyword_fields": ["title", "metadata", "chunks"],
+        "boost_keywords": ["结果", "结论", "理由", "支持", "不支持", "符合", "不符合", "成功", "失败", "胜", "败"]
+      }
+    },
+    {
+      "id": "comparison_lookup",
+      "name": "对比分析检索",
+      "description": "当用户要求比较多个对象、多个案例或不同维度时，分别召回各对象的相关证据片段。",
+      "trigger": {
+        "intents": ["compare_cases", "evidence_lookup"],
+        "required_any_keywords": ["比较", "对比", "异同", "差异", "共同点"]
+      },
+      "search_logic": {
+        "keyword_fields": ["title", "metadata", "chunks"],
+        "boost_keywords": ["比较", "对比", "共同", "差异", "相同", "不同"]
+      }
+    },
+    {
+      "id": "full_text_keyword_lookup",
+      "name": "全文关键词兜底检索",
+      "description": "当其他规则无法充分命中时，使用用户问题中的关键词在标题、元数据和正文切片中执行通用全文匹配。",
+      "trigger": {
+        "intents": ["case_scope_filter", "issue_filter", "factor_extract", "reason_extract", "result_filter", "compare_cases", "evidence_lookup"],
+        "required_any_keywords": []
+      },
+      "search_logic": {
+        "keyword_fields": ["title", "metadata", "chunks"],
+        "boost_keywords": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: archive-file-classifier-agent
+  version: 0.1.1
+  labels:
+    domain: archive-classification
+    template: analyst
+    visibility: internal
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: deepseek-v4-flash
+    model: deepseek-v4-flash
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/archive-classification-contract
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+  subagents: []
+  hooks: []
+  permissions:
+    policy: production-read-only
+  workspace:
+    mode: isolated
+    restoreSession: false
+    archiveOnComplete: true
+  limits:
+    maxTurns: 12
+    timeoutSeconds: 600
+    maxBudgetUsd: 1
+    maxModelTokens: 120000

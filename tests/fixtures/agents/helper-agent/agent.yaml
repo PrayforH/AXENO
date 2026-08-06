@@ -1,0 +1,32 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: helper
+  version: 1.0.0
+  labels:
+    purpose: delegated-review
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: new-api-default
+    model: claude-sonnet-4-6
+    requiredCapabilities:
+      - streaming
+      - tool_use
+  prompt:
+    system: prompts/system.md
+  skills: []
+  tools:
+    - builtin: Read
+  subagents: []
+  hooks: []
+  permissions:
+    policy: local-standard
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 4
+    timeoutSeconds: 180
+    maxBudgetUsd: 0.5

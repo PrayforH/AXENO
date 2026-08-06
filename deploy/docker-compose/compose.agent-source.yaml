@@ -1,0 +1,11 @@
+# Optional deployment overlay for seeding Studio from an external agent source tree.
+#
+# Set HARNESS_AGENT_SOURCE_DIR to an absolute directory on the Docker host.
+# The mount is read-only and is used only by the one-shot seed service.
+services:
+  seed:
+    environment:
+      HARNESS_SEED_AGENT_MANIFESTS: /app/agents/helper-agent/agent.yaml
+      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml
+    volumes:
+      - ${HARNESS_AGENT_SOURCE_DIR:?set HARNESS_AGENT_SOURCE_DIR}:/app/agents:ro

@@ -1,0 +1,126 @@
+groups:
+  - name: harness-reliability
+    interval: 30s
+    rules:
+      - alert: HarnessRunCreateLatencyHigh
+        expr: max(harness_api_request_duration_seconds{operation="run.create",quantile="0.95"}) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Run 创建 P95 超过 500ms
+          runbook_url: docs/runbooks/platform-reliability.md#run-创建延迟
+
+      - alert: HarnessEventVisibilityDelayed
+        expr: max(harness_event_visibility_delay_seconds{quantile="0.95"}) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness durable event 可见延迟 P95 超过 2 秒
+          runbook_url: docs/runbooks/platform-reliability.md#event-可见延迟
+
+      - alert: HarnessQueueWaitHigh
+        expr: max(harness_run_stage_duration_seconds{stage="queue_wait",quantile="0.95"}) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Queue Wait P95 超过 1 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessRuntimeFirstEventDelayed
+        expr: max(harness_run_stage_duration_seconds{stage="runtime_first_event",quantile="0.95"}) > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 首 Runtime Event P95 超过 1.5 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessRuntimeFirstTextDelayed
+        expr: max(harness_run_stage_duration_seconds{stage="runtime_first_text",quantile="0.95"}) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 首正文 P95 超过 3 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessCancelConvergenceDelayed
+        expr: max(harness_workflow_convergence_seconds{workflow="run.cancel",quantile="0.95"}) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 取消收敛 P95 超过 3 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessApprovalWaitHigh
+        expr: max(harness_workflow_convergence_seconds{workflow="approval.decide",quantile="0.95"}) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 审批等待 P95 超过 10 秒
+          runbook_url: docs/runbooks/platform-reliability.md#run-分段延迟
+
+      - alert: HarnessWorkerQueueOperationFailures
+        expr: sum by (operation) (increase(harness_worker_queue_failures_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Worker 检测到队列操作失败
+          runbook_url: docs/runbooks/platform-reliability.md#队列积压
+
+      - alert: HarnessArtifactDownloadReliabilityLow
+        expr: |
+          sum(increase(harness_artifact_download_total{outcome="success"}[15m]))
+          /
+          clamp_min(sum(increase(harness_artifact_download_total[15m])), 1)
+          < 0.999
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness Artifact 下载成功率低于 99.9%
+          runbook_url: docs/runbooks/platform-reliability.md#artifact-下载失败
+
+      - alert: HarnessTraceCompletenessLow
+        expr: |
+          sum(increase(harness_trace_terminal_total{completeness="complete"}[30m]))
+          /
+          clamp_min(sum(increase(harness_trace_terminal_total[30m])), 1)
+          < 0.99
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Harness 终态 Trace 完整率低于 99%
+          runbook_url: docs/runbooks/platform-reliability.md#trace-不完整
+
+      - alert: HarnessStuckRunUnresolved
+        expr: max by (status) (harness_stuck_runs) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Harness 存在未能自动收敛的卡死 Run
+          runbook_url: docs/runbooks/platform-reliability.md#卡死-run
+
+      - alert: HarnessReaperFailure
+        expr: sum by (reaper) (increase(harness_reaper_actions_total{outcome="failed"}[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Harness Reaper 执行失败
+          runbook_url: docs/runbooks/platform-reliability.md#reaper-失败
+
+      - alert: HarnessRunQueuePressure
+        expr: max(harness_queue_tasks{state="ready"}) >= 1000
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Harness Run ready queue 达到容量阈值
+          runbook_url: docs/runbooks/platform-reliability.md#队列积压

@@ -1,0 +1,310 @@
+.controlPlane {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--codex-border, #343434);
+  border-radius: 14px;
+  background: var(--codex-surface-raised, #202020);
+}
+
+.controlPlane > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.controlPlane > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.controlPlane > header span,
+.secretCard span {
+  color: var(--codex-accent, #339cff);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.controlPlane > header strong,
+.secretCard strong {
+  color: var(--codex-ink, #fff);
+  font-size: 15px;
+}
+
+.controlPlane > header small,
+.controlPlane > header em,
+.secretCard small,
+.triggerList small {
+  color: var(--codex-ink-muted, #9b9b9b);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.creator {
+  display: grid;
+  grid-template-columns: 130px minmax(180px, 1fr) 150px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.creator[data-focused="true"] {
+  grid-template-columns: 130px minmax(180px, 1fr) 150px auto;
+}
+
+.protocolField {
+  display: grid;
+  gap: 6px;
+}
+
+.protocolField > span {
+  color: var(--codex-ink-muted, #9b9b9b);
+  font-size: 11px;
+}
+
+.protocolField > strong {
+  min-height: 36px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--codex-border, #343434);
+  border-radius: 9px;
+  color: var(--codex-ink, #fff);
+  background: var(--codex-surface, #181818);
+  font-size: 13px;
+}
+
+.a2aEntry {
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--codex-border, #343434);
+  border-radius: 11px;
+  background: var(--codex-surface, #181818);
+}
+
+.a2aEntry > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.a2aEntry span {
+  color: var(--codex-accent, #339cff);
+  font: 700 10px/1.2 var(--font-code, ui-monospace, monospace);
+  letter-spacing: 0.08em;
+}
+
+.a2aEntry strong {
+  color: var(--codex-ink, #fff);
+  font-size: 13px;
+}
+
+.a2aEntry small {
+  color: var(--codex-ink-muted, #9b9b9b);
+  font-size: 12px;
+}
+
+.a2aEntry a {
+  flex: 0 0 auto;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--codex-accent, #339cff) 55%, transparent);
+  border-radius: 8px;
+  color: var(--codex-accent, #339cff);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.a2aEntry a:hover {
+  background: color-mix(in srgb, var(--codex-accent, #339cff) 10%, transparent);
+}
+
+.scheduleFields {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 150px minmax(220px, 1fr);
+  gap: 10px;
+}
+
+.creator label {
+  display: grid;
+  gap: 6px;
+}
+
+.creator label > span {
+  color: var(--codex-ink-muted, #9b9b9b);
+  font-size: 11px;
+}
+
+.creator input,
+.creator select,
+.creator button,
+.actions button,
+.secretActions button {
+  min-height: 36px;
+  border: 1px solid var(--codex-border, #343434);
+  border-radius: 9px;
+  background: var(--codex-surface, #181818);
+  color: var(--codex-ink, #fff);
+  font: inherit;
+}
+
+.creator input,
+.creator select {
+  padding: 0 10px;
+}
+
+.creator button,
+.actions button,
+.secretActions button {
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.creator > button {
+  border-color: color-mix(in srgb, var(--codex-accent, #339cff) 70%, transparent);
+  background: var(--codex-accent, #339cff);
+  color: #07121d;
+  font-weight: 700;
+}
+
+.creator button:disabled,
+.actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.secretCard {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--codex-accent, #339cff) 55%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--codex-accent, #339cff) 8%, var(--codex-surface, #181818));
+}
+
+.secretCard > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.secretCard > code,
+.triggerList code {
+  overflow: hidden;
+  color: var(--codex-ink-secondary, #d4d4d4);
+  font-family: var(--font-code, ui-monospace, monospace);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secretCard > code {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--codex-surface, #181818);
+  user-select: all;
+}
+
+.secretActions,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.triggerList {
+  display: grid;
+  gap: 8px;
+}
+
+.triggerList article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--codex-border, #343434);
+  border-radius: 11px;
+  background: var(--codex-surface, #181818);
+}
+
+.triggerList .actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--codex-border, #343434);
+}
+
+.triggerList article[data-enabled="false"] {
+  opacity: 0.68;
+}
+
+.triggerList article > div:not(.actions) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.triggerList strong {
+  color: var(--codex-ink, #fff);
+  font-size: 13px;
+}
+
+.state {
+  align-self: start;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--codex-diff-added, #40c977) 15%, transparent);
+  color: var(--codex-diff-added, #40c977);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+article[data-enabled="false"] .state {
+  background: var(--codex-surface-hover, #2a2a2a);
+  color: var(--codex-ink-muted, #9b9b9b);
+}
+
+.empty,
+.error {
+  margin: 0;
+  padding: 12px;
+  border-radius: 9px;
+  color: var(--codex-ink-muted, #9b9b9b);
+  font-size: 12px;
+}
+
+.empty {
+  background: var(--codex-surface, #181818);
+}
+
+.error {
+  border: 1px solid color-mix(in srgb, var(--codex-diff-removed, #fa423e) 45%, transparent);
+  color: var(--codex-diff-removed, #fa423e);
+}
+
+@media (max-width: 820px) {
+  .creator,
+  .scheduleFields,
+  .triggerList article {
+    grid-template-columns: 1fr;
+  }
+
+  .controlPlane > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .a2aEntry {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .a2aEntry a {
+    text-align: center;
+  }
+}

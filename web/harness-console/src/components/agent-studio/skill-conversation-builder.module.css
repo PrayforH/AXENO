@@ -1,0 +1,439 @@
+.builder {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--studio-violet) 42%, var(--studio-line));
+  border-radius: 12px;
+  background:
+    radial-gradient(circle at 12% 0%, var(--studio-violet-soft), transparent 17rem),
+    var(--studio-panel-subtle);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.header {
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.assistantMark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--studio-violet) 38%, transparent);
+  border-radius: 9px;
+  color: var(--studio-violet);
+  background: var(--studio-violet-soft);
+  font-size: 15px;
+}
+
+.header > div:nth-child(2) {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.header span,
+.proposal header span {
+  color: var(--studio-violet);
+  font: 700 8px/1.2 var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.12em;
+}
+
+.header strong {
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.header small {
+  overflow: hidden;
+  color: var(--studio-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header > button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--studio-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 19px;
+  line-height: 1;
+  transition: 180ms ease;
+}
+
+.header > button:hover {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+  background: var(--studio-panel);
+}
+
+.workspace,
+.workspaceWithProposal {
+  display: grid;
+  min-height: 440px;
+}
+
+.workspaceWithProposal {
+  grid-template-columns: minmax(0, 1.12fr) minmax(260px, 0.88fr);
+}
+
+.conversation {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.transcript {
+  min-height: 190px;
+  max-height: 360px;
+  display: grid;
+  align-content: start;
+  gap: 11px;
+  padding: 3px 3px 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.message {
+  max-width: 88%;
+  display: grid;
+  gap: 5px;
+}
+
+.message[data-role="user"] {
+  justify-self: end;
+}
+
+.message > span {
+  color: var(--studio-faint);
+  font: 600 8px/1 var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.message[data-role="user"] > span {
+  text-align: right;
+}
+
+.message p {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--studio-line);
+  border-radius: 5px 10px 10px;
+  color: var(--studio-ink-soft);
+  background: var(--studio-panel);
+  font-size: 10px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.message[data-role="user"] p {
+  border-color: color-mix(in srgb, var(--studio-violet) 28%, var(--studio-line));
+  border-radius: 10px 5px 10px 10px;
+  background: var(--studio-violet-soft);
+}
+
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--studio-muted);
+}
+
+.thinking span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--studio-violet);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.thinking span:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.thinking span:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+.thinking p {
+  margin: 0 0 0 4px;
+  font-size: 9px;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.starters,
+.followUps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 1px 0 12px;
+}
+
+.starters button,
+.followUps button {
+  padding: 6px 8px;
+  border: 1px solid var(--studio-line);
+  border-radius: 7px;
+  color: var(--studio-muted);
+  background: var(--studio-panel);
+  cursor: pointer;
+  font-size: 8px;
+  line-height: 1.4;
+  text-align: left;
+  transition: 180ms ease;
+}
+
+.starters button:hover,
+.followUps button:hover {
+  border-color: color-mix(in srgb, var(--studio-violet) 45%, var(--studio-line));
+  color: var(--studio-ink);
+  transform: translateY(-1px);
+}
+
+.followUps {
+  display: grid;
+}
+
+.followUps > span,
+.instructionPreview > span,
+.fileList > span {
+  color: var(--studio-faint);
+  font: 600 8px/1.2 var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.error {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--studio-red) 38%, transparent);
+  border-radius: 8px;
+  color: var(--studio-red);
+  background: var(--studio-red-soft);
+}
+
+.error strong {
+  font-size: 9px;
+}
+
+.error span {
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.composer {
+  margin-top: auto;
+  overflow: hidden;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 10px;
+  background: var(--studio-panel);
+  transition: 180ms ease;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--studio-violet) 64%, var(--studio-line));
+  box-shadow: 0 0 0 3px var(--studio-violet-soft);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 74px;
+  display: block;
+  padding: 10px 11px 4px;
+  resize: vertical;
+  border: 0;
+  color: var(--studio-ink);
+  background: transparent;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.composer textarea::placeholder {
+  color: var(--studio-faint);
+}
+
+.composer footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 7px 7px 11px;
+}
+
+.composer footer span {
+  color: var(--studio-faint);
+  font-size: 8px;
+}
+
+.composer footer button,
+.applyButton {
+  min-height: 29px;
+  padding: 0 11px;
+  border: 1px solid var(--studio-violet);
+  border-radius: 7px;
+  color: #fff;
+  background: var(--studio-violet);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+  transition: 180ms ease;
+}
+
+.composer footer button:hover:not(:disabled),
+.applyButton:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.composer footer button:active:not(:disabled),
+.applyButton:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.composer footer button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.3);
+  opacity: 0.42;
+}
+
+.proposal {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-left: 1px solid var(--studio-line);
+  background: color-mix(in srgb, var(--studio-panel) 78%, transparent);
+}
+
+.proposal > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.proposal > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.proposal header strong {
+  font-size: 12px;
+}
+
+.proposal header em {
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: var(--studio-muted);
+  background: var(--studio-panel-subtle);
+  font-size: 7px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.proposal > code {
+  overflow: hidden;
+  color: var(--studio-violet);
+  font: 700 11px/1.4 var(--codex-font-mono, ui-monospace, monospace);
+  text-overflow: ellipsis;
+}
+
+.proposal > p {
+  margin: -5px 0 0;
+  color: var(--studio-muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.instructionPreview {
+  min-height: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.instructionPreview pre {
+  max-height: 200px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  color: var(--studio-ink-soft);
+  background: var(--studio-panel-subtle);
+  font: 8px/1.6 var(--codex-font-mono, ui-monospace, monospace);
+  white-space: pre-wrap;
+}
+
+.fileList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.fileList > span {
+  width: 100%;
+}
+
+.fileList code {
+  padding: 4px 6px;
+  border: 1px solid var(--studio-line);
+  border-radius: 5px;
+  color: var(--studio-muted);
+  background: var(--studio-panel-subtle);
+  font-size: 7px;
+}
+
+.proposal > footer {
+  display: grid;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.proposal > footer small {
+  color: var(--studio-faint);
+  font-size: 8px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .workspaceWithProposal {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .proposal {
+    border-top: 1px solid var(--studio-line);
+    border-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking span {
+    animation: none;
+  }
+
+  .transcript {
+    scroll-behavior: auto;
+  }
+}

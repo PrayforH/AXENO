@@ -1,0 +1,171 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    uses: ./.github/workflows/verify.yml
+
+  build-once:
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      artifact-name: release-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --group dev
+        env:
+          UV_DEFAULT_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
+      - name: Derive lowercase immutable image references
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "IMAGE_PREFIX=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_ENV"
+      - name: Build and push API once
+        id: api
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/api.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/api:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+      - name: Build and push Web once
+        id: web
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/web.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/web:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+      - name: Build and push Sandbox once
+        id: sandbox
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: deploy/docker/sandbox.Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/sandbox:${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=sandbox
+          cache-to: type=gha,scope=sandbox,mode=max
+      - name: Pack byte-deterministic Agent bundles
+        run: |
+          make agent-determinism
+          mkdir -p dist/release/sbom
+          uv run python scripts/check_agent_packages.py --output dist/release/agents
+      - name: Generate API SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE_PREFIX }}/api@${{ steps.api.outputs.digest }}
+          format: spdx-json
+          output-file: dist/release/sbom/api.spdx.json
+          upload-artifact: false
+      - name: Generate Web SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE_PREFIX }}/web@${{ steps.web.outputs.digest }}
+          format: spdx-json
+          output-file: dist/release/sbom/web.spdx.json
+          upload-artifact: false
+      - name: Generate Sandbox SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE_PREFIX }}/sandbox@${{ steps.sandbox.outputs.digest }}
+          format: spdx-json
+          output-file: dist/release/sbom/sandbox.spdx.json
+          upload-artifact: false
+      - name: Scan exact release digests
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.69.2
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp '^https://github.com/aquasecurity/' \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "$TRIVY_IMAGE" >/dev/null
+          for image in \
+            "$IMAGE_PREFIX/api@$API_DIGEST" \
+            "$IMAGE_PREFIX/web@$WEB_DIGEST" \
+            "$IMAGE_PREFIX/sandbox@$SANDBOX_DIGEST"; do
+            docker run --rm -v "$HOME/.docker:/root/.docker:ro" \
+              "$TRIVY_IMAGE" image --scanners vuln --ignore-unfixed \
+              --severity HIGH,CRITICAL --exit-code 1 "$image"
+          done
+      - name: Create deterministic release manifest
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          uv run python scripts/release_manifest.py create \
+            --artifact-root dist/release \
+            --source-commit "$SOURCE_COMMIT" \
+            --image "api=$IMAGE_PREFIX/api@$API_DIGEST" \
+            --image "web=$IMAGE_PREFIX/web@$WEB_DIGEST" \
+            --image "sandbox=$IMAGE_PREFIX/sandbox@$SANDBOX_DIGEST" \
+            --sbom "api=$PWD/dist/release/sbom/api.spdx.json" \
+            --sbom "web=$PWD/dist/release/sbom/web.spdx.json" \
+            --sbom "sandbox=$PWD/dist/release/sbom/sandbox.spdx.json" \
+            --output dist/release/release-manifest.json
+      - name: Keyless-sign images, SBOM attestations, and release manifest
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+          SANDBOX_DIGEST: ${{ steps.sandbox.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for component in api web sandbox; do
+            digest_variable="${component^^}_DIGEST"
+            image="$IMAGE_PREFIX/$component@${!digest_variable}"
+            cosign sign --yes "$image"
+            cosign attest --yes --type spdxjson \
+              --predicate "dist/release/sbom/$component.spdx.json" "$image"
+          done
+          cosign sign-blob --yes \
+            --bundle dist/release/release-manifest.sigstore.json \
+            dist/release/release-manifest.json
+      - name: Upload immutable release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.sha }}
+          path: dist/release
+          if-no-files-found: error
+          retention-days: 90

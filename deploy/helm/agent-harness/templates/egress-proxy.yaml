@@ -1,0 +1,75 @@
+{{- if .Values.egressProxy.enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.egressProxy.namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: harness-egress-proxy
+  namespace: {{ .Values.egressProxy.namespace }}
+data:
+  squid.conf: |
+    http_port {{ .Values.egressProxy.port }}
+    acl SSL_ports port 443
+    acl CONNECT method CONNECT
+    acl allowed_domains dstdomain {{ join " " .Values.egressProxy.allowedDomains }}
+    http_access deny CONNECT !SSL_ports
+    http_access allow allowed_domains
+    http_access deny all
+    access_log stdio:/dev/stdout
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: harness-egress-proxy
+  namespace: {{ .Values.egressProxy.namespace }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: harness-egress-proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: harness-egress-proxy
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: squid
+          image: {{ .Values.egressProxy.image }}
+          args: ["-N", "-f", "/etc/squid/squid.conf"]
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.egressProxy.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/squid/squid.conf
+              subPath: squid.conf
+      volumes:
+        - name: config
+          configMap:
+            name: harness-egress-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: harness-egress-proxy
+  namespace: {{ .Values.egressProxy.namespace }}
+spec:
+  selector:
+    app.kubernetes.io/name: harness-egress-proxy
+  ports:
+    - name: proxy
+      port: {{ .Values.egressProxy.port }}
+      targetPort: proxy
+{{- end }}

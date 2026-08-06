@@ -1,0 +1,16 @@
+sandbox:
+  namespace: harness-sandboxes
+  runtimeClassName: gvisor
+  runtimeHandler: runsc
+  createRuntimeClass: false
+  serviceAccountName: harness-sandbox
+  workerServiceAccountName: harness-worker
+
+egressProxy:
+  enabled: true
+  namespace: harness-system
+  image: ubuntu/squid:6.10-24.10_edge
+  port: 3128
+  allowedDomains:
+    - .anthropic.com
+    - .mcp.tavily.com

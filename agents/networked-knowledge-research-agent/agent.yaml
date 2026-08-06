@@ -1,0 +1,40 @@
+apiVersion: harness/v1alpha1
+kind: Agent
+metadata:
+  name: networked-knowledge-research-agent
+  version: 0.1.17
+  labels:
+    domain: networked-research
+    template: analyst
+    display-name: 联网知识研究
+    description: 综合外部知识库、OpenAI 官方文档和公网搜索，生成带来源与不确定性说明的研究答复。
+    execution-profile: isolated-default
+spec:
+  runtime: claude-agent-sdk
+  model:
+    route: deepseek-v4-flash
+    model: deepseek-v4-flash
+    requiredCapabilities: [streaming, tool_use]
+  prompt:
+    system: prompts/system.md
+  skills:
+    - skills/multi-source-research
+  tools:
+    - builtin: Read
+    - builtin: Glob
+    - builtin: Grep
+    - mcp: tavily-readonly
+    - mcp: knowledge-search
+  subagents: []
+  hooks: []
+  permissions:
+    policy: production-read-only
+  workspace:
+    mode: isolated
+    restoreSession: true
+    archiveOnComplete: true
+  limits:
+    maxTurns: 18
+    timeoutSeconds: 1200
+    maxBudgetUsd: 2
+    maxModelTokens: 300000
