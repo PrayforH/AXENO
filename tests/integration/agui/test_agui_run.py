@@ -277,6 +277,8 @@ async def test_agui_thread_list_and_history_restore_owned_tasks() -> None:
     assert tasks["thread-history-a"]["title"] == "first task"
     assert tasks["thread-history-a"]["status"] == "succeeded"
     assert history.status_code == 200
+    assert history.json()["status"] == "succeeded"
+    assert history.json()["run_id"] == run_id
     messages = history.json()["messages"]
     assert messages[0] == {
         "id": f"user-{run_id}",
@@ -483,6 +485,40 @@ async def test_cancel_agui_run_resolves_protocol_ids_to_harness_run() -> None:
 
         response = await client.post(
             "/v1/agui/threads/thread-cancel/runs/client-run-cancel/cancel",
+            headers=HEADERS,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run.run_id
+    assert response.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_resumed_agui_run_by_server_id() -> None:
+    app = create_memory_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/v1/agents", json={"path": str(FIXTURE_MANIFEST)}, headers=HEADERS
+        )
+        request = RunAgentInput.model_validate(
+            _request(
+                thread_id="thread-resumed",
+                run_id="client-run-resumed",
+                prompt="wait",
+            )
+        )
+        run = await app.state.container.agui.create_run(
+            tenant_id="tenant-a",
+            user_id="user-1",
+            agent_name="echo-agent",
+            agent_version="0.1.0",
+            request=request,
+        )
+
+        response = await client.post(
+            f"/v1/agui/runs/{run.run_id}/cancel",
             headers=HEADERS,
         )
 

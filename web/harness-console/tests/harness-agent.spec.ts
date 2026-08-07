@@ -80,6 +80,24 @@ describe("HarnessHttpAgent", () => {
     });
   });
 
+  it("cancels a resumed run by its durable server ID", () => {
+    let cancelUrl = "";
+    const agent = new HarnessHttpAgent({
+      url: "http://harness/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+      cancelFetch: async (input) => {
+        cancelUrl = String(input);
+        return new Response(null, { status: 200 });
+      },
+    });
+
+    agent.adoptActiveRun("thread-resumed", "server/run-resumed");
+    agent.cancelActiveRun();
+
+    expect(cancelUrl).toBe(
+      "http://harness/v1/agui/runs/server%2Frun-resumed/cancel",
+    );
+  });
+
   it("notifies Harness when assistant-ui aborts its run signal", async () => {
     let cancelUrl = "";
     const cancelFetch: typeof fetch = async (input) => {

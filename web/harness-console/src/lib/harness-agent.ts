@@ -25,6 +25,10 @@ interface AssistantUiRunOptions {
   signal?: AbortSignal;
 }
 
+type ActiveRun = Pick<RunAgentInput, "threadId" | "runId"> & {
+  idKind: "client" | "server";
+};
+
 const terminalAguiEvents = new Set(["RUN_FINISHED", "RUN_ERROR"]);
 
 function replayUrl(requestUrl: string, serverRunId: string) {
@@ -166,7 +170,7 @@ function recoverInterruptedAguiStream(
 }
 
 export class HarnessHttpAgent extends HttpAgent {
-  private activeInput?: Pick<RunAgentInput, "threadId" | "runId">;
+  private activeInput?: ActiveRun;
   private cancelFetch: typeof fetch;
   private modelRouteOverride?: string;
 
@@ -210,8 +214,20 @@ export class HarnessHttpAgent extends HttpAgent {
   }
 
   override run(input: RunAgentInput) {
-    this.activeInput = { threadId: input.threadId, runId: input.runId };
+    this.activeInput = {
+      threadId: input.threadId,
+      runId: input.runId,
+      idKind: "client",
+    };
     return super.run(this.withModelOverride(input));
+  }
+
+  adoptActiveRun(threadId: string, serverRunId: string): void {
+    this.activeInput = {
+      threadId,
+      runId: serverRunId,
+      idKind: "server",
+    };
   }
 
   private withModelOverride<T extends object>(input: T): T {
@@ -232,11 +248,12 @@ export class HarnessHttpAgent extends HttpAgent {
     options?: AssistantUiRunOptions,
   ): Promise<RunAgentResult> {
     const input = parameters as Partial<RunAgentInput> | undefined;
-    let activeInput: Pick<RunAgentInput, "threadId" | "runId"> | undefined;
+    let activeInput: ActiveRun | undefined;
     if (input?.runId) {
       activeInput = {
         threadId: input.threadId || this.threadId || "main",
         runId: input.runId,
+        idKind: "client",
       };
       this.activeInput = activeInput;
     }
@@ -341,9 +358,13 @@ export class HarnessHttpAgent extends HttpAgent {
     const base = globalThis.location?.origin ?? "http://localhost";
     const url = new URL(this.url, base);
     url.search = "";
-    url.pathname = `${url.pathname.replace(/\/$/, "")}/threads/${encodeURIComponent(
-      activeInput.threadId,
-    )}/runs/${encodeURIComponent(activeInput.runId)}/cancel`;
+    url.pathname = activeInput.idKind === "server"
+      ? `${url.pathname.replace(/\/$/, "")}/runs/${encodeURIComponent(
+          activeInput.runId,
+        )}/cancel`
+      : `${url.pathname.replace(/\/$/, "")}/threads/${encodeURIComponent(
+          activeInput.threadId,
+        )}/runs/${encodeURIComponent(activeInput.runId)}/cancel`;
     const target = relative ? `${url.pathname}${url.search}` : url.toString();
     void this.cancelFetch(target, {
       method: "POST",

@@ -112,7 +112,7 @@ describe("full-page agent workbench", () => {
 
   it("keeps the conversation runtime mounted while task status changes", () => {
     expect(page).toContain(
-      'key={`${threadId}:${selectedAgent.spaceId ?? "personal"}:${selectedAgent.ownerUserId ?? "self"}:${selectedAgent.name}:${selectedAgent.version}`}',
+      'key={`${threadId}:${agentItemKey(selectedAgent)}`}',
     );
     expect(page).not.toContain("refreshToken");
     expect(taskSidebar).not.toContain("onCurrentTaskStatusChange");

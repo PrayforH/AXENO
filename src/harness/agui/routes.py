@@ -269,6 +269,8 @@ class AguiThreadHistory(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     thread_id: str
+    status: str
+    run_id: str | None = None
     messages: list[AguiHistoryMessage]
 
 
@@ -546,6 +548,11 @@ async def get_agui_thread_history(
         identity.tenant_id, list(binding.session_ids), limit=200
     )
     runs = _visible_thread_runs(runs)
+    latest = max(
+        runs,
+        key=lambda item: (item.updated_at, item.run_id),
+        default=None,
+    )
     messages: list[AguiHistoryMessage] = []
     for run in sorted(runs, key=lambda item: (item.created_at, item.run_id)):
         prompt = run.input.get("prompt")
@@ -670,7 +677,12 @@ async def get_agui_thread_history(
             )
             for artifact in artifacts
         )
-    return AguiThreadHistory(thread_id=thread_id, messages=messages)
+    return AguiThreadHistory(
+        thread_id=thread_id,
+        status=latest.status.value if latest is not None else "idle",
+        run_id=latest.run_id if latest is not None else None,
+        messages=messages,
+    )
 
 
 def _history_input_type(
@@ -806,3 +818,16 @@ async def stream_agui_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/runs/{run_id}/cancel", response_model=Run)
+async def cancel_agui_run_by_server_id(
+    run_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> Run:
+    """Cancel a resumed run when the browser no longer has its AG-UI client ID."""
+
+    ensure_permission(identity, "tasks:write")
+    await require_owned_run(container, identity, run_id)
+    return await container.runs.cancel(identity.tenant_id, run_id)

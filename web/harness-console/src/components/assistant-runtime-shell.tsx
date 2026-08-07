@@ -6,7 +6,7 @@ import {
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import type { ReactNode } from "react";
-import { useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
@@ -59,7 +59,21 @@ export function AssistantRuntimeShell({
   }, [agentName, agentOwnerUserId, agentVersion, modelRouteOverride, spaceId, threadId]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
-  const history = useMemo(() => createThreadHistoryAdapter(threadId), [threadId]);
+  const history = useMemo(
+    () =>
+      createThreadHistoryAdapter(threadId, {
+        onActiveRun: (serverRunId) =>
+          agent.adoptActiveRun(threadId, serverRunId),
+      }),
+    [agent, threadId],
+  );
+  useEffect(
+    () => () => {
+      history.dispose();
+      void agent.detachActiveRun();
+    },
+    [agent, history],
+  );
   useLayoutEffect(() => {
     activateRuntimeThread(threadId);
     activityStore.clear();
