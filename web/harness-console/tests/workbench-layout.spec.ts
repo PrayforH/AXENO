@@ -63,13 +63,13 @@ describe("full-page agent workbench", () => {
 
   it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {
     expect(codexStyles).toMatch(
-      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*border:\s*1px solid var\(--codex-line-strong\);[^}]*background:\s*var\(--codex-surface-raised\);/s,
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*width:\s*34px;[^}]*height:\s*34px;[^}]*border-radius:\s*999px;[^}]*background:\s*var\(--codex-ink-soft\);[^}]*box-shadow:\s*none;/s,
     );
     expect(codexStyles).not.toMatch(
       /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*background:\s*var\(--codex-accent\);/s,
     );
     expect(codexStyles).toMatch(
-      /\.harness-composer-shell \.aui-composer-cancel:hover\s*\{[^}]*color:\s*var\(--codex-danger\);[^}]*background:\s*var\(--codex-danger-soft\);/s,
+      /\.harness-composer-shell \.aui-composer-cancel:hover\s*\{[^}]*color:\s*#ffffff;[^}]*background:\s*var\(--codex-danger\);/s,
     );
     expect(codexStyles).toMatch(
       /\.aui-message-error\s*\{[^}]*color:\s*var\(--codex-faint\);[^}]*background:\s*transparent;/s,
