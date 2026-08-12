@@ -155,6 +155,8 @@ it("switches the composer action to stop for an active run", () => {
   expect(agentThreadSource).toContain(
     'className="aui-button aui-button-icon aui-composer-cancel"',
   );
+  expect(agentThreadSource).toContain('aria-label="停止运行"');
+  expect(agentThreadSource).not.toContain('title="停止运行"');
   expect(agentThreadSource).toContain("aui.thread().cancelRun()");
   expect(agentThreadSource).toContain("<Composer.Send />");
   expect(agentThreadSource).not.toContain("<Composer.Action");

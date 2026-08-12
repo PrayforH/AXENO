@@ -201,6 +201,16 @@ html[data-color-mode="light"] .harness-composer-shell .aui-composer-send {
   background: var(--codex-accent);
 }
 
+html[data-color-mode="light"] .harness-composer-shell .aui-composer-cancel {
+  color: #ffffff;
+  background: var(--codex-ink);
+}
+
+html[data-color-mode="light"] .harness-composer-shell .aui-composer-cancel:hover {
+  color: #ffffff;
+  background: var(--codex-danger);
+}
+
 html[data-color-mode="light"] main#main-content:has(> [data-studio-sidebar]) {
   background: var(--codex-surface);
 }

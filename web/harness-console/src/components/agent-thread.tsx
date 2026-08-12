@@ -345,11 +345,10 @@ function HarnessComposer() {
             type="button"
             className="aui-button aui-button-icon aui-composer-cancel"
             aria-label="停止运行"
-            title="停止运行"
             onClick={() => aui.thread().cancelRun()}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
+              <rect x="8" y="8" width="8" height="8" rx="1.5" fill="currentColor" />
             </svg>
           </button>
         ) : (
