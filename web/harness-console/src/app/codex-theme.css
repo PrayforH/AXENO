@@ -740,12 +740,21 @@ select {
 }
 
 .harness-composer-shell .aui-composer-cancel {
-  color: #07111a;
-  background: var(--codex-accent);
+  border: 1px solid var(--codex-line-strong);
+  color: var(--codex-ink-soft);
+  background: var(--codex-surface-raised);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%), 0 4px 12px rgb(0 0 0 / 16%);
 }
 
 .harness-composer-shell .aui-composer-cancel:hover {
-  background: var(--codex-accent-hover);
+  border-color: rgb(250 66 62 / 38%);
+  color: var(--codex-danger);
+  background: var(--codex-danger-soft);
+}
+
+.harness-composer-shell .aui-composer-cancel svg {
+  width: 18px;
+  height: 18px;
 }
 
 .harness-composer-shell :is(.aui-composer-attach, .aui-composer-send, .aui-composer-cancel):active {
@@ -2638,6 +2647,10 @@ body.codex-theme-v1 .task-list-toolbar {
 body.codex-theme-v1 .task-list-toolbar .task-list-heading {
   min-height: 28px;
   padding: 5px 13px 6px;
+}
+
+body.codex-theme-v1 .task-list-heading-copy svg {
+  color: var(--codex-muted);
 }
 
 body.codex-theme-v1 .task-list-search {

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
+import { ProductIcon } from "./product-icon";
 import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
@@ -299,7 +300,10 @@ export function TaskSidebar({
           </div>
           <div className="task-list-toolbar">
             <div className="task-list-heading">
-              <span>最近</span>
+              <span className="task-list-heading-copy">
+                <ProductIcon name="clock" />
+                最近
+              </span>
               <small>{query ? `${filteredTasks.length} / ${tasks.length}` : tasks.length}</small>
             </div>
             <label className="task-list-search">

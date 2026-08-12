@@ -177,6 +177,23 @@
   font-weight: 700;
 }
 
+.railHeadingLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.railHeadingLabel svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .railHeading button {
   width: 30px;
   height: 30px;

@@ -29,6 +29,10 @@ const themeSelector = readFileSync(
   join(process.cwd(), "src/components/theme-toggle.tsx"),
   "utf8",
 );
+const productIcons = readFileSync(
+  join(process.cwd(), "src/components/product-icon.tsx"),
+  "utf8",
+);
 
 describe("account settings", () => {
   it("keeps help, settings and logout available from the account menu", () => {
@@ -40,6 +44,23 @@ describe("account settings", () => {
     expect(menu).toContain('href="/api/auth/logout"');
     expect(menu).toContain("退出登录");
     expect(styles).toMatch(/\.account-help,\s*\.account-settings,/s);
+    expect(menu).toContain('<ProductIcon name="book" />');
+    expect(menu).toContain('<ProductIcon name="settings" />');
+    expect(menu).toContain('<ProductIcon name="logout" />');
+  });
+
+  it("uses one custom line-icon system across account and settings navigation", () => {
+    expect(productIcons).toContain("export type ProductIconName");
+    expect(productIcons).toContain("data-product-icon={name}");
+    expect(settings).toContain("const SETTINGS_NAV");
+    expect(settings.match(/href: "#/g)).toHaveLength(8);
+    expect(settings).toContain("<ProductIcon name={item.icon} />");
+    expect(styles).toMatch(
+      /\.account-actions svg\s*\{[^}]*stroke-width:\s*1\.65;/s,
+    );
+    expect(styles).toMatch(
+      /\.settings-index a svg\s*\{[^}]*stroke-width:\s*1\.65;/s,
+    );
   });
 
   it("anchors the user control at the bottom of expanded and collapsed task rails", () => {
@@ -66,7 +87,7 @@ describe("account settings", () => {
   });
 
   it("keeps the only theme control in account appearance settings", () => {
-    expect(settings).toContain('href="#appearance"');
+    expect(settings).toContain('{ href: "#appearance", label: "外观", icon: "appearance" }');
     expect(settings).toContain('id="appearance"');
     expect(settings).toContain("<ThemeSelector />");
     expect(themeSelector).toContain('"浅色"');

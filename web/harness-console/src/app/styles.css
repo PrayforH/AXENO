@@ -1693,6 +1693,23 @@ textarea:not(.aui-composer-input):focus-visible {
   font-weight: 620;
 }
 
+.task-list-heading-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-list-heading-copy svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .task-list-toolbar {
   padding-bottom: 7px;
 }
@@ -3172,8 +3189,16 @@ body,
 }
 
 .harness-composer-shell .aui-composer-cancel {
-  background: #282d29;
-  color: #fff;
+  border: 1px solid #d2d6d2;
+  color: #4d5550;
+  background: #f7f8f7;
+  box-shadow: 0 1px 2px rgb(31 36 32 / 6%);
+}
+
+.harness-composer-shell .aui-composer-cancel:hover {
+  border-color: #d9aaa5;
+  color: #a0433b;
+  background: #fbf2f1;
 }
 
 .composer-meta {
@@ -5934,6 +5959,7 @@ textarea:not(.aui-composer-input):focus-visible,
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 9px;
   border: 0;
   border-radius: 7px;
   color: #3d4843;
@@ -5941,6 +5967,17 @@ textarea:not(.aui-composer-input):focus-visible,
   cursor: pointer;
   font-size: 12px;
   text-decoration: none;
+}
+
+.account-actions svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .account-help,
@@ -6042,10 +6079,24 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .settings-index a {
   padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
   border-left: 2px solid transparent;
   color: #65706a;
   font-size: 12px;
   text-decoration: none;
+}
+
+.settings-index a svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .settings-index a:hover,

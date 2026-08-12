@@ -63,16 +63,26 @@ describe("full-page agent workbench", () => {
 
   it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {
     expect(codexStyles).toMatch(
-      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*background:\s*var\(--codex-accent\);/s,
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*border:\s*1px solid var\(--codex-line-strong\);[^}]*background:\s*var\(--codex-surface-raised\);/s,
     );
     expect(codexStyles).not.toMatch(
-      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*var\(--codex-danger/s,
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*background:\s*var\(--codex-accent\);/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.harness-composer-shell \.aui-composer-cancel:hover\s*\{[^}]*color:\s*var\(--codex-danger\);[^}]*background:\s*var\(--codex-danger-soft\);/s,
     );
     expect(codexStyles).toMatch(
       /\.aui-message-error\s*\{[^}]*color:\s*var\(--codex-faint\);[^}]*background:\s*transparent;/s,
     );
     expect(codexStyles).toMatch(
       /\.aui-message-error \.run-retry-button\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
+    );
+  });
+
+  it("uses a consistent product icon language in high-frequency navigation", () => {
+    expect(taskSidebar).toContain('<ProductIcon name="clock" />');
+    expect(styles).toMatch(
+      /\.task-list-heading-copy svg\s*\{[^}]*stroke-width:\s*1\.65;/s,
     );
   });
 

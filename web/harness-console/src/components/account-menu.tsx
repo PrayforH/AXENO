@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth-provider";
+import { ProductIcon } from "./product-icon";
 
 const ROLE_LABELS = {
   owner: "所有者",
@@ -68,10 +69,17 @@ export function AccountMenu() {
               target="_blank"
               rel="noreferrer"
             >
+              <ProductIcon name="book" />
               产品使用手册
             </a>
-            <Link className="account-settings" href="/settings">个人设置</Link>
-            <a className="account-logout" href="/api/auth/logout">退出登录</a>
+            <Link className="account-settings" href="/settings">
+              <ProductIcon name="settings" />
+              个人设置
+            </Link>
+            <a className="account-logout" href="/api/auth/logout">
+              <ProductIcon name="logout" />
+              退出登录
+            </a>
           </nav>
         </div>
       )}

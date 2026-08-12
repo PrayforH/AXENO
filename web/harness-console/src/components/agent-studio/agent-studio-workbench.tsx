@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAuth } from "../auth-provider";
 import { useConfirmationDialog } from "../confirmation-dialog";
+import { ProductIcon } from "../product-icon";
 import { StudioSidebar } from "./studio-sidebar";
 import {
   DEFAULT_STUDIO_DRAFT,
@@ -1871,7 +1872,10 @@ export function AgentStudioWorkbench() {
     <main className={styles.studioShell} id="main-content" data-studio-integration="api">
       <StudioSidebar active="agents">
         <div className={styles.railHeading}>
-          <span>智能体</span>
+          <span className={styles.railHeadingLabel}>
+            <ProductIcon name="agent" />
+            智能体
+          </span>
           <button
             type="button"
             aria-label="新建智能体"

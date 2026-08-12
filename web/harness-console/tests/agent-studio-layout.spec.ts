@@ -693,4 +693,12 @@ describe("Agent Studio management page", () => {
     expect(styles).toMatch(/@media \(max-width: 900px\)/);
     expect(styles).toMatch(/@media \(prefers-reduced-motion: no-preference\)/);
   });
+
+  it("adds a restrained icon cue to the Agent collection heading", () => {
+    expect(workbench).toContain('<ProductIcon name="agent" />');
+    expect(workbench).toContain("styles.railHeadingLabel");
+    expect(styles).toMatch(
+      /\.railHeadingLabel svg\s*\{[^}]*stroke-width:\s*1\.65;/s,
+    );
+  });
 });
