@@ -182,7 +182,7 @@ export function TeamSpaces() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
   const [spaceLoading, setSpaceLoading] = useState(false);
-  const [activeView, setActiveView] = useState<SpaceView>("agents");
+  const [activeView, setActiveView] = useState<SpaceView>("members");
   const [showCreate, setShowCreate] = useState(false);
   const [createError, setCreateError] = useState("");
   const [confirmingMemberId, setConfirmingMemberId] = useState("");
@@ -631,7 +631,7 @@ export function TeamSpaces() {
           <nav className={styles.spaceList} aria-label="团队空间">
             <header><span>我的空间</span><small>{spaces.length}</small></header>
             {loading ? <div className={styles.spaceListLoading}><i /><i /><i /></div> : spaces.length === 0 ? <p>创建空间后，成员和共享资源会显示在这里。</p> : spaces.map((item) => (
-              <button key={item.space.spaceId} data-active={item.space.spaceId === selectedId || undefined} onClick={() => { setSelectedId(item.space.spaceId); setActiveView("agents"); }}>
+              <button key={item.space.spaceId} data-active={item.space.spaceId === selectedId || undefined} onClick={() => { setSelectedId(item.space.spaceId); setActiveView("members"); }}>
                 <strong>{item.space.name}</strong><span>{ROLE_LABELS[item.membership.role]}</span><small>{item.space.description || "未填写说明"}</small>
               </button>
             ))}
@@ -644,9 +644,9 @@ export function TeamSpaces() {
             </section>
 
             <nav className={styles.resourceTabs} aria-label="空间资源">
+              <button type="button" disabled={spaceLoading} aria-current={activeView === "members" ? "page" : undefined} onClick={() => setActiveView("members")}><span>成员</span><small>{spaceLoading ? "…" : members.length}</small></button>
               <button type="button" disabled={spaceLoading} aria-current={activeView === "agents" ? "page" : undefined} onClick={() => setActiveView("agents")}><span>智能体</span><small>{spaceLoading ? "…" : workspaceAgents.length}</small></button>
               <button type="button" disabled={spaceLoading} aria-current={activeView === "knowledge" ? "page" : undefined} onClick={() => setActiveView("knowledge")}><span>知识库</span><small>{spaceLoading ? "…" : sharedKnowledge.length}</small></button>
-              <button type="button" disabled={spaceLoading} aria-current={activeView === "members" ? "page" : undefined} onClick={() => setActiveView("members")}><span>成员</span><small>{spaceLoading ? "…" : members.length}</small></button>
             </nav>
 
             {spaceLoading && <section className={styles.resourceLoading} aria-live="polite">

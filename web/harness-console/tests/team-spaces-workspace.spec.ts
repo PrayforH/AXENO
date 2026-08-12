@@ -24,6 +24,19 @@ describe("collaboration workspace product surface", () => {
     expect(component).toContain("members.length");
   });
 
+  it("starts with members before resources because membership gates sharing", () => {
+    const tabs = component.indexOf('className={styles.resourceTabs}');
+    const members = component.indexOf('<span>成员</span>', tabs);
+    const agents = component.indexOf('<span>智能体</span>', tabs);
+    const knowledge = component.indexOf('<span>知识库</span>', tabs);
+    expect(component).toContain('useState<SpaceView>("members")');
+    expect(component).toContain('setSelectedId(item.space.spaceId); setActiveView("members")');
+    expect(tabs).toBeGreaterThan(-1);
+    expect(members).toBeGreaterThan(tabs);
+    expect(agents).toBeGreaterThan(members);
+    expect(knowledge).toBeGreaterThan(agents);
+  });
+
   it("starts a new task from the selected workspace agent", () => {
     expect(component).toContain("开始任务");
     expect(component).toContain("item.can_chat && agent.currentVersion");
