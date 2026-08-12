@@ -45,7 +45,7 @@ def test_final_response_excludes_progress_commentary_before_last_action() -> Non
     assert final_response_text(events) == "检查完成：工作区正常。"
 
 
-def test_active_response_restores_latest_visible_message_during_tool_pause() -> None:
+def test_active_response_keeps_progress_in_activity_during_tool_pause() -> None:
     events = [
         _event("message.start", 1, message_id="progress-1"),
         _event(
@@ -60,7 +60,17 @@ def test_active_response_restores_latest_visible_message_during_tool_pause() -> 
     ]
 
     assert final_response_text(events) == ""
-    assert active_response_text(events) == "我先检查工作区。"
+    assert active_response_text(events) == ""
+
+
+def test_active_response_restores_message_before_any_tool_starts() -> None:
+    events = [
+        _event("message.start", 1, message_id="answer"),
+        _event("message.delta", 2, message_id="answer", text="正在组织答案："),
+        _event("message.delta", 3, message_id="answer", text="第一部分。"),
+    ]
+
+    assert active_response_text(events) == "正在组织答案：第一部分。"
 
 
 def test_active_response_replaces_progress_with_new_partial_answer() -> None:

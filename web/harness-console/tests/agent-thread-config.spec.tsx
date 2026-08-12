@@ -62,6 +62,7 @@ import {
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
   messageOwnsRun,
+  turnOwnsRun,
   normalizeMessageText,
   ownsLiveResponse,
   shouldOfferIncompleteRetry,
@@ -355,5 +356,11 @@ it("keeps interrupted run activity attached to its own answer branch", () => {
   expect(messageOwnsRun("assistant-run_2", "run_2")).toBe(true);
   expect(messageOwnsRun("assistant-run_2-message_a", "run_2")).toBe(true);
   expect(messageOwnsRun("assistant-run_1-message_a", "run_2")).toBe(false);
-  expect(agentThreadSource).toContain("messageOwnsRun(messageId, activity.run_id)");
+  expect(agentThreadSource).toContain("turnOwnsRun(");
+});
+
+it("attaches a resumed run to the latest optimistic assistant turn", () => {
+  expect(turnOwnsRun("__optimistic__42", "run_2", true, "run_2")).toBe(true);
+  expect(turnOwnsRun("__optimistic__42", "run_2", false, "run_2")).toBe(false);
+  expect(turnOwnsRun("__optimistic__42", "run_2", true, "run_3")).toBe(false);
 });

@@ -125,7 +125,7 @@ describe("thread history activity restoration", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rewinds an active assistant turn and marks it for stream recovery", async () => {
+  it("loads an active turn directly into one resumed response slot", async () => {
     const onActiveRun = vi.fn();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(historyResponse("running", "已完成一半")));
 
@@ -137,7 +137,6 @@ describe("thread history activity restoration", () => {
     expect(repository.headId).toBe("user-run-resume");
     expect(repository.messages.map((item) => item.message.id)).toEqual([
       "user-run-resume",
-      "assistant-run-resume",
     ]);
     expect(onActiveRun).toHaveBeenCalledWith("run-resume");
   });

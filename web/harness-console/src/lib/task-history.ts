@@ -195,11 +195,17 @@ export function createThreadHistoryAdapter(
       const activeAssistant = repository.messages.find(
         (item) => item.message.id === activeAssistantId,
       );
+      const resumeRepository = ExportedMessageRepository.fromArray(
+        repository.messages
+          .filter((item) => item.message.id !== activeAssistantId)
+          .map((item) => item.message),
+      );
       return {
-        ...repository,
-        // Resume replaces the partial assistant snapshot. Rewind to its
-        // parent so assistant-ui does not append a duplicate response.
-        headId: activeAssistant?.parentId ?? repository.messages.at(-1)?.message.id ?? null,
+        ...resumeRepository,
+        // Do not briefly render the durable partial response and then replace
+        // it with assistant-ui's resumed placeholder.  Loading only through
+        // its parent keeps one stable visual response slot throughout restore.
+        headId: activeAssistant?.parentId ?? resumeRepository.messages.at(-1)?.message.id ?? null,
         unstable_resume: true,
       };
     },

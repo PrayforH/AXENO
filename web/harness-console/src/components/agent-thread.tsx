@@ -731,11 +731,16 @@ function TurnActivity({
   messageId: string;
 }) {
   const activity = useRunActivity();
-  const ownedActivity = activity && messageOwnsRun(messageId, activity.run_id)
-    ? activity
-    : undefined;
   const runView = useRunViewModel();
   const isLast = useAuiState((state) => state.message.isLast);
+  const ownedActivity = activity && turnOwnsRun(
+    messageId,
+    activity.run_id,
+    isLast,
+    runView?.runId,
+  )
+    ? activity
+    : undefined;
   const responseStarted = useAssistantResponseStarted();
   const [capturedActivity, setCapturedActivity] = useState(ownedActivity);
 
@@ -762,7 +767,10 @@ function TurnActivity({
     isLast,
     hasDurableProjection,
   );
-  if (!displayed || !messageOwnsRun(messageId, displayed.run_id)) return null;
+  if (
+    !displayed ||
+    !turnOwnsRun(messageId, displayed.run_id, isLast, runView?.runId)
+  ) return null;
 
   return (
     <div
@@ -832,6 +840,20 @@ export function shouldSuppressNativeAssistantText(
 export function messageOwnsRun(messageId: string, runId: string) {
   const prefix = `assistant-${runId}`;
   return messageId === prefix || messageId.startsWith(`${prefix}-`);
+}
+
+export function turnOwnsRun(
+  messageId: string,
+  activityRunId: string,
+  isLast: boolean,
+  viewRunId: string | undefined,
+) {
+  // History recovery creates an optimistic assistant message whose random ID
+  // cannot contain the durable server run ID.  The current Activity snapshot
+  // is still authoritative for the latest turn, so keep it attached there.
+  return messageOwnsRun(messageId, activityRunId) || (
+    isLast && viewRunId === activityRunId
+  );
 }
 
 function HarnessAssistantMessage() {

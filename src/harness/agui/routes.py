@@ -90,22 +90,30 @@ def final_response_text(events: list[RunEvent]) -> str:
 
 
 def active_response_text(events: list[RunEvent]) -> str:
-    """Restore the latest provider message while a run is still active.
+    """Restore only the current answer candidate for an active run.
 
-    A provider commonly emits progress text, starts a tool, and pauses before
-    emitting the next message.  During that pause ``final_response_text`` is
-    intentionally empty because the latest text precedes an auditable action.
-    Returning to the task must nevertheless keep the text the user had already
-    seen.  Once the run is terminal, history switches back to
-    ``final_response_text`` so progress commentary is not retained as part of
-    the final answer.
+    Progress commentary that was followed by a tool belongs in Activity, not
+    in the response slot.  When a user returns from Studio during that tool
+    pause there may therefore be no response text yet.  Once the provider
+    starts emitting after the latest auditable action, restore only that newest
+    message so the response grows in place without replaying earlier progress.
     """
+
+    last_action_index = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if event.type.startswith(_RESPONSE_BOUNDARY_PREFIXES)
+        ),
+        default=-1,
+    )
 
     latest_message_id = next(
         (
             str(event.payload.get("message_id", "")).strip()
-            for event in reversed(events)
-            if event.type == "message.delta"
+            for index, event in reversed(list(enumerate(events)))
+            if index > last_action_index
+            and event.type == "message.delta"
             and str(event.payload.get("message_id", "")).strip()
         ),
         "",
@@ -113,8 +121,9 @@ def active_response_text(events: list[RunEvent]) -> str:
     if latest_message_id:
         return "".join(
             safe_model_text(str(event.payload.get("text", "")))
-            for event in events
-            if event.type == "message.delta"
+            for index, event in enumerate(events)
+            if index > last_action_index
+            and event.type == "message.delta"
             and str(event.payload.get("message_id", "")).strip()
             == latest_message_id
         )
@@ -123,14 +132,16 @@ def active_response_text(events: list[RunEvent]) -> str:
         (
             index
             for index, event in enumerate(events)
-            if event.type == "message.start"
+            if index > last_action_index and event.type == "message.start"
         ),
-        default=0,
+        default=last_action_index + 1,
     )
     return "".join(
         safe_model_text(str(event.payload.get("text", "")))
         for index, event in enumerate(events)
-        if index >= latest_start_index and event.type == "message.delta"
+        if index >= latest_start_index
+        and index > last_action_index
+        and event.type == "message.delta"
     )
 
 
