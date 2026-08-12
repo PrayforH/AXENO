@@ -145,6 +145,16 @@
   background: var(--codex-surface-hover);
 }
 
+.discard {
+  margin-right: auto;
+  color: var(--codex-danger);
+  background: transparent;
+}
+
+.discard:hover {
+  background: var(--codex-danger-soft);
+}
+
 .confirm {
   color: var(--codex-on-accent);
   background: var(--codex-accent);
@@ -188,6 +198,14 @@
   .actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .actions:has(.discard) {
+    grid-template-columns: 1fr;
+  }
+
+  .discard {
+    margin-right: 0;
   }
 }
 

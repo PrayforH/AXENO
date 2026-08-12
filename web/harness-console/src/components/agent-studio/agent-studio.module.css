@@ -522,32 +522,18 @@
 }
 
 .syncState {
-  width: fit-content;
-  min-height: 20px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 0;
+  gap: 5px;
   color: var(--studio-faint);
-  font-size: 10px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
   white-space: nowrap;
-}
-
-.syncState i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--studio-faint);
 }
 
 .syncState[data-dirty="true"] {
   color: var(--studio-amber);
-}
-
-.syncState[data-dirty="true"] i {
-  background: var(--studio-amber);
-  box-shadow: 0 0 0 3px var(--studio-amber-soft);
 }
 
 .actionGroup {
@@ -3543,8 +3529,8 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
-  margin-top: 24px;
-  padding: 14px 15px;
+  margin-top: 18px;
+  padding: 12px 14px;
   border: 1px solid var(--studio-line-strong);
   border-radius: 11px;
   background: var(--studio-panel);
@@ -3667,11 +3653,11 @@
   display: grid;
   grid-template-columns: minmax(220px, 1fr) repeat(3, auto) auto;
   align-items: center;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--studio-line);
-  border-radius: 10px;
-  background: var(--studio-panel-subtle);
+  gap: 8px;
+  padding: 12px 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .evalDatasetSummary > div {
@@ -3999,7 +3985,7 @@
 }
 
 .evalControlPlane {
-  margin-top: 24px;
+  margin-top: 18px;
   overflow: hidden;
   border: 1px solid var(--studio-line-strong);
   border-radius: 12px;

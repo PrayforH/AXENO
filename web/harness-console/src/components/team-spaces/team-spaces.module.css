@@ -121,6 +121,8 @@
 }
 
 .createButton {
+  width: fit-content;
+  justify-self: end;
   min-height: 42px;
   padding: 0 16px;
   display: inline-flex;
@@ -1109,7 +1111,7 @@
   }
 
   .hero h1 { font-size: 31px; }
-  .createButton { width: 100%; }
+  .createButton { justify-self: start; }
   .createDrawer { width: 100vw; }
   .createDrawer > header { padding: 16px; }
   .createForm { padding: 18px 16px; }

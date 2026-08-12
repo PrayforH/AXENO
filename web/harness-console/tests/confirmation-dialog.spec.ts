@@ -40,6 +40,8 @@ describe("shared confirmation dialog", () => {
     expect(dialog).toContain('event.key !== "Tab"');
     expect(dialog).toContain("previousFocusRef.current?.focus()");
     expect(dialog).toContain("createPortal");
+    expect(dialog).toContain('type ConfirmationDecision = "confirm" | "cancel" | "discard"');
+    expect(dialog).toContain("request.discardLabel");
   });
 
   it("supports theme tokens, mobile layout and reduced motion", () => {
@@ -59,6 +61,7 @@ describe("shared confirmation dialog", () => {
     expect(studio).toContain("放弃本地修改并加载控制面版本？");
     expect(studio).toContain("放弃并加载");
     expect(studio).toContain("继续导入");
+    expect(studio).toContain("放弃修改并离开");
     expect(studio).toContain("卸载 Skill");
     expect(lifecycle).toContain("确认删除");
     expect(memory).toContain("删除记忆");

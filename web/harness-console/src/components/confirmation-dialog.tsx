@@ -16,17 +16,24 @@ export type ConfirmationRequest = {
   description: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  discardLabel?: string;
   context?: ReactNode;
   tone?: "default" | "danger";
 };
+
+export type ConfirmationDecision = "confirm" | "cancel" | "discard";
 
 export type ConfirmationRequester = (
   request: ConfirmationRequest,
 ) => Promise<boolean>;
 
+export type ConfirmationDecisionRequester = (
+  request: ConfirmationRequest,
+) => Promise<ConfirmationDecision>;
+
 type ConfirmationDialogProps = {
   request: ConfirmationRequest | null;
-  onResolve: (confirmed: boolean) => void;
+  onResolve: (decision: ConfirmationDecision) => void;
 };
 
 function ConfirmationDialog({ request, onResolve }: ConfirmationDialogProps) {
@@ -46,7 +53,7 @@ function ConfirmationDialog({ request, onResolve }: ConfirmationDialogProps) {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onResolve(false);
+        onResolve("cancel");
         return;
       }
       if (event.key !== "Tab") return;
@@ -84,7 +91,7 @@ function ConfirmationDialog({ request, onResolve }: ConfirmationDialogProps) {
       className={styles.backdrop}
       role="presentation"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onResolve(false);
+        if (event.target === event.currentTarget) onResolve("cancel");
       }}
     >
       <div
@@ -108,18 +115,27 @@ function ConfirmationDialog({ request, onResolve }: ConfirmationDialogProps) {
           {request.context && <div className={styles.context}>{request.context}</div>}
         </div>
         <div className={styles.actions}>
+          {request.discardLabel && (
+            <button
+              type="button"
+              className={styles.discard}
+              onClick={() => onResolve("discard")}
+            >
+              {request.discardLabel}
+            </button>
+          )}
           <button
             ref={cancelRef}
             type="button"
             className={styles.cancel}
-            onClick={() => onResolve(false)}
+            onClick={() => onResolve("cancel")}
           >
             {request.cancelLabel ?? "取消"}
           </button>
           <button
             type="button"
             className={styles.confirm}
-            onClick={() => onResolve(true)}
+            onClick={() => onResolve("confirm")}
           >
             {request.confirmLabel ?? "确认"}
           </button>
@@ -132,31 +148,37 @@ function ConfirmationDialog({ request, onResolve }: ConfirmationDialogProps) {
 
 export function useConfirmationDialog(): {
   requestConfirmation: ConfirmationRequester;
+  requestDecision: ConfirmationDecisionRequester;
   confirmationDialog: ReactNode;
 } {
   const [request, setRequest] = useState<ConfirmationRequest | null>(null);
-  const resolverRef = useRef<((confirmed: boolean) => void) | null>(null);
+  const resolverRef = useRef<((decision: ConfirmationDecision) => void) | null>(null);
 
-  const resolve = useCallback((confirmed: boolean) => {
+  const resolve = useCallback((decision: ConfirmationDecision) => {
     const resolver = resolverRef.current;
     resolverRef.current = null;
     setRequest(null);
-    resolver?.(confirmed);
+    resolver?.(decision);
   }, []);
 
-  const requestConfirmation = useCallback<ConfirmationRequester>(
+  const requestDecision = useCallback<ConfirmationDecisionRequester>(
     (nextRequest) =>
-      new Promise<boolean>((resolver) => {
-        resolverRef.current?.(false);
+      new Promise<ConfirmationDecision>((resolver) => {
+        resolverRef.current?.("cancel");
         resolverRef.current = resolver;
         setRequest(nextRequest);
       }),
     [],
   );
 
+  const requestConfirmation = useCallback<ConfirmationRequester>(
+    async (nextRequest) => (await requestDecision(nextRequest)) === "confirm",
+    [requestDecision],
+  );
+
   useEffect(
     () => () => {
-      resolverRef.current?.(false);
+      resolverRef.current?.("cancel");
       resolverRef.current = null;
     },
     [],
@@ -164,6 +186,7 @@ export function useConfirmationDialog(): {
 
   return {
     requestConfirmation,
+    requestDecision,
     confirmationDialog: (
       <ConfirmationDialog request={request} onResolve={resolve} />
     ),

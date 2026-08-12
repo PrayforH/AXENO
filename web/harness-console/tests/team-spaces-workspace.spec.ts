@@ -78,6 +78,8 @@ describe("collaboration workspace product surface", () => {
     expect(component).not.toContain('<details id="new-space"');
     expect(styles).toContain(".createBackdrop");
     expect(styles).toContain(".createDrawer");
+    expect(styles).toMatch(/\.createButton\s*\{[^}]*width:\s*fit-content;/s);
+    expect(styles).toMatch(/\.createButton\s*\{[^}]*justify-self:\s*end;/s);
     expect(styles).toMatch(/\.createDrawer\s*\{[\s\S]*?height:\s*100dvh;/);
     expect(styles).toMatch(/@media \(max-width: 660px\)[\s\S]*?\.createDrawer\s*\{\s*width:\s*100vw;/);
   });

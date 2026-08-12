@@ -256,6 +256,8 @@ describe("Agent Studio management page", () => {
       workbench.indexOf('<div className={styles.headerActions}>'),
     );
     expect(titleBlock).toContain("className={styles.syncState}");
+    expect(titleBlock).toContain("已保存 r${draft.revision}");
+    expect(titleBlock).not.toContain("已同步 r${draft.revision}");
     expect(styles).toContain(".syncState");
   });
 
@@ -270,6 +272,14 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("disabled={!canEdit || saving}");
     expect(workbench).toContain("onClick={() => void startNewDraft()}");
     expect(workbench).toContain(': "尚未保存"');
+  });
+
+  it("allows discarding unsaved edits when leaving Studio", () => {
+    expect(workbench).toContain("requestDecision");
+    expect(workbench).toContain('discardLabel: "放弃修改并离开"');
+    expect(workbench).toContain('discardLabel: "放弃修改并返回"');
+    expect(workbench).toContain('if (decision === "cancel") return');
+    expect(workbench).toContain('if (decision === "confirm")');
   });
 
   it("saves unsaved work before switching Agents and serializes draft loads", () => {
@@ -297,12 +307,13 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain('? "正在加载…" : "加载控制面版本"');
   });
 
-  it("separates A2A protocol management from generic trigger creation", () => {
+  it("keeps the A2A implementation available while hiding its product entry", () => {
     expect(a2aPage).toContain("AgentA2AWorkspace");
     expect(a2aPage).toContain("AuthProvider");
     expect(a2aWorkspace).toContain('kindFilter="a2a"');
     expect(a2aWorkspace).toContain("Agent Card + message:send");
-    expect(triggerControlPlane).toContain("打开 A2A 控制台");
+    expect(triggerControlPlane).not.toContain("打开 A2A 控制台");
+    expect(triggerControlPlane).not.toContain("Agent 间协议接入");
     expect(triggerControlPlane).toContain("/message:send");
     expect(triggerControlPlane).toContain("/agent-card.json");
     expect(triggerControlPlane).toContain('item.kind !== "a2a"');

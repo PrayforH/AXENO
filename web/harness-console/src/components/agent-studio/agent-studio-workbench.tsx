@@ -278,7 +278,11 @@ export function AgentStudioWorkbench() {
   const router = useRouter();
   const { membership, user } = useAuth();
   useDismissablePopovers();
-  const { requestConfirmation, confirmationDialog } = useConfirmationDialog();
+  const {
+    requestConfirmation,
+    requestDecision,
+    confirmationDialog,
+  } = useConfirmationDialog();
   const [draft, setDraft] = useState<StudioDraft>({
     ...DEFAULT_STUDIO_DRAFT,
     id: "",
@@ -891,16 +895,19 @@ export function AgentStudioWorkbench() {
       }
 
       leavePromptOpenRef.current = true;
-      void requestConfirmation({
-        title: "保存当前修改并离开？",
-        description: "Agent Studio 会先保存当前草稿，再返回上一页；如果保存失败或发生版本冲突，将留在这里继续处理。",
+      void requestDecision({
+        title: "有未保存的修改",
+        description: "可以保存后返回，也可以放弃这次修改直接离开。",
         confirmLabel: "保存并返回",
         cancelLabel: "继续编辑",
+        discardLabel: "放弃修改并返回",
         context: <span>浏览器历史：返回上一页</span>,
-      }).then(async (confirmed) => {
-        if (!confirmed) return;
-        const saved = await saveDraftRef.current();
-        if (!saved) return;
+      }).then(async (decision) => {
+        if (decision === "cancel") return;
+        if (decision === "confirm") {
+          const saved = await saveDraftRef.current();
+          if (!saved) return;
+        }
         historyGuard.deactivate(() => {
           window.setTimeout(() => {
             allowNavigationRef.current = true;
@@ -919,7 +926,7 @@ export function AgentStudioWorkbench() {
         historyGuardRef.current = null;
       }
     };
-  }, [requestConfirmation]);
+  }, [requestDecision]);
 
   useEffect(() => {
     const historyGuard = historyGuardRef.current;
@@ -973,16 +980,19 @@ export function AgentStudioWorkbench() {
         anchor.getAttribute("aria-label") ?? anchor.textContent,
         destination,
       );
-      void requestConfirmation({
-        title: "保存当前修改并离开？",
-        description: "Agent Studio 会先保存当前草稿，再打开目标页面；如果保存失败或发生版本冲突，将留在这里继续处理。",
+      void requestDecision({
+        title: "有未保存的修改",
+        description: "可以保存后前往目标页面，也可以放弃这次修改直接离开。",
         confirmLabel: "保存并离开",
         cancelLabel: "继续编辑",
+        discardLabel: "放弃修改并离开",
         context: <span>前往：{destinationName}</span>,
-      }).then(async (confirmed) => {
-        if (!confirmed) return;
-        const saved = await saveDraft();
-        if (!saved) return;
+      }).then(async (decision) => {
+        if (decision === "cancel") return;
+        if (decision === "confirm") {
+          const saved = await saveDraft();
+          if (!saved) return;
+        }
         const navigate = () => {
           allowNavigationRef.current = true;
           if (destination.origin === window.location.origin) {
@@ -1008,7 +1018,7 @@ export function AgentStudioWorkbench() {
       window.removeEventListener("beforeunload", protectBrowserNavigation);
       document.removeEventListener("click", protectLinkedNavigation, true);
     };
-  }, [canEdit, dirty, draft, requestConfirmation, router, saving]);
+  }, [canEdit, dirty, draft, requestDecision, router, saving]);
 
   async function applyRecommendedExecutionProfile(profileId: string) {
     const saved = await saveDraft({ ...draft, executionProfile: profileId });
@@ -1909,24 +1919,24 @@ export function AgentStudioWorkbench() {
             <div className={styles.eyebrow}>
               <span className={styles.draftDot} />
               {publishedCurrent ? "已发布" : "草稿"} · {draft.domain}
+              <span className={styles.syncState} data-dirty={dirty} role="status">
+                <span aria-hidden="true">·</span>
+                {saving
+                  ? "保存中"
+                  : inspecting
+                    ? "检查中"
+                    : dirty
+                      ? "未保存"
+                      : draft.id
+                        ? `已保存 r${draft.revision}`
+                        : "尚未保存"}
+              </span>
             </div>
             <div className={styles.titleLine}>
               <h1>{draft.displayName}</h1>
               <code>{draft.name}@{draft.version}</code>
             </div>
             <p>{draft.description}</p>
-            <span className={styles.syncState} data-dirty={dirty} role="status">
-              <i aria-hidden="true" />
-              {saving
-                ? "正在保存"
-                : inspecting
-                  ? "正在检查"
-                  : dirty
-                    ? "有未保存更改"
-                    : draft.id
-                      ? `已同步 r${draft.revision}`
-                      : "尚未保存"}
-            </span>
             {draft.publishedVersion && (
               <div className={styles.publicationBadge} data-current={publishedCurrent}>
                 <span>{publishedCurrent ? "不可变版本已发布" : "存在历史发布版本"}</span>
@@ -3482,21 +3492,6 @@ export function AgentStudioWorkbench() {
                 </div>
                 {draft.evaluationEnabled ? (
                   <>
-                    <div className={styles.evalToolbar}>
-                      <div>
-                        {(["happy", "ambiguous", "safety"] as const).map((tag) => (
-                          <span
-                            key={tag}
-                            data-complete={draft.evalCases.some((testCase) => testCase.tag === tag)}
-                          >
-                            {evaluationCoverageLabels[tag]}
-                          </span>
-                        ))}
-                      </div>
-                      <button type="button" onClick={() => setEvalManagerOpen(true)}>
-                        管理评测场景
-                      </button>
-                    </div>
                     <div className={styles.evalDatasetSummary}>
                       <div>
                         <strong>{draft.evalCases.length} 条评测场景</strong>
@@ -3508,7 +3503,7 @@ export function AgentStudioWorkbench() {
                         </span>
                       ))}
                       <button type="button" onClick={() => setEvalManagerOpen(true)}>
-                        打开评测集管理器
+                        管理评测集
                       </button>
                     </div>
                 <section className={styles.evalControlPlane} aria-label="持久化评测控制面">
