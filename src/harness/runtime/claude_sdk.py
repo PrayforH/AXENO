@@ -100,7 +100,8 @@ REMOTE_CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS = 3.0
 VISIBLE_EXECUTION_CONTRACT = """
 ## User-visible execution contract
 
-- Before significant tool work, give a short factual progress sentence. After important tool
+- If the request may take more than a couple of seconds, begin with one short factual progress
+  sentence before analysis or tool work; do not wait for a plan to finish. After important tool
   results, state the observable finding before the next action. Do not expose private chain-of-
   thought; only provide concise user-facing progress and auditable facts.
 - Every final deliverable must exist as a file inside the current workspace. In the final answer,

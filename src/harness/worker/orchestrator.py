@@ -1012,6 +1012,7 @@ class RunOrchestrator:
         workspace_policy = WorkspacePolicy()
         workspace_durable = True
         latest_runtime_result_payload: Mapping[str, Any] | None = None
+        provisioning_started_at = None
 
         try:
             if not is_resume:
@@ -1019,6 +1020,7 @@ class RunOrchestrator:
                     run = await self._reclaim(run)
                 else:
                     run = await self._move(run, RunStatus.PROVISIONING)
+                    provisioning_started_at = run.updated_at
                     self._observe_run_stage(
                         "queue_wait",
                         (run.updated_at - run.created_at).total_seconds(),
@@ -1158,6 +1160,11 @@ class RunOrchestrator:
             internal_asset_tool_calls: set[str] = set()
             if not is_resume:
                 run = await self._move(run, RunStatus.RUNNING)
+                if provisioning_started_at is not None:
+                    self._observe_run_stage(
+                        "environment_prepare",
+                        (run.updated_at - provisioning_started_at).total_seconds(),
+                    )
             else:
                 await self._events.append(
                     tenant_id=tenant_id,
@@ -1247,18 +1254,33 @@ class RunOrchestrator:
             known_tool_calls: dict[str, tuple[bool, bool]] = {}
             runtime_started_at = self._clock()
             first_runtime_event_observed = False
+            first_provider_event_observed = False
             first_runtime_text_observed = False
 
             def observe_runtime_event(runtime_event: Any) -> None:
-                nonlocal first_runtime_event_observed, first_runtime_text_observed
+                nonlocal first_runtime_event_observed
+                nonlocal first_provider_event_observed
+                nonlocal first_runtime_text_observed
                 observed_at = self._clock()
                 elapsed = (observed_at - runtime_started_at).total_seconds()
+                event_type = getattr(runtime_event, "type", None)
                 if not first_runtime_event_observed:
                     self._observe_run_stage("runtime_first_event", elapsed)
                     first_runtime_event_observed = True
                 if (
+                    not first_provider_event_observed
+                    and event_type
+                    not in {
+                        "model.route.selected",
+                        "tool.directory.loaded",
+                        "tool.directory.degraded",
+                    }
+                ):
+                    self._observe_run_stage("provider_first_event", elapsed)
+                    first_provider_event_observed = True
+                if (
                     not first_runtime_text_observed
-                    and getattr(runtime_event, "type", None) == "message.delta"
+                    and event_type == "message.delta"
                     and str(getattr(runtime_event, "payload", {}).get("text", "")).strip()
                 ):
                     self._observe_run_stage("runtime_first_text", elapsed)

@@ -76,4 +76,13 @@ describe("Weknora-inspired product theme", () => {
     );
     expect(studioStyles).toContain("--studio-green: var(--codex-accent)");
   });
+
+  it("keeps the Markdown prompt editor on the light Studio surface", () => {
+    expect(studioStyles).toMatch(
+      /data-color-mode="light"[^}]*\.codeEditor\s*\{[^}]*color:\s*var\(--studio-ink-soft\);[^}]*background:\s*var\(--studio-panel\);/s,
+    );
+    expect(studioStyles).toMatch(
+      /data-color-mode="light"[^}]*\.codeEditor:read-only\s*\{[^}]*background:\s*var\(--studio-panel-subtle\);/s,
+    );
+  });
 });

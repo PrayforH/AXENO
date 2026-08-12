@@ -6095,6 +6095,22 @@
   background: var(--studio-panel-subtle);
 }
 
+:global(html[data-color-mode="light"]) .codeEditor {
+  color: var(--studio-ink-soft);
+  background: var(--studio-panel);
+  caret-color: var(--studio-green);
+}
+
+:global(html[data-color-mode="light"]) .codeEditor::selection {
+  color: #163126;
+  background: #dbece2;
+}
+
+:global(html[data-color-mode="light"]) .codeEditor:read-only {
+  color: var(--studio-muted);
+  background: var(--studio-panel-subtle);
+}
+
 :global(html[data-color-mode="light"]) .field input,
 :global(html[data-color-mode="light"]) .field textarea,
 :global(html[data-color-mode="light"]) .field select,

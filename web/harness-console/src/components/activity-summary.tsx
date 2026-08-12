@@ -125,6 +125,8 @@ const visibleProcessEvents = new Set([
   "credential.lease.issued",
   "tool.directory.loaded",
   "tool.directory.degraded",
+  "runtime.system",
+  "message.start",
   "runtime.result",
   "workspace.archived",
   "workspace.recovery_retained",
@@ -132,7 +134,23 @@ const visibleProcessEvents = new Set([
 ]);
 
 function processCategory(eventType: string): ProcessCategory {
-  if (["runtime.system", "message.start"].includes(eventType)) return "model";
+  // `run.running` is emitted only after provisioning, workspace restore and
+  // runtime preparation have finished. Treating it as setup kept the UI on
+  // “正在准备运行环境” throughout provider startup and model thinking, even
+  // though the environment was already ready.
+  if (
+    [
+      "run.running",
+      "policy.resolved",
+      "credential.lease.issued",
+      "tool.directory.loaded",
+      "tool.directory.degraded",
+      "runtime.system",
+      "message.start",
+    ].includes(eventType)
+  ) {
+    return "model";
+  }
   if (["runtime.result", "workspace.archived", "artifact.ready"].includes(eventType)) {
     return "result";
   }
@@ -241,9 +259,20 @@ function processAction(processes: readonly ProcessNode[]): ActionNode {
   const category = processes[0]?.category ?? "setup";
   const status = combinedStatus(processes.map((item) => item.status));
   const active = status === "running" || status === "waiting";
+  const transientTitles = new Set([
+    "正在准备运行环境",
+    "Agent 开始执行",
+    "模型正在处理",
+    "正在生成本轮回复",
+  ]);
   const detailParts = processes
     .flatMap((item) => [item.title, item.summary])
-    .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
+    .filter(
+      (value, index, values): value is string =>
+        Boolean(value) &&
+        !transientTitles.has(value ?? "") &&
+        values.indexOf(value) === index,
+    );
   const label =
     category === "setup"
       ? active ? "正在准备运行环境" : "已准备运行环境"

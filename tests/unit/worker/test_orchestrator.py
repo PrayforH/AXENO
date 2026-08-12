@@ -1131,6 +1131,7 @@ async def test_records_queue_wait_first_runtime_event_and_first_text(
     class StageTimingRuntime(FakeRuntime):
         async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
             del context
+            yield RuntimeEvent(type="model.route.selected", payload={"route_id": "fast"})
             current[0] = NOW + timedelta(seconds=3)
             yield RuntimeEvent(type="runtime.system", payload={"subtype": "init"})
             current[0] = NOW + timedelta(seconds=5)
@@ -1157,7 +1158,17 @@ async def test_records_queue_wait_first_runtime_event_and_first_text(
     assert metrics.quantile(
         "harness_run_stage_duration_seconds",
         0.95,
+        labels={"stage": "environment_prepare"},
+    ) == (0, 1)
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
         labels={"stage": "runtime_first_event"},
+    ) == (0, 1)
+    assert metrics.quantile(
+        "harness_run_stage_duration_seconds",
+        0.95,
+        labels={"stage": "provider_first_event"},
     ) == (1, 1)
     assert metrics.quantile(
         "harness_run_stage_duration_seconds",
