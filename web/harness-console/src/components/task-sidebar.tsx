@@ -272,7 +272,6 @@ export function TaskSidebar({
               <span className="task-sidebar-brand-mark" aria-hidden="true">AS</span>
               <span className="task-sidebar-brand-copy">
                 <strong>Agent Studio</strong>
-                <small>智能任务工作台</small>
               </span>
             </Link>
             <button

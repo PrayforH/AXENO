@@ -81,7 +81,6 @@ export function StudioSidebar({
           {!collapsed && (
             <span className={styles.brandCopy}>
               <strong>Agent Studio</strong>
-              <small>智能体控制面</small>
             </span>
           )}
         </Link>

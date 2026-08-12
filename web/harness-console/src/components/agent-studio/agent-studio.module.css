@@ -2095,6 +2095,68 @@
   }
 }
 
+/* Weknora light workspace: flatter hierarchy and one green interaction axis. */
+:global(html[data-color-mode="light"]) .studioShell {
+  --studio-ink: var(--codex-ink);
+  --studio-ink-soft: var(--codex-ink-soft);
+  --studio-muted: var(--codex-muted);
+  --studio-faint: var(--codex-faint);
+  --studio-line: var(--codex-line);
+  --studio-line-strong: var(--codex-line-strong);
+  --studio-paper: var(--codex-surface);
+  --studio-panel: var(--codex-surface-raised);
+  --studio-panel-subtle: var(--codex-surface-subtle);
+  --studio-field: var(--codex-field);
+  --studio-sidebar: var(--codex-surface-sidebar);
+  --studio-green: var(--codex-accent);
+  --studio-green-soft: var(--codex-accent-soft);
+  background: var(--studio-paper);
+}
+
+:global(html[data-color-mode="light"]) .agentRail,
+:global(html[data-color-mode="light"]) .contractRail {
+  border-color: var(--studio-line);
+  background: var(--studio-sidebar);
+}
+
+:global(html[data-color-mode="light"]) .workspaceTabs,
+:global(html[data-color-mode="light"]) .sectionNav,
+:global(html[data-color-mode="light"]) .agentSearch input {
+  border-color: transparent;
+  background: var(--studio-panel-subtle);
+}
+
+:global(html[data-color-mode="light"]) .workspaceTabActive,
+:global(html[data-color-mode="light"]) .agentRowActive,
+:global(html[data-color-mode="light"]) .sectionActive {
+  border-color: transparent;
+  color: var(--studio-green);
+  background: color-mix(in srgb, var(--studio-green) 7%, #ffffff);
+  box-shadow: none;
+}
+
+:global(html[data-color-mode="light"]) .toolCard,
+:global(html[data-color-mode="light"]) .toolCardEnabled,
+:global(html[data-color-mode="light"]) .mcpCard,
+:global(html[data-color-mode="light"]) .mcpCardEnabled,
+:global(html[data-color-mode="light"]) .routeCard,
+:global(html[data-color-mode="light"]) .routeCardActive,
+:global(html[data-color-mode="light"]) .promptWorkspace,
+:global(html[data-color-mode="light"]) .orchestrationGraph,
+:global(html[data-color-mode="light"]) .subagentNode,
+:global(html[data-color-mode="light"]) .evalControlPlane,
+:global(html[data-color-mode="light"]) .deploymentControlPlane {
+  border-color: var(--studio-line);
+  box-shadow: 0 1px 2px rgb(36 60 45 / 4%);
+}
+
+@media (max-width: 900px) {
+  :global(html[data-color-mode="light"]) .agentRail,
+  :global(html[data-color-mode="light"]) .sectionNav {
+    background: rgb(248 250 248 / 97%);
+  }
+}
+
 /* Keep the Studio rail visually continuous with the task workspace. */
 .railHeading {
   padding: 13px 13px 7px;

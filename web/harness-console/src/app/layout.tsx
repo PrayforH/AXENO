@@ -4,6 +4,7 @@ import "@assistant-ui/react-ui/styles/index.css";
 import "@assistant-ui/react-ui/styles/markdown.css";
 import "./styles.css";
 import "./codex-theme.css";
+import "./weknora-theme.css";
 
 export const metadata: Metadata = {
   title: {
@@ -16,7 +17,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   colorScheme: "light dark",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f7f7" },
+    { media: "(prefers-color-scheme: light)", color: "#fbfcfb" },
     { media: "(prefers-color-scheme: dark)", color: "#181818" },
   ],
 };
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html
       lang="zh-CN"
       data-theme="codex-theme-v1"
+      data-product-ui="weknora"
       data-color-mode="dark"
       suppressHydrationWarning
     >

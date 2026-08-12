@@ -6,8 +6,8 @@
 
 .navigationLink,
 .navigationActive {
-  min-height: 36px;
-  padding: 0 11px;
+  min-height: 40px;
+  padding: 0 12px;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
@@ -15,8 +15,8 @@
   border: 0;
   border-radius: 9px;
   color: var(--codex-muted, #a1a1a1);
-  font-size: 11px;
-  font-weight: 620;
+  font-size: 12.5px;
+  font-weight: 590;
   text-decoration: none;
   transition:
     color 150ms ease,
@@ -49,13 +49,28 @@
 
 .navigation svg,
 .collapseIcon {
-  width: 18px;
-  height: 18px;
+  width: 19px;
+  height: 19px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.65;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+:global(html[data-color-mode="light"]) .navigationLink {
+  color: var(--codex-ink-soft, #35423a);
+}
+
+:global(html[data-color-mode="light"]) .navigationLink:hover {
+  color: var(--codex-ink, #17211b);
+  background: var(--codex-surface-hover, #edf2ee);
+}
+
+:global(html[data-color-mode="light"]) .navigationActive {
+  color: var(--codex-accent, #16b364);
+  background: color-mix(in srgb, var(--codex-accent, #16b364) 8%, #ffffff);
+  box-shadow: none;
 }
 
 .navigation[data-workspace-navigation="collapsed"] {
