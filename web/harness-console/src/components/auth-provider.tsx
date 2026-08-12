@@ -13,6 +13,7 @@ import {
   type AuthInvalidationReason,
   subscribeAuthEvents,
 } from "../lib/auth-coordination";
+import { ProductBrandMark } from "./product-brand";
 import type { AuthUser, Membership } from "../lib/auth-session";
 
 type AuthContextValue = {
@@ -114,7 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (!value) {
     return (
       <main className="auth-loading" aria-busy="true" aria-label="正在验证登录状态">
-        <span className="auth-loading-mark">AS</span>
+        <ProductBrandMark className="auth-loading-mark" />
         <span>正在进入工作台…</span>
       </main>
     );

@@ -5192,6 +5192,15 @@
   background: #e7f0eb;
 }
 
+.studioStateMark:global(.product-brand-mark) {
+  --product-brand-accent: var(--studio-green, var(--codex-accent, #16b364));
+  border-color: var(--studio-line-strong, #3b463f);
+  color: #f5faf7;
+  background: #202823;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%), 0 8px 22px rgb(0 0 0 / 18%);
+  font: inherit;
+}
+
 .studioStateCard h1 {
   margin: 0;
   font-size: 22px;

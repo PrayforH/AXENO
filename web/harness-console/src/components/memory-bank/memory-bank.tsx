@@ -8,6 +8,7 @@ import {
   useConfirmationDialog,
 } from "../confirmation-dialog";
 import styles from "./memory-bank.module.css";
+import { ProductBrandCopy, ProductBrandMark } from "../product-brand";
 
 const STATUS = { pending: "待确认", active: "使用中", rejected: "已拒绝", deleted: "已删除", expired: "已过期" } as const;
 const SENSITIVITY = { personal: "一般偏好", sensitive: "敏感信息", prohibited: "禁止保存" } as const;
@@ -103,7 +104,7 @@ export function MemoryBank() {
   const counts = useMemo(() => ({ active: entries.filter((item) => item.status === "active").length, pending: entries.filter((item) => item.status === "pending").length, agents: new Set(entries.map((item) => item.agentName)).size }), [entries]);
 
   return <main className={styles.shell} id="main-content">
-    <header className={styles.topbar}><Link className={styles.brand} href="/"><span>AS</span><div><strong>Agent Studio</strong><small>智能任务工作台</small></div></Link><div className={styles.topbarActions}><Link className={styles.back} href="/settings">返回设置</Link></div></header>
+    <header className={styles.topbar}><Link className={styles.brand} href="/"><ProductBrandMark /><ProductBrandCopy /></Link><div className={styles.topbarActions}><Link className={styles.back} href="/settings">返回设置</Link></div></header>
     <div className={styles.frame}>
       <header className={styles.hero}><div><p>Managed memory ledger</p><h1>你决定智能体记住什么</h1><span>智能体只能提出记忆建议。默认逐条确认；敏感内容不会因为开启自动保存而绕过确认，密钥和提示注入内容始终拒绝保存。</span></div><div className={styles.scope}><label htmlFor="memory-agent">当前智能体</label><input id="memory-agent" value={agentName} placeholder="例如 public-opinion-agent" onChange={(event) => setAgentName(event.target.value)} onBlur={() => void load()}/><small>输入名称并移开焦点，查看该智能体的记忆与策略。</small></div></header>
       {error && <p className={styles.alert} role="alert">{error}</p>}{notice && <p className={`${styles.alert} ${styles.notice}`} role="status">{notice}</p>}

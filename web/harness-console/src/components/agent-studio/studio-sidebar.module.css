@@ -67,15 +67,7 @@
 }
 
 .brandMark::after {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 2px;
-  content: "";
-  background: var(--sidebar-accent);
-  box-shadow: 0 0 10px rgb(51 156 255 / 48%);
+  display: none;
 }
 
 .brandCopy {

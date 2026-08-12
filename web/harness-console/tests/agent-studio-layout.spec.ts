@@ -49,6 +49,10 @@ const sidebar = readFileSync(
   join(process.cwd(), "src/components/agent-studio/studio-sidebar.tsx"),
   "utf8",
 );
+const productBrand = readFileSync(
+  join(process.cwd(), "src/components/product-brand.tsx"),
+  "utf8",
+);
 const sidebarStyles = readFileSync(
   join(
     process.cwd(),
@@ -213,7 +217,9 @@ describe("Agent Studio management page", () => {
     expect(page).toContain("AgentStudioWorkbench");
     expect(workbench).toContain("<StudioSidebar");
     expect(workbench).toContain("有效运行契约");
-    expect(sidebar).toContain("Agent Studio");
+    expect(sidebar).toContain("<ProductBrandMark");
+    expect(sidebar).toContain("<ProductBrandCopy");
+    expect(productBrand).toContain('PRODUCT_NAME = "序枢"');
     expect(sidebar).toContain("<WorkspaceNavigation");
     expect(workspaceNavigation).toContain('aria-label="工作区"');
     expect(workspaceNavigation).toContain('href: "/"');
@@ -345,8 +351,8 @@ describe("Agent Studio management page", () => {
   it("shares a persistent task-style collapsible control-plane rail", () => {
     expect(sidebar).toContain("agent-studio-sidebar-collapsed");
     expect(sidebar).toContain("data-studio-sidebar");
-    expect(sidebar).toContain("收起 Agent Studio 侧栏");
-    expect(sidebar).toContain("展开 Agent Studio 侧栏");
+    expect(sidebar).toContain("`收起${PRODUCT_NAME}侧栏`");
+    expect(sidebar).toContain("`展开${PRODUCT_NAME}侧栏`");
     expect(sidebar).toContain("aria-expanded={!collapsed}");
     expect(sidebar).not.toContain("<ThemeToggle");
     expect(sidebar).toContain("<AccountMenu");
@@ -607,9 +613,9 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("歧义 ambiguous");
     expect(workbench).toContain("安全 safety");
     expect(workbench).toContain("updateEvalCase");
-    expect(errorBoundary).toContain("Agent Studio 没有正常加载");
+    expect(errorBoundary).toContain("{PRODUCT_NAME}没有正常加载");
     expect(errorBoundary).toContain("重新加载");
-    expect(loadingBoundary).toContain("正在恢复 Agent Studio");
+    expect(loadingBoundary).toContain("正在恢复{PRODUCT_NAME}");
     expect(styles).toContain(".studioStateShell");
     expect(styles).toContain(".deploymentControlPlane");
     expect(styles).toContain(".environmentGrid");
@@ -676,7 +682,7 @@ describe("Agent Studio management page", () => {
   });
 
   it("renders only tenant API rows instead of invented live agents", () => {
-    expect(sidebar).toContain("<strong>Agent Studio</strong>");
+    expect(sidebar).toContain("<ProductBrandCopy");
     expect(workbench).toContain("studioClient.listAccessibleDrafts");
     expect(workbench).toContain("studioClient.getDraft");
     expect(workbench).not.toContain("helper-agent-1.0.0");

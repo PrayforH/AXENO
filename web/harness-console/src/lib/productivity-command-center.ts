@@ -45,7 +45,7 @@ const actionCommands: ReadonlyArray<
     kind: "action",
     id: "studio-agents",
     title: "创建或调整智能体",
-    description: "进入 Studio 定义工作、能力和版本",
+    description: "进入构建区定义工作、能力和版本",
     keywords: "agent studio 智能体 助手 创建 编辑 发布",
   },
   {

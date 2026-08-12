@@ -18,6 +18,80 @@
   box-sizing: border-box;
 }
 
+/* 序枢 brand system: one compact control mark across navigation and states. */
+.product-brand-mark {
+  --product-brand-accent: #25c878;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 9px;
+  color: #f5faf7;
+  background: #202823;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%), 0 5px 14px rgb(8 22 14 / 10%);
+}
+
+.product-brand-mark::after {
+  display: none !important;
+}
+
+.product-brand-mark svg {
+  width: 25px;
+  height: 25px;
+  overflow: visible;
+}
+
+.product-brand-track {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.product-brand-origin {
+  fill: #f5faf7;
+}
+
+.product-brand-core {
+  fill: #202823;
+  stroke: var(--product-brand-accent);
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.product-brand-terminal {
+  fill: var(--product-brand-accent);
+}
+
+.product-brand-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.product-brand-copy strong,
+.product-brand-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-brand-copy strong {
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+}
+
+.product-brand-copy small {
+  color: var(--codex-faint, var(--muted-ink));
+  font: 650 8px/1.2 var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.12em;
+}
+
 html,
 body {
   min-height: 100%;
@@ -1593,8 +1667,7 @@ textarea:not(.aui-composer-input):focus-visible {
   text-decoration: none;
 }
 
-.task-sidebar-brand-mark,
-.task-rail-brand {
+.task-sidebar-brand-mark {
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
@@ -1603,6 +1676,15 @@ textarea:not(.aui-composer-input):focus-visible {
   border: 1px solid var(--line);
   border-radius: 9px;
   font: 700 12px/1 ui-monospace, monospace;
+  text-decoration: none;
+}
+
+.task-rail-brand {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
   text-decoration: none;
 }
 
@@ -5542,18 +5624,30 @@ textarea:not(.aui-composer-input):focus-visible,
   background: #eaf4ee;
 }
 
-.login-brand div {
+.login-brand .product-brand-mark {
+  --product-brand-accent: #6ce6aa;
+  width: 40px;
+  height: 40px;
+  border-color: rgb(255 255 255 / 16%);
+  background: #172e25;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 10%), 0 12px 30px rgb(0 0 0 / 18%);
+}
+
+.login-brand .product-brand-copy {
   display: grid;
-  gap: 1px;
+  gap: 4px;
 }
 
-.login-brand strong {
-  font: 650 17px/1.2 "Avenir Next Condensed", "Arial Narrow", sans-serif;
+.login-brand .product-brand-copy strong {
+  color: #f2f8f4;
+  font: 680 19px/1.1 "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  letter-spacing: -0.03em;
 }
 
-.login-brand span:last-child {
+.login-brand .product-brand-copy small {
   color: #a7b9b0;
-  font-size: 12px;
+  font-size: 8px;
+  letter-spacing: 0.15em;
 }
 
 .login-thesis {
@@ -6038,6 +6132,11 @@ textarea:not(.aui-composer-input):focus-visible,
   color: var(--muted-ink);
   font: 10px/1.2 var(--font-mono);
   letter-spacing: 0.04em;
+}
+
+.settings-brand .product-brand-mark {
+  width: 32px;
+  height: 32px;
 }
 
 .settings-back {
@@ -6752,19 +6851,17 @@ textarea:not(.aui-composer-input):focus-visible,
 .task-rail-brand {
   position: relative;
   margin-bottom: 7px;
-  color: #ffffff;
-  background: #202020;
+  color: inherit;
+  background: transparent;
 }
 
 .task-rail-brand::after {
-  position: absolute;
-  right: 3px;
-  bottom: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 2px;
-  content: "";
-  background: var(--codex-accent, #339cff);
+  display: none;
+}
+
+.task-rail-brand .product-brand-mark {
+  width: 34px;
+  height: 34px;
 }
 
 .task-sidebar-heading-actions {

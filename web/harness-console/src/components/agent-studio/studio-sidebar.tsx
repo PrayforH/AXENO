@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type ReactNode, useEffect, useState } from "react";
 import { AccountMenu } from "../account-menu";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../product-brand";
 import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
@@ -66,22 +67,18 @@ export function StudioSidebar({
       className={styles.sidebar}
       data-studio-sidebar={collapsed ? "collapsed" : "expanded"}
       aria-label={
-        collapsed ? "Agent Studio 快捷栏" : "Agent Studio 控制面导航"
+        collapsed ? `${PRODUCT_NAME}快捷栏` : `${PRODUCT_NAME}控制面导航`
       }
     >
       <header className={styles.brand}>
         <Link
           className={styles.brandLink}
           href="/studio/agents"
-          aria-label="Agent Studio 首页"
+          aria-label={`${PRODUCT_NAME}首页`}
         >
-          <span className={styles.brandMark} aria-hidden="true">
-            AS
-          </span>
+          <ProductBrandMark className={styles.brandMark} />
           {!collapsed && (
-            <span className={styles.brandCopy}>
-              <strong>Agent Studio</strong>
-            </span>
+            <ProductBrandCopy className={styles.brandCopy} />
           )}
         </Link>
         {!collapsed && (
@@ -89,7 +86,7 @@ export function StudioSidebar({
             className={styles.collapseButton}
             type="button"
             aria-expanded={!collapsed}
-            aria-label="收起 Agent Studio 侧栏"
+            aria-label={`收起${PRODUCT_NAME}侧栏`}
             title="收起侧栏"
             onClick={toggleSidebar}
           >
@@ -106,7 +103,7 @@ export function StudioSidebar({
               type="button"
               aria-expanded={!collapsed}
               aria-label={
-                collapsed ? "展开 Agent Studio 侧栏" : "收起 Agent Studio 侧栏"
+                collapsed ? `展开${PRODUCT_NAME}侧栏` : `收起${PRODUCT_NAME}侧栏`
               }
               title={collapsed ? "展开侧栏" : "收起侧栏"}
               onClick={toggleSidebar}

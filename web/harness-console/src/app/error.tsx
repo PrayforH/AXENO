@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
+import { PRODUCT_NAME } from "../components/product-brand";
 
 function RecoveryMark() {
   return (
@@ -40,7 +41,7 @@ export default function ErrorPage({
         </div>
         {error.digest ? <small className="recovery-reference">参考编号 {error.digest}</small> : null}
       </section>
-      <p className="recovery-footnote">Agent Studio · 已有内容仍保存在原位置</p>
+      <p className="recovery-footnote">{PRODUCT_NAME} · 已有内容仍保存在原位置</p>
     </main>
   );
 }

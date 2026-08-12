@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import { ProductIcon } from "./product-icon";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "./product-brand";
 import {
   WorkspaceCollapseIcon,
   WorkspaceNavigation,
@@ -236,9 +237,9 @@ export function TaskSidebar({
           <Link
             className="task-rail-brand"
             href="/"
-            aria-label="Agent Studio 任务首页"
+            aria-label={`${PRODUCT_NAME}任务首页`}
           >
-            AS
+            <ProductBrandMark />
           </Link>
           <button
             ref={expandButtonRef}
@@ -268,11 +269,9 @@ export function TaskSidebar({
       ) : (
         <>
           <div className="task-sidebar-brand">
-            <Link className="task-sidebar-brand-link" href="/" aria-label="Agent Studio 任务首页">
-              <span className="task-sidebar-brand-mark" aria-hidden="true">AS</span>
-              <span className="task-sidebar-brand-copy">
-                <strong>Agent Studio</strong>
-              </span>
+            <Link className="task-sidebar-brand-link" href="/" aria-label={`${PRODUCT_NAME}任务首页`}>
+              <ProductBrandMark className="task-sidebar-brand-mark" />
+              <ProductBrandCopy className="task-sidebar-brand-copy" />
             </Link>
             <button
               ref={closeButtonRef}

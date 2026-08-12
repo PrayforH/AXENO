@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { useAuth } from "../auth-provider";
 import { useConfirmationDialog } from "../confirmation-dialog";
 import { ProductIcon } from "../product-icon";
+import { PRODUCT_NAME, ProductBrandMark } from "../product-brand";
 import { StudioSidebar } from "./studio-sidebar";
 import {
   DEFAULT_STUDIO_DRAFT,
@@ -453,7 +454,7 @@ export function AgentStudioWorkbench() {
         ref: `${item.name}@${item.version}`,
         label: item.displayName,
         description: `${item.domain} · ${item.publishedVersion ? "已发布版本" : `可编辑草稿 r${item.revision}`}`,
-        policy: item.publishedVersion ? "已发布快照" : "Studio 草稿",
+        policy: item.publishedVersion ? "已发布快照" : "构建草稿",
         tools: [] as string[],
         status: item.publishedVersion ? "approved" as const : "draft" as const,
       })),
@@ -566,7 +567,7 @@ export function AgentStudioWorkbench() {
       } catch (error) {
         if (!active) return;
         setLoadError(
-          error instanceof Error ? error.message : "Agent Studio API 当前不可用",
+          error instanceof Error ? error.message : `${PRODUCT_NAME}服务当前不可用`,
         );
       } finally {
         if (active) setLoading(false);
@@ -1136,7 +1137,7 @@ export function AgentStudioWorkbench() {
     }
     const confirmed = await requestConfirmation({
       title: "保存当前修改并新建？",
-      description: "Agent Studio 会先保存当前草稿，再创建一个新的个人智能体；保存失败或发生版本冲突时会保留当前编辑内容。",
+      description: `${PRODUCT_NAME}会先保存当前草稿，再创建一个新的个人智能体；保存失败或发生版本冲突时会保留当前编辑内容。`,
       confirmLabel: "保存并新建",
       cancelLabel: "继续编辑",
       context: <span>当前草稿：{draft.displayName}</span>,
@@ -1155,7 +1156,7 @@ export function AgentStudioWorkbench() {
       if (dirty) {
         const confirmed = await requestConfirmation({
           title: "保存当前修改并切换？",
-          description: "Agent Studio 会先保存当前草稿，再切换智能体；保存失败或发生版本冲突时会保留当前编辑内容。",
+          description: `${PRODUCT_NAME}会先保存当前草稿，再切换智能体；保存失败或发生版本冲突时会保留当前编辑内容。`,
           confirmLabel: "保存并切换",
           cancelLabel: "继续编辑",
           context: <span>切换到：{target?.displayName ?? "所选智能体"}</span>,
@@ -1190,7 +1191,7 @@ export function AgentStudioWorkbench() {
       title: "放弃本地修改并加载控制面版本？",
       description:
         "控制面版本会替换当前表单里所有尚未保存的修改。"
-        + "Agent Studio 不会为这些本地修改生成恢复点。",
+        + `${PRODUCT_NAME}不会为这些本地修改生成恢复点。`,
       confirmLabel: "放弃并加载",
       cancelLabel: "继续编辑",
       tone: "danger",
@@ -1862,10 +1863,10 @@ export function AgentStudioWorkbench() {
   }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
-    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>AS</span><h1>正在读取 Agent Studio</h1><p>正在恢复你的智能体草稿与能力目录。</p></section></main>;
+    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><ProductBrandMark className={styles.studioStateMark} /><h1>正在读取{PRODUCT_NAME}</h1><p>正在恢复你的智能体草稿与能力目录。</p></section></main>;
   }
   if (loadError) {
-    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Agent Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>{PRODUCT_NAME}数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
   }
 
   return (
@@ -2576,7 +2577,7 @@ export function AgentStudioWorkbench() {
                   id="orchestration-title"
                   kicker="04 / Collaboration"
                   title="让 Lead 负责决策，让专家并行取证"
-                  description="Lead 是唯一面向用户的主线；Sub Agent 可直接绑定并打开 Studio 草稿编辑，正式发布 Lead 时再固定依赖版本。"
+                  description="Lead 是唯一面向用户的主线；Sub Agent 可直接绑定并打开构建草稿编辑，正式发布 Lead 时再固定依赖版本。"
                 />
 
                 <div className={styles.orchestrationSummary} aria-label="协同运行摘要">

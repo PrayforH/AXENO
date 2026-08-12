@@ -2,6 +2,7 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { publishAuthEvent } from "../../lib/auth-coordination";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../../components/product-brand";
 
 type AuthConfig = {
   registration_enabled: boolean;
@@ -76,13 +77,10 @@ export default function LoginPage() {
   const hasSso = Boolean(config?.providers.google || config?.providers.github);
   return (
     <main className="login-shell" id="main-content">
-      <section className="login-context" aria-label="Agent Studio 简介">
+      <section className="login-context" aria-label={`${PRODUCT_NAME}简介`}>
         <div className="login-brand">
-          <span className="brand-mark">AS</span>
-          <div>
-            <strong>Agent Studio</strong>
-            <span>智能任务工作台</span>
-          </div>
+          <ProductBrandMark />
+          <ProductBrandCopy />
         </div>
         <div className="login-thesis">
           <p className="login-eyebrow">从意图到可审计的执行</p>

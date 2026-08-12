@@ -36,7 +36,7 @@ describe("Weknora-inspired product theme", () => {
     expect(layout.indexOf('import "./weknora-theme.css"')).toBeGreaterThan(
       layout.indexOf('import "./codex-theme.css"'),
     );
-    expect(layout).toContain('data-product-ui="weknora"');
+    expect(layout).toContain('data-product-ui="xushu"');
     expect(layout).toContain('color: "#fbfcfb"');
   });
 

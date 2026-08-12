@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from "../../components/auth-provider";
 import { ThemeSelector } from "../../components/theme-toggle";
 import { WorkspaceMembers } from "../../components/workspace-members";
 import { ProductIcon, type ProductIconName } from "../../components/product-icon";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../../components/product-brand";
 import {
   loadTasks,
   setTaskArchived,
@@ -189,9 +190,9 @@ function SettingsContent() {
   return (
     <main className="settings-shell" id="main-content">
       <header className="settings-header">
-        <a className="settings-brand" href="/" aria-label="返回 Agent Studio">
-          <span className="brand-mark" aria-hidden="true">AS</span>
-          <span><strong>Agent Studio</strong><small>智能任务工作台</small></span>
+        <a className="settings-brand" href="/" aria-label={`返回${PRODUCT_NAME}`}>
+          <ProductBrandMark />
+          <ProductBrandCopy />
         </a>
         <div className="settings-header-actions">
           <a className="settings-back" href="/">返回工作台</a>
@@ -256,7 +257,7 @@ function SettingsContent() {
           <section className="settings-section" id="appearance">
             <div className="settings-section-copy">
               <h2>外观</h2>
-              <p>整个 Agent Studio 使用同一主题偏好。</p>
+              <p>整个{PRODUCT_NAME}使用同一主题偏好。</p>
             </div>
             <div className="settings-form settings-appearance">
               <div>

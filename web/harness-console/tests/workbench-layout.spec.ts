@@ -87,7 +87,8 @@ describe("full-page agent workbench", () => {
   });
 
   it("presents a user task workspace instead of an internal validation console", () => {
-    expect(taskSidebar).toContain("Agent Studio");
+    expect(taskSidebar).toContain("<ProductBrandMark");
+    expect(taskSidebar).toContain("<ProductBrandCopy");
     expect(page).toContain("<TaskAgentSwitcher");
     expect(page).not.toContain('className="brand-lockup"');
     expect(page).toContain('className="task-content-shell"');
