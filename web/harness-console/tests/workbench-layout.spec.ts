@@ -103,7 +103,7 @@ describe("full-page agent workbench", () => {
   it("opens observability from the exact run instead of a global operations link", () => {
     expect(page).toContain("<RunDetailsProvider");
     expect(page).toContain("activity={inspectedActivity}");
-    expect(page).toContain('inspectedActivity ? " inspector-open" : ""');
+    expect(page).not.toContain('inspectedActivity ? " inspector-open" : ""');
     expect(agentThread).toContain("<ActivitySummary");
     expect(agentThread).toContain("可打开“运行详情”查看原因");
     expect(activitySummary).toContain('className="execution-details-trigger"');
@@ -597,13 +597,10 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("reserves a real desktop grid column for run details", () => {
-    expect(styles).toMatch(
-      /@media \(max-width: 1100px\) and \(min-width: 981px\)[\s\S]*?\.workspace-stage\.tasks-open\.inspector-open\s*\{[^}]*grid-template-columns:\s*var\(--app-sidebar-expanded-width,\s*248px\) minmax\(0,\s*1fr\) 320px;/s,
-    );
-    expect(styles).toMatch(
-      /@media \(max-width: 1100px\) and \(min-width: 981px\)[\s\S]*?\.workspace-stage\.tasks-open\.inspector-open \.developer-drawer\s*\{[^}]*position:\s*relative;[^}]*width:\s*auto;/s,
-    );
+  it("opens run details as an overlay instead of resizing the workspace", () => {
+    expect(page).not.toContain('inspectedActivity ? " inspector-open" : ""');
+    expect(page).toContain("<DeveloperDrawer");
+    expect(styles).toContain(".run-details-backdrop");
   });
 
   it("shows a lightweight recovery skeleton instead of a lone loading line", () => {

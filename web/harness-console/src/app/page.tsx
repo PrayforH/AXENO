@@ -359,7 +359,7 @@ function AuthenticatedHome() {
         onOpen={openRunDetails}
       >
       <div
-        className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""}${inspectedActivity ? " inspector-open" : ""}`}
+        className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""}`}
       >
         {compactTaskSidebar && taskSidebarOpen && (
           <button

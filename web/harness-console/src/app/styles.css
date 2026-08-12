@@ -6960,6 +6960,30 @@ textarea:not(.aui-composer-input):focus-visible,
   animation: context-backdrop-in 150ms ease-out;
 }
 
+.run-details-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(0 0 0 / 48%);
+  backdrop-filter: blur(2px);
+  animation: context-backdrop-in 150ms ease-out;
+}
+
+.context-recovery-panel,
+.run-details-backdrop .developer-drawer {
+  width: min(440px, 100vw);
+}
+
+.run-details-backdrop .developer-drawer {
+  height: 100dvh;
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--codex-shadow, -24px 0 70px rgb(0 0 0 / 38%));
+  animation: context-panel-in 180ms ease-out;
+}
+
 .context-recovery-panel {
   --paper: var(--codex-surface, #181818);
   --surface: var(--codex-surface-raised, #242424);
@@ -6973,7 +6997,6 @@ textarea:not(.aui-composer-input):focus-visible,
   --rail-soft: var(--codex-success-soft, rgb(64 201 119 / 13%));
   --signal: var(--codex-warning, #e6aa4a);
   --danger: var(--codex-danger, #fa423e);
-  width: min(440px, 100vw);
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
