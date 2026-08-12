@@ -9,6 +9,13 @@ const component = readFileSync(
   ),
   "utf8",
 );
+const styles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/mcp-catalog-control-plane.module.css",
+  ),
+  "utf8",
+);
 const navigation = readFileSync(
   join(process.cwd(), "src/components/workspace-navigation.tsx"),
   "utf8",
@@ -99,6 +106,12 @@ describe("MCP capability catalog", () => {
     expect(component).toContain("MANAGED_AUTH_HEADER_NAMES");
     expect(component).toContain("密钥、Token 和 Cookie 不能放入自定义请求头");
     expect(component).toContain("自动检测");
+    expect(styles).toMatch(/\.formSectionTitle\s*\{[^}]*grid-template-columns:\s*20px minmax\(0, 1fr\);/s);
+    expect(styles).toMatch(/\.formSectionTitle\s*>\s*span\s*\{[^}]*font:\s*700 9px\/1\.2/s);
+    expect(styles).toContain("font-variant-numeric: tabular-nums");
+    expect(component.match(/className=\{styles\.formSection\}/g)).toHaveLength(5);
+    expect(styles).toMatch(/\.formSection\s*\{[^}]*border-radius:\s*12px;[^}]*background:\s*var\(--panel\);/s);
+    expect(styles).toMatch(/@media \(max-width: 680px\)[\s\S]*?\.formSection\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s);
   });
 
   it("explains which agents need resync after the reviewed tool list changes", () => {

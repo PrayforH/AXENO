@@ -933,6 +933,7 @@ export function McpCatalogControlPlane({
               <button type="button" onClick={closeEditor}>关闭</button>
             </header>
             <form onSubmit={save}>
+              <section className={styles.formSection}>
               <div className={styles.formSectionTitle}>
                 <span>01</span>
                 <div>
@@ -1000,6 +1001,8 @@ export function McpCatalogControlPlane({
                   }
                 />
               </label>
+              </section>
+              <section className={styles.formSection}>
               <div className={styles.formSectionTitle}>
                 <span>02</span>
                 <div>
@@ -1127,6 +1130,8 @@ export function McpCatalogControlPlane({
                   }
                 />
               </label>
+              </section>
+              <section className={styles.formSection}>
               <div className={styles.formSectionTitle}>
                 <span>03</span>
                 <div>
@@ -1206,6 +1211,8 @@ export function McpCatalogControlPlane({
                   <small>对应服务端引用 JSON 中的键。</small>
                 </label>
               )}
+              </section>
+              <section className={styles.formSection}>
               <div className={styles.formSectionTitle}>
                 <span>04</span>
                 <div>
@@ -1262,6 +1269,8 @@ export function McpCatalogControlPlane({
                   })}
                 </div>
               </section>
+              </section>
+              <section className={styles.formSection}>
               <div className={styles.formSectionTitle}>
                 <span>05</span>
                 <div>
@@ -1380,6 +1389,7 @@ export function McpCatalogControlPlane({
                   <span>运行前必须通过预检</span>
                 </label>
               </div>
+              </section>
               <div className={styles.formActions}>
                 <span>已审核 {draft.tools.length} 个工具；保存后可在「智能体 → 工具与 MCP」中绑定。</span>
                 <button type="button" onClick={() => setShowForm(false)}>取消</button>

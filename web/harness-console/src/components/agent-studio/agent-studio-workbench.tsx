@@ -4007,7 +4007,9 @@ export function AgentStudioWorkbench() {
                 setPromoteTarget("");
               }}
             >
-              ×
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4.5 4.5 7 7m0-7-7 7" />
+              </svg>
             </button>
           </div>
         </div>
@@ -4147,7 +4149,9 @@ export function AgentStudioWorkbench() {
               aria-label="关闭有效运行契约"
               onClick={() => setContractOpen(false)}
             >
-              ×
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4.5 4.5 7 7m0-7-7 7" />
+              </svg>
             </button>
           </div>
         </div>

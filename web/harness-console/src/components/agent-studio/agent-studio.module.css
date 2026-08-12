@@ -4814,47 +4814,65 @@
   letter-spacing: -0.025em;
 }
 
-.contractHeaderActions {
+.contractHeader > .contractHeaderActions {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
 }
 
 .contractHeaderActions > button {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border: 1px solid var(--studio-line);
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--studio-muted);
-  background: transparent;
-  font-size: 17px;
-  line-height: 1;
+  background: var(--studio-panel-subtle);
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.contractHeaderActions > button svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
 }
 
 .contractHeaderActions > button:hover {
   color: var(--studio-ink);
-  background: var(--studio-panel-subtle);
+  border-color: var(--studio-line-strong);
+  background: var(--studio-panel);
 }
 
 .riskBadge {
-  padding: 5px 8px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
   color: var(--studio-green);
-  background: var(--studio-green-soft);
-  border-radius: 7px;
+  background: color-mix(in srgb, var(--studio-green) 7%, transparent);
+  border-radius: 6px;
   font-size: 9px !important;
-  font-weight: 700;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .riskBadge[data-risk="medium"] {
   color: var(--studio-amber);
-  background: var(--studio-amber-soft);
+  background: color-mix(in srgb, var(--studio-amber) 7%, transparent);
 }
 
 .riskBadge[data-risk="high"] {
   color: var(--studio-red);
-  background: var(--studio-red-soft);
+  background: color-mix(in srgb, var(--studio-red) 7%, transparent);
 }
 
 .capabilitySpine {
