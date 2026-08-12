@@ -349,15 +349,7 @@ function HarnessComposer() {
             onClick={() => aui.thread().cancelRun()}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-              <rect x="8" y="8" width="8" height="8" rx="1.25" fill="currentColor" />
+              <rect x="8" y="8" width="8" height="8" rx="1.5" fill="currentColor" />
             </svg>
           </button>
         ) : (
@@ -817,6 +809,12 @@ export function incompleteRunGuidance(isLast: boolean) {
     : "该条历史运行未完整结束，可打开“运行详情”查看原因。";
 }
 
+export function shouldOfferIncompleteRetry(
+  status: { type?: string; reason?: string } | undefined,
+) {
+  return status?.type === "incomplete" && status.reason !== "cancelled";
+}
+
 export function ownsLiveResponse(
   isLast: boolean,
   messageId: string,
@@ -841,9 +839,8 @@ function HarnessAssistantMessage() {
   const live = useLiveResponse();
   const isLast = useAuiState((state) => state.message.isLast);
   const messageId = useAuiState((state) => state.message.id);
-  const isIncomplete = useAuiState(
-    (state) => state.message.status?.type === "incomplete",
-  );
+  const messageStatus = useAuiState((state) => state.message.status);
+  const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus);
   const content = useAuiState((state) => state.message.content);
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
@@ -877,7 +874,7 @@ function HarnessAssistantMessage() {
           Reasoning: ReasoningPart,
         }}
       />
-      {isIncomplete ? (
+      {showIncompleteRecovery ? (
         <div className="aui-message-error">
           <span>{incompleteRunGuidance(isLast)}</span>
           <ActionBarPrimitive.Reload

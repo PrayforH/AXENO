@@ -61,6 +61,21 @@ describe("full-page agent workbench", () => {
     );
   });
 
+  it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {
+    expect(codexStyles).toMatch(
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*background:\s*var\(--codex-accent\);/s,
+    );
+    expect(codexStyles).not.toMatch(
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*var\(--codex-danger/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.aui-message-error\s*\{[^}]*color:\s*var\(--codex-faint\);[^}]*background:\s*transparent;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.aui-message-error \.run-retry-button\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
+    );
+  });
+
   it("presents a user task workspace instead of an internal validation console", () => {
     expect(taskSidebar).toContain("Agent Studio");
     expect(page).toContain("<TaskAgentSwitcher");

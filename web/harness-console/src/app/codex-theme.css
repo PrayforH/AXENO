@@ -740,8 +740,12 @@ select {
 }
 
 .harness-composer-shell .aui-composer-cancel {
-  color: var(--codex-danger);
-  background: var(--codex-danger-soft);
+  color: #07111a;
+  background: var(--codex-accent);
+}
+
+.harness-composer-shell .aui-composer-cancel:hover {
+  background: var(--codex-accent-hover);
 }
 
 .harness-composer-shell :is(.aui-composer-attach, .aui-composer-send, .aui-composer-cancel):active {
@@ -1266,29 +1270,33 @@ body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
   color: var(--codex-accent);
 }
 
-.domain-error,
-.aui-message-error {
+.domain-error {
   border-color: rgb(250 66 62 / 30%);
   color: var(--codex-danger);
   background: var(--codex-danger-soft);
 }
 
+.aui-message-error {
+  border-color: var(--codex-line);
+  color: var(--codex-faint);
+  background: transparent;
+}
+
 .aui-message-error .run-retry-button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid rgb(250 66 62 / 34%);
-  border-radius: 7px;
-  color: var(--codex-ink-soft);
-  background: var(--codex-surface-raised);
+  min-height: 26px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--codex-muted);
+  background: transparent;
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
 }
 
 .aui-message-error .run-retry-button:hover {
-  border-color: var(--codex-accent);
-  color: var(--codex-ink);
-  background: var(--codex-surface-hover);
+  color: var(--codex-accent);
+  background: transparent;
 }
 
 /* Run inspector */

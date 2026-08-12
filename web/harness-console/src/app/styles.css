@@ -3172,8 +3172,8 @@ body,
 }
 
 .harness-composer-shell .aui-composer-cancel {
-  background: #f1e6e4;
-  color: #8d4039;
+  background: #282d29;
+  color: #fff;
 }
 
 .composer-meta {
@@ -3572,15 +3572,15 @@ body,
   display: none;
 }
 .aui-message-error {
-  margin-top: 10px;
-  padding: 8px 0;
+  margin-top: 8px;
+  padding: 8px 0 2px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-top: 1px solid #eadbd7;
+  border-top: 1px solid #e2e4e1;
   background: transparent;
-  color: #8d4035;
+  color: #737b76;
   font-size: 11px;
 }
 

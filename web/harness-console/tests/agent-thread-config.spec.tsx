@@ -64,6 +64,7 @@ import {
   messageOwnsRun,
   normalizeMessageText,
   ownsLiveResponse,
+  shouldOfferIncompleteRetry,
   shouldSuppressNativeAssistantText,
   shouldShowComposerStop,
   shouldShowPreResponseActivity,
@@ -104,6 +105,17 @@ it("uses the current run control name in incomplete-run guidance", () => {
   expect(agentThreadSource).toContain('className="run-retry-button"');
   expect(agentThreadSource).toContain("重新运行");
   expect(agentThreadSource).not.toContain("请查看运行详情");
+});
+
+it("keeps user-stopped runs neutral and only offers retry for actual failures", () => {
+  expect(shouldOfferIncompleteRetry({ type: "incomplete", reason: "cancelled" })).toBe(false);
+  expect(shouldOfferIncompleteRetry({ type: "incomplete", reason: "error" })).toBe(true);
+  expect(shouldOfferIncompleteRetry({ type: "complete", reason: "unknown" })).toBe(false);
+  expect(agentThreadSource).toContain(
+    "const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus)",
+  );
+  expect(agentThreadSource).toContain("{showIncompleteRecovery ? (");
+  expect(agentThreadSource).not.toContain('<circle\n                cx="12"');
 });
 
 it("uses interactive answer branch primitives for regenerated responses", () => {
