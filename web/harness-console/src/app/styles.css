@@ -518,7 +518,10 @@ textarea:not(.aui-composer-input):focus-visible {
 
 .assistant-message-copy {
   width: 30px;
+  min-width: 30px;
   height: 30px;
+  flex: 0 0 30px;
+  position: relative;
   padding: 6px;
   display: grid;
   place-items: center;
@@ -528,6 +531,22 @@ textarea:not(.aui-composer-input):focus-visible {
   background: transparent;
   cursor: pointer;
   transition: color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+/* Copy feedback is announced by assistive technology without becoming visible
+   text inside the fixed-size icon action. Keep this local to message controls so
+   it cannot depend on a utility class supplied by an external UI package. */
+.message-copy-status {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
 }
 
 .assistant-message-copy:hover,
@@ -3909,11 +3928,14 @@ textarea:not(.aui-composer-input):focus-visible,
   margin-top: 4px;
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 4px;
 }
 
 .assistant-message-controls > .aui-branch-picker-root,
 .assistant-message-controls > .aui-assistant-action-bar-root {
+  min-width: max-content;
+  flex: 0 0 auto;
   margin: 0;
 }
 
@@ -5283,7 +5305,10 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .user-message-action {
   width: 28px;
+  min-width: 28px;
   height: 28px;
+  flex: 0 0 28px;
+  position: relative;
   padding: 5px;
   display: grid;
   place-items: center;

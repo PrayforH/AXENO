@@ -185,6 +185,8 @@ it("normalizes copied message text and provides an HTTP-safe clipboard fallback"
   expect(normalizeMessageText("上海贤创广告有限公司 下钻")).toBe("上海贤创广告有限公司 下钻");
   expect(agentThreadSource).toContain('document.execCommand("copy")');
   expect(agentThreadSource).toContain('data-copy-state={copyState}');
+  expect(agentThreadSource).toContain('className="message-copy-status"');
+  expect(agentThreadSource).not.toContain('className="sr-only"');
 });
 
 it("removes answer regeneration while preserving failed-run recovery", () => {

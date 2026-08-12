@@ -49,6 +49,18 @@ const login = readFileSync(
 );
 
 describe("full-page agent workbench", () => {
+  it("keeps copy feedback visually hidden inside fixed-size message actions", () => {
+    expect(styles).toMatch(
+      /\.message-copy-status\s*\{[^}]*position:\s*absolute;[^}]*clip-path:\s*inset\(50%\);[^}]*white-space:\s*nowrap;/s,
+    );
+    expect(styles).toMatch(
+      /\.assistant-message-copy\s*\{[^}]*min-width:\s*30px;[^}]*flex:\s*0 0 30px;/s,
+    );
+    expect(styles).toMatch(
+      /\.user-message-action\s*\{[^}]*min-width:\s*28px;[^}]*flex:\s*0 0 28px;/s,
+    );
+  });
+
   it("presents a user task workspace instead of an internal validation console", () => {
     expect(taskSidebar).toContain("Agent Studio");
     expect(page).toContain("<TaskAgentSwitcher");

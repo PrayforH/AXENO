@@ -229,7 +229,7 @@ function MessageCopyButton({
       onClick={() => void copy()}
     >
       {copyState === "copied" ? <CopySuccessIcon /> : <CopyMessageIcon />}
-      <span className="sr-only" aria-live="polite">{feedback}</span>
+      <span className="message-copy-status" aria-live="polite">{feedback}</span>
     </button>
   );
 }
