@@ -126,7 +126,7 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /\.workspace-stage:not\(\.tasks-open\)\s*\{[^}]*grid-template-columns:\s*var\(--app-sidebar-collapsed-width,\s*52px\) minmax\(0,\s*1fr\);/s,
     );
-    expect(codexStyles).toContain("--app-sidebar-expanded-width: 248px");
+    expect(codexStyles).toContain("--app-sidebar-expanded-width: 264px");
     expect(codexStyles).toContain(
       "grid-template-columns: var(--app-sidebar-expanded-width) minmax(0, 1fr)",
     );

@@ -192,7 +192,7 @@ describe("Agent Studio management page", () => {
   });
 
   it("uses one sidebar width contract across Studio surfaces", () => {
-    expect(codexTheme).toContain("--app-sidebar-expanded-width: 248px");
+    expect(codexTheme).toContain("--app-sidebar-expanded-width: 264px");
     expect(codexTheme).toContain("--app-sidebar-collapsed-width: 52px");
     expect(codexTheme).toContain(
       "--studio-sidebar-expanded-width: var(--app-sidebar-expanded-width)",

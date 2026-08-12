@@ -1531,11 +1531,11 @@ textarea:not(.aui-composer-input):focus-visible {
 
 /* Durable task navigation -------------------------------------------------- */
 .workspace-stage.tasks-open {
-  grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr);
 }
 
 .workspace-stage.tasks-open.inspector-open {
-  grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr) 340px;
+  grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr) 340px;
 }
 
 .sidebar-glyph {
@@ -2066,11 +2066,11 @@ textarea:not(.aui-composer-input):focus-visible {
 
 @media (max-width: 1100px) and (min-width: 821px) {
   .workspace-stage.tasks-open {
-    grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr);
+    grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr);
   }
 
   .workspace-stage.tasks-open.inspector-open {
-    grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr);
+    grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr);
   }
 
   .workspace-stage.tasks-open.inspector-open .developer-drawer {
@@ -5040,17 +5040,17 @@ textarea:not(.aui-composer-input):focus-visible,
 
 /* Keep task navigation authoritative over earlier responsive workspace rules. */
 .workspace-stage.tasks-open {
-  grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr);
+  grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr);
 }
 
 .workspace-stage.tasks-open.inspector-open {
-  grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr) 340px;
+  grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr) 340px;
 }
 
 @media (max-width: 1100px) and (min-width: 821px) {
   .workspace-stage.tasks-open,
   .workspace-stage.tasks-open.inspector-open {
-    grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr);
+    grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr);
   }
 }
 
@@ -6658,7 +6658,7 @@ textarea:not(.aui-composer-input):focus-visible,
 /* At compact desktop widths the inspector remains a layout column, not an overlay. */
 @media (max-width: 1100px) and (min-width: 981px) {
   .workspace-stage.tasks-open.inspector-open {
-    grid-template-columns: var(--app-sidebar-expanded-width, 248px) minmax(0, 1fr) 320px;
+    grid-template-columns: var(--app-sidebar-expanded-width, 264px) minmax(0, 1fr) 320px;
   }
 
   .workspace-stage.tasks-open.inspector-open .developer-drawer {

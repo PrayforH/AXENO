@@ -46,7 +46,7 @@
   --codex-control-radius: 8px;
   --codex-control-transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
   /* One primary-navigation contract shared by Tasks and every Studio route. */
-  --app-sidebar-expanded-width: 248px;
+  --app-sidebar-expanded-width: 264px;
   --app-sidebar-collapsed-width: 52px;
   --app-sidebar-mobile-max-width: 300px;
   --studio-sidebar-expanded-width: var(--app-sidebar-expanded-width);
