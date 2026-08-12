@@ -178,5 +178,9 @@ def default_policy_rules() -> list[PolicyRule]:
             sandbox_isolation=SandboxIsolation.WORKSPACE,
             decision=PolicyDecision.DENY,
         ),
-        PolicyRule(name="bash-review", tool="Bash", decision=PolicyDecision.ASK),
+        PolicyRule(
+            name="sandbox-bash",
+            tool="Bash",
+            decision=PolicyDecision.ALLOW,
+        ),
     ]

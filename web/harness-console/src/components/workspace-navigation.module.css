@@ -4,6 +4,31 @@
   gap: 3px;
 }
 
+.navigationGroup {
+  display: grid;
+  gap: 3px;
+}
+
+.navigationGroup + .navigationGroup {
+  margin-top: 8px;
+  padding-top: 9px;
+  border-top: 1px solid var(--codex-line, #303030);
+}
+
+.navigationGroup > h2 {
+  margin: 0;
+  padding: 0 10px 4px;
+  color: var(--codex-faint, #737373);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+}
+
+.navigationGroup > div {
+  display: grid;
+  gap: 3px;
+}
+
 .modeSwitcher {
   margin: 4px 8px 10px;
   padding: 3px;

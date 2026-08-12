@@ -6,6 +6,7 @@ import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from io import BytesIO
+from typing import cast
 from uuid import uuid4
 
 from harness.auth.audit import AuditService
@@ -37,12 +38,15 @@ def _published_evaluation_enabled(snapshot: dict[str, object]) -> bool:
     manifest = snapshot.get("manifest")
     if not isinstance(manifest, dict):
         return True
+    manifest = cast(dict[str, object], manifest)
     metadata = manifest.get("metadata")
     if not isinstance(metadata, dict):
         return True
+    metadata = cast(dict[str, object], metadata)
     labels = metadata.get("labels")
     if not isinstance(labels, dict):
         return True
+    labels = cast(dict[str, object], labels)
     return str(labels.get("evaluation-enabled", "true")).lower() != "false"
 
 

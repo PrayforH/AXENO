@@ -16,7 +16,7 @@ describe("Knowledge control plane", () => {
     expect(page).toContain('<McpCatalogControlPlane mode="knowledge"');
     expect(component).toContain('active={knowledgeMode ? "knowledge" : "capabilities"}');
     expect(component).toContain("接入外部知识库");
-    expect(component).toContain("不上传资料、不切片，也不保存向量");
+    expect(component).toContain("文档、切片、Embedding 与向量索引均留在外部系统");
   });
 
   it("uses governed MCP registration and manual tool discovery", () => {

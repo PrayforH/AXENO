@@ -1,6 +1,10 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { spaceMemberDirectory } from "../../lib/team-space-members";
+import { useDialogFocus } from "../../lib/use-dialog-focus";
+import { useAuth } from "../auth-provider";
 import { StudioSidebar } from "../agent-studio/studio-sidebar";
 import styles from "./team-spaces.module.css";
 
@@ -21,6 +25,16 @@ type SpaceMember = {
   createdAt: string;
 };
 type SpaceSummary = { space: TeamSpace; membership: SpaceMember };
+type SpaceWorkspace = {
+  summary: SpaceSummary;
+  members: SpaceMember[];
+  directory: TenantMember[];
+  agents: AgentPermissions[];
+  releases_by_agent: Record<string, ReleaseItem[]>;
+  acls_by_agent: Record<string, AgentAcl[]>;
+  knowledge: SharedKnowledge[];
+  mcp_credentials: McpCredentialStatus[];
+};
 type TenantMember = {
   user: { user_id: string; display_name: string; email: string };
   membership: { role: string };
@@ -32,7 +46,18 @@ type CatalogAgent = {
   domain: string;
   owner_user_id: string;
   scope: "personal" | "team";
+  mcp_references: string[];
+  knowledge_references: string[];
 };
+type McpCredentialStatus = { reference: string; configured: boolean; keyNames: string[] };
+type McpCapability = {
+  reference: string;
+  label: string;
+  enabled: boolean;
+  authMode: "none" | "bearer" | "header" | "query";
+  authKey: string;
+};
+type StudioCatalogRecord = { catalog: { mcpServers: McpCapability[] } };
 type WorkspaceAgent = {
   tenantId: string;
   agentId: string;
@@ -51,11 +76,11 @@ type WorkspaceAgent = {
 type AgentPermissions = {
   agent: WorkspaceAgent;
   permissions: string[];
-  canView: boolean;
-  canChat: boolean;
-  canEdit: boolean;
-  canPublish: boolean;
-  canManage: boolean;
+  can_view: boolean;
+  can_chat: boolean;
+  can_edit: boolean;
+  can_publish: boolean;
+  can_manage: boolean;
 };
 type ReleaseItem = {
   release: {
@@ -93,6 +118,7 @@ type SharedKnowledge = {
   sharedBy: string;
   createdAt: string;
 };
+type SpaceView = "agents" | "knowledge" | "members";
 
 const ROLE_LABELS: Record<SpaceRole, string> = {
   owner: "所有者",
@@ -126,6 +152,7 @@ function agentKey(agent: Pick<CatalogAgent, "owner_user_id" | "name" | "version"
 }
 
 export function TeamSpaces() {
+  const { user } = useAuth();
   const [spaces, setSpaces] = useState<SpaceSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [members, setMembers] = useState<SpaceMember[]>([]);
@@ -136,18 +163,33 @@ export function TeamSpaces() {
   const [aclsByAgent, setAclsByAgent] = useState<Record<string, AgentAcl[]>>({});
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [sharedKnowledge, setSharedKnowledge] = useState<SharedKnowledge[]>([]);
+  const [mcpCatalog, setMcpCatalog] = useState<McpCapability[]>([]);
+  const [spaceMcpCredentials, setSpaceMcpCredentials] = useState<McpCredentialStatus[]>([]);
   const [spaceName, setSpaceName] = useState("");
   const [spaceDescription, setSpaceDescription] = useState("");
   const [memberUserId, setMemberUserId] = useState("");
   const [memberRole, setMemberRole] = useState<SpaceRole>("contributor");
   const [agentSelection, setAgentSelection] = useState("");
   const [viewerRunnable, setViewerRunnable] = useState(true);
+  const [connectionMode, setConnectionMode] = useState<"caller_owned" | "service_owned">("caller_owned");
+  const [knowledgeDependencies, setKnowledgeDependencies] = useState<string[]>([]);
+  const [mcpCredentialInputs, setMcpCredentialInputs] = useState<Record<string, string>>({});
   const [aclGrantee, setAclGrantee] = useState("");
   const [aclPermission, setAclPermission] = useState("chat");
   const [knowledgeSelection, setKnowledgeSelection] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [spaceLoading, setSpaceLoading] = useState(false);
+  const [activeView, setActiveView] = useState<SpaceView>("agents");
+  const [showCreate, setShowCreate] = useState(false);
+  const [createError, setCreateError] = useState("");
+  const [confirmingMemberId, setConfirmingMemberId] = useState("");
+  const [confirmingAction, setConfirmingAction] = useState("");
+  const spaceLoadSequence = useRef(0);
+  const createDialogRef = useRef<HTMLElement>(null);
+  const createNameRef = useRef<HTMLInputElement>(null);
 
   const selected = spaces.find((item) => item.space.spaceId === selectedId) ?? null;
   const canManage = selected?.membership.role === "owner" || selected?.membership.role === "admin";
@@ -156,6 +198,65 @@ export function TeamSpaces() {
     () => new Map(directory.map((item) => [item.user.user_id, item])),
     [directory],
   );
+  const aclCandidates = useMemo(
+    () => spaceMemberDirectory(directory, members),
+    [directory, members],
+  );
+  const selectedAgent = useMemo(
+    () => personalAgents.find((item) => agentKey(item) === agentSelection) ?? null,
+    [agentSelection, personalAgents],
+  );
+  const mcpByReference = useMemo(
+    () => new Map(mcpCatalog.map((item) => [item.reference, item])),
+    [mcpCatalog],
+  );
+  const configuredSpaceMcp = useMemo(
+    () => new Set(spaceMcpCredentials.filter((item) => item.configured).map((item) => item.reference)),
+    [spaceMcpCredentials],
+  );
+  const sharedKnowledgeReferences = useMemo(
+    () => new Set(sharedKnowledge.map((item) => item.knowledgeBaseReference)),
+    [sharedKnowledge],
+  );
+  const accessibleKnowledgeReferences = useMemo(
+    () => new Set(knowledgeBases.map((item) => item.reference)),
+    [knowledgeBases],
+  );
+  const missingMcpDefinitions = (selectedAgent?.mcp_references ?? []).filter((reference) => {
+    const capability = mcpByReference.get(reference);
+    return !capability || !capability.enabled;
+  });
+  const missingServiceCredentials = (selectedAgent?.mcp_references ?? []).filter((reference) => {
+    const capability = mcpByReference.get(reference);
+    return capability?.authMode !== "none" && !configuredSpaceMcp.has(reference);
+  });
+  const missingKnowledgeAccess = (selectedAgent?.knowledge_references ?? []).filter(
+    (reference) => !sharedKnowledgeReferences.has(reference) && !accessibleKnowledgeReferences.has(reference),
+  );
+  const unselectedKnowledge = (selectedAgent?.knowledge_references ?? []).filter(
+    (reference) => !sharedKnowledgeReferences.has(reference) && !knowledgeDependencies.includes(reference),
+  );
+  const credentialsReady = connectionMode === "caller_owned" || missingServiceCredentials.every(
+    (reference) => Boolean(mcpCredentialInputs[reference]?.trim()),
+  );
+  const dependenciesReady = missingMcpDefinitions.length === 0
+    && missingKnowledgeAccess.length === 0
+    && unselectedKnowledge.length === 0
+    && credentialsReady
+    && (canManage || (selectedAgent?.knowledge_references ?? []).every(
+      (reference) => sharedKnowledgeReferences.has(reference),
+    ));
+
+  const closeCreate = useCallback(() => {
+    if (busy !== "create") setShowCreate(false);
+  }, [busy]);
+
+  useDialogFocus({
+    open: showCreate,
+    panelRef: createDialogRef,
+    initialFocusRef: createNameRef,
+    onEscape: closeCreate,
+  });
 
   const loadSpaces = useCallback(async () => {
     const values = await request<SpaceSummary[]>("/api/spaces");
@@ -168,60 +269,52 @@ export function TeamSpaces() {
   }, []);
 
   const loadSpace = useCallback(async (spaceId: string) => {
+    const sequence = ++spaceLoadSequence.current;
+    setSpaceLoading(Boolean(spaceId));
+    setMembers([]);
+    setDirectory([]);
+    setWorkspaceAgents([]);
+    setReleasesByAgent({});
+    setAclsByAgent({});
+    setSharedKnowledge([]);
+    setSpaceMcpCredentials([]);
+    setConfirmingMemberId("");
+    setConfirmingAction("");
     if (!spaceId) {
-      setMembers([]);
-      setDirectory([]);
-      setWorkspaceAgents([]);
-      setReleasesByAgent({});
-      setAclsByAgent({});
-      setSharedKnowledge([]);
+      setSpaceLoading(false);
       return;
     }
-    const summary = spaces.find((item) => item.space.spaceId === spaceId);
-    const manageable = summary?.membership.role === "owner" || summary?.membership.role === "admin";
-    const [nextMembers, nextAgents, nextKnowledge, nextDirectory] = await Promise.all([
-      request<SpaceMember[]>(`/api/spaces/${encodeURIComponent(spaceId)}/members`),
-      request<AgentPermissions[]>(`/api/spaces/${encodeURIComponent(spaceId)}/agents`),
-      request<SharedKnowledge[]>(`/api/spaces/${encodeURIComponent(spaceId)}/knowledge`),
-      manageable
-        ? request<TenantMember[]>(`/api/spaces/${encodeURIComponent(spaceId)}/member-directory`)
-        : Promise.resolve([]),
-    ]);
-    setMembers(nextMembers);
-    setWorkspaceAgents(nextAgents);
-    setSharedKnowledge(nextKnowledge);
-    setDirectory(nextDirectory);
-    setMemberUserId((current) =>
-      nextDirectory.some((item) => item.user.user_id === current)
-        ? current
-        : nextDirectory[0]?.user.user_id ?? "",
-    );
-    const agents = nextAgents.map((item) => item.agent);
-    setAclGrantee((current) =>
-      nextDirectory.some((item) => item.user.user_id === current)
-        ? current
-        : nextDirectory[0]?.user.user_id ?? "",
-    );
-    const [releases, acls] = await Promise.all([
-      Promise.all(
-        agents.map(async (agent) => [
-          agent.agentId,
-          await request<ReleaseItem[]>(
-            `/api/spaces/${encodeURIComponent(spaceId)}/agents/${encodeURIComponent(agent.agentId)}/releases`,
-          ),
-        ] as const),
-      ),
-      Promise.all(
-        agents.map(async (agent) => [
-          agent.agentId,
-          await request<AgentAcl[]>(
-            `/api/spaces/${encodeURIComponent(spaceId)}/agents/${encodeURIComponent(agent.agentId)}/acl`,
-          ),
-        ] as const),
-      ),
-    ]);
-    setReleasesByAgent(Object.fromEntries(releases));
-    setAclsByAgent(Object.fromEntries(acls));
+    try {
+      const workspace = await request<SpaceWorkspace>(
+        `/api/spaces/${encodeURIComponent(spaceId)}/workspace`,
+      );
+      if (sequence !== spaceLoadSequence.current) return;
+      setMembers(workspace.members);
+      setWorkspaceAgents(workspace.agents);
+      setSharedKnowledge(workspace.knowledge);
+      setSpaceMcpCredentials(workspace.mcp_credentials ?? []);
+      setDirectory(workspace.directory);
+      setReleasesByAgent(workspace.releases_by_agent);
+      setAclsByAgent(workspace.acls_by_agent);
+      const nextAclCandidates = spaceMemberDirectory(workspace.directory, workspace.members);
+      setMemberUserId((current) =>
+        workspace.directory.some((item) => item.user.user_id === current)
+          ? current
+          : workspace.directory[0]?.user.user_id ?? "",
+      );
+      setAclGrantee((current) =>
+        nextAclCandidates.some((item) => item.user.user_id === current)
+          ? current
+          : nextAclCandidates[0]?.user.user_id ?? "",
+      );
+      setError("");
+    } catch (caught) {
+      if (sequence === spaceLoadSequence.current) {
+        setError(caught instanceof Error ? caught.message : "空间内容暂不可用");
+      }
+    } finally {
+      if (sequence === spaceLoadSequence.current) setSpaceLoading(false);
+    }
   }, [spaces]);
 
   useEffect(() => {
@@ -231,23 +324,27 @@ export function TeamSpaces() {
         const personal = items.filter((item) => item.scope === "personal");
         setPersonalAgents(personal);
         setAgentSelection(personal[0] ? agentKey(personal[0]) : "");
+        setKnowledgeDependencies(personal[0]?.knowledge_references ?? []);
+      }),
+      request<StudioCatalogRecord>("/api/studio/catalog").then((record) => {
+        setMcpCatalog(record.catalog.mcpServers);
       }),
       request<KnowledgeBase[]>("/api/studio/knowledge/bases").then((items) => {
         setKnowledgeBases(items);
         setKnowledgeSelection(items[0]?.reference ?? "");
       }).catch(() => undefined),
-    ]).catch((caught) => setError(caught instanceof Error ? caught.message : "共享空间暂不可用"));
+    ])
+      .catch((caught) => setError(caught instanceof Error ? caught.message : "共享空间暂不可用"))
+      .finally(() => setLoading(false));
   }, [loadSpaces]);
 
   useEffect(() => {
-    void loadSpace(selectedId).catch((caught) =>
-      setError(caught instanceof Error ? caught.message : "空间内容暂不可用"),
-    );
+    void loadSpace(selectedId);
   }, [loadSpace, selectedId]);
 
   async function createSpace(event: FormEvent) {
     event.preventDefault();
-    setBusy("create"); setError(""); setNotice("");
+    setBusy("create"); setCreateError(""); setError(""); setNotice("");
     try {
       const created = await request<SpaceSummary>("/api/spaces", {
         method: "POST",
@@ -258,8 +355,9 @@ export function TeamSpaces() {
       await loadSpaces();
       setSelectedId(created.space.spaceId);
       setNotice(`已创建团队空间「${created.space.name}」。`);
+      setShowCreate(false);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "创建失败");
+      setCreateError(caught instanceof Error ? caught.message : "创建失败");
     } finally { setBusy(""); }
   }
 
@@ -280,12 +378,42 @@ export function TeamSpaces() {
     } finally { setBusy(""); }
   }
 
+  async function removeMember(member: SpaceMember) {
+    if (!selectedId || member.userId === user.user_id) return;
+    setBusy(`member-remove:${member.userId}`); setError(""); setNotice("");
+    try {
+      await request(
+        `/api/spaces/${encodeURIComponent(selectedId)}/members/${encodeURIComponent(member.userId)}`,
+        { method: "DELETE" },
+      );
+      setConfirmingMemberId("");
+      await loadSpace(selectedId);
+      const profile = memberById.get(member.userId)?.user;
+      setNotice(`已将${profile?.display_name ? `「${profile.display_name}」` : "该成员"}移出空间；其个人任务记录不受影响。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "成员移除失败");
+    } finally { setBusy(""); }
+  }
+
   async function shareAgent(event: FormEvent) {
     event.preventDefault();
     const agent = personalAgents.find((item) => agentKey(item) === agentSelection);
     if (!selectedId || !agent) return;
     setBusy("share"); setError(""); setNotice("");
     try {
+      if (connectionMode === "service_owned") {
+        await Promise.all(missingServiceCredentials.map((reference) => {
+          const capability = mcpByReference.get(reference);
+          return request(`/api/spaces/${encodeURIComponent(selectedId)}/mcp/${encodeURIComponent(reference)}/credentials`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              authKey: capability?.authKey ?? "authorization",
+              value: mcpCredentialInputs[reference]?.trim(),
+            }),
+          });
+        }));
+      }
       await request(`/api/spaces/${encodeURIComponent(selectedId)}/agents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -294,10 +422,13 @@ export function TeamSpaces() {
           name: agent.name,
           version: agent.version,
           runnable_by_viewer: viewerRunnable,
+          connection_mode: connectionMode,
+          share_knowledge_references: knowledgeDependencies,
         }),
       });
+      setMcpCredentialInputs({});
       await loadSpace(selectedId);
-      setNotice(`${agent.display_name} ${agent.version} 已发布为工作区 Agent Release。`);
+      setNotice(`${agent.display_name} ${agent.version} 已发布；MCP 采用${connectionMode === "service_owned" ? "空间共享凭据" : "成员个人凭据"}，知识库依赖已同步授权。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "发布失败");
     } finally { setBusy(""); }
@@ -343,6 +474,7 @@ export function TeamSpaces() {
         { method: "DELETE" },
       );
       await loadSpace(selectedId);
+      setConfirmingAction("");
       setNotice("Release 授权已撤销；既有任务仍保留其历史快照和记录。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "撤销失败");
@@ -378,6 +510,7 @@ export function TeamSpaces() {
         { method: "DELETE" },
       );
       await loadSpace(selectedId);
+      setConfirmingAction("");
       setNotice("Agent 权限已撤销。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "权限撤销失败");
@@ -409,6 +542,7 @@ export function TeamSpaces() {
         { method: "DELETE" },
       );
       await loadSpace(selectedId);
+      setConfirmingAction("");
       setNotice("知识库空间授权已撤销；历史任务不会被转移或公开。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "撤销失败");
@@ -425,32 +559,103 @@ export function TeamSpaces() {
       </StudioSidebar>
       <section className={styles.content}>
         <header className={styles.hero}>
-          <div><p>Team collaboration</p><h1>共享空间</h1><span>把可复用能力发布为工作区 Agent，而不是共享个人运行记录。</span></div>
-          <form onSubmit={createSpace} className={styles.createForm}>
-            <input value={spaceName} onChange={(event) => setSpaceName(event.target.value)} placeholder="空间名称" maxLength={160} required />
-            <input value={spaceDescription} onChange={(event) => setSpaceDescription(event.target.value)} placeholder="用途说明（可选）" maxLength={1000} />
-            <button disabled={busy === "create"}>{busy === "create" ? "创建中" : "新建空间"}</button>
-          </form>
+          <div><p>Team workspace</p><h1>协作空间</h1><span>集中交付团队可运行的智能体和知识，不共享成员的个人任务记录。</span></div>
+          <button
+            className={styles.createButton}
+            type="button"
+            onClick={() => { setCreateError(""); setShowCreate(true); }}
+          >
+            新建协作空间
+          </button>
         </header>
+
+        {showCreate && (
+          <div
+            className={styles.createBackdrop}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeCreate();
+            }}
+          >
+            <section
+              aria-labelledby="create-space-title"
+              aria-modal="true"
+              className={styles.createDrawer}
+              ref={createDialogRef}
+              role="dialog"
+            >
+              <header>
+                <div>
+                  <p>New team workspace</p>
+                  <h2 id="create-space-title">新建协作空间</h2>
+                </div>
+                <button type="button" onClick={closeCreate} disabled={busy === "create"}>关闭</button>
+              </header>
+              <form onSubmit={createSpace} className={styles.createForm}>
+                <p className={styles.createIntro}>空间用于交付团队可运行的智能体版本和知识授权，不会共享任何成员的个人任务记录。</p>
+                <label>
+                  <span>空间名称</span>
+                  <input
+                    ref={createNameRef}
+                    value={spaceName}
+                    onChange={(event) => setSpaceName(event.target.value)}
+                    placeholder="例如：市场研究组"
+                    maxLength={160}
+                    required
+                  />
+                  <small>成员会在空间目录和任务入口看到这个名称。</small>
+                </label>
+                <label>
+                  <span>用途说明 <em>可选</em></span>
+                  <textarea
+                    value={spaceDescription}
+                    onChange={(event) => setSpaceDescription(event.target.value)}
+                    placeholder="说明这个空间交付哪些智能体和知识。"
+                    maxLength={1000}
+                    rows={4}
+                  />
+                </label>
+                {createError && <p className={styles.createError} role="alert">{createError}</p>}
+                <footer>
+                  <span>创建后，你将成为空间所有者。</span>
+                  <button type="button" onClick={closeCreate} disabled={busy === "create"}>取消</button>
+                  <button disabled={busy === "create"}>{busy === "create" ? "创建中…" : "创建空间"}</button>
+                </footer>
+              </form>
+            </section>
+          </div>
+        )}
 
         {(notice || error) && <p className={error ? styles.error : styles.notice} role={error ? "alert" : "status"}>{error || notice}</p>}
 
         <div className={styles.workspace}>
           <nav className={styles.spaceList} aria-label="团队空间">
-            {spaces.length === 0 ? <p>还没有团队空间。</p> : spaces.map((item) => (
-              <button key={item.space.spaceId} data-active={item.space.spaceId === selectedId || undefined} onClick={() => setSelectedId(item.space.spaceId)}>
+            <header><span>我的空间</span><small>{spaces.length}</small></header>
+            {loading ? <div className={styles.spaceListLoading}><i /><i /><i /></div> : spaces.length === 0 ? <p>创建空间后，成员和共享资源会显示在这里。</p> : spaces.map((item) => (
+              <button key={item.space.spaceId} data-active={item.space.spaceId === selectedId || undefined} onClick={() => { setSelectedId(item.space.spaceId); setActiveView("agents"); }}>
                 <strong>{item.space.name}</strong><span>{ROLE_LABELS[item.membership.role]}</span><small>{item.space.description || "未填写说明"}</small>
               </button>
             ))}
           </nav>
 
-          {selected ? <div className={styles.detail}>
+          {selected ? <div className={styles.detail} aria-busy={spaceLoading}>
             <section className={styles.summary}>
-              <div><p>当前空间</p><h2>{selected.space.name}</h2><span>{selected.space.description || "用于团队共享可运行的 Agent 版本。"}</span></div>
-              <div className={styles.boundaries}><span><b>{members.length}</b> 成员</span><span><b>{workspaceAgents.length}</b> Agent</span><span><b>{sharedKnowledge.length}</b> 知识库</span><span><b>0</b> 共享任务</span></div>
+              <div><p>当前空间 · {ROLE_LABELS[selected.membership.role]}</p><h2>{selected.space.name}</h2><span>{selected.space.description || "用于团队共享可运行的智能体版本。"}</span></div>
+              <div className={styles.boundaries}><span><b>{spaceLoading ? "…" : members.length}</b> 成员</span><span><b>{spaceLoading ? "…" : workspaceAgents.length}</b> Agent</span><span><b>{spaceLoading ? "…" : sharedKnowledge.length}</b> 知识库</span><span><b>0</b> 共享任务</span></div>
             </section>
 
-            <section className={styles.panel}>
+            <nav className={styles.resourceTabs} aria-label="空间资源">
+              <button type="button" disabled={spaceLoading} aria-current={activeView === "agents" ? "page" : undefined} onClick={() => setActiveView("agents")}><span>智能体</span><small>{spaceLoading ? "…" : workspaceAgents.length}</small></button>
+              <button type="button" disabled={spaceLoading} aria-current={activeView === "knowledge" ? "page" : undefined} onClick={() => setActiveView("knowledge")}><span>知识库</span><small>{spaceLoading ? "…" : sharedKnowledge.length}</small></button>
+              <button type="button" disabled={spaceLoading} aria-current={activeView === "members" ? "page" : undefined} onClick={() => setActiveView("members")}><span>成员</span><small>{spaceLoading ? "…" : members.length}</small></button>
+            </nav>
+
+            {spaceLoading && <section className={styles.resourceLoading} aria-live="polite">
+              <div><i /><i /><i /></div>
+              <strong>正在切换协作空间</strong>
+              <span>同步这个空间的成员、智能体 Release 与知识授权…</span>
+            </section>}
+
+            {!spaceLoading && activeView === "members" && <section className={styles.panel}>
               <header><div><p>Members & RBAC</p><h3>空间成员</h3></div><span>Owner › Admin › Contributor › Viewer</span></header>
               {canManage && <form className={styles.inlineForm} onSubmit={addMember}>
                 <select value={memberUserId} onChange={(event) => setMemberUserId(event.target.value)}>
@@ -463,25 +668,99 @@ export function TeamSpaces() {
               </form>}
               <div className={styles.memberGrid}>{members.map((member) => {
                 const profile = memberById.get(member.userId)?.user;
-                return <article key={member.userId}><span>{(profile?.display_name || member.userId).slice(0, 1).toUpperCase()}</span><div><strong>{profile?.display_name || member.userId}</strong><small>{profile?.email || "租户成员"}</small></div><em>{ROLE_LABELS[member.role]}</em></article>;
+                const isCurrentUser = member.userId === user.user_id;
+                const canRemove = canManage
+                  && !isCurrentUser
+                  && (selected.membership.role === "owner" || !["owner", "admin"].includes(member.role));
+                const confirming = confirmingMemberId === member.userId;
+                return <article key={member.userId}>
+                  <span>{(profile?.display_name || member.userId).slice(0, 1).toUpperCase()}</span>
+                  <div><strong>{profile?.display_name || member.userId}{isCurrentUser ? "（你）" : ""}</strong><small>{profile?.email || "租户成员"}</small></div>
+                  <div className={styles.memberActions}>
+                    <em>{ROLE_LABELS[member.role]}</em>
+                    {canRemove && !confirming && <button type="button" onClick={() => setConfirmingMemberId(member.userId)}>移出</button>}
+                    {canRemove && confirming && <>
+                      <button type="button" className={styles.danger} disabled={busy === `member-remove:${member.userId}`} onClick={() => void removeMember(member)}>{busy === `member-remove:${member.userId}` ? "移除中" : "确认移除"}</button>
+                      <button type="button" disabled={busy === `member-remove:${member.userId}`} onClick={() => setConfirmingMemberId("")}>取消</button>
+                    </>}
+                  </div>
+                </article>;
               })}</div>
-            </section>
+            </section>}
 
-            <section className={styles.panel}>
+            {!spaceLoading && activeView === "agents" && <section className={styles.panel}>
               <header><div><p>Workspace Agents</p><h3>共享智能体</h3></div><span>稳定身份 + 不可变 Release</span></header>
-              {canShare && <form className={styles.shareForm} onSubmit={shareAgent}>
-                <select value={agentSelection} onChange={(event) => setAgentSelection(event.target.value)}>
+              {canShare && <form className={`${styles.shareForm} ${styles.shareWizard}`} onSubmit={shareAgent}>
+                <select value={agentSelection} onChange={(event) => {
+                  const nextSelection = event.target.value;
+                  const nextAgent = personalAgents.find((agent) => agentKey(agent) === nextSelection);
+                  setAgentSelection(nextSelection);
+                  setKnowledgeDependencies(nextAgent?.knowledge_references ?? []);
+                  setMcpCredentialInputs({});
+                }} aria-label="选择个人智能体版本">
                   {personalAgents.map((agent) => <option key={agentKey(agent)} value={agentKey(agent)}>{agent.display_name} · {agent.version}</option>)}
                 </select>
+                <select value={connectionMode} onChange={(event) => setConnectionMode(event.target.value as "caller_owned" | "service_owned")} aria-label="MCP 凭据模式">
+                  <option value="caller_owned">MCP：成员个人凭据</option>
+                  <option value="service_owned">MCP：空间共享凭据</option>
+                </select>
                 <label><input type="checkbox" checked={viewerRunnable} onChange={(event) => setViewerRunnable(event.target.checked)} />允许 Viewer 运行</label>
-                <button disabled={!agentSelection || busy === "share"}>发布 Release</button>
+
+                <section className={styles.dependencyPanel} aria-label="共享依赖检查">
+                  <header><strong>发布依赖</strong><span>Release 共享定义；凭据与知识权限按下列策略处理</span></header>
+                  {(selectedAgent?.mcp_references.length ?? 0) === 0 && (selectedAgent?.knowledge_references.length ?? 0) === 0
+                    ? <p>该版本没有 MCP 或知识库依赖，可以直接发布。</p>
+                    : <>
+                      {(selectedAgent?.mcp_references.length ?? 0) > 0 && <div className={styles.dependencyGroup}>
+                        <strong>MCP</strong>
+                        {selectedAgent?.mcp_references.map((reference) => {
+                          const capability = mcpByReference.get(reference);
+                          const requiresCredential = capability?.authMode !== "none";
+                          const configured = configuredSpaceMcp.has(reference);
+                          return <label key={reference} className={!capability?.enabled ? styles.dependencyBlocked : ""}>
+                            <span><b>{capability?.label ?? reference}</b><small>{reference}</small></span>
+                            {!capability?.enabled
+                              ? <em>定义缺失或已停用</em>
+                              : connectionMode === "caller_owned"
+                                ? <em>{requiresCredential ? "每位成员使用自己的凭据" : "无需凭据"}</em>
+                                : configured || !requiresCredential
+                                  ? <em>{requiresCredential ? "空间凭据已配置" : "无需凭据"}</em>
+                                  : canManage
+                                    ? <input type="password" autoComplete="new-password" value={mcpCredentialInputs[reference] ?? ""} onChange={(event) => setMcpCredentialInputs((current) => ({ ...current, [reference]: event.target.value }))} placeholder="输入空间共享凭据" aria-label={`${reference} 空间共享凭据`} />
+                                    : <em>需空间管理员配置凭据</em>}
+                          </label>;
+                        })}
+                      </div>}
+                      {(selectedAgent?.knowledge_references.length ?? 0) > 0 && <div className={styles.dependencyGroup}>
+                        <strong>知识库</strong>
+                        {selectedAgent?.knowledge_references.map((reference) => {
+                          const alreadyShared = sharedKnowledgeReferences.has(reference);
+                          const accessible = accessibleKnowledgeReferences.has(reference);
+                          const checked = alreadyShared || knowledgeDependencies.includes(reference);
+                          return <label key={reference} className={!alreadyShared && !accessible ? styles.dependencyBlocked : ""}>
+                            <input type="checkbox" checked={checked} disabled={alreadyShared || !accessible || !canManage} onChange={(event) => setKnowledgeDependencies((current) => event.target.checked ? [...new Set([...current, reference])] : current.filter((item) => item !== reference))} />
+                            <span><b>{knowledgeBases.find((item) => item.reference === reference)?.displayName ?? reference}</b><small>{reference}</small></span>
+                            <em>{alreadyShared ? "空间已授权" : !accessible ? "当前账号无权授权" : canManage ? "随 Release 同步授权" : "需空间管理员先授权"}</em>
+                          </label>;
+                        })}
+                      </div>}
+                    </>}
+                </section>
+                {!dependenciesReady && <p className={styles.dependencyWarning}>依赖尚未就绪：补齐 MCP 定义/空间凭据，并确保全部知识库已授权后才能发布。</p>}
+                <button disabled={!agentSelection || busy === "share" || !dependenciesReady}>{busy === "share" ? "发布中…" : "确认依赖并发布 Release"}</button>
               </form>}
               <div className={styles.agentList}>{workspaceAgents.length === 0 ? <p>尚未发布共享 Agent。</p> : workspaceAgents.map((item) => {
                 const agent = item.agent;
                 const releases = releasesByAgent[agent.agentId] ?? [];
+                const currentRelease = releases.find(
+                  (entry) => entry.release.version === agent.currentVersion,
+                );
+                const displayName = currentRelease?.agent.display_name
+                  || agent.displayName
+                  || agent.name;
                 const acls = aclsByAgent[agent.agentId] ?? [];
                 return <article key={agent.agentId} className={styles.agentCard}>
-                  <div><strong>{agent.displayName || agent.name}</strong><span>{agent.name} · 当前 {agent.currentVersion ?? "未发布"}</span></div>
+                  <div><strong>{displayName}</strong><span>{agent.name} · 当前 {agent.currentVersion ?? "未发布"}</span></div>
                   <small>{item.permissions.map((permission) => PERMISSION_LABELS[permission] ?? permission).join(" / ") || "仅查看"}</small>
                   <div className={styles.releaseList}>
                     {releases.map((entry) => (
@@ -489,19 +768,24 @@ export function TeamSpaces() {
                         <span>{entry.release.version}{entry.release.version === agent.currentVersion ? " · 当前" : ""}</span>
                         <span>{entry.release.connectionMode === "service_owned" ? "共享凭据" : "个人凭据"}</span>
                         <div className={styles.actions}>
-                          {item.canPublish && entry.release.version !== agent.currentVersion && <button onClick={() => void promoteRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("promote:")}>设为当前</button>}
-                          {item.canPublish && <button className={styles.danger} onClick={() => void unshareRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("remove:")}>撤销</button>}
+                          {item.can_publish && entry.release.version !== agent.currentVersion && <button onClick={() => void promoteRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("promote:")}>设为当前</button>}
+                          {item.can_publish && confirmingAction !== `release:${agent.agentId}:${entry.release.version}` && <button className={styles.danger} onClick={() => setConfirmingAction(`release:${agent.agentId}:${entry.release.version}`)} disabled={busy.startsWith("remove:")} aria-label={`撤销 Release ${entry.release.version}`}>撤销</button>}
+                          {item.can_publish && confirmingAction === `release:${agent.agentId}:${entry.release.version}` && <>
+                            <button className={styles.danger} onClick={() => void unshareRelease(agent.agentId, entry.release.version)} disabled={busy.startsWith("remove:")}>{busy.startsWith("remove:") ? "撤销中" : "确认撤销"}</button>
+                            <button onClick={() => setConfirmingAction("")} disabled={busy.startsWith("remove:")}>取消</button>
+                          </>}
                         </div>
                       </div>
                     ))}
                   </div>
                   <div className={styles.actions}>
-                    {item.canChat && <button onClick={() => void forkAgent(agent.agentId)} disabled={busy.startsWith("fork:")}>复制到个人</button>}
+                    {item.can_chat && agent.currentVersion && <Link className={styles.runLink} href={`/?space=${encodeURIComponent(selectedId)}&agent=${encodeURIComponent(agent.name)}&version=${encodeURIComponent(agent.currentVersion)}`}>开始任务</Link>}
+                    {item.can_chat && <button onClick={() => void forkAgent(agent.agentId)} disabled={busy.startsWith("fork:")}>复制到个人</button>}
                   </div>
-                  {item.canManage && (
+                  {item.can_manage && (
                     <form className={styles.inlineForm} onSubmit={(event) => { event.preventDefault(); void addAcl(agent.agentId); }}>
                       <select value={aclGrantee} onChange={(event) => setAclGrantee(event.target.value)} aria-label="加授成员">
-                        {directory.map((entry) => <option value={entry.user.user_id} key={entry.user.user_id}>{entry.user.display_name}</option>)}
+                        {aclCandidates.map((entry) => <option value={entry.user.user_id} key={entry.user.user_id}>{entry.user.display_name}</option>)}
                       </select>
                       <select value={aclPermission} onChange={(event) => setAclPermission(event.target.value)} aria-label="权限">
                         <option value="chat">对话</option><option value="view">查看</option><option value="edit">编辑</option><option value="publish">发布</option>
@@ -511,13 +795,21 @@ export function TeamSpaces() {
                   )}
                   {acls.length > 0 && <div className={styles.aclList}>{acls.map((acl) => {
                     const profile = memberById.get(acl.granteeId)?.user;
-                    return <span key={`${acl.granteeId}:${acl.permission}`}>{profile?.display_name || acl.granteeId} · {PERMISSION_LABELS[acl.permission] ?? acl.permission}{item.canManage && <button className={styles.danger} onClick={() => void removeAcl(agent.agentId, acl.granteeId, acl.permission)} disabled={busy.startsWith("acl-remove:")}>撤销</button>}</span>;
+                    const aclKey = `acl:${agent.agentId}:${acl.granteeId}:${acl.permission}`;
+                    return <span key={`${acl.granteeId}:${acl.permission}`}>
+                      {profile?.display_name || acl.granteeId} · {PERMISSION_LABELS[acl.permission] ?? acl.permission}
+                      {item.can_manage && confirmingAction !== aclKey && <button className={styles.danger} onClick={() => setConfirmingAction(aclKey)} disabled={busy.startsWith("acl-remove:")} aria-label={`撤销 ${profile?.display_name || acl.granteeId} 的${PERMISSION_LABELS[acl.permission] ?? acl.permission}权限`}>撤销</button>}
+                      {item.can_manage && confirmingAction === aclKey && <>
+                        <button className={styles.danger} onClick={() => void removeAcl(agent.agentId, acl.granteeId, acl.permission)} disabled={busy.startsWith("acl-remove:")}>{busy.startsWith("acl-remove:") ? "撤销中" : "确认"}</button>
+                        <button onClick={() => setConfirmingAction("")} disabled={busy.startsWith("acl-remove:")}>取消</button>
+                      </>}
+                    </span>;
                   })}</div>}
                 </article>;
               })}</div>
-            </section>
+            </section>}
 
-            <section className={styles.panel}>
+            {!spaceLoading && activeView === "knowledge" && <section className={styles.panel}>
               <header><div><p>Knowledge grants</p><h3>共享知识库授权</h3></div><span>空间授权可撤销，检索记录仍归运行用户</span></header>
               {canManage && <form className={styles.shareForm} onSubmit={shareKnowledge}>
                 <select value={knowledgeSelection} onChange={(event) => setKnowledgeSelection(event.target.value)}>
@@ -531,11 +823,11 @@ export function TeamSpaces() {
                 return <article key={item.knowledgeBaseReference}>
                   <div><strong>{base?.displayName ?? item.knowledgeBaseReference}</strong><span>{item.knowledgeBaseReference}</span></div>
                   <small>成员运行共享 Agent 时可检索</small>
-                  <div className={styles.actions}>{canManage && <button className={styles.danger} onClick={() => void unshareKnowledge(item.knowledgeBaseReference)} disabled={busy.startsWith("knowledge:")}>撤销授权</button>}</div>
+                  <div className={styles.actions}>{canManage && confirmingAction !== `knowledge:${item.knowledgeBaseReference}` && <button className={styles.danger} onClick={() => setConfirmingAction(`knowledge:${item.knowledgeBaseReference}`)} disabled={busy.startsWith("knowledge:")}>撤销授权</button>}{canManage && confirmingAction === `knowledge:${item.knowledgeBaseReference}` && <><button className={styles.danger} onClick={() => void unshareKnowledge(item.knowledgeBaseReference)} disabled={busy.startsWith("knowledge:")}>{busy.startsWith("knowledge:") ? "撤销中" : "确认撤销"}</button><button onClick={() => setConfirmingAction("")} disabled={busy.startsWith("knowledge:")}>取消</button></>}</div>
                 </article>;
               })}</div>
-            </section>
-          </div> : <div className={styles.empty}><strong>创建第一个团队空间</strong><span>之后可以添加成员并发布个人 Agent 的不可变版本。</span></div>}
+            </section>}
+          </div> : !loading && <div className={styles.empty}><strong>创建第一个协作空间</strong><span>邀请成员，再把个人智能体的不可变版本和知识授权发布到空间。</span><button type="button" onClick={() => { setCreateError(""); setShowCreate(true); }}>开始创建</button></div>}
         </div>
       </section>
     </main>

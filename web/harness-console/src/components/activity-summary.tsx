@@ -14,6 +14,7 @@ import {
 } from "../lib/run-view-model";
 import { toolActivitySentence } from "../lib/tool-presentation";
 import { MarkdownText } from "./markdown-text";
+import { useRunDetails } from "./run-details-context";
 
 const phaseLabels: Record<RunPhase, string> = {
   queued: "等待处理",
@@ -684,6 +685,7 @@ export function ActivitySummary({
   const timeline = displayTimeline(view);
   const heading = activityHeading(view);
   const failure = view.phase === "failed" ? failureDetails(view) : null;
+  const runDetails = useRunDetails();
 
   function toggleDisclosure(_event: MouseEvent<HTMLButtonElement>) {
     const nextOpen = !open;
@@ -709,6 +711,18 @@ export function ActivitySummary({
         <span className="execution-duration">{durationLabel(elapsed)}</span>
         <span className="execution-chevron" aria-hidden="true" />
       </button>
+      {runDetails ? (
+        <button
+          type="button"
+          className="execution-details-trigger"
+          aria-haspopup="dialog"
+          aria-expanded={runDetails.selectedRunId === activity.run_id}
+          aria-controls="run-details-panel"
+          onClick={() => runDetails.open(activity)}
+        >
+          运行详情
+        </button>
+      ) : null}
       <div className="execution-tree" hidden={!open}>
         {failure ? (
           <section className="execution-failure-diagnostic" aria-label="失败定位">

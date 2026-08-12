@@ -31,11 +31,15 @@ const themeSelector = readFileSync(
 );
 
 describe("account settings", () => {
-  it("keeps settings and logout available from the account menu", () => {
+  it("keeps help, settings and logout available from the account menu", () => {
+    expect(menu).toContain("产品使用手册");
+    expect(menu).toContain("DdiCdPFcroUpUXxOumNcQpIin1g");
+    expect(menu).toContain('target="_blank"');
     expect(menu).toContain('href="/settings"');
     expect(menu).toContain("个人设置");
     expect(menu).toContain('href="/api/auth/logout"');
     expect(menu).toContain("退出登录");
+    expect(styles).toMatch(/\.account-help,\s*\.account-settings,/s);
   });
 
   it("anchors the user control at the bottom of expanded and collapsed task rails", () => {
@@ -46,6 +50,9 @@ describe("account settings", () => {
     expect(workbench).not.toContain("<AccountMenu />");
     expect(styles).toMatch(/\.task-rail-account\s*\{[^}]*margin-top:\s*auto;/s);
     expect(styles).toMatch(/\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;/s);
+    expect(styles).toMatch(
+      /@media \(max-width: 820px\)[\s\S]*?\.task-sidebar\.is-collapsed\s*\{[^}]*z-index:\s*20;/s,
+    );
   });
 
   it("provides useful profile, password, and session controls", () => {

@@ -5,6 +5,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_memory_app
+from harness.config import Settings
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
 
 FIXTURE_MANIFEST = Path("tests/fixtures/agents/echo-agent/agent.yaml")
@@ -103,7 +104,7 @@ async def test_artifact_upload_stops_at_configured_size_limit() -> None:
 
 @pytest.mark.asyncio
 async def test_artifact_quota_is_checked_before_pending_metadata_is_created() -> None:
-    app = create_memory_app()
+    app = create_memory_app(settings=Settings(quota_enforcement_enabled=True))
     await app.state.container.quotas.replace_policy(
         tenant_id="tenant-a",
         user_id="owner-a",

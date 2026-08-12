@@ -67,6 +67,22 @@ class InMemoryAgentRegistry:
             key=lambda version: (version.name, version.version),
         )
 
+    async def list_catalog_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentVersion]:
+        # In-memory values do not incur payload transfer, but preserve the
+        # production contract that catalog reads exclude packaged files.
+        return [
+            version.model_copy(
+                update={
+                    "snapshot": {
+                        "manifest": version.snapshot.get("manifest", {}),
+                    }
+                }
+            )
+            for version in await self.list_for_user(tenant_id, owner_user_id)
+        ]
+
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
     ) -> int:
@@ -75,9 +91,7 @@ class InMemoryAgentRegistry:
         moved_keys = [
             key
             for key in self._items
-            if key[0] == tenant_id
-            and key[1] == from_user_id
-            and key[2] == name
+            if key[0] == tenant_id and key[1] == from_user_id and key[2] == name
         ]
         async with self._lock:
             conflicts = [
@@ -87,9 +101,7 @@ class InMemoryAgentRegistry:
             ]
             if conflicts:
                 joined = ", ".join(f"{item[0]}@{item[1]}" for item in sorted(conflicts))
-                raise ConflictError(
-                    f"target user already owns an Agent version: {joined}"
-                )
+                raise ConflictError(f"target user already owns an Agent version: {joined}")
             for key in moved_keys:
                 version = self._items.pop(key)
                 self._items[(tenant_id, to_user_id, name, key[3])] = version.model_copy(
@@ -115,6 +127,11 @@ class InMemorySessionRepository:
             return self._items[(tenant_id, session_id)]
         except KeyError as error:
             raise NotFoundError(f"session not found: {session_id}") from error
+
+    async def list_for_ids(
+        self, tenant_id: str, session_ids: list[str]
+    ) -> list[Session]:
+        return [await self.get(tenant_id, session_id) for session_id in session_ids]
 
     async def bind_claude_session_id(
         self, tenant_id: str, session_id: str, claude_session_id: str
@@ -299,25 +316,105 @@ class InMemoryEventRepository:
             self._items[key].append(event)
             self._by_id[event.event_id] = event
 
+    async def latest_sequence(self, tenant_id: str, run_id: str) -> int:
+        events = self._items[(tenant_id, run_id)]
+        return events[-1].sequence if events else 0
+
     async def list_after(self, tenant_id: str, run_id: str, after_sequence: int) -> list[RunEvent]:
         return [
             event for event in self._items[(tenant_id, run_id)] if event.sequence > after_sequence
         ]
 
+    async def latest_for_session_type(
+        self, tenant_id: str, session_id: str, event_type: str
+    ) -> RunEvent | None:
+        return await self.latest_for_session_types(tenant_id, session_id, (event_type,))
+
+    async def latest_for_session_types(
+        self, tenant_id: str, session_id: str, event_types: tuple[str, ...]
+    ) -> RunEvent | None:
+        wanted = set(event_types)
+        matches = (
+            event
+            for (stored_tenant, _), events in self._items.items()
+            if stored_tenant == tenant_id
+            for event in events
+            if event.session_id == session_id and event.type in wanted
+        )
+        return max(
+            matches,
+            key=lambda event: (event.timestamp, event.run_id, event.sequence),
+            default=None,
+        )
+
 
 class InMemoryEventBus:
     def __init__(self) -> None:
         self._items: dict[tuple[str, str], list[RunEvent]] = defaultdict(list)
+        self._conditions: dict[tuple[str, str], asyncio.Condition] = defaultdict(asyncio.Condition)
 
     async def publish(self, event: RunEvent) -> None:
-        events = self._items[(event.tenant_id, event.run_id)]
-        if all(existing.event_id != event.event_id for existing in events):
-            events.append(event)
+        key = (event.tenant_id, event.run_id)
+        async with self._conditions[key]:
+            events = self._items[key]
+            if all(existing.event_id != event.event_id for existing in events):
+                events.append(event)
+                self._conditions[key].notify_all()
 
     async def read(self, tenant_id: str, run_id: str, after_sequence: int = 0) -> list[RunEvent]:
         return [
             event for event in self._items[(tenant_id, run_id)] if event.sequence > after_sequence
         ]
+
+    async def wait(
+        self,
+        tenant_id: str,
+        run_id: str,
+        after_sequence: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        key = (tenant_id, run_id)
+        condition = self._conditions[key]
+        async with condition:
+            if any(event.sequence > after_sequence for event in self._items[key]):
+                return True
+            try:
+                await asyncio.wait_for(condition.wait(), timeout=timeout_seconds)
+            except TimeoutError:
+                return False
+            return any(event.sequence > after_sequence for event in self._items[key])
+
+
+class InMemoryCancellationWakeup:
+    def __init__(self) -> None:
+        self._tokens: dict[tuple[str, str], int] = defaultdict(int)
+        self._conditions: dict[tuple[str, str], asyncio.Condition] = defaultdict(asyncio.Condition)
+
+    async def publish(self, tenant_id: str, run_id: str, fencing_token: int) -> None:
+        key = (tenant_id, run_id)
+        async with self._conditions[key]:
+            self._tokens[key] = max(self._tokens[key], fencing_token)
+            self._conditions[key].notify_all()
+
+    async def wait(
+        self,
+        tenant_id: str,
+        run_id: str,
+        after_fencing_token: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool:
+        key = (tenant_id, run_id)
+        condition = self._conditions[key]
+        async with condition:
+            if self._tokens[key] > after_fencing_token:
+                return True
+            try:
+                await asyncio.wait_for(condition.wait(), timeout=timeout_seconds)
+            except TimeoutError:
+                return False
+            return self._tokens[key] > after_fencing_token
 
 
 class InMemoryArtifactStore:
@@ -616,6 +713,7 @@ class InMemoryAguiThreadBindingRepository:
         user_id: str,
         thread_id: str,
         *,
+        expected_session_id: str,
         session_id: str,
         updated_at: datetime,
     ) -> AguiThreadBinding:
@@ -625,11 +723,19 @@ class InMemoryAguiThreadBindingRepository:
                 binding = self._by_thread[thread_key]
             except KeyError as error:
                 raise NotFoundError(f"AG-UI thread binding not found: {thread_id}") from error
+            if binding.session_id != expected_session_id:
+                raise ConflictError("AG-UI thread Session changed concurrently")
+            if binding.session_id == session_id:
+                return binding
             session_key = (tenant_id, user_id, session_id)
             existing = self._by_session.get(session_key)
             if existing is not None and existing.thread_id != thread_id:
                 raise ConflictError("AG-UI session binding already exists")
-            previous = tuple(dict.fromkeys((*binding.previous_session_ids, binding.session_id)))
+            previous = tuple(
+                value
+                for value in dict.fromkeys((*binding.previous_session_ids, binding.session_id))
+                if value != session_id
+            )
             updated = binding.model_copy(
                 update={
                     "session_id": session_id,

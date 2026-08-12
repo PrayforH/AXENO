@@ -1,7 +1,11 @@
 import type { ChatModelRunOptions } from "@assistant-ui/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityStore } from "../src/lib/activity-store";
-import { createThreadHistoryAdapter } from "../src/lib/task-history";
+import {
+  createThreadHistoryAdapter,
+  loadTasks,
+  TASK_LIST_REQUEST_TIMEOUT_MS,
+} from "../src/lib/task-history";
 
 describe("thread history activity restoration", () => {
   afterEach(() => {
@@ -80,6 +84,45 @@ describe("thread history activity restoration", () => {
       status: "succeeded",
       metrics: { turns: 2 },
     });
+  });
+
+  it("coalesces simultaneous recent-task requests during workspace restore", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const fromBindingRestore = loadTasks(false);
+    const fromSidebar = loadTasks(false);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fromSidebar).toBe(fromBindingRestore);
+    resolveFetch?.(Response.json([]));
+    await expect(fromBindingRestore).resolves.toEqual([]);
+    await expect(loadTasks(false)).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("times out a stalled task-list request and allows the next refresh to recover", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stalled = loadTasks(true);
+    const timedOut = expect(stalled).rejects.toThrow("任务列表读取超时");
+    await vi.advanceTimersByTimeAsync(TASK_LIST_REQUEST_TIMEOUT_MS);
+    await timedOut;
+
+    fetchMock.mockResolvedValueOnce(Response.json([]));
+    await expect(loadTasks(true)).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("rewinds an active assistant turn and marks it for stream recovery", async () => {

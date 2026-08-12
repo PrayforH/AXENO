@@ -53,6 +53,8 @@ class PostgresAgentDraftRepository:
                     tenant_id=draft.tenant_id,
                     owner_user_id=draft.created_by,
                     draft_id=draft.draft_id,
+                    agent_id=draft.agent_id,
+                    space_id=draft.space_id,
                     name=draft.spec.name,
                     revision=draft.revision,
                     schema_version=AGENT_DRAFT_SCHEMA_VERSION,
@@ -92,6 +94,8 @@ class PostgresAgentDraftRepository:
         statement = (
             select(
                 AgentDraftRow.draft_id,
+                AgentDraftRow.agent_id,
+                AgentDraftRow.space_id,
                 AgentDraftRow.name,
                 AgentDraftRow.payload["spec"]["displayName"].as_string(),
                 AgentDraftRow.payload["spec"]["domain"].as_string(),
@@ -112,14 +116,16 @@ class PostgresAgentDraftRepository:
         return [
             AgentDraftSummary(
                 draftId=row[0],
-                name=row[1],
-                displayName=row[2],
-                domain=row[3],
-                version=row[4],
-                template=row[5],
-                revision=row[6],
-                updatedAt=row[7],
-                publishedVersion=row[8],
+                agentId=row[1],
+                spaceId=row[2],
+                name=row[3],
+                displayName=row[4],
+                domain=row[5],
+                version=row[6],
+                template=row[7],
+                revision=row[8],
+                updatedAt=row[9],
+                publishedVersion=row[10],
             )
             for row in rows
         ]

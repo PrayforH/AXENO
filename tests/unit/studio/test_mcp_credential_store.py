@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -19,6 +20,34 @@ from harness.studio.mcp_credential_store import (
     StoredMcpCredential,
     StoredMcpCredentialProvider,
 )
+
+
+def test_cryptography_vex_is_limited_to_the_unreachable_pkcs7_path() -> None:
+    source_imports: set[str] = set()
+    source_text = ""
+    for path in Path("src").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        source_text += text
+        for line in text.splitlines():
+            if line.startswith(("import cryptography", "from cryptography")):
+                source_imports.add(line)
+
+    assert source_imports == {
+        "from cryptography.exceptions import InvalidTag",
+        "from cryptography.hazmat.primitives.ciphers.aead import AESGCM",
+    }
+    assert "pkcs7" not in source_text.lower()
+
+    vex = json.loads(
+        Path("security/vex/cryptography-49.0.0.openvex.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    statement = vex["statements"][0]
+    assert statement["vulnerability"]["name"] == "CVE-2026-69247"
+    assert statement["products"] == [{"@id": "pkg:pypi/cryptography@49.0.0"}]
+    assert statement["status"] == "not_affected"
+    assert statement["justification"] == "vulnerable_code_not_in_execute_path"
 
 
 def identity(tenant_id: str = "tenant-a") -> ExecutionIdentity:

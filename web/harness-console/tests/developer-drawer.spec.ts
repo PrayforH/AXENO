@@ -48,6 +48,7 @@ describe("developer drawer", () => {
     expect(panel).not.toContain("Harness activity");
     expect(panel).not.toContain("Run inspector");
     expect(panel).not.toContain("协议与原始事件");
+    expect(panel).not.toContain("条原始事件");
   });
 
   it("uses a compact metric grid and quiet observability row", () => {
@@ -72,6 +73,7 @@ describe("developer drawer", () => {
     expect(panel).toContain("activity.trace_id");
     expect(panel.slice(identifiersStart)).toContain("activity.run_id");
     expect(panel.slice(identifiersStart)).toContain("threadId");
+    expect(panel).toContain('id="run-details-panel"');
     expect(panel).not.toContain("developerRows(threadId)");
   });
 

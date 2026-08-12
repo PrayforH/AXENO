@@ -58,6 +58,14 @@ export function AccountMenu() {
             <code>{membership.tenant_id}</code>
           </div>
           <nav className="account-actions" aria-label="账户操作">
+            <a
+              className="account-help"
+              href="https://my.feishu.cn/docx/DdiCdPFcroUpUXxOumNcQpIin1g"
+              target="_blank"
+              rel="noreferrer"
+            >
+              产品使用手册
+            </a>
             <a className="account-settings" href="/settings">个人设置</a>
             <a className="account-logout" href="/api/auth/logout">退出登录</a>
           </nav>

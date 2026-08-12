@@ -241,6 +241,45 @@ def test_projects_safe_runtime_milestones_without_internal_identifiers() -> None
     assert "private-runtime-session" not in repr(runtime)
 
 
+def test_context_recovery_is_visible_without_projecting_digest_content() -> None:
+    projected = activity_projection(
+        event("context.recovery.loaded", {"mode": "digest_rebase"})
+    )[0].model_dump(by_alias=True)
+
+    item = projected["patch"][0]["value"]
+    assert item["title"] == "上下文恢复点已载入"
+    assert item["summary"] == "已从脱敏摘要恢复事实、决定、待办与耐久对象引用"
+    assert item["metadata"] == {}
+
+
+def test_projects_context_compaction_without_transcript_content() -> None:
+    projected = activity_projection(
+        event(
+            "context.compaction.started",
+            {
+                "trigger": "auto",
+                "custom_instructions_supplied": False,
+                "run_context_trust": "untrusted",
+                "transcript_path": "/never-show/transcript.jsonl",
+            },
+        )
+    )[0].model_dump(by_alias=True)
+
+    item = projected["patch"][0]["value"]
+    assert item["title"] == "正在压缩长上下文"
+    assert item["metadata"] == {
+        "trigger": "auto",
+        "run_context_trust": "untrusted",
+        "custom_instructions_supplied": False,
+    }
+    assert "never-show" not in repr(projected)
+
+    provider_status = activity_projection(
+        event("runtime.system", {"subtype": "status", "status": "compacting"})
+    )[0].model_dump(by_alias=True)
+    assert provider_status["patch"][0]["value"]["title"] == "正在压缩长上下文"
+
+
 def test_historical_provider_diagnostic_is_sanitized_in_activity_replay() -> None:
     projected = activity_projection(
         event("message.delta", {"text": "API Error: 400 Content Exists Risk"})

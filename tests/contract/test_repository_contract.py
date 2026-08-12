@@ -60,8 +60,14 @@ async def test_session_repository_is_tenant_scoped() -> None:
     await repository.add(session)
 
     assert await repository.get("tenant-a", "session-1") == session
+    assert await repository.list_for_ids(
+        "tenant-a", ["session-1", "session-1"]
+    ) == [session, session]
+    assert await repository.list_for_ids("tenant-a", []) == []
     with pytest.raises(NotFoundError):
         await repository.get("tenant-b", "session-1")
+    with pytest.raises(NotFoundError):
+        await repository.list_for_ids("tenant-a", ["session-1", "missing"])
 
 
 @pytest.mark.asyncio

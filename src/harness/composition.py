@@ -32,6 +32,8 @@ from harness.auth.audit import AuditService
 from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepository
 from harness.auth.service import AuthService, OAuthProviderConfig
 from harness.config import Settings
+from harness.context.checkpoint import ContextCheckpointService
+from harness.context.service import ContextService
 from harness.core.manifest import AgentManifest, AgentManifestSnapshot
 from harness.core.models import ModelCompatibility, RunStatus, Session
 from harness.core.ports import ArtifactStore, TaskQueue
@@ -106,6 +108,7 @@ from harness.sandbox.local import LocalSandboxProvider
 from harness.sharing.service import TeamSpaceService
 from harness.sharing.workspace_repositories import AgentIdentityService
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
+from harness.storage.context_repository import PostgresContextRepository
 from harness.storage.database import create_database
 from harness.storage.deployment_repository import (
     PostgresDeploymentRepository,
@@ -143,11 +146,17 @@ from harness.storage.platform_repositories import (
 from harness.storage.preview_repository import PostgresPreviewRepository
 from harness.storage.quality_repository import PostgresQualityRepository
 from harness.storage.quota_repository import PostgresQuotaRepository
-from harness.storage.redis import AsyncRedisClient, RedisEventBus, RedisTaskQueue
+from harness.storage.redis import (
+    AsyncRedisClient,
+    RedisCancellationWakeup,
+    RedisEventBus,
+    RedisTaskQueue,
+)
 from harness.storage.reliability_repository import PostgresReliabilityRepository
 from harness.storage.repositories import PostgresEventRepository, PostgresRunRepository
 from harness.storage.sharing_repository import PostgresTeamSpaceRepository
 from harness.storage.studio_repository import PostgresAgentDraftRepository
+from harness.storage.transcript_checkpoint import PostgresTranscriptCheckpointProvider
 from harness.storage.trigger_repository import PostgresAgentTriggerRepository
 from harness.storage.workspace_repository import PostgresWorkspaceAgentRepository
 from harness.studio.catalog import default_capability_catalog
@@ -591,6 +600,7 @@ def build_production_container(
         retry_delay_seconds=settings.worker_task_retry_delay_seconds,
     )
     bus = RedisEventBus(redis_client)
+    cancellation_wakeup = RedisCancellationWakeup(redis_client)
     store: ArtifactStore = MinioArtifactStore(
         endpoint=settings.minio_endpoint,
         access_key=access_key,
@@ -608,6 +618,15 @@ def build_production_container(
     def ids(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
 
+    context_service = ContextService(
+        PostgresContextRepository(sessions),
+        clock=clock,
+        id_generator=ids,
+    )
+    context_checkpoints = ContextCheckpointService(
+        context_service,
+        PostgresTranscriptCheckpointProvider(sessions),
+    )
     knowledge = KnowledgeService(
         knowledge_repository,
         audit=audit,
@@ -806,6 +825,7 @@ def build_production_container(
         metrics=reliability_metrics,
         admission=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
+        cancellation_wakeup=cancellation_wakeup,
     )
     trigger_service = AgentTriggerService(
         trigger_repository,
@@ -1019,6 +1039,7 @@ def build_production_container(
                 profiles=policy_profiles,
                 approvals=approval_service,
                 events=events,
+                context_service=context_service,
                 quotas=enforced_quotas,
                 observability=observability,
             ),
@@ -1157,12 +1178,16 @@ def build_production_container(
         quotas=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
         metrics=reliability_metrics,
+        cancellation_wakeup=cancellation_wakeup,
+        context_checkpoints=context_checkpoints,
+        context_service=context_service,
     )
     agui = AguiRunService(
         sessions=session_service,
         runs=run_service,
         input_artifacts=input_service,
         bindings=binding_repository,
+        contexts=context_service,
         title_generator=(
             AnthropicCompatibleTaskTitleGenerator(
                 base_url=title_gateway.base_url,
@@ -1304,6 +1329,7 @@ def build_production_container(
         agents=agent_service,
         team_spaces=team_spaces,
         workspace_agents=workspace_agent_repository,
+        context=context_service,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,
@@ -1329,6 +1355,7 @@ def build_production_container(
         worker=worker,
         agui=agui,
         auto_execute=False,
+        event_wakeup=bus,
         skill_conversation=(
             AnthropicCompatibleSkillConversationService(configured_gateways)
             if title_gateway is not None

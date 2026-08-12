@@ -5,7 +5,7 @@ from typing import Literal
 
 from harness.application.agent_assets import resolve_published_agent_versions
 from harness.application.types import Clock, IdGenerator
-from harness.core.errors import ConflictError
+from harness.core.errors import ConflictError, NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import AgentVersionStatus, Session
 from harness.core.ports import AgentRegistry, SessionRepository
@@ -161,3 +161,41 @@ class SessionService:
 
     async def get(self, tenant_id: str, session_id: str) -> Session:
         return await self._sessions.get(tenant_id, session_id)
+
+    async def list_for_ids(
+        self, tenant_id: str, session_ids: list[str]
+    ) -> list[Session]:
+        return await self._sessions.list_for_ids(tenant_id, session_ids)
+
+    async def clone_for_context_rebase(
+        self,
+        tenant_id: str,
+        user_id: str,
+        source_session_id: str,
+        *,
+        session_id: str,
+    ) -> Session:
+        """Create a fresh SDK identity while pinning the exact Harness snapshot."""
+
+        source = await self._sessions.get(tenant_id, source_session_id)
+        if source.user_id != user_id:
+            raise NotFoundError(f"session not found: {source_session_id}")
+        cloned = source.model_copy(
+            update={
+                "session_id": session_id,
+                "claude_session_id": None,
+                "created_at": self._clock(),
+            }
+        )
+        try:
+            await self._sessions.add(cloned)
+            return cloned
+        except ConflictError as error:
+            existing = await self._sessions.get(tenant_id, session_id)
+            expected = cloned.model_dump(exclude={"created_at"})
+            actual = existing.model_dump(exclude={"created_at"})
+            if actual != expected:
+                raise ConflictError(
+                    "context rebase Session ID was reused for another snapshot"
+                ) from error
+            return existing

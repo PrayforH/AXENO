@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { activityOverview, type ActivityItem } from "../lib/activity-schema";
-import { useRunActivity } from "../lib/activity-store";
+import {
+  activityOverview,
+  type ActivityItem,
+  type RunActivity,
+} from "../lib/activity-schema";
 import { isHiddenByCollapsedDetails } from "../lib/focus-target";
 
 const statusLabels: Record<string, string> = {
@@ -257,12 +260,13 @@ function useNarrowRunPanel() {
 
 export function DeveloperDrawer({
   threadId,
+  activity,
   onClose,
 }: {
   threadId: string;
+  activity: RunActivity;
   onClose?: () => void;
 }) {
-  const activity = useRunActivity();
   const overview = activity ? activityOverview(activity) : undefined;
   const isModal = useNarrowRunPanel();
   const traceEntries = activity ? traceActivityEntries(activity.items) : [];
@@ -332,6 +336,7 @@ export function DeveloperDrawer({
   return (
     <aside
       ref={panelRef}
+      id="run-details-panel"
       className="developer-drawer"
       aria-label="运行详情"
       role={isModal ? "dialog" : undefined}
@@ -399,7 +404,6 @@ export function DeveloperDrawer({
           <details className="inspector-activity inspector-trace" open>
             <summary>
               <span>Trace · {traceEntries.length} 个步骤</span>
-              <small>{activity.items.length} 条原始事件</small>
               <span className="inspector-disclosure-chevron" aria-hidden="true" />
             </summary>
             <div className="trace-ledger" aria-label="完整执行 Trace">

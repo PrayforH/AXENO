@@ -29,6 +29,7 @@ from harness.knowledge import api as knowledge_routes
 from harness.lifecycle import api as lifecycle_routes
 from harness.memory_bank import api as memory_bank_routes
 from harness.platform_mcp import api as platform_mcp_routes
+from harness.policy.profiles import PolicyProfileRegistry
 from harness.quota.repositories import QuotaExceededError
 from harness.reliability import api as reliability_routes
 from harness.sharing import api as sharing_routes
@@ -45,7 +46,11 @@ async def _http_error(_request: Request, error: Exception) -> JSONResponse:
         payload = detail
     else:
         payload = {"code": "http_error", "message": str(detail)}
-    return JSONResponse(status_code=error.status_code, content={"error": payload})
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"error": payload},
+        headers=error.headers,
+    )
 
 
 async def _request_validation_error(_request: Request, error: Exception) -> JSONResponse:
@@ -324,8 +329,15 @@ def create_memory_app(
     *,
     auto_execute: bool = False,
     settings: Settings | None = None,
+    policy_profiles: PolicyProfileRegistry | None = None,
 ) -> FastAPI:
-    return create_app(build_memory_container(auto_execute=auto_execute, settings=settings))
+    return create_app(
+        build_memory_container(
+            auto_execute=auto_execute,
+            settings=settings,
+            policy_profiles=policy_profiles,
+        )
+    )
 
 
 def create_configured_app(settings: Settings) -> FastAPI:

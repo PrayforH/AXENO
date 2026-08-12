@@ -49,6 +49,15 @@ class AgentRegistry(Protocol):
 
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]: ...
 
+    async def list_catalog_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentVersion]:
+        """List versions with only the manifest portion of ``snapshot`` loaded.
+
+        Runtime callers that need packaged files must continue to use ``get``.
+        """
+        ...
+
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
     ) -> int:
@@ -59,6 +68,7 @@ class AgentRegistry(Protocol):
         with the same name@version coordinate. Returns the number of moved
         rows.
         """
+        ...
 
 
 class AgentIdentityProvider(Protocol):
@@ -68,11 +78,30 @@ class AgentIdentityProvider(Protocol):
         self, tenant_id: str, owner_user_id: str, name: str
     ) -> str: ...
 
+    async def promote_personal_agent_version(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+        version: str,
+    ) -> None:
+        """Move a personal Agent's current pointer after a new publication.
+
+        Workspace-scoped identities are ignored because their release pointer
+        is governed by the owning team space.
+        """
+        ...
+
 
 class SessionRepository(Protocol):
     async def add(self, session: Session) -> None: ...
 
     async def get(self, tenant_id: str, session_id: str) -> Session: ...
+
+    async def list_for_ids(
+        self, tenant_id: str, session_ids: list[str]
+    ) -> list[Session]: ...
 
     async def bind_claude_session_id(
         self, tenant_id: str, session_id: str, claude_session_id: str
@@ -120,9 +149,19 @@ class ApprovalRepository(Protocol):
 class EventRepository(Protocol):
     async def append(self, event: RunEvent) -> None: ...
 
+    async def latest_sequence(self, tenant_id: str, run_id: str) -> int: ...
+
     async def list_after(
         self, tenant_id: str, run_id: str, after_sequence: int
     ) -> list[RunEvent]: ...
+
+    async def latest_for_session_type(
+        self, tenant_id: str, session_id: str, event_type: str
+    ) -> RunEvent | None: ...
+
+    async def latest_for_session_types(
+        self, tenant_id: str, session_id: str, event_types: tuple[str, ...]
+    ) -> RunEvent | None: ...
 
 
 class EventBus(Protocol):
@@ -131,6 +170,39 @@ class EventBus(Protocol):
     async def read(
         self, tenant_id: str, run_id: str, after_sequence: int = 0
     ) -> list[RunEvent]: ...
+
+
+class EventWakeup(Protocol):
+    """Best-effort notification that durable events may be ready to read."""
+
+    async def wait(
+        self,
+        tenant_id: str,
+        run_id: str,
+        after_sequence: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool: ...
+
+
+class CancellationWakeup(Protocol):
+    """Best-effort cancellation signal guarded by a durable fencing token."""
+
+    async def publish(
+        self,
+        tenant_id: str,
+        run_id: str,
+        fencing_token: int,
+    ) -> None: ...
+
+    async def wait(
+        self,
+        tenant_id: str,
+        run_id: str,
+        after_fencing_token: int,
+        *,
+        timeout_seconds: float,
+    ) -> bool: ...
 
 
 class ArtifactStore(Protocol):
@@ -230,6 +302,7 @@ class AguiThreadBindingRepository(Protocol):
         user_id: str,
         thread_id: str,
         *,
+        expected_session_id: str,
         session_id: str,
         updated_at: datetime,
     ) -> AguiThreadBinding: ...

@@ -1,6 +1,7 @@
 """Translate AG-UI thread/run identifiers into Harness domain identifiers."""
 
 import asyncio
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,8 @@ from harness.agui.task_title import (
 from harness.application.input_artifacts import InputArtifactService
 from harness.application.runs import RunService
 from harness.application.sessions import SessionService
+from harness.context.models import SessionContextDigest
+from harness.context.service import ContextService
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import AguiThreadBinding as StoredAguiThreadBinding
 from harness.core.models import Run
@@ -53,6 +56,14 @@ class AguiRunCreation:
     deduplicated: bool
 
 
+@dataclass(frozen=True)
+class AguiContextRebase:
+    thread_id: str
+    previous_session_id: str
+    session_id: str
+    digest: SessionContextDigest
+
+
 class AguiRunService:
     def __init__(
         self,
@@ -62,12 +73,14 @@ class AguiRunService:
         input_artifacts: InputArtifactService,
         bindings: AguiThreadBindingRepository | None = None,
         title_generator: TaskTitleGenerator | None = None,
+        contexts: ContextService | None = None,
     ) -> None:
         self._sessions = sessions
         self._run_service = runs
         self._input_artifacts = input_artifacts
         self._bindings = bindings or InMemoryAguiThreadBindingRepository()
         self._title_generator = title_generator
+        self._contexts = contexts
         self._title_tasks: set[asyncio.Task[None]] = set()
         self._title_task_keys: set[tuple[str, str, str, datetime]] = set()
         self._run_bindings: dict[tuple[str, str, str, str], str] = {}
@@ -177,50 +190,52 @@ class AguiRunService:
             user_id=user_id,
             input_artifact_ids=input_artifact_ids,
         )
-        binding = await self._resolve_binding(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            thread_id=request.thread_id,
-            agent_name=agent_name,
-            agent_version=agent_version,
-            agent_owner_user_id=agent_owner_user_id,
-            space_id=space_id,
-            connection_mode=connection_mode,
-        )
-        creation = await self._run_service.create_with_result(
-            tenant_id,
-            binding.session_id,
-            request.run_id,
-            input={
-                "prompt": prompt,
-                "conversation_prompts": conversation_prompts,
-                "input_artifact_ids": [item.input_artifact_id for item in resolved],
-                **(
-                    {"required_model_capabilities": ["vision"]}
-                    if any(item.media_type.startswith("image/") for item in resolved)
-                    else {}
-                ),
-                **(
-                    {"model_route_override": model_route_override}
-                    if (model_route_override := _model_route_override(request)) is not None
-                    else {}
-                ),
-            },
-            deduplicate_active_input=True,
-        )
+        run_input: dict[str, object] = {
+            "prompt": prompt,
+            "conversation_prompts": conversation_prompts,
+            "input_artifact_ids": [item.input_artifact_id for item in resolved],
+            **(
+                {"required_model_capabilities": ["vision"]}
+                if any(item.media_type.startswith("image/") for item in resolved)
+                else {}
+            ),
+            **(
+                {"model_route_override": model_route_override}
+                if (model_route_override := _model_route_override(request)) is not None
+                else {}
+            ),
+        }
+        creation = None
+        for attempt in range(2):
+            binding = await self._resolve_binding(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=request.thread_id,
+                agent_name=agent_name,
+                agent_version=agent_version,
+                agent_owner_user_id=agent_owner_user_id,
+                space_id=space_id,
+                connection_mode=connection_mode,
+            )
+            creation = await self._run_service.create_with_result(
+                tenant_id,
+                binding.session_id,
+                request.run_id,
+                input=run_input,
+                deduplicate_active_input=True,
+            )
+            current = await self._bindings.get_by_thread(tenant_id, user_id, request.thread_id)
+            if current.session_id == binding.session_id:
+                break
+            await self._run_service.cancel(tenant_id, creation.run.run_id)
+            if attempt == 1:
+                raise ConflictError("task context changed repeatedly while the Run was created")
+        assert creation is not None
         run = creation.run
         async with self._lock:
             self._run_bindings[(tenant_id, user_id, request.thread_id, request.run_id)] = run.run_id
         title_timestamp = datetime.now(UTC)
-        await self._bindings.update_title(
-            tenant_id,
-            user_id,
-            request.thread_id,
-            title=summarize_task_title_from_prompts(conversation_prompts),
-            source="fallback",
-            generated_at=title_timestamp,
-        )
-        self._schedule_model_title(
+        self._schedule_initial_title(
             tenant_id=tenant_id,
             user_id=user_id,
             thread_id=request.thread_id,
@@ -265,6 +280,66 @@ class AguiRunService:
             generated_at=generated_at,
         )
         return updated.title or "新任务"
+
+    def _schedule_initial_title(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        prompts: list[str],
+        generated_at: datetime,
+    ) -> None:
+        key = (tenant_id, user_id, thread_id, generated_at)
+        if key in self._title_task_keys:
+            return
+        self._title_task_keys.add(key)
+        task = asyncio.create_task(
+            self._store_initial_title(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                prompts=prompts,
+                generated_at=generated_at,
+            )
+        )
+        self._title_tasks.add(task)
+
+        def cleanup(completed: asyncio.Task[None]) -> None:
+            self._title_tasks.discard(completed)
+            self._title_task_keys.discard(key)
+
+        task.add_done_callback(cleanup)
+
+    async def _store_initial_title(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+        prompts: list[str],
+        generated_at: datetime,
+    ) -> None:
+        try:
+            await self._bindings.update_title(
+                tenant_id,
+                user_id,
+                thread_id,
+                title=summarize_task_title_from_prompts(prompts),
+                source="fallback",
+                generated_at=generated_at,
+            )
+        except Exception:
+            # Metadata enrichment is fail-open for the already-created Run.
+            return
+        if self._title_generator is not None and prompts:
+            await self._generate_model_title(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                thread_id=thread_id,
+                prompts=prompts,
+                generated_at=generated_at,
+            )
 
     def _schedule_model_title(
         self,
@@ -322,6 +397,119 @@ class AguiRunService:
             # A title must never block the Agent run; the deterministic title remains valid.
             return
 
+    async def rebase_context(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+    ) -> AguiContextRebase:
+        contexts = self._require_contexts()
+        async with self._lock:
+            binding = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
+            source = await self._sessions.get(tenant_id, binding.session_id)
+            if source.user_id != user_id:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
+            if source.claude_session_id is None:
+                raise ConflictError("context rebase requires at least one completed model Run")
+            await self._require_no_active_runs(
+                tenant_id, [source.session_id], operation="rebase context"
+            )
+            source_digest = await contexts.latest_digest(tenant_id, user_id, source.session_id)
+            if source_digest is None:
+                raise ConflictError("context rebase requires a durable recovery point")
+            seed = "\x1f".join(
+                (
+                    tenant_id,
+                    user_id,
+                    thread_id,
+                    source.session_id,
+                    source_digest.content_hash,
+                )
+            ).encode()
+            target_session_id = f"session_ctx_{hashlib.sha256(seed).hexdigest()[:32]}"
+            target = await self._sessions.clone_for_context_rebase(
+                tenant_id,
+                user_id,
+                source.session_id,
+                session_id=target_session_id,
+            )
+            digest = await contexts.create_rebase_digest(
+                tenant_id=tenant_id,
+                owner_user_id=user_id,
+                source_session_id=source.session_id,
+                target_session_id=target.session_id,
+            )
+            await self._bindings.rebind_session(
+                tenant_id,
+                user_id,
+                thread_id,
+                expected_session_id=source.session_id,
+                session_id=target.session_id,
+                updated_at=datetime.now(UTC),
+            )
+            return AguiContextRebase(
+                thread_id=thread_id,
+                previous_session_id=source.session_id,
+                session_id=target.session_id,
+                digest=digest,
+            )
+
+    async def rollback_context_rebase(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        thread_id: str,
+    ) -> AguiContextRebase:
+        contexts = self._require_contexts()
+        async with self._lock:
+            binding = await self._bindings.get_by_thread(tenant_id, user_id, thread_id)
+            if not binding.session_id.startswith("session_ctx_"):
+                raise ConflictError("this task is not using a rebased context")
+            if not binding.previous_session_ids:
+                raise ConflictError("no previous task context is available")
+            await self._require_no_active_runs(
+                tenant_id, [binding.session_id], operation="rollback context"
+            )
+            target_session_id = binding.previous_session_ids[-1]
+            target = await self._sessions.get(tenant_id, target_session_id)
+            if target.user_id != user_id:
+                raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
+            digest = await contexts.latest_digest(tenant_id, user_id, target_session_id)
+            if digest is None:
+                raise ConflictError("previous task context has no recovery point")
+            await self._bindings.rebind_session(
+                tenant_id,
+                user_id,
+                thread_id,
+                expected_session_id=binding.session_id,
+                session_id=target_session_id,
+                updated_at=datetime.now(UTC),
+            )
+            return AguiContextRebase(
+                thread_id=thread_id,
+                previous_session_id=binding.session_id,
+                session_id=target_session_id,
+                digest=digest,
+            )
+
+    def _require_contexts(self) -> ContextService:
+        if self._contexts is None:
+            raise ConflictError("context recovery is not configured")
+        return self._contexts
+
+    async def _require_no_active_runs(
+        self,
+        tenant_id: str,
+        session_ids: list[str],
+        *,
+        operation: str,
+    ) -> None:
+        runs = await self._run_service.list_for_sessions(tenant_id, session_ids, limit=200)
+        if any(not run.status.is_terminal for run in runs):
+            raise ConflictError(f"cannot {operation} while this task has an active Run")
+
     async def cancel_run(
         self,
         *,
@@ -361,9 +549,7 @@ class AguiRunService:
                 if run is not None:
                     break
             if run is None:
-                raise NotFoundError(
-                    f"AG-UI run is not bound: {thread_id}/{client_run_id}"
-                )
+                raise NotFoundError(f"AG-UI run is not bound: {thread_id}/{client_run_id}")
             run_id = run.run_id
             async with self._lock:
                 self._run_bindings[key] = run_id
@@ -429,6 +615,7 @@ class AguiRunService:
                         tenant_id,
                         user_id,
                         thread_id,
+                        expected_session_id=stored.session_id,
                         session_id=next_session.session_id,
                         updated_at=datetime.now(UTC),
                     )
@@ -481,7 +668,7 @@ def _model_route_override(request: RunAgentInput) -> str | None:
     raw = request.forwarded_props
     if not isinstance(raw, dict):
         return None
-    value = raw.get("modelRoute")
+    value = cast(dict[str, object], raw).get("modelRoute")
     if value is None or value == "":
         return None
     if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", value):

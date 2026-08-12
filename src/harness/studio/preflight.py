@@ -387,10 +387,10 @@ class LivePreflightRunner:
                         "approval_policy_mismatch",
                         f"Declared tool {tool_name} is denied by its permission profile",
                     )
-                if tool_name == "Bash" and result.decision is not PolicyDecision.ASK:
+                if tool_name == "Bash" and result.decision is not PolicyDecision.ALLOW:
                     raise PreflightCheckError(
                         "approval_policy_mismatch",
-                        "Declared Bash must enter human approval",
+                        "Declared Bash must run without routine approval inside the Sandbox",
                     )
             return PreflightEvidence(
                 summary="Declared tool permission coverage passed",

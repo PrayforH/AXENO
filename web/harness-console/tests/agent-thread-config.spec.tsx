@@ -62,6 +62,7 @@ import {
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
   messageOwnsRun,
+  normalizeMessageText,
   ownsLiveResponse,
   shouldSuppressNativeAssistantText,
   shouldShowComposerStop,
@@ -74,7 +75,7 @@ const agentThreadSource = readFileSync(
 );
 
 it("registers the approval renderer through the assistant-ui Thread config", () => {
-  renderToStaticMarkup(<AgentThread />);
+  renderToStaticMarkup(<AgentThread userId="user-a" threadId="thread-a" />);
 
   expect(agentThreadSource).toContain('part.toolName === "harness_request_approval"');
   expect(agentThreadSource).toContain("<ApprovalToolBridge");
@@ -85,13 +86,16 @@ it("registers the approval renderer through the assistant-ui Thread config", () 
 });
 
 it("presents task-first guidance through a custom assistant-ui welcome", () => {
-  const html = renderToStaticMarkup(<AgentThread />);
+  const html = renderToStaticMarkup(<AgentThread userId="user-a" threadId="thread-a" />);
 
   expect(html).toContain("把目标交给 Agent");
   expect(html).toContain("分析与规划");
   expect(html).toContain("阅读与整理");
   expect(html).toContain("执行与协作");
-  expect(html).toContain("在关键操作前请求确认");
+  expect(html).toContain("常规操作自动完成");
+  expect(html).toContain("仅在高风险边界需要你确认");
+  expect(html).toContain("隔离执行 · 自动风险分级 · 产物可直接下载");
+  expect(html).not.toContain("支持人工审批");
 });
 
 it("uses the current run control name in incomplete-run guidance", () => {
@@ -164,16 +168,29 @@ it("keeps assistant output avatar-free so activity rows cannot overlap it", () =
 it("places copy before edit below the user message content", () => {
   const content = agentThreadSource.indexOf("<UserMessage.Content />");
   const actions = agentThreadSource.indexOf("<ActionBarPrimitive.Root", content);
-  const copy = agentThreadSource.indexOf("<ActionBarPrimitive.Copy", actions);
+  const copy = agentThreadSource.indexOf("<MessageCopyButton", actions);
   const edit = agentThreadSource.indexOf('aria-label="编辑消息"', actions);
   expect(content).toBeGreaterThan(-1);
   expect(actions).toBeGreaterThan(content);
   expect(copy).toBeGreaterThan(actions);
   expect(edit).toBeGreaterThan(copy);
   expect(agentThreadSource).toContain("onClick={beginEdit}");
-  expect(agentThreadSource).toContain("<ActionBarPrimitive.Copy");
+  expect(agentThreadSource).toContain("<MessageCopyButton");
   expect(agentThreadSource).toContain('aria-label="编辑消息"');
-  expect(agentThreadSource).toContain('aria-label="复制消息"');
+  expect(agentThreadSource).toContain('label="复制消息"');
+});
+
+it("normalizes copied message text and provides an HTTP-safe clipboard fallback", () => {
+  expect(normalizeMessageText(" 第一行\r\n\r\n\r\n第二行  \n")).toBe("第一行\n\n第二行");
+  expect(normalizeMessageText("上海贤创广告有限公司 下钻")).toBe("上海贤创广告有限公司 下钻");
+  expect(agentThreadSource).toContain('document.execCommand("copy")');
+  expect(agentThreadSource).toContain('data-copy-state={copyState}');
+});
+
+it("removes answer regeneration while preserving failed-run recovery", () => {
+  expect(agentThreadSource).toContain("allowReload: false");
+  expect(agentThreadSource).not.toContain("<AssistantActionBar.Reload");
+  expect(agentThreadSource).toContain("<ActionBarPrimitive.Reload");
 });
 
 it("only edits the latest user turn and allows unchanged text to start a new run", () => {

@@ -10,18 +10,25 @@ export type WorkspaceId =
   | "usage"
   | "data";
 export type WorkspaceMode = "tasks" | "studio";
+type WorkspaceGroup = "build" | "manage";
 
 export const workspaceItems: ReadonlyArray<{
   id: WorkspaceId;
   href: string;
   label: string;
+  group: WorkspaceGroup;
 }> = [
-  { id: "tasks", href: "/", label: "任务" },
-  { id: "agents", href: "/studio/agents", label: "智能体" },
-  { id: "capabilities", href: "/studio/capabilities", label: "MCP" },
-  { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
-  { id: "data", href: "/studio/data", label: "数据" },
+  { id: "tasks", href: "/", label: "任务", group: "build" },
+  { id: "agents", href: "/studio/agents", label: "智能体", group: "build" },
+  { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力", group: "build" },
+  { id: "knowledge", href: "/studio/knowledge", label: "知识库", group: "build" },
+  { id: "spaces", href: "/studio/spaces", label: "协作空间", group: "manage" },
 ];
+
+const workspaceGroupLabels: Record<WorkspaceGroup, string> = {
+  build: "构建",
+  manage: "协作",
+};
 
 export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
   if (workspace === "tasks") {
@@ -112,27 +119,40 @@ export function WorkspaceNavigation({
     ? workspaceItems.filter((workspace) => visible.includes(workspace.id))
     : workspaceItems;
 
+  function renderWorkspaceLink(workspace: (typeof workspaceItems)[number]) {
+    const current = workspace.id === active;
+    return (
+      <Link
+        className={current ? styles.navigationActive : styles.navigationLink}
+        href={workspace.href}
+        aria-current={current ? "page" : undefined}
+        title={collapsed ? workspace.label : undefined}
+        key={workspace.id}
+      >
+        <WorkspaceIcon workspace={workspace.id} />
+        {!collapsed && <span>{workspace.label}</span>}
+      </Link>
+    );
+  }
+
   return (
     <nav
       className={styles.navigation}
       data-workspace-navigation={collapsed ? "collapsed" : "expanded"}
       aria-label="工作区"
     >
-      {items.map((workspace) => {
-        const current = workspace.id === active;
-        return (
-          <Link
-            className={current ? styles.navigationActive : styles.navigationLink}
-            href={workspace.href}
-            aria-current={current ? "page" : undefined}
-            title={collapsed ? workspace.label : undefined}
-            key={workspace.id}
-          >
-            <WorkspaceIcon workspace={workspace.id} />
-            {!collapsed && <span>{workspace.label}</span>}
-          </Link>
-        );
-      })}
+      {collapsed
+        ? items.map(renderWorkspaceLink)
+        : (["build", "manage"] as const).map((group) => {
+            const groupItems = items.filter((workspace) => workspace.group === group);
+            if (groupItems.length === 0) return null;
+            return (
+              <section className={styles.navigationGroup} key={group}>
+                <h2>{workspaceGroupLabels[group]}</h2>
+                <div>{groupItems.map(renderWorkspaceLink)}</div>
+              </section>
+            );
+          })}
     </nav>
   );
 }

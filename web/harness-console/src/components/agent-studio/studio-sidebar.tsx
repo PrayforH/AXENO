@@ -12,6 +12,7 @@ import {
 import styles from "./studio-sidebar.module.css";
 
 const STORAGE_KEY = "agent-studio-sidebar-collapsed";
+const COMPACT_MEDIA_QUERY = "(max-width: 980px)";
 
 type StudioWorkspace = Exclude<WorkspaceId, "tasks">;
 
@@ -25,25 +26,37 @@ export function StudioSidebar({
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      setCollapsed(
-        stored === "true" ||
-          (stored === null &&
-            window.matchMedia("(max-width: 980px)").matches),
-      );
-    } catch {
-      setCollapsed(window.matchMedia("(max-width: 980px)").matches);
+    const compactViewport = window.matchMedia(COMPACT_MEDIA_QUERY);
+
+    function syncSidebarToViewport() {
+      if (compactViewport.matches) {
+        setCollapsed(true);
+        return;
+      }
+
+      try {
+        setCollapsed(window.localStorage.getItem(STORAGE_KEY) === "true");
+      } catch {
+        setCollapsed(false);
+      }
     }
+
+    syncSidebarToViewport();
+    compactViewport.addEventListener("change", syncSidebarToViewport);
+    return () => {
+      compactViewport.removeEventListener("change", syncSidebarToViewport);
+    };
   }, []);
 
   function toggleSidebar() {
     setCollapsed((current) => {
       const next = !current;
-      try {
-        window.localStorage.setItem(STORAGE_KEY, String(next));
-      } catch {
-        // The layout still works when storage is unavailable.
+      if (!window.matchMedia(COMPACT_MEDIA_QUERY).matches) {
+        try {
+          window.localStorage.setItem(STORAGE_KEY, String(next));
+        } catch {
+          // The layout still works when storage is unavailable.
+        }
       }
       return next;
     });
@@ -111,11 +124,7 @@ export function StudioSidebar({
       <WorkspaceNavigation
         active={active}
         collapsed={collapsed}
-        visible={
-          collapsed
-            ? undefined
-            : ["agents", "capabilities", "knowledge", "data"]
-        }
+        visible={["agents", "capabilities", "knowledge", "spaces"]}
       />
 
       {!collapsed && children && (

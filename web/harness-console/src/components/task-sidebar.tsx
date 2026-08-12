@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import {
   WorkspaceCollapseIcon,
@@ -10,11 +10,13 @@ import {
 } from "./workspace-navigation";
 import { useRunViewModel } from "../lib/activity-store";
 import { approvalStore } from "../lib/approval-store";
+import { useDialogFocus } from "../lib/use-dialog-focus";
 import {
   loadTasks,
   setTaskArchived,
   type TaskSummary,
 } from "../lib/task-history";
+import { taskListRefreshDelay } from "../lib/task-list-refresh";
 
 const statusLabels: Record<string, string> = {
   idle: "新任务",
@@ -58,25 +60,68 @@ function ArchiveIcon() {
   );
 }
 
+function RestoreIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M5.4 7.1H2.8V4.5" />
+      <path d="M3.2 7a7 7 0 1 1-.1 5.5" />
+      <path d="m3 7 2.8-2.8" />
+    </svg>
+  );
+}
+
 const activeStatuses = new Set(["queued", "running", "waiting_approval", "cancelling"]);
 
 export function TaskSidebar({
   currentThreadId,
   collapsed,
+  overlayOpen = false,
   onToggle,
   onSelect,
   onNewTask,
 }: {
   currentThreadId: string;
   collapsed: boolean;
+  overlayOpen?: boolean;
   onToggle: () => void;
   onSelect: (task: TaskSummary) => void;
   onNewTask: () => void;
 }) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [query, setQuery] = useState("");
   const [updatingThreadId, setUpdatingThreadId] = useState("");
+  const [listMode, setListMode] = useState<"recent" | "archived">("recent");
+  const taskListsRef = useRef<Record<"recent" | "archived", TaskSummary[]>>({
+    recent: [],
+    archived: [],
+  });
+  const sidebarRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const wasOverlayOpenRef = useRef(false);
   const runView = useRunViewModel();
+  const showingArchived = listMode === "archived";
+
+  useDialogFocus({
+    open: overlayOpen,
+    panelRef: sidebarRef,
+    initialFocusRef: closeButtonRef,
+    onEscape: onToggle,
+  });
+
+  useEffect(() => {
+    if (overlayOpen) {
+      wasOverlayOpenRef.current = true;
+      return;
+    }
+    if (!wasOverlayOpenRef.current) return;
+    wasOverlayOpenRef.current = false;
+    const focusTimer = window.setTimeout(() => expandButtonRef.current?.focus(), 20);
+    return () => window.clearTimeout(focusTimer);
+  }, [overlayOpen]);
 
   useEffect(() => {
     approvalStore.reset(currentThreadId);
@@ -84,35 +129,110 @@ export function TaskSidebar({
 
   useEffect(() => {
     let active = true;
+    let refreshing = false;
+    let timer: number | undefined;
+
+    function schedule(next: TaskSummary[], failed = false) {
+      if (!active || document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(
+        () => void refresh(),
+        taskListRefreshDelay(
+          next.map((task) => task.status),
+          runView?.phase,
+          failed,
+        ),
+      );
+    }
+
     async function refresh() {
+      if (
+        !active
+        || refreshing
+        || document.visibilityState === "hidden"
+      ) return;
+      refreshing = true;
       try {
-        const next = await loadTasks();
+        const next = await loadTasks(showingArchived);
         if (active) {
+          taskListsRef.current[listMode] = next;
           setTasks(next);
           setError("");
+          schedule(next);
         }
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : String(cause));
+        if (active) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+          schedule([], true);
+        }
+      } finally {
+        refreshing = false;
+        if (active) setLoading(false);
       }
     }
-    void refresh();
-    const timer = window.setInterval(refresh, 4_000);
+
+    function refreshWhenVisible() {
+      if (document.visibilityState === "hidden") {
+        window.clearTimeout(timer);
+        return;
+      }
+      window.clearTimeout(timer);
+      void refresh();
+    }
+
+    refreshWhenVisible();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshWhenVisible);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshWhenVisible);
     };
-  }, [runView?.phase]);
+  }, [listMode, refreshKey, runView?.phase, showingArchived]);
 
-  async function updateArchived(task: TaskSummary) {
+  function switchListMode(next: "recent" | "archived") {
+    if (next === listMode) return;
+    const cached = taskListsRef.current[next];
+    setListMode(next);
+    setTasks(cached);
+    setQuery("");
+    setError("");
+    setLoading(cached.length === 0);
+  }
+
+  function retryTasks() {
+    setError("");
+    setLoading(true);
+    setRefreshKey((current) => current + 1);
+  }
+
+  async function updateArchived(task: TaskSummary, archived: boolean) {
     if (activeStatuses.has(task.status)) return;
     setUpdatingThreadId(task.thread_id);
     try {
-      await setTaskArchived(task.thread_id, true);
-      setTasks((current) =>
-        current.filter((item) => item.thread_id !== task.thread_id),
-      );
+      await setTaskArchived(task.thread_id, archived);
+      setTasks((current) => {
+        const next = current.filter((item) => item.thread_id !== task.thread_id);
+        taskListsRef.current[listMode] = next;
+        return next;
+      });
+      const destinationMode = archived ? "archived" : "recent";
+      taskListsRef.current[destinationMode] = [
+        task,
+        ...taskListsRef.current[destinationMode].filter(
+          (item) => item.thread_id !== task.thread_id,
+        ),
+      ];
       setError("");
-      if (task.thread_id === currentThreadId) onNewTask();
+      if (archived) {
+        if (task.thread_id === currentThreadId) onNewTask();
+      } else {
+        setListMode("recent");
+        setTasks(taskListsRef.current.recent);
+        setLoading(false);
+        onSelect(task);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -124,6 +244,16 @@ export function TaskSidebar({
     () => tasks.find((task) => task.thread_id === currentThreadId),
     [currentThreadId, tasks],
   );
+  const filteredTasks = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    if (!normalized) return tasks;
+    return tasks.filter((task) =>
+      [task.title, statusLabels[task.status] ?? task.status, task.agent_name]
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(normalized),
+    );
+  }, [query, tasks]);
 
   useEffect(() => {
     if (!selected) return;
@@ -136,8 +266,12 @@ export function TaskSidebar({
 
   return (
     <aside
+      ref={sidebarRef}
       className={`task-sidebar ${collapsed ? "is-collapsed" : ""}`}
       aria-label={collapsed ? "任务快捷栏" : "任务列表"}
+      aria-modal={overlayOpen ? true : undefined}
+      data-task-sidebar-overlay={overlayOpen ? "true" : undefined}
+      role={overlayOpen ? "dialog" : undefined}
     >
       {collapsed ? (
         <div className="task-sidebar-rail">
@@ -149,10 +283,12 @@ export function TaskSidebar({
             AS
           </Link>
           <button
+            ref={expandButtonRef}
             className="task-rail-toggle"
             type="button"
             onClick={onToggle}
             aria-label="展开任务列表"
+            aria-expanded="false"
             title="展开任务列表"
           >
             <WorkspaceCollapseIcon collapsed />
@@ -181,7 +317,14 @@ export function TaskSidebar({
                 <small>智能任务工作台</small>
               </span>
             </Link>
-            <button type="button" onClick={onToggle} aria-label="收起任务列表" title="收起任务列表">
+            <button
+              ref={closeButtonRef}
+              type="button"
+              onClick={onToggle}
+              aria-label="收起任务列表"
+              aria-expanded="true"
+              title="收起任务列表"
+            >
               <WorkspaceCollapseIcon collapsed={false} />
             </button>
           </div>
@@ -194,12 +337,42 @@ export function TaskSidebar({
               <span>新建任务</span>
             </button>
           </div>
-          <div className="task-list-heading">
-            <span>最近任务</span>
-            <small>{tasks.length}</small>
+          <div className="task-list-toolbar">
+            <div className="task-list-scope" role="tablist" aria-label="任务范围">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!showingArchived}
+                onClick={() => switchListMode("recent")}
+              >
+                最近
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={showingArchived}
+                onClick={() => switchListMode("archived")}
+              >
+                已归档
+              </button>
+            </div>
+            <div className="task-list-heading">
+              <span>{showingArchived ? "已归档任务" : "最近任务"}</span>
+              <small>{query ? `${filteredTasks.length} / ${tasks.length}` : tasks.length}</small>
+            </div>
+            <label className="task-list-search">
+              <span aria-hidden="true" />
+              <input
+                type="search"
+                value={query}
+                placeholder="搜索任务或智能体"
+                aria-label={showingArchived ? "搜索已归档任务" : "搜索最近任务"}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
           </div>
           <div className="task-list" role="list">
-            {tasks.map((task) => (
+            {filteredTasks.map((task) => (
               <div
                 role="listitem"
                 key={task.thread_id}
@@ -207,8 +380,10 @@ export function TaskSidebar({
               >
                 <button
                   type="button"
-                  className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
-                  onClick={() => onSelect(task)}
+                  className={`task-list-item ${!showingArchived && task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
+                  onClick={() => showingArchived
+                    ? void updateArchived(task, false)
+                    : onSelect(task)}
                 >
                   <span className="task-list-title">{task.title}</span>
                   <span className="task-list-meta">
@@ -221,26 +396,63 @@ export function TaskSidebar({
                 <button
                   type="button"
                   className="task-list-archive"
-                  onClick={() => void updateArchived(task)}
+                  onClick={() => void updateArchived(task, !showingArchived)}
                   disabled={
                     updatingThreadId === task.thread_id
                     || activeStatuses.has(task.status)
                   }
-                  aria-label={`归档 ${task.title}`}
+                  aria-label={showingArchived
+                    ? `恢复并打开 ${task.title}`
+                    : `归档 ${task.title}`}
                   title={
                     activeStatuses.has(task.status)
                       ? "任务结束后可归档"
-                      : "归档任务"
+                      : showingArchived
+                        ? "恢复并打开任务"
+                        : "归档任务"
                   }
                 >
-                  <ArchiveIcon />
+                  {showingArchived ? <RestoreIcon /> : <ArchiveIcon />}
                 </button>
               </div>
             ))}
-            {tasks.length === 0 && !error && (
-              <p className="task-list-empty">你还没有历史任务</p>
+            {loading && tasks.length === 0 && (
+              <div className="task-list-state" aria-live="polite">
+                <span className="task-list-spinner" aria-hidden="true" />
+                <strong>{showingArchived ? "正在读取归档" : "正在读取任务"}</strong>
+                <small>{showingArchived ? "同步已归档的任务记录…" : "同步最近的对话与运行状态…"}</small>
+              </div>
             )}
-            {error && <p className="task-list-error">任务列表暂时不可用</p>}
+            {!loading && tasks.length === 0 && !error && (
+              <div className="task-list-state task-list-empty">
+                <strong>{showingArchived ? "还没有归档任务" : "从第一个任务开始"}</strong>
+                <small>
+                  {showingArchived
+                    ? "归档的任务会保留在这里，可随时恢复。"
+                    : "描述目标，Agent 会规划步骤并保留执行记录。"}
+                </small>
+                <button
+                  type="button"
+                  onClick={() => showingArchived ? switchListMode("recent") : onNewTask()}
+                >
+                  {showingArchived ? "回到最近任务" : "开始新任务"}
+                </button>
+              </div>
+            )}
+            {!loading && tasks.length > 0 && filteredTasks.length === 0 && (
+              <div className="task-list-state task-list-empty">
+                <strong>没有匹配的任务</strong>
+                <small>换一个标题、状态或智能体名称试试。</small>
+                <button type="button" onClick={() => setQuery("")}>清除搜索</button>
+              </div>
+            )}
+            {error && (
+              <div className="task-list-state task-list-error" role="alert">
+                <strong>{showingArchived ? "归档列表暂时不可用" : "任务列表暂时不可用"}</strong>
+                <small>当前任务不受影响，可以重新连接历史记录。</small>
+                <button type="button" onClick={retryTasks}>重新加载</button>
+              </div>
+            )}
           </div>
           <div className="task-sidebar-account">
             <AccountMenu />
