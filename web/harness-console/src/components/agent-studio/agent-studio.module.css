@@ -2078,6 +2078,40 @@
   }
 }
 
+/* Keep the Studio rail visually continuous with the task workspace. */
+.railHeading {
+  padding: 13px 13px 7px;
+}
+
+.agentSearch {
+  margin: 0 8px 8px;
+}
+
+.agentSearch input {
+  border-color: transparent;
+  border-radius: 9px;
+  background: var(--studio-panel-subtle);
+}
+
+.agentList {
+  gap: 2px;
+  padding: 0 8px 14px;
+}
+
+.agentRow,
+.agentRowActive,
+.agentRow:hover {
+  border: 0;
+  border-radius: 10px;
+}
+
+.agentRowActive {
+  background: color-mix(in srgb, var(--studio-green) 8%, var(--studio-panel));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 3%),
+    0 8px 20px rgb(0 0 0 / 10%);
+}
+
 @media (max-width: 560px) {
   .promptWorkspace[data-focus="true"] {
     inset: 6px;

@@ -970,11 +970,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 async function listAccessibleDrafts(): Promise<StudioDraftSummary[]> {
-  const personal = await request<StudioDraftSummary[]>("drafts");
+  const personalRequest = request<StudioDraftSummary[]>("drafts");
   try {
-    const response = requireAuthenticatedResponse(
-      await fetch("/api/spaces", { cache: "no-store" }),
-    );
+    const [personal, response] = await Promise.all([
+      personalRequest,
+      fetch("/api/spaces", { cache: "no-store" }).then(requireAuthenticatedResponse),
+    ]);
     if (!response.ok) return personal;
     const spaces = await response.json() as StudioSpaceSummary[];
     const workspace = await Promise.all(
@@ -990,7 +991,7 @@ async function listAccessibleDrafts(): Promise<StudioDraftSummary[]> {
     );
   } catch {
     // Personal Studio remains usable if collaboration is temporarily degraded.
-    return personal;
+    return personalRequest;
   }
 }
 

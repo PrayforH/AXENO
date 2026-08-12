@@ -152,15 +152,14 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("uses an Archestra-style task and Studio mode split on the shared rail", () => {
-    expect(taskSidebar).toContain('<WorkspaceModeSwitcher mode="tasks" />');
-    expect(studioSidebar).toContain('<WorkspaceModeSwitcher mode="studio" />');
+  it("uses one flat workspace navigation instead of nested task and Studio modes", () => {
+    expect(taskSidebar).not.toContain("WorkspaceModeSwitcher");
+    expect(studioSidebar).not.toContain("WorkspaceModeSwitcher");
     expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
-    expect(studioSidebar).toContain('"spaces"]');
+    expect(studioSidebar).toContain('"tasks", "agents", "capabilities", "knowledge", "spaces"]');
     expect(studioSidebar).not.toContain('"usage",');
     expect(studioSidebar).not.toContain('"data",');
-    expect(workspaceNavigation).toContain('aria-label="工作模式"');
-    expect(workspaceNavigation).toContain("<span>Studio</span>");
+    expect(workspaceNavigation).not.toContain('aria-label="工作模式"');
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
@@ -173,11 +172,11 @@ describe("full-page agent workbench", () => {
     }
     expect(workspaceNavigation).not.toContain('href: "/studio/usage"');
     expect(workspaceNavigation).not.toContain('href: "/studio/data"');
-    expect(workspaceNavigation).toContain('build: "构建"');
-    expect(workspaceNavigation).toContain('manage: "协作"');
+    expect(workspaceNavigation).not.toContain("workspaceGroupLabels");
+    expect(workspaceNavigation).toContain("{items.map(renderWorkspaceLink)}");
     expect(workspaceNavigationStyles).toContain(".navigationActive");
-    expect(workspaceNavigationStyles).toContain(".modeSwitcher");
-    expect(workspaceNavigationStyles).toContain(".modeActive");
+    expect(workspaceNavigationStyles).not.toContain(".modeSwitcher");
+    expect(workspaceNavigationStyles).not.toContain(".navigationGroup");
     expect(workspaceNavigationStyles).toContain(
       '[data-workspace-navigation="collapsed"]',
     );
@@ -187,19 +186,18 @@ describe("full-page agent workbench", () => {
     expect(taskSidebar).toContain('className="task-sidebar-primary"');
     expect(taskSidebar).toContain("<span>新建任务</span>");
     expect(taskSidebar).toContain('className="task-list-heading"');
-    expect(taskSidebar).toContain('role="tablist" aria-label="任务范围"');
-    expect(taskSidebar).toContain('aria-selected={!showingArchived}');
-    expect(taskSidebar).toContain('showingArchived ? "搜索已归档任务" : "搜索最近任务"');
+    expect(taskSidebar).not.toContain('role="tablist" aria-label="任务范围"');
+    expect(taskSidebar).not.toContain("已归档");
+    expect(taskSidebar).toContain('aria-label="搜索最近任务"');
     expect(taskSidebar).toContain("filteredTasks.map");
     expect(taskSidebar).toContain('className="task-list-archive"');
     expect(taskSidebar).toContain("setTaskArchived");
-    expect(taskSidebar).toContain("loadTasks(showingArchived)");
-    expect(taskSidebar).toContain("恢复并打开任务");
+    expect(taskSidebar).toContain("loadTasks(false)");
+    expect(taskSidebar).not.toContain("恢复并打开任务");
     expect(taskSidebar).toContain('className="task-sidebar-brand"');
     expect(styles).toContain(".task-sidebar-primary");
     expect(styles).toContain(".task-list-heading");
     expect(styles).toContain(".task-list-search");
-    expect(styles).toContain(".task-list-scope");
     expect(taskSidebar).toContain("正在读取任务");
     expect(taskSidebar).toContain("从第一个任务开始");
     expect(taskSidebar).toContain("重新加载");

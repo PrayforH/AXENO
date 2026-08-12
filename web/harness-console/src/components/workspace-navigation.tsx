@@ -9,26 +9,18 @@ export type WorkspaceId =
   | "spaces"
   | "usage"
   | "data";
-export type WorkspaceMode = "tasks" | "studio";
-type WorkspaceGroup = "build" | "manage";
 
 export const workspaceItems: ReadonlyArray<{
   id: WorkspaceId;
   href: string;
   label: string;
-  group: WorkspaceGroup;
 }> = [
-  { id: "tasks", href: "/", label: "任务", group: "build" },
-  { id: "agents", href: "/studio/agents", label: "智能体", group: "build" },
-  { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力", group: "build" },
-  { id: "knowledge", href: "/studio/knowledge", label: "知识库", group: "build" },
-  { id: "spaces", href: "/studio/spaces", label: "协作空间", group: "manage" },
+  { id: "tasks", href: "/", label: "任务" },
+  { id: "agents", href: "/studio/agents", label: "智能体" },
+  { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力" },
+  { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
+  { id: "spaces", href: "/studio/spaces", label: "协作空间" },
 ];
-
-const workspaceGroupLabels: Record<WorkspaceGroup, string> = {
-  build: "构建",
-  manage: "协作",
-};
 
 export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
   if (workspace === "tasks") {
@@ -141,45 +133,7 @@ export function WorkspaceNavigation({
       data-workspace-navigation={collapsed ? "collapsed" : "expanded"}
       aria-label="工作区"
     >
-      {collapsed
-        ? items.map(renderWorkspaceLink)
-        : (["build", "manage"] as const).map((group) => {
-            const groupItems = items.filter((workspace) => workspace.group === group);
-            if (groupItems.length === 0) return null;
-            return (
-              <section className={styles.navigationGroup} key={group}>
-                <h2>{workspaceGroupLabels[group]}</h2>
-                <div>{groupItems.map(renderWorkspaceLink)}</div>
-              </section>
-            );
-          })}
-    </nav>
-  );
-}
-
-export function WorkspaceModeSwitcher({
-  mode,
-}: {
-  mode: WorkspaceMode;
-}) {
-  return (
-    <nav className={styles.modeSwitcher} aria-label="工作模式">
-      <Link
-        className={mode === "tasks" ? styles.modeActive : styles.modeLink}
-        href="/"
-        aria-current={mode === "tasks" ? "page" : undefined}
-      >
-        <WorkspaceIcon workspace="tasks" />
-        <span>任务</span>
-      </Link>
-      <Link
-        className={mode === "studio" ? styles.modeActive : styles.modeLink}
-        href="/studio/agents"
-        aria-current={mode === "studio" ? "page" : undefined}
-      >
-        <WorkspaceIcon workspace="agents" />
-        <span>Studio</span>
-      </Link>
+      {items.map(renderWorkspaceLink)}
     </nav>
   );
 }

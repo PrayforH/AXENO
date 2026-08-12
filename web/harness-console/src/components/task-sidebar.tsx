@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AccountMenu } from "./account-menu";
 import {
   WorkspaceCollapseIcon,
-  WorkspaceModeSwitcher,
   WorkspaceNavigation,
 } from "./workspace-navigation";
 import { useRunViewModel } from "../lib/activity-store";
@@ -60,16 +59,6 @@ function ArchiveIcon() {
   );
 }
 
-function RestoreIcon() {
-  return (
-    <svg viewBox="0 0 20 20" aria-hidden="true">
-      <path d="M5.4 7.1H2.8V4.5" />
-      <path d="M3.2 7a7 7 0 1 1-.1 5.5" />
-      <path d="m3 7 2.8-2.8" />
-    </svg>
-  );
-}
-
 const activeStatuses = new Set(["queued", "running", "waiting_approval", "cancelling"]);
 
 export function TaskSidebar({
@@ -93,17 +82,11 @@ export function TaskSidebar({
   const [refreshKey, setRefreshKey] = useState(0);
   const [query, setQuery] = useState("");
   const [updatingThreadId, setUpdatingThreadId] = useState("");
-  const [listMode, setListMode] = useState<"recent" | "archived">("recent");
-  const taskListsRef = useRef<Record<"recent" | "archived", TaskSummary[]>>({
-    recent: [],
-    archived: [],
-  });
   const sidebarRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const expandButtonRef = useRef<HTMLButtonElement>(null);
   const wasOverlayOpenRef = useRef(false);
   const runView = useRunViewModel();
-  const showingArchived = listMode === "archived";
 
   useDialogFocus({
     open: overlayOpen,
@@ -153,9 +136,8 @@ export function TaskSidebar({
       ) return;
       refreshing = true;
       try {
-        const next = await loadTasks(showingArchived);
+        const next = await loadTasks(false);
         if (active) {
-          taskListsRef.current[listMode] = next;
           setTasks(next);
           setError("");
           schedule(next);
@@ -189,17 +171,7 @@ export function TaskSidebar({
       document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.removeEventListener("focus", refreshWhenVisible);
     };
-  }, [listMode, refreshKey, runView?.phase, showingArchived]);
-
-  function switchListMode(next: "recent" | "archived") {
-    if (next === listMode) return;
-    const cached = taskListsRef.current[next];
-    setListMode(next);
-    setTasks(cached);
-    setQuery("");
-    setError("");
-    setLoading(cached.length === 0);
-  }
+  }, [refreshKey, runView?.phase]);
 
   function retryTasks() {
     setError("");
@@ -207,32 +179,17 @@ export function TaskSidebar({
     setRefreshKey((current) => current + 1);
   }
 
-  async function updateArchived(task: TaskSummary, archived: boolean) {
+  async function archiveTask(task: TaskSummary) {
     if (activeStatuses.has(task.status)) return;
     setUpdatingThreadId(task.thread_id);
     try {
-      await setTaskArchived(task.thread_id, archived);
+      await setTaskArchived(task.thread_id, true);
       setTasks((current) => {
         const next = current.filter((item) => item.thread_id !== task.thread_id);
-        taskListsRef.current[listMode] = next;
         return next;
       });
-      const destinationMode = archived ? "archived" : "recent";
-      taskListsRef.current[destinationMode] = [
-        task,
-        ...taskListsRef.current[destinationMode].filter(
-          (item) => item.thread_id !== task.thread_id,
-        ),
-      ];
       setError("");
-      if (archived) {
-        if (task.thread_id === currentThreadId) onNewTask();
-      } else {
-        setListMode("recent");
-        setTasks(taskListsRef.current.recent);
-        setLoading(false);
-        onSelect(task);
-      }
+      if (task.thread_id === currentThreadId) onNewTask();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -328,36 +285,21 @@ export function TaskSidebar({
               <WorkspaceCollapseIcon collapsed={false} />
             </button>
           </div>
-          <div className="task-sidebar-mode">
-            <WorkspaceModeSwitcher mode="tasks" />
-          </div>
           <div className="task-sidebar-primary">
             <button type="button" onClick={onNewTask}>
               <NewTaskIcon />
               <span>新建任务</span>
             </button>
           </div>
+          <div className="task-sidebar-mode">
+            <WorkspaceNavigation
+              active="tasks"
+              visible={["agents", "capabilities", "knowledge", "spaces"]}
+            />
+          </div>
           <div className="task-list-toolbar">
-            <div className="task-list-scope" role="tablist" aria-label="任务范围">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={!showingArchived}
-                onClick={() => switchListMode("recent")}
-              >
-                最近
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={showingArchived}
-                onClick={() => switchListMode("archived")}
-              >
-                已归档
-              </button>
-            </div>
             <div className="task-list-heading">
-              <span>{showingArchived ? "已归档任务" : "最近任务"}</span>
+              <span>最近</span>
               <small>{query ? `${filteredTasks.length} / ${tasks.length}` : tasks.length}</small>
             </div>
             <label className="task-list-search">
@@ -366,7 +308,7 @@ export function TaskSidebar({
                 type="search"
                 value={query}
                 placeholder="搜索任务或智能体"
-                aria-label={showingArchived ? "搜索已归档任务" : "搜索最近任务"}
+                aria-label="搜索最近任务"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
@@ -380,10 +322,8 @@ export function TaskSidebar({
               >
                 <button
                   type="button"
-                  className={`task-list-item ${!showingArchived && task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
-                  onClick={() => showingArchived
-                    ? void updateArchived(task, false)
-                    : onSelect(task)}
+                  className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
+                  onClick={() => onSelect(task)}
                 >
                   <span className="task-list-title">{task.title}</span>
                   <span className="task-list-meta">
@@ -396,47 +336,34 @@ export function TaskSidebar({
                 <button
                   type="button"
                   className="task-list-archive"
-                  onClick={() => void updateArchived(task, !showingArchived)}
+                  onClick={() => void archiveTask(task)}
                   disabled={
                     updatingThreadId === task.thread_id
                     || activeStatuses.has(task.status)
                   }
-                  aria-label={showingArchived
-                    ? `恢复并打开 ${task.title}`
-                    : `归档 ${task.title}`}
+                  aria-label={`归档 ${task.title}`}
                   title={
                     activeStatuses.has(task.status)
                       ? "任务结束后可归档"
-                      : showingArchived
-                        ? "恢复并打开任务"
-                        : "归档任务"
+                      : "归档任务"
                   }
                 >
-                  {showingArchived ? <RestoreIcon /> : <ArchiveIcon />}
+                  <ArchiveIcon />
                 </button>
               </div>
             ))}
             {loading && tasks.length === 0 && (
               <div className="task-list-state" aria-live="polite">
                 <span className="task-list-spinner" aria-hidden="true" />
-                <strong>{showingArchived ? "正在读取归档" : "正在读取任务"}</strong>
-                <small>{showingArchived ? "同步已归档的任务记录…" : "同步最近的对话与运行状态…"}</small>
+                <strong>正在读取任务</strong>
+                <small>同步最近的对话与运行状态…</small>
               </div>
             )}
             {!loading && tasks.length === 0 && !error && (
               <div className="task-list-state task-list-empty">
-                <strong>{showingArchived ? "还没有归档任务" : "从第一个任务开始"}</strong>
-                <small>
-                  {showingArchived
-                    ? "归档的任务会保留在这里，可随时恢复。"
-                    : "描述目标，Agent 会规划步骤并保留执行记录。"}
-                </small>
-                <button
-                  type="button"
-                  onClick={() => showingArchived ? switchListMode("recent") : onNewTask()}
-                >
-                  {showingArchived ? "回到最近任务" : "开始新任务"}
-                </button>
+                <strong>从第一个任务开始</strong>
+                <small>描述目标，Agent 会规划步骤并保留执行记录。</small>
+                <button type="button" onClick={onNewTask}>开始新任务</button>
               </div>
             )}
             {!loading && tasks.length > 0 && filteredTasks.length === 0 && (
@@ -448,7 +375,7 @@ export function TaskSidebar({
             )}
             {error && (
               <div className="task-list-state task-list-error" role="alert">
-                <strong>{showingArchived ? "归档列表暂时不可用" : "任务列表暂时不可用"}</strong>
+                <strong>任务列表暂时不可用</strong>
                 <small>当前任务不受影响，可以重新连接历史记录。</small>
                 <button type="button" onClick={retryTasks}>重新加载</button>
               </div>

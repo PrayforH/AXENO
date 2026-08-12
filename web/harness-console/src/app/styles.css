@@ -5833,8 +5833,21 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .account-trigger-copy {
   min-width: 0;
+  flex: 1 1 auto;
   display: grid;
   gap: 2px;
+}
+
+.account-trigger-chevron {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .66;
 }
 
 .account-trigger-copy strong,
@@ -5859,16 +5872,18 @@ textarea:not(.aui-composer-input):focus-visible,
   z-index: 120;
   bottom: calc(100% + 8px);
   left: 0;
-  width: 260px;
-  padding: 14px;
+  right: 0;
+  width: auto;
+  padding: 6px;
   border: 1px solid var(--line);
+  border-radius: 12px;
   box-shadow: 0 18px 44px rgb(23 32 29 / 14%);
   background: var(--surface-raised);
 }
 
 .task-sidebar-account {
   padding: 7px 8px 8px;
-  border-top: 1px solid #dfe3df;
+  border-top: 0;
   background: #eef1ee;
 }
 
@@ -5879,7 +5894,7 @@ textarea:not(.aui-composer-input):focus-visible,
 .account-identity {
   display: grid;
   gap: 3px;
-  padding-bottom: 12px;
+  padding: 9px 10px 11px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -5894,7 +5909,7 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 .account-role {
-  padding: 12px 0;
+  padding: 10px;
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -5906,7 +5921,8 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .account-actions {
   display: grid;
-  gap: 6px;
+  gap: 2px;
+  padding-top: 4px;
 }
 
 .account-help,
@@ -5914,10 +5930,12 @@ textarea:not(.aui-composer-input):focus-visible,
 .account-logout {
   width: 100%;
   min-height: 36px;
+  padding: 0 10px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border: 1px solid #c7d0ca;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 7px;
   color: #3d4843;
   background: #f4f6f4;
   cursor: pointer;
@@ -5927,9 +5945,8 @@ textarea:not(.aui-composer-input):focus-visible,
 
 .account-help,
 .account-settings {
-  border-color: var(--line);
   color: var(--ink);
-  background: white;
+  background: transparent;
 }
 
 .account-help:hover,
@@ -6761,6 +6778,10 @@ textarea:not(.aui-composer-input):focus-visible,
   display: none;
 }
 
+.task-rail-account .account-trigger-chevron {
+  display: none;
+}
+
 /* Agent selection is part of task creation. Existing threads remain version-bound. */
 .task-agent-switcher {
   position: relative;
@@ -6883,6 +6904,8 @@ textarea:not(.aui-composer-input):focus-visible,
 .task-rail-account .account-popover {
   bottom: 0;
   left: calc(100% + 10px);
+  right: auto;
+  width: 240px;
 }
 
 .task-new-icon {

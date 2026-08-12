@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useAuth } from "./auth-provider";
 
@@ -46,6 +47,9 @@ export function AccountMenu() {
           <strong>{user.display_name}</strong>
           <small>{ROLE_LABELS[membership.role]}</small>
         </span>
+        <svg className="account-trigger-chevron" viewBox="0 0 16 16" aria-hidden="true">
+          <path d={open ? "m4 10 4-4 4 4" : "m4 6 4 4 4-4"} />
+        </svg>
       </button>
       {open && (
         <div className="account-popover" role="dialog" aria-label="当前账户">
@@ -66,7 +70,7 @@ export function AccountMenu() {
             >
               产品使用手册
             </a>
-            <a className="account-settings" href="/settings">个人设置</a>
+            <Link className="account-settings" href="/settings">个人设置</Link>
             <a className="account-logout" href="/api/auth/logout">退出登录</a>
           </nav>
         </div>

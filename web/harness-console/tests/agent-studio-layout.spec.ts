@@ -222,6 +222,14 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain('data-studio-integration="api"');
   });
 
+  it("renders the primary Studio editor before secondary control-plane data", () => {
+    expect(workbench).toContain("const [serverDrafts, serverCapabilities] = await Promise.all([");
+    expect(workbench).toContain("if (loading || loadError) return;");
+    expect(workbench).toContain("studioClient.listPreviews()");
+    expect(workbench).toContain("These panels are secondary; the primary editor remains available.");
+    expect(studioClient).toContain("const [personal, response] = await Promise.all([");
+  });
+
   it("keeps contract drawer status and close actions compact and aligned", () => {
     expect(styles).toContain(".contractHeader > .contractHeaderActions");
     expect(styles).toMatch(/\.contractHeader\s*>\s*\.contractHeaderActions\s*\{[^}]*display:\s*flex;/s);

@@ -513,28 +513,13 @@ export function AgentStudioWorkbench() {
       setLoading(true);
       setLoadError("");
       try {
-        const [
-          serverDrafts,
-          serverCapabilities,
-          serverPreviews,
-          serverDatasets,
-          serverEvalRuns,
-          serverGovernedPolicies,
-        ] = await Promise.all([
+        const [serverDrafts, serverCapabilities] = await Promise.all([
           studioClient.listAccessibleDrafts(),
           studioClient.capabilities(),
-          studioClient.listPreviews(),
-          studioClient.listEvalDatasets(),
-          studioClient.listEvalRuns(),
-          studioClient.listGovernedPolicies(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
         setDrafts(serverDrafts);
-        setPreviews(serverPreviews);
-        setEvalDatasets(serverDatasets);
-        setEvalRuns(serverEvalRuns);
-        setGovernedPolicies(serverGovernedPolicies);
         const navigationState = new URLSearchParams(window.location.search);
         const requestedDraftId = navigationState.get("draft");
         const requestedSection = navigationState.get("section");
@@ -589,6 +574,36 @@ export function AgentStudioWorkbench() {
     void load();
     return () => { active = false; };
   }, [canEdit]);
+
+  useEffect(() => {
+    if (loading || loadError) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void Promise.all([
+        studioClient.listPreviews(),
+        studioClient.listEvalDatasets(),
+        studioClient.listEvalRuns(),
+        studioClient.listGovernedPolicies(),
+      ]).then(([
+        serverPreviews,
+        serverDatasets,
+        serverEvalRuns,
+        serverGovernedPolicies,
+      ]) => {
+        if (!active) return;
+        setPreviews(serverPreviews);
+        setEvalDatasets(serverDatasets);
+        setEvalRuns(serverEvalRuns);
+        setGovernedPolicies(serverGovernedPolicies);
+      }).catch(() => {
+        // These panels are secondary; the primary editor remains available.
+      });
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [loadError, loading]);
 
   function updateDraft(update: Partial<StudioDraft>) {
     const next = applyStudioDraftUpdate(draft, update);

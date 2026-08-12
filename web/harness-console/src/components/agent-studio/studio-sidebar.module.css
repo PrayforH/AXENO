@@ -17,9 +17,11 @@
   display: flex;
   flex-direction: column;
   overflow: visible;
-  border-right: 1px solid var(--sidebar-line);
+  border-right: 1px solid color-mix(in srgb, var(--sidebar-line) 72%, transparent);
   color: var(--sidebar-ink);
-  background: var(--sidebar-panel);
+  background:
+    radial-gradient(circle at 0 0, var(--sidebar-accent-soft), transparent 190px),
+    var(--sidebar-panel);
   transition: width 180ms cubic-bezier(.2, .8, .2, 1), box-shadow 180ms ease;
 }
 
@@ -30,13 +32,13 @@
 }
 
 .brand {
-  min-height: 64px;
+  min-height: 60px;
   padding: 10px 11px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border-bottom: 1px solid var(--sidebar-line);
+  border-bottom: 0;
 }
 
 .brandLink {
@@ -162,7 +164,7 @@
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
-  border-top: 1px solid var(--sidebar-line);
+  border-top: 0;
 }
 
 .sidebarFooter {
@@ -172,7 +174,8 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  border-top: 1px solid var(--sidebar-line);
+  border-top: 0;
+  background: linear-gradient(to bottom, transparent, var(--sidebar-panel) 28%);
 }
 
 .accountSlot {
@@ -228,6 +231,17 @@
 
 .sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-trigger-copy) {
   display: none;
+}
+
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-trigger-chevron) {
+  display: none;
+}
+
+.sidebar[data-studio-sidebar="collapsed"] .accountSlot :global(.account-popover) {
+  right: auto;
+  bottom: 0;
+  left: calc(100% + 10px);
+  width: 240px;
 }
 
 :global(html[data-color-mode="light"]) .brandMark {

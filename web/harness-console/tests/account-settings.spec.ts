@@ -49,7 +49,8 @@ describe("account settings", () => {
     expect(studioSidebar).toContain("<AccountMenu />");
     expect(workbench).not.toContain("<AccountMenu />");
     expect(styles).toMatch(/\.task-rail-account\s*\{[^}]*margin-top:\s*auto;/s);
-    expect(styles).toMatch(/\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;/s);
+    expect(styles).toMatch(/\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;[^}]*right:\s*0;[^}]*width:\s*auto;/s);
+    expect(menu).toContain('className="account-trigger-chevron"');
     expect(styles).toMatch(
       /@media \(max-width: 820px\)[\s\S]*?\.task-sidebar\.is-collapsed\s*\{[^}]*z-index:\s*20;/s,
     );

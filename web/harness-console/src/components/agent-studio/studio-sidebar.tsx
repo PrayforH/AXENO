@@ -5,7 +5,6 @@ import { type ReactNode, useEffect, useState } from "react";
 import { AccountMenu } from "../account-menu";
 import {
   WorkspaceCollapseIcon,
-  WorkspaceModeSwitcher,
   WorkspaceNavigation,
   type WorkspaceId,
 } from "../workspace-navigation";
@@ -119,12 +118,10 @@ export function StudioSidebar({
         </div>
       )}
 
-      {!collapsed && <WorkspaceModeSwitcher mode="studio" />}
-
       <WorkspaceNavigation
         active={active}
         collapsed={collapsed}
-        visible={["agents", "capabilities", "knowledge", "spaces"]}
+        visible={["tasks", "agents", "capabilities", "knowledge", "spaces"]}
       />
 
       {!collapsed && children && (
