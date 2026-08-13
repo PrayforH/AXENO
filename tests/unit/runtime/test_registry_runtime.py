@@ -185,7 +185,7 @@ async def test_admin_model_binding_replaces_manifest_gateway_at_runtime(
             apiKey="settings-secret",
         ),
     )
-    await model_configurations.bind_agent(
+    bound = await model_configurations.bind_agent(
         "tenant-a",
         "admin-a",
         "helper-agent",
@@ -248,6 +248,12 @@ async def test_admin_model_binding_replaces_manifest_gateway_at_runtime(
     assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == "settings-secret"
     selected = next(event for event in events if event.type == "model.route.selected")
     assert selected.payload["route_id"] == "frontend-vision"
+
+    await model_configurations.disable(
+        "tenant-a", "admin-a", "frontend-vision", bound.revision
+    )
+    with pytest.raises(ConflictError, match="unavailable in the control plane"):
+        _events = [event async for event in runtime.execute(context)]
 
 
 @pytest.mark.asyncio

@@ -828,6 +828,22 @@ async def disable_model(
     )
 
 
+@router.delete(
+    "/models/{route_id}/permanent", response_model=ModelConfigurationList
+)
+async def delete_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConfigurationList:
+    return await service.delete(
+        actor.tenant_id, actor.user_id, route_id, expected_revision
+    )
+
+
 @router.put(
     "/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList
 )
@@ -851,22 +867,6 @@ async def test_model_connection(
     ],
 ) -> ModelConnectionTestResult:
     return await service.test(actor.tenant_id, route_id)
-
-
-@router.post(
-    "/models/{route_id}/restore-server", response_model=ModelConfigurationList
-)
-async def restore_server_model(
-    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
-    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
-    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
-) -> ModelConfigurationList:
-    return await service.restore_server(
-        actor.tenant_id, actor.user_id, route_id, expected_revision
-    )
 
 
 @router.post("/models/{route_id}/images", response_model=GenerateImageResult)

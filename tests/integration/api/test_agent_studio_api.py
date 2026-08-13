@@ -1772,6 +1772,51 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
 
 
 @pytest.mark.asyncio
+async def test_model_management_can_permanently_delete_model_and_secret() -> None:
+    owner_headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    api, container = app_and_container()
+    async with AsyncClient(
+        transport=ASGITransport(app=api), base_url="http://test"
+    ) as client:
+        initial = await client.get("/v1/studio/models", headers=owner_headers)
+        configured = await client.put(
+            "/v1/studio/models/minimax-h3",
+            headers=owner_headers,
+            json={
+                "expectedRevision": initial.json()["revision"],
+                "label": "MiniMax H3",
+                "modelType": "chat",
+                "provider": "MiniMax",
+                "model": "MiniMax-H3",
+                "baseUrl": "https://models.example.test/v1",
+                "apiFormat": "anthropic_compatible",
+                "authScheme": "x-api-key",
+                "apiKey": "api-key-must-be-deleted",
+                "enabled": True,
+            },
+        )
+        deleted = await client.delete(
+            "/v1/studio/models/minimax-h3/permanent",
+            headers=owner_headers,
+            params={"expectedRevision": configured.json()["revision"]},
+        )
+
+    assert configured.status_code == 200
+    assert deleted.status_code == 200
+    assert "minimax-h3" not in {
+        item["routeId"] for item in deleted.json()["models"]
+    }
+    assert "api-key-must-be-deleted" not in deleted.text
+    assert await container.mcp_credentials.repository.get(
+        "tenant-a", "tenant:model-control-plane", "minimax-h3"
+    ) is None
+
+
+@pytest.mark.asyncio
 async def test_each_studio_writer_can_discover_mcp_tools() -> None:
     class Connector:
         async def discover(
@@ -1947,7 +1992,7 @@ async def test_published_agent_version_is_immutable_after_catalog_change() -> No
         registry = cast(InMemoryAgentRegistry, vars(container.agents)["_registry"])
         stored_before = await registry.get("tenant-a", "owner-a", "policy-researcher", "0.1.0")
         disabled = await client.delete(
-            "/v1/studio/catalog/modelRoute/new-api-default",
+            "/v1/studio/catalog/modelRoute/deepseek-v4-flash",
             headers=owner_headers,
             params={"expected_revision": 1},
         )

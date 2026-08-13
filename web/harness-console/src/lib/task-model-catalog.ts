@@ -36,6 +36,7 @@ export async function loadTaskModelRoutes(): Promise<TaskModelRoute[]> {
     .filter(
       (route) =>
         route.routeId !== "anthropic-official" &&
+        route.routeId !== "new-api-default" &&
         route.enabled &&
         route.models.length === 1 &&
         route.modelType !== "image_generation" &&

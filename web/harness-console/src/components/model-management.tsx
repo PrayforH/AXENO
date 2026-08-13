@@ -19,8 +19,7 @@ type ManagedModel = {
   capabilities: string[];
   enabled: boolean;
   credentialConfigured: boolean;
-  source: "server" | "workspace";
-  serverAvailable: boolean;
+  deletable: boolean;
   version: number;
 };
 
@@ -179,19 +178,19 @@ export function ModelManagement() {
     }
   }
 
-  async function restoreServer(model: ManagedModel) {
-    if (!window.confirm(`恢复“${model.label}”的服务器配置？当前工作区覆盖和单独保存的密钥将被移除。`)) return;
-    setBusy(`restore:${model.routeId}`);
+  async function deleteModel(model: ManagedModel) {
+    if (!window.confirm(`永久删除“${model.label}”？模型配置和已保存的密钥都会被移除，此操作无法撤销。`)) return;
+    setBusy(`delete:${model.routeId}`);
     setMessage(null);
     try {
       const next = await api<ModelState>(
-        `/api/studio/models/${encodeURIComponent(model.routeId)}/restore-server?expectedRevision=${state.revision}`,
-        { method: "POST" },
+        `/api/studio/models/${encodeURIComponent(model.routeId)}/permanent?expectedRevision=${state.revision}`,
+        { method: "DELETE" },
       );
       setState(next);
-      setMessage({ kind: "success", text: `${model.label} 已恢复为 174 服务器配置。` });
+      setMessage({ kind: "success", text: `${model.label} 已删除。` });
     } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "服务器配置未能恢复。" });
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "模型未能删除。" });
     } finally {
       setBusy("");
     }
@@ -221,7 +220,7 @@ export function ModelManagement() {
     <div className={styles.controlPlane}>
       <div className={styles.guardrail}>
         <span className={styles.lock} aria-hidden="true">⌁</span>
-        <div><strong>凭据由服务端托管</strong><small>API Key 加密保存且不回传浏览器；只有 Owner / Admin 可以查看连接信息或修改配置。</small></div>
+        <div><strong>模型由控制面统一管理</strong><small>API Key 加密保存且不回传浏览器；只有 Owner / Admin 可以查看连接信息或修改配置。</small></div>
       </div>
 
       <div className={styles.toolbar}>
@@ -249,7 +248,7 @@ export function ModelManagement() {
                 <p>{model.model}</p>
                 <small>{model.provider} · {TYPE_COPY[model.modelType].description}</small>
                 <div className={styles.statusRow}>
-                  <span data-ok>{model.source === "server" ? "服务器配置" : "工作区覆盖"}</span>
+                  <span data-ok>控制面配置</span>
                   <span data-ok={Boolean(model.baseUrl)}>端点{model.baseUrl ? "已配置" : "待配置"}</span>
                   <span data-ok={model.credentialConfigured}>密钥{model.credentialConfigured ? "已保存" : "待配置"}</span>
                 </div>
@@ -259,8 +258,8 @@ export function ModelManagement() {
                 <button type="button" disabled={!model.baseUrl || !model.credentialConfigured || busy !== ""} onClick={() => void testConnection(model)}>
                   {busy === `test:${model.routeId}` ? "测试中" : "测试"}
                 </button>
-                {model.source === "workspace" && model.serverAvailable && <button type="button" disabled={busy !== ""} onClick={() => void restoreServer(model)}>恢复服务器配置</button>}
                 {model.enabled && <button type="button" className={styles.danger} disabled={busy !== ""} onClick={() => void disable(model)}>停用</button>}
+                {model.deletable && <button type="button" className={styles.deleteButton} disabled={busy !== ""} onClick={() => void deleteModel(model)} aria-label={`删除 ${model.label}`} title="永久删除模型">删除</button>}
               </div>
             </article>
           ))}

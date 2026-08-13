@@ -120,17 +120,18 @@ class RegistryClaudeRuntime:
         raw_override = context.run.input.get("model_route_override")
         route_override = raw_override if isinstance(raw_override, str) else None
         route_id = route_override or configured_route
-        dynamic_config = (
-            await self._model_configurations.resolve_runtime(
+        dynamic_config: CcSwitchClaudeConfig | None = None
+        if self._model_configurations is not None:
+            dynamic_config = await self._model_configurations.resolve_runtime(
                 session.tenant_id,
                 session.agent_name,
                 route_id,
                 apply_agent_binding=route_override is None,
             )
-            if self._model_configurations is not None
-            else None
-        )
-        if dynamic_config is not None:
+            if dynamic_config is None:
+                raise ConflictError(
+                    f"task model route is unavailable in the control plane: {route_id}"
+                )
             selected_config = dynamic_config
             assert selected_config.route_id is not None
             route_id = selected_config.route_id
@@ -173,14 +174,22 @@ class RegistryClaudeRuntime:
         )
         selected_fallback: CcSwitchClaudeConfig | None = None
         if fallback_route_id is not None:
-            try:
-                selected_fallback = self._config_for_route(
+            if self._model_configurations is not None:
+                selected_fallback = await self._model_configurations.resolve_runtime(
+                    session.tenant_id,
+                    session.agent_name,
                     fallback_route_id,
-                    legacy_fallback=True,
-                    strict=True,
+                    apply_agent_binding=False,
                 )
-            except ConflictError:
-                pass
+            else:
+                try:
+                    selected_fallback = self._config_for_route(
+                        fallback_route_id,
+                        legacy_fallback=True,
+                        strict=True,
+                    )
+                except ConflictError:
+                    pass
         if selected_fallback is not None:
             assert fallback_route_id is not None
             fallback_route = ModelRoute(
@@ -193,7 +202,7 @@ class RegistryClaudeRuntime:
                 auth_scheme=selected_fallback.resolved_auth_scheme,
             )
             routes.append(fallback_route)
-            if self._credential_broker is None:
+            if self._model_configurations is not None or self._credential_broker is None:
                 fallback_secret = selected_fallback.credential.get_secret_value()
             else:
                 assert context.identity is not None

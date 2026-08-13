@@ -23,7 +23,9 @@ from harness.studio.models import (
 from harness.studio.repositories import AgentDraftRepository
 
 CatalogResourceType = Literal["modelRoute", "mcp", "policy", "executionProfile"]
-_RETIRED_PLATFORM_MODEL_ROUTES = frozenset({"anthropic-official"})
+_RETIRED_PLATFORM_MODEL_ROUTES = frozenset(
+    {"anthropic-official", "new-api-default"}
+)
 _EDITABLE_PLATFORM_MCP_REFERENCES = frozenset({"tavily-readonly"})
 
 
@@ -121,7 +123,14 @@ def _upgrade_system_managed_catalog(
     """Upgrade known system defaults without dropping tenant-authored entries."""
 
     defaults = default_capability_catalog()
-    route_ids = {route.route_id for route in catalog.model_routes}
+    legacy_deepseek = next(
+        (
+            route
+            for route in catalog.model_routes
+            if route.route_id == "new-api-default"
+        ),
+        None,
+    )
     routes = [
         route
         for route in catalog.model_routes
@@ -136,60 +145,33 @@ def _upgrade_system_managed_catalog(
         else:
             normalized_routes.append(route)
     routes = normalized_routes
-    if not {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
-        legacy = next(
-            (route for route in routes if route.route_id == "new-api-default"),
-            None,
+    route_ids = {route.route_id for route in routes}
+    if legacy_deepseek is not None and not {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    }.issubset(route_ids):
+        routes.extend(
+            ModelRouteCapability(
+                routeId=route_id,
+                label=label,
+                provider=legacy_deepseek.provider,
+                models=(model,),
+                capabilities=legacy_deepseek.capabilities,
+                credentialManaged=legacy_deepseek.credential_managed,
+                credentialReference=legacy_deepseek.credential_reference,
+            )
+            for route_id, label, model in (
+                (
+                    "deepseek-v4-flash",
+                    "DeepSeek V4 Flash",
+                    "deepseek-v4-flash",
+                ),
+                ("deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro"),
+            )
+            if route_id not in route_ids
         )
-        if legacy is not None and set(legacy.models) == {
-            "deepseek-v4-flash",
-            "deepseek-v4-pro",
-        }:
-            compatibility_route = legacy.model_copy(
-                update={
-                    "label": "DeepSeek V4（兼容路由）",
-                    "models": ("deepseek-v4-pro",),
-                    "version": legacy.version + 1,
-                    "enabled": False,
-                }
-            )
-            split_routes = (
-                ModelRouteCapability(
-                    routeId="deepseek-v4-flash",
-                    label="DeepSeek V4 Flash",
-                    provider=legacy.provider,
-                    models=("deepseek-v4-flash",),
-                    capabilities=legacy.capabilities,
-                    credentialManaged=legacy.credential_managed,
-                    credentialReference=legacy.credential_reference,
-                ),
-                ModelRouteCapability(
-                    routeId="deepseek-v4-pro",
-                    label="DeepSeek V4 Pro",
-                    provider=legacy.provider,
-                    models=("deepseek-v4-pro",),
-                    capabilities=legacy.capabilities,
-                    credentialManaged=legacy.credential_managed,
-                    credentialReference=legacy.credential_reference,
-                ),
-            )
-            migrated: list[ModelRouteCapability] = []
-            for route in routes:
-                migrated.append(compatibility_route if route is legacy else route)
-                if route is legacy:
-                    migrated.extend(split_routes)
-            routes = migrated
-            route_ids.update({"deepseek-v4-flash", "deepseek-v4-pro"})
-            changed = True
-
-    if "glm-5-2" not in route_ids:
-        glm = next(route for route in defaults.model_routes if route.route_id == "glm-5-2")
-        routes.append(glm)
         changed = True
 
-    routes, routes_changed = _append_missing(
-        tuple(routes), defaults.model_routes, lambda item: item.route_id
-    )
     mcp_servers, mcp_changed = _append_missing(
         catalog.mcp_servers, defaults.mcp_servers, lambda item: item.reference
     )
@@ -208,7 +190,6 @@ def _upgrade_system_managed_catalog(
     )
     changed = changed or any(
         (
-            routes_changed,
             mcp_changed,
             policies_changed,
             profiles_changed,
@@ -250,15 +231,14 @@ class CapabilityCatalogService:
             updatedAt=self._clock(),
         )
         current = await self._repository.seed(seed)
-        retired_catalog = _retire_platform_model_routes(current.catalog)
-        catalog_for_upgrade = retired_catalog or current.catalog
         if current.updated_by == "system" or current.updated_by.startswith("system-"):
-            upgraded_catalog = (
-                _upgrade_system_managed_catalog(catalog_for_upgrade)
-                or retired_catalog
-            )
+            # The system migration needs to inspect retired grouped routes before
+            # removing them so it can preserve their credentials on split routes.
+            upgraded_catalog = _upgrade_system_managed_catalog(current.catalog)
             updated_by = "system-route-migration"
         else:
+            retired_catalog = _retire_platform_model_routes(current.catalog)
+            catalog_for_upgrade = retired_catalog or current.catalog
             upgraded_catalog = (
                 _upgrade_known_legacy_permission_copy(catalog_for_upgrade)
                 or retired_catalog
@@ -553,6 +533,62 @@ class CapabilityCatalogService:
                         item.reference == resource_id
                         and _mcp_is_mutable_by(item, user_id)
                     )
+                )
+            }
+        )
+        record = await self.replace(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=ReplaceCapabilityCatalogRequest(
+                expectedRevision=expected_revision,
+                catalog=updated_catalog,
+            ),
+        )
+        return CatalogMutationResult(
+            record=self._record_for_user(record, user_id),
+            impact=impact,
+        )
+
+    async def delete_model(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        resource_id: str,
+        expected_revision: int,
+    ) -> CatalogMutationResult:
+        """Permanently remove an unreferenced workspace model route."""
+
+        current = await self.get(tenant_id)
+        if not any(
+            item.route_id == resource_id for item in current.catalog.model_routes
+        ):
+            raise NotFoundError(f"Catalog resource not found: modelRoute/{resource_id}")
+        impact = await self.impact(
+            tenant_id, user_id, "modelRoute", resource_id
+        )
+        bound_agents = tuple(
+            sorted(
+                agent_name
+                for agent_name, route_id in current.catalog.agent_model_bindings.items()
+                if route_id == resource_id
+            )
+        )
+        if impact.draft_ids or bound_agents:
+            references = (
+                *(f"draft:{draft_id}" for draft_id in impact.draft_ids),
+                *(f"agent:{agent_name}" for agent_name in bound_agents),
+            )
+            raise ConflictError(
+                "Rebind or update these references before deleting the model: "
+                + ", ".join(references)
+            )
+        updated_catalog = current.catalog.model_copy(
+            update={
+                "model_routes": tuple(
+                    item
+                    for item in current.catalog.model_routes
+                    if item.route_id != resource_id
                 )
             }
         )

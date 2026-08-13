@@ -25,6 +25,7 @@ from harness.studio.mcp_credential_store import (
     StoredMcpCredential,
 )
 from harness.studio.models import (
+    CapabilityCatalogRecord,
     ModelRouteCapability,
     ReplaceCapabilityCatalogRequest,
     StudioModel,
@@ -32,6 +33,7 @@ from harness.studio.models import (
 )
 
 _MODEL_CREDENTIAL_OWNER = "tenant:model-control-plane"
+_MODEL_IMPORT_ACTOR = "system:model-control-plane-import"
 _API_KEY = "api_key"
 
 
@@ -66,8 +68,7 @@ class ModelConfiguration(StudioModel):
     capabilities: tuple[str, ...]
     enabled: bool
     credential_configured: bool = Field(alias="credentialConfigured")
-    source: Literal["server", "workspace"]
-    server_available: bool = Field(alias="serverAvailable")
+    deletable: bool
     version: int
 
 
@@ -125,7 +126,7 @@ class ModelConfigurationService:
         self._http_client = http_client
 
     async def list(self, tenant_id: str) -> ModelConfigurationList:
-        record = await self._catalogs.get(tenant_id)
+        record = await self._import_server_models(tenant_id)
         stored = {
             item.reference
             for item in await self._credentials.repository.list_for_user(
@@ -138,19 +139,16 @@ class ModelConfigurationService:
                 ModelConfiguration(
                     routeId=route.route_id,
                     label=route.label,
-                    modelType=self._effective_route(route).model_type,
+                    modelType=route.model_type,
                     provider=route.provider,
-                    model=self._effective_route(route).models[0],
-                    baseUrl=self._effective_route(route).base_url,
-                    apiFormat=self._effective_route(route).api_format,
-                    authScheme=self._effective_route(route).auth_scheme,
-                    capabilities=self._effective_route(route).capabilities,
+                    model=route.models[0],
+                    baseUrl=route.base_url,
+                    apiFormat=route.api_format,
+                    authScheme=route.auth_scheme,
+                    capabilities=route.capabilities,
                     enabled=route.enabled,
-                    credentialConfigured=(
-                        route.route_id in stored or route.route_id in self._server_routes
-                    ),
-                    source="server" if route.base_url is None else "workspace",
-                    serverAvailable=route.route_id in self._server_routes,
+                    credentialConfigured=route.route_id in stored,
+                    deletable=True,
                     version=route.version,
                 )
                 for route in record.catalog.model_routes
@@ -165,7 +163,7 @@ class ModelConfigurationService:
         route_id: str,
         request: ConfigureModelRequest,
     ) -> ModelConfigurationList:
-        record = await self._catalogs.get(tenant_id)
+        record = await self._import_server_models(tenant_id)
         if record.revision != request.expected_revision:
             raise ConflictError("model catalog revision changed; reload before saving")
         self._validate_endpoint(request.base_url)
@@ -179,7 +177,6 @@ class ModelConfigurationService:
         if (
             request.api_key is None
             and credential is None
-            and route_id not in self._server_routes
         ):
             raise ConflictError("an API key is required when creating a model connection")
         capabilities = {
@@ -216,63 +213,6 @@ class ModelConfigurationService:
             await self._store_secret(tenant_id, user_id, route_id, request.api_key)
         return await self.list(tenant_id)
 
-    async def restore_server(
-        self,
-        tenant_id: str,
-        user_id: str,
-        route_id: str,
-        expected_revision: int,
-    ) -> ModelConfigurationList:
-        """Remove a workspace override and return to the trusted server route."""
-
-        server = self._server_routes.get(route_id)
-        if server is None:
-            raise NotFoundError(f"server model configuration not found: {route_id}")
-        record = await self._catalogs.get(tenant_id)
-        if record.revision != expected_revision:
-            raise ConflictError("model catalog revision changed; reload before restoring")
-        current = next(
-            (route for route in record.catalog.model_routes if route.route_id == route_id),
-            None,
-        )
-        if current is None:
-            raise NotFoundError(f"configured model not found: {route_id}")
-        restored = current.model_copy(
-            update={
-                "models": (server.model,),
-                "capabilities": tuple(sorted(server.capabilities)),
-                "model_type": self._server_model_type(server),
-                "base_url": None,
-                "api_format": "anthropic_compatible",
-                "auth_scheme": server.resolved_auth_scheme,
-                "version": current.version + 1,
-                "enabled": True,
-            }
-        )
-        await self._catalogs.upsert(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            resource_type="modelRoute",
-            resource_id=route_id,
-            request=UpsertCatalogResourceRequest(
-                expectedRevision=record.revision,
-                resource=restored,
-            ),
-        )
-        await self._credentials.repository.delete(
-            tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
-        )
-        if self._credentials.audit is not None:
-            await self._credentials.audit.record(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                action="studio.model_configuration.restore_server",
-                resource_type="model_route",
-                resource_id=route_id,
-                details={},
-            )
-        return await self.list(tenant_id)
-
     async def disable(
         self,
         tenant_id: str,
@@ -289,6 +229,35 @@ class ModelConfigurationService:
         )
         return await self.list(tenant_id)
 
+    async def delete(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        expected_revision: int,
+    ) -> ModelConfigurationList:
+        """Permanently remove a user-created route and its stored credential."""
+
+        await self._catalogs.delete_model(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            resource_id=route_id,
+            expected_revision=expected_revision,
+        )
+        await self._credentials.repository.delete(
+            tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
+        )
+        if self._credentials.audit is not None:
+            await self._credentials.audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.model_configuration.delete",
+                resource_type="model_route",
+                resource_id=route_id,
+                details={},
+            )
+        return await self.list(tenant_id)
+
     async def bind_agent(
         self,
         tenant_id: str,
@@ -296,7 +265,7 @@ class ModelConfigurationService:
         agent_name: str,
         request: BindAgentModelRequest,
     ) -> ModelConfigurationList:
-        record = await self._catalogs.get(tenant_id)
+        record = await self._import_server_models(tenant_id)
         route = next(
             (item for item in record.catalog.model_routes if item.route_id == request.route_id),
             None,
@@ -325,7 +294,7 @@ class ModelConfigurationService:
         *,
         apply_agent_binding: bool = True,
     ) -> CcSwitchClaudeConfig | None:
-        record = await self._catalogs.get(tenant_id)
+        record = await self._import_server_models(tenant_id)
         route_id = (
             record.catalog.agent_model_bindings.get(agent_name, requested_route_id)
             if apply_agent_binding
@@ -336,11 +305,6 @@ class ModelConfigurationService:
         )
         if route is None or not route.enabled:
             return None
-        if route.base_url is None:
-            server = self._server_routes.get(route.route_id)
-            if server is not None:
-                return server
-        route = self._effective_route(route)
         if route.base_url is None or route.model_type == "image_generation":
             return None
         secret = await self._secret(tenant_id, route_id)
@@ -461,20 +425,16 @@ class ModelConfigurationService:
         return GenerateImageResult(model=route.models[0], images=tuple(images))
 
     async def _route(self, tenant_id: str, route_id: str) -> ModelRouteCapability:
-        record = await self._catalogs.get(tenant_id)
+        record = await self._import_server_models(tenant_id)
         route = next(
             (item for item in record.catalog.model_routes if item.route_id == route_id), None
         )
         if route is None:
             raise NotFoundError(f"configured model not found: {route_id}")
-        effective = self._effective_route(route)
-        if effective.base_url is None:
+        if route.base_url is None:
             raise NotFoundError(f"configured model not found: {route_id}")
-        # Server routes are loaded from trusted deployment settings and may be
-        # internal HTTP endpoints. Workspace overrides remain SSRF-protected.
-        if route.base_url is not None:
-            self._validate_endpoint(effective.base_url)
-        return effective
+        self._validate_endpoint(route.base_url)
+        return route
 
     async def _store_secret(
         self, tenant_id: str, user_id: str, route_id: str, api_key: SecretStr
@@ -513,25 +473,66 @@ class ModelConfigurationService:
         )
         if stored is not None:
             return self._credentials.cipher.decrypt(stored).get(_API_KEY)
-        server = self._server_routes.get(route_id)
-        return server.credential if server is not None else None
+        return None
 
-    def _effective_route(self, route: ModelRouteCapability) -> ModelRouteCapability:
-        if route.base_url is not None:
-            return route
-        server = self._server_routes.get(route.route_id)
-        if server is None:
-            return route
-        return route.model_copy(
-            update={
-                "models": (server.model,),
-                "capabilities": tuple(sorted(server.capabilities)),
-                "model_type": self._server_model_type(server),
-                "base_url": self._server_direct_base_url(server),
-                "api_format": "anthropic_compatible",
-                "auth_scheme": server.resolved_auth_scheme,
-            }
-        )
+    async def _import_server_models(
+        self, tenant_id: str
+    ) -> CapabilityCatalogRecord:
+        """One-time import from deployment settings into the frontend control plane."""
+
+        record = await self._catalogs.get(tenant_id)
+        if not self._server_routes:
+            return record
+        stored = {
+            item.reference
+            for item in await self._credentials.repository.list_for_user(
+                tenant_id, _MODEL_CREDENTIAL_OWNER
+            )
+        }
+        changed = False
+        imported_routes: list[ModelRouteCapability] = []
+        for route in record.catalog.model_routes:
+            server = self._server_routes.get(route.route_id)
+            if server is None:
+                imported_routes.append(route)
+                continue
+            if route.route_id not in stored:
+                await self._store_secret(
+                    tenant_id,
+                    _MODEL_IMPORT_ACTOR,
+                    route.route_id,
+                    server.credential,
+                )
+            if route.base_url is None:
+                route = route.model_copy(
+                    update={
+                        "models": (server.model,),
+                        "capabilities": tuple(sorted(server.capabilities)),
+                        "model_type": self._server_model_type(server),
+                        "base_url": self._server_direct_base_url(server),
+                        "api_format": "anthropic_compatible",
+                        "auth_scheme": server.resolved_auth_scheme,
+                        "version": route.version + 1,
+                    }
+                )
+                changed = True
+            imported_routes.append(route)
+        if not changed:
+            return record
+        try:
+            return await self._catalogs.replace(
+                tenant_id=tenant_id,
+                user_id=_MODEL_IMPORT_ACTOR,
+                request=ReplaceCapabilityCatalogRequest(
+                    expectedRevision=record.revision,
+                    catalog=record.catalog.model_copy(
+                        update={"model_routes": tuple(imported_routes)}
+                    ),
+                ),
+            )
+        except ConflictError:
+            # Another API/worker process completed the same idempotent import.
+            return await self._catalogs.get(tenant_id)
 
     @staticmethod
     def _server_model_type(
@@ -584,6 +585,12 @@ class ModelConfigurationService:
                 await client.aclose()
 
     def _validate_endpoint(self, value: str) -> None:
+        normalized = value.rstrip("/")
+        if normalized in {
+            self._server_direct_base_url(route)
+            for route in self._server_routes.values()
+        }:
+            return
         parsed = urlsplit(value)
         if self._environment == "production" and parsed.scheme != "https":
             raise ConflictError("production model connections require HTTPS")

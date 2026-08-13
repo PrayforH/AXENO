@@ -27,7 +27,7 @@ def test_default_catalog_exposes_separate_deepseek_v4_routes() -> None:
 
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
-    assert routes["new-api-default"].enabled is False
+    assert "new-api-default" not in routes
     assert routes["glm-5-2"].models == ("shdata-glm",)
     assert "anthropic-official" not in routes
 
@@ -339,7 +339,7 @@ async def test_get_refreshes_only_known_legacy_system_permission_copy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_splits_legacy_deepseek_route_in_system_migrated_catalog() -> None:
+async def test_get_retires_legacy_deepseek_route_in_system_migrated_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
     catalog = default_capability_catalog()
     legacy_route = ModelRouteCapability(
@@ -387,7 +387,7 @@ async def test_get_splits_legacy_deepseek_route_in_system_migrated_catalog() -> 
     routes = {route.route_id: route for route in upgraded.catalog.model_routes}
     assert upgraded.revision == 25
     assert upgraded.updated_by == "system-route-migration"
-    assert routes["new-api-default"].enabled is False
+    assert "new-api-default" not in routes
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
     assert routes["deepseek-v4-flash"].credential_reference == "CUSTOM_NEW_API_KEY"

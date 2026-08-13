@@ -20,16 +20,6 @@ def default_capability_catalog() -> CapabilityCatalog:
     return CapabilityCatalog(
         modelRoutes=(
             ModelRouteCapability(
-                routeId="new-api-default",
-                label="DeepSeek V4（兼容路由）",
-                provider="deepseek",
-                models=("deepseek-v4-pro",),
-                capabilities=("streaming", "tool_use"),
-                credentialReference="NEW_API_KEY",
-                version=2,
-                enabled=False,
-            ),
-            ModelRouteCapability(
                 routeId="deepseek-v4-flash",
                 label="DeepSeek V4 Flash",
                 provider="deepseek",

@@ -14,6 +14,14 @@ const secretInput = readFileSync(
   join(process.cwd(), "src/components/secret-input.tsx"),
   "utf8",
 );
+const modelStyles = readFileSync(
+  join(process.cwd(), "src/components/model-management.module.css"),
+  "utf8",
+);
+const themeStyles = readFileSync(
+  join(process.cwd(), "src/app/codex-theme.css"),
+  "utf8",
+);
 
 describe("model management settings", () => {
   it("shows the control plane only to workspace administrators", () => {
@@ -45,5 +53,19 @@ describe("model management settings", () => {
     expect(secretInput).toContain('type={visible ? "text" : "password"}');
     expect(secretInput).toContain("aria-pressed={visible}");
     expect(secretInput).toContain('type="button"');
+  });
+
+  it("permanently deletes frontend-managed models", () => {
+    expect(management).toContain("model.deletable &&");
+    expect(management).toContain("/permanent?expectedRevision=");
+    expect(management).toContain("永久删除模型");
+    expect(management).toContain("控制面配置");
+    expect(management).not.toContain("恢复服务器配置");
+  });
+
+  it("keeps dropdown arrows away from the right border", () => {
+    expect(themeStyles).toContain("background-position: right 18px center !important");
+    expect(themeStyles).toContain("padding-inline-end: 44px !important");
+    expect(modelStyles).toContain("padding: 0 44px 0 9px");
   });
 });

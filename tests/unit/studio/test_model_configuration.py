@@ -154,9 +154,62 @@ async def test_image_generation_uses_dedicated_endpoint_and_never_chat_route() -
 
     image = next(item for item in configured.models if item.route_id == "image-primary")
     assert image.capabilities == ("image_generation",)
+    assert image.deletable is True
     assert result.images[0].url == "https://cdn.example.test/image.png"
     assert captured[0].url.path.endswith("/v1/images/generations")
     assert captured[0].headers["authorization"] == "Bearer secret-value-never-returned"
+
+
+@pytest.mark.asyncio
+async def test_delete_permanently_removes_workspace_model_and_credential() -> None:
+    models, _catalogs, credentials = service()
+    configured = await models.configure(
+        "tenant-a", "admin-a", "minimax-h3", request()
+    )
+
+    deleted = await models.delete(
+        "tenant-a", "admin-a", "minimax-h3", configured.revision
+    )
+
+    assert "minimax-h3" not in {item.route_id for item in deleted.models}
+    assert await credentials.get(
+        "tenant-a", "tenant:model-control-plane", "minimax-h3"
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_of_platform_model_route_persists() -> None:
+    models, _catalogs, _credentials = service()
+
+    deleted = await models.delete(
+        "tenant-a", "admin-a", "deepseek-v4-flash", 1
+    )
+    repeated = await models.list("tenant-a")
+
+    assert "deepseek-v4-flash" not in {item.route_id for item in deleted.models}
+    assert repeated == deleted
+
+
+@pytest.mark.asyncio
+async def test_delete_rejects_model_still_bound_to_an_agent() -> None:
+    models, _catalogs, _credentials = service()
+    configured = await models.configure(
+        "tenant-a", "admin-a", "minimax-h3", request()
+    )
+    bound = await models.bind_agent(
+        "tenant-a",
+        "admin-a",
+        "helper-agent",
+        BindAgentModelRequest(
+            expectedRevision=configured.revision,
+            routeId="minimax-h3",
+        ),
+    )
+
+    with pytest.raises(ConflictError, match="agent:helper-agent"):
+        await models.delete(
+            "tenant-a", "admin-a", "minimax-h3", bound.revision
+        )
 
 
 @pytest.mark.asyncio
@@ -181,7 +234,7 @@ async def test_production_rejects_insecure_or_private_model_endpoints() -> None:
 
 
 @pytest.mark.asyncio
-async def test_server_route_is_visible_testable_and_does_not_expose_secret() -> None:
+async def test_server_route_is_imported_testable_and_does_not_expose_secret() -> None:
     captured: list[httpx.Request] = []
 
     def handler(incoming: httpx.Request) -> httpx.Response:
@@ -199,7 +252,7 @@ async def test_server_route_is_visible_testable_and_does_not_expose_secret() -> 
         capabilities=frozenset({"streaming", "tool_use", "vision"}),
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        models, _catalogs, _credentials = service(
+        models, _catalogs, credentials = service(
             environment="production", client=client, server_routes=(route,)
         )
         listed = await models.list("tenant-a")
@@ -208,10 +261,13 @@ async def test_server_route_is_visible_testable_and_does_not_expose_secret() -> 
     view = next(item for item in listed.models if item.route_id == "minimax-m3")
     assert view.base_url == "https://api.minimaxi.com/anthropic/v1"
     assert view.model_type == "vision"
-    assert view.source == "server"
-    assert view.server_available is True
     assert view.credential_configured is True
+    assert view.deletable is True
     assert "server-only-secret" not in listed.model_dump_json()
+    stored = await credentials.get(
+        "tenant-a", "tenant:model-control-plane", "minimax-m3"
+    )
+    assert stored is not None
     assert result.ok is True
     assert captured[0].url == "https://api.minimaxi.com/anthropic/v1/messages"
     assert captured[0].headers["x-api-key"] == "server-only-secret"
@@ -235,11 +291,11 @@ async def test_trusted_server_route_may_use_private_http_but_workspace_override_
     resolved = await models.resolve_runtime("tenant-a", "helper-agent", "glm-5-2")
 
     assert resolved is not None
-    assert resolved.base_url == "http://172.20.109.174:4000"
+    assert resolved.base_url == "http://172.20.109.174:4000/v1"
 
 
 @pytest.mark.asyncio
-async def test_restore_server_removes_workspace_override_and_saved_secret() -> None:
+async def test_imported_server_model_runs_without_server_fallback_after_import() -> None:
     route = CcSwitchClaudeConfig(
         route_id="minimax-m3",
         base_url="https://api.minimaxi.com/anthropic",
@@ -249,26 +305,24 @@ async def test_restore_server_removes_workspace_override_and_saved_secret() -> N
         auth_scheme="x-api-key",
         capabilities=frozenset({"streaming", "tool_use", "vision"}),
     )
-    models, _catalogs, credentials = service(server_routes=(route,))
-    configured = await models.configure(
-        "tenant-a",
-        "admin-a",
-        "minimax-m3",
-        request(
-            expectedRevision=1,
-            model="wrong-model",
-            baseUrl="https://api.minimaxi.com/v1",
+    models, catalogs, credentials = service(server_routes=(route,))
+    imported = await models.list("tenant-a")
+    database_only = ModelConfigurationService(
+        catalogs,
+        McpCredentialService(
+            credentials,
+            McpCredentialCipher(SecretStr("test-encryption-key")),
         ),
     )
 
-    restored = await models.restore_server(
-        "tenant-a", "admin-a", "minimax-m3", configured.revision
+    listed = await database_only.list("tenant-a")
+    resolved = await database_only.resolve_runtime(
+        "tenant-a", "helper-agent", "minimax-m3"
     )
 
-    view = next(item for item in restored.models if item.route_id == "minimax-m3")
-    assert view.source == "server"
+    view = next(item for item in listed.models if item.route_id == "minimax-m3")
+    assert listed == imported
     assert view.base_url == "https://api.minimaxi.com/anthropic/v1"
     assert view.model == "MiniMax-M3"
-    assert await credentials.get(
-        "tenant-a", "tenant:model-control-plane", "minimax-m3"
-    ) is None
+    assert resolved is not None
+    assert resolved.credential.get_secret_value() == "server-only-secret"

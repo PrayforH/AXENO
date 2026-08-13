@@ -26,7 +26,7 @@ describe("task model selection", () => {
           provider: "deepseek",
           models: ["deepseek-v4-pro"],
           capabilities: ["streaming", "tool_use"],
-          enabled: false,
+          enabled: true,
         },
         {
           routeId: "deepseek-v4-flash",
