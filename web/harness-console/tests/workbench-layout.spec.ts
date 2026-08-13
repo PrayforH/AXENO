@@ -68,7 +68,9 @@ describe("full-page agent workbench", () => {
       /\.user-message-edit-shell\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*align-self:\s*stretch;/s,
     );
     expect(styles).toMatch(/\.user-message-editor-input\s*\{[^}]*resize:\s*none;/s);
-    expect(styles).toContain(".user-message-editor-input:focus-visible");
+    expect(styles).toMatch(
+      /textarea\.user-message-editor-input:focus-visible\s*\{[^}]*outline:\s*none;[^}]*outline-offset:\s*0;[^}]*border-color:\s*transparent;[^}]*box-shadow:\s*none;/s,
+    );
     expect(agentThread).not.toContain("<AssistantActionBar.FeedbackPositive");
     expect(agentThread).not.toContain("<AssistantActionBar.FeedbackNegative");
     expect(agentThread).toContain("allowFeedbackPositive: false");

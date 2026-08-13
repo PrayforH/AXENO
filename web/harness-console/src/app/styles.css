@@ -5485,9 +5485,11 @@ textarea:not(.aui-composer-input):focus-visible,
   outline: none;
 }
 
-.user-message-editor-input:focus,
-.user-message-editor-input:focus-visible {
+textarea.user-message-editor-input:focus,
+textarea.user-message-editor-input:focus-visible {
   outline: none;
+  outline-offset: 0;
+  border-color: transparent;
   box-shadow: none;
 }
 
