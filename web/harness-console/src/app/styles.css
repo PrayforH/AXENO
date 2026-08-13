@@ -1661,9 +1661,9 @@ textarea:not(.aui-composer-input):focus-visible {
 }
 
 .task-sidebar-brand-mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
+  width: var(--app-sidebar-brand-mark-size, 36px);
+  height: var(--app-sidebar-brand-mark-size, 36px);
+  flex: 0 0 var(--app-sidebar-brand-mark-size, 36px);
   display: grid;
   place-items: center;
   border: 1px solid var(--line);

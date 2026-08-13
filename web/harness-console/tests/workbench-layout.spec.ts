@@ -19,6 +19,13 @@ const studioSidebar = readFileSync(
   ),
   "utf8",
 );
+const studioSidebarStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/studio-sidebar.module.css",
+  ),
+  "utf8",
+);
 const workspaceNavigation = readFileSync(
   join(process.cwd(), "src/components/workspace-navigation.tsx"),
   "utf8",
@@ -507,6 +514,16 @@ describe("full-page agent workbench", () => {
     );
     expect(styles).toMatch(
       /\.harness-composer-shell \.aui-composer-attachments \.aui-attachment-root\s*\{[^}]*flex:\s*0 0 10rem;/s,
+    );
+  });
+
+  it("keeps the expanded Task and Studio brand marks at one stable size", () => {
+    expect(codexStyles).toContain("--app-sidebar-brand-mark-size: 36px");
+    expect(styles).toMatch(
+      /\.task-sidebar-brand-mark\s*\{[^}]*width:\s*var\(--app-sidebar-brand-mark-size, 36px\);[^}]*height:\s*var\(--app-sidebar-brand-mark-size, 36px\);[^}]*flex:\s*0 0 var\(--app-sidebar-brand-mark-size, 36px\);/s,
+    );
+    expect(studioSidebarStyles).toMatch(
+      /\.brandMark\s*\{[^}]*width:\s*var\(--app-sidebar-brand-mark-size, 36px\);[^}]*height:\s*var\(--app-sidebar-brand-mark-size, 36px\);[^}]*flex:\s*0 0 var\(--app-sidebar-brand-mark-size, 36px\);/s,
     );
   });
 

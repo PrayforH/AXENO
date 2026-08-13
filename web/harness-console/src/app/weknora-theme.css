@@ -67,8 +67,8 @@ html[data-color-mode="light"] body.codex-theme-v1 .task-sidebar-brand {
 }
 
 html[data-color-mode="light"] body.codex-theme-v1 .task-sidebar-brand-mark {
-  width: 36px;
-  height: 36px;
+  width: var(--app-sidebar-brand-mark-size, 36px);
+  height: var(--app-sidebar-brand-mark-size, 36px);
   border-color: #28332d;
   border-radius: 10px;
   color: #ffffff;

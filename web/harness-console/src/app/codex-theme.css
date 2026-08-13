@@ -49,6 +49,7 @@
   --app-sidebar-expanded-width: 264px;
   --app-sidebar-collapsed-width: 52px;
   --app-sidebar-mobile-max-width: 300px;
+  --app-sidebar-brand-mark-size: 36px;
   --studio-sidebar-expanded-width: var(--app-sidebar-expanded-width);
   --studio-sidebar-collapsed-width: var(--app-sidebar-collapsed-width);
   --studio-sidebar-mobile-max-width: var(--app-sidebar-mobile-max-width);
