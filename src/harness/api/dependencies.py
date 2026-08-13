@@ -17,6 +17,7 @@ from harness.adapters.memory import (
     InMemoryApprovalRepository,
     InMemoryArtifactRepository,
     InMemoryArtifactStore,
+    InMemoryCancellationWakeup,
     InMemoryEventBus,
     InMemoryEventRepository,
     InMemoryInputArtifactRepository,
@@ -47,10 +48,12 @@ from harness.auth.service import (
     OAuthProviderConfig,
 )
 from harness.config import Settings
+from harness.context.repositories import InMemoryContextRepository
+from harness.context.service import ContextService
 from harness.core.errors import NotFoundError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import Run, RunStatus, Session
-from harness.core.ports import EventRepository, TaskQueue
+from harness.core.ports import EventRepository, EventWakeup, TaskQueue
 from harness.deployments.controller import DeploymentController
 from harness.deployments.queue import DeploymentTaskQueue
 from harness.deployments.repositories import (
@@ -96,7 +99,7 @@ from harness.platform_mcp.workload import (
     PlatformMcpTokenService,
     build_platform_mcp_app,
 )
-from harness.policy.profiles import default_policy_profiles
+from harness.policy.profiles import PolicyProfileRegistry, default_policy_profiles
 from harness.policy.runtime import ResolvedPolicy
 from harness.quality.controller import QualitySyncController
 from harness.quality.langfuse import DisabledQualityExporter
@@ -221,6 +224,7 @@ class ApiContainer:
     agents: AgentService
     team_spaces: TeamSpaceService
     workspace_agents: WorkspaceAgentRepository
+    context: ContextService
     sessions: SessionService
     runs: RunService
     triggers: AgentTriggerService
@@ -246,6 +250,7 @@ class ApiContainer:
     worker: RunOrchestrator
     agui: AguiRunService
     auto_execute: bool
+    event_wakeup: EventWakeup | None = None
     skill_conversation: SkillConversationService | None = None
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     close: Callable[[], Awaitable[None]] | None = None
@@ -255,6 +260,7 @@ def build_memory_container(
     *,
     auto_execute: bool = False,
     settings: Settings | None = None,
+    policy_profiles: PolicyProfileRegistry | None = None,
 ) -> ApiContainer:
     resolved_settings = settings or Settings()
     registry = InMemoryAgentRegistry()
@@ -274,6 +280,7 @@ def build_memory_container(
     artifact_store = InMemoryArtifactStore()
     raw_events = InMemoryEventRepository()
     bus = InMemoryEventBus()
+    cancellation_wakeup = InMemoryCancellationWakeup()
     queue = InMemoryTaskQueue()
     observability = build_observability(resolved_settings)
     reliability_metrics = ReliabilityMetrics()
@@ -297,10 +304,10 @@ def build_memory_container(
         ),
     )
     audit = AuditService(InMemoryAuditRepository())
-    policy_profiles = default_policy_profiles()
+    active_policy_profiles = policy_profiles or default_policy_profiles()
     governance = GovernanceService(
         governance_repository,
-        static_profiles=policy_profiles,
+        static_profiles=active_policy_profiles,
         audit=audit,
     )
     agent_drafts = InMemoryAgentDraftRepository()
@@ -321,6 +328,12 @@ def build_memory_container(
 
     def id_generator(prefix: str) -> str:
         return f"{prefix}_{uuid4().hex}"
+
+    context_service = ContextService(
+        InMemoryContextRepository(),
+        clock=clock,
+        id_generator=id_generator,
+    )
 
     knowledge = KnowledgeService(
         knowledge_repository,
@@ -476,6 +489,7 @@ def build_memory_container(
         metrics=reliability_metrics,
         admission=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
+        cancellation_wakeup=cancellation_wakeup,
     )
     session_service = SessionService(
         registry,
@@ -662,7 +676,7 @@ def build_memory_container(
         manifest = AgentManifestSnapshot.model_validate(version.snapshot).manifest
         return await governance.resolve_runtime(tenant_id, manifest.spec.permissions.policy)
 
-    policy = policy_profiles.resolve("local-standard")
+    policy = active_policy_profiles.resolve("local-standard")
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     if resolved_settings.sandbox_provider == "daytona":
         daytona_api_key = resolved_settings.daytona_api_key.get_secret_value()
@@ -787,9 +801,10 @@ def build_memory_container(
             model_configurations=model_configurations,
             tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
-                profiles=policy_profiles,
+                profiles=active_policy_profiles,
                 approvals=approval_service,
                 events=event_service,
+                context_service=context_service,
                 quotas=enforced_quotas,
                 observability=observability,
             ),
@@ -807,7 +822,7 @@ def build_memory_container(
         sandbox=preflight_sandbox,
         model_probe=model_probe,
         mcp_probe=mcp_probe,
-        policies=policy_profiles,
+        policies=active_policy_profiles,
         policy_resolver=governance.resolve_runtime,
         observability=observability,
         timeout_seconds=resolved_settings.preflight_timeout_seconds,
@@ -849,11 +864,14 @@ def build_memory_container(
         quotas=enforced_quotas,
         quota_plan_resolver=run_quota_plan,
         metrics=reliability_metrics,
+        cancellation_wakeup=cancellation_wakeup,
+        context_service=context_service,
     )
     agui = AguiRunService(
         sessions=session_service,
         runs=run_service,
         input_artifacts=input_artifact_service,
+        contexts=context_service,
     )
 
     async def lifecycle_reap() -> int:
@@ -936,6 +954,7 @@ def build_memory_container(
         agents=agent_service,
         team_spaces=team_spaces,
         workspace_agents=workspace_agent_repository,
+        context=context_service,
         sessions=session_service,
         runs=run_service,
         triggers=trigger_service,
@@ -961,6 +980,7 @@ def build_memory_container(
         worker=worker,
         agui=agui,
         auto_execute=auto_execute,
+        event_wakeup=bus,
         skill_conversation=skill_conversation,
         sandbox_maintenance=sandbox_maintenance,
     )
@@ -986,8 +1006,11 @@ async def require_identity(
         except AuthenticationError as error:
             raise HTTPException(
                 status_code=401,
-                detail={"code": "access_token_invalid", "message": str(error)},
-                headers={"WWW-Authenticate": "Bearer"},
+                detail={"code": error.code, "message": str(error)},
+                headers={
+                    "WWW-Authenticate": "Bearer",
+                    "X-Harness-Auth-Error": error.code,
+                },
             ) from error
         identity = Identity(
             tenant_id=membership.tenant_id,

@@ -1,7 +1,6 @@
-from typing import cast
+from copy import deepcopy
 
 import pytest
-from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_app
@@ -22,16 +21,14 @@ async def test_shared_agent_catalog_and_session_keep_user_owned_history_boundary
     version = await container.agents.publish(
         "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_id}
     bob = {**base, "X-User-ID": bob_id}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        created = await client.post(
-            "/v1/spaces", headers=alice, json={"name": "民政协作组"}
-        )
+        created = await client.post("/v1/spaces", headers=alice, json={"name": "民政协作组"})
         assert created.status_code == 201
         space_id = created.json()["space"]["spaceId"]
         member = await client.put(
@@ -75,6 +72,7 @@ async def test_shared_agent_catalog_and_session_keep_user_owned_history_boundary
     team_item = next(item for item in catalog.json() if item["scope"] == "team")
     assert team_item["owner_user_id"] == alice_id
     assert team_item["space_id"] == space_id
+    assert team_item["can_chat"] is True
     assert session.status_code == 201
     assert session.json()["user_id"] == bob_id
     assert session.json()["agent_owner_user_id"] == alice_id
@@ -95,7 +93,7 @@ async def test_non_member_cannot_discover_space() -> None:
         password="Long-password-2",
         display_name="Bob",
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_session.user.user_id}
@@ -105,6 +103,178 @@ async def test_non_member_cannot_discover_space() -> None:
         space_id = created.json()["space"]["spaceId"]
         hidden = await client.get(f"/v1/spaces/{space_id}", headers=bob)
     assert hidden.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_space_workspace_returns_one_consistent_collaboration_payload() -> None:
+    container = build_memory_container()
+    owner_session = await container.auth.register(
+        email="workspace-owner@example.com",
+        password="Long-password-1",
+        display_name="Owner",
+    )
+    member_session = await container.auth.register(
+        email="workspace-member@example.com",
+        password="Long-password-2",
+        display_name="Member",
+    )
+    owner_id = owner_session.user.user_id
+    member_id = member_session.user.user_id
+    app = create_app(container)
+    token = container.api_bearer_token.get_secret_value()
+    base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
+    owner = {**base, "X-User-ID": owner_id}
+    member = {**base, "X-User-ID": member_id}
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/v1/spaces", headers=owner, json={"name": "聚合空间"})
+        space_id = created.json()["space"]["spaceId"]
+        await client.put(
+            f"/v1/spaces/{space_id}/members",
+            headers=owner,
+            json={"user_id": member_id, "role": "viewer"},
+        )
+        owner_workspace = await client.get(f"/v1/spaces/{space_id}/workspace", headers=owner)
+        member_workspace = await client.get(f"/v1/spaces/{space_id}/workspace", headers=member)
+
+    assert owner_workspace.status_code == 200
+    assert owner_workspace.json()["summary"]["space"]["spaceId"] == space_id
+    assert len(owner_workspace.json()["members"]) == 2
+    assert len(owner_workspace.json()["directory"]) == 2
+    assert owner_workspace.json()["agents"] == []
+    assert owner_workspace.json()["releases_by_agent"] == {}
+    assert member_workspace.status_code == 200
+    assert member_workspace.json()["summary"]["membership"]["role"] == "viewer"
+    assert member_workspace.json()["directory"] == []
+
+
+@pytest.mark.asyncio
+async def test_shared_release_preflight_blocks_missing_workspace_mcp_credentials() -> None:
+    container = build_memory_container()
+    owner_session = await container.auth.register(
+        email="dependency-mcp-owner@example.com",
+        password="Long-password-1",
+        display_name="Dependency owner",
+    )
+    owner_id = owner_session.user.user_id
+    version = await container.agents.publish(
+        "local",
+        owner_id,
+        "agents/public-opinion-agent/agent.yaml",
+        environment="production",
+    )
+    app = create_app(container)
+    token = container.api_bearer_token.get_secret_value()
+    owner = {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-ID": "local",
+        "X-User-ID": owner_id,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        created = await client.post("/v1/spaces", headers=owner, json={"name": "MCP 依赖组"})
+        space_id = created.json()["space"]["spaceId"]
+        catalog = await client.get("/v1/agents", headers=owner)
+        personal = next(
+            item
+            for item in catalog.json()
+            if item["scope"] == "personal" and item["name"] == version.name
+        )
+        blocked = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=owner,
+            json={
+                "name": version.name,
+                "version": version.version,
+                "connection_mode": "service_owned",
+            },
+        )
+        configured = await client.put(
+            f"/v1/spaces/{space_id}/mcp/tavily-readonly/credentials",
+            headers=owner,
+            json={"authKey": "authorization", "value": "workspace-token"},
+        )
+        shared = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=owner,
+            json={
+                "name": version.name,
+                "version": version.version,
+                "connection_mode": "service_owned",
+            },
+        )
+
+    assert personal["mcp_references"] == ["tavily-readonly"]
+    assert personal["knowledge_references"] == []
+    assert blocked.status_code == 409
+    assert "workspace MCP credential" in blocked.text
+    assert configured.status_code == 200
+    assert shared.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_shared_release_can_sync_declared_knowledge_grants() -> None:
+    container = build_memory_container()
+    owner_session = await container.auth.register(
+        email="dependency-knowledge-owner@example.com",
+        password="Long-password-1",
+        display_name="Knowledge owner",
+    )
+    owner_id = owner_session.user.user_id
+    source = await container.agents.publish(
+        "local", owner_id, "agents/lead-agent/agent.yaml", environment="production"
+    )
+    snapshot = deepcopy(source.snapshot)
+    snapshot["manifest"]["metadata"]["name"] = "knowledge-sharing-agent"
+    snapshot["manifest"]["spec"]["knowledgeReferences"] = ["team-handbook"]
+    version = source.model_copy(
+        update={
+            "name": "knowledge-sharing-agent",
+            "manifest_hash": "knowledge-sharing-agent-hash",
+            "snapshot": snapshot,
+        }
+    )
+    await vars(container.agents)["_registry"].add(version)
+    app = create_app(container)
+    token = container.api_bearer_token.get_secret_value()
+    owner = {
+        "Authorization": f"Bearer {token}",
+        "X-Tenant-ID": "local",
+        "X-User-ID": owner_id,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        base = await client.post(
+            "/v1/studio/knowledge/bases",
+            headers=owner,
+            json={"reference": "team-handbook", "displayName": "团队手册"},
+        )
+        created = await client.post("/v1/spaces", headers=owner, json={"name": "知识依赖组"})
+        space_id = created.json()["space"]["spaceId"]
+        blocked = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=owner,
+            json={"name": version.name, "version": version.version},
+        )
+        shared = await client.post(
+            f"/v1/spaces/{space_id}/agents",
+            headers=owner,
+            json={
+                "name": version.name,
+                "version": version.version,
+                "share_knowledge_references": ["team-handbook"],
+            },
+        )
+        workspace = await client.get(f"/v1/spaces/{space_id}/workspace", headers=owner)
+
+    assert base.status_code == 201
+    assert blocked.status_code == 409
+    assert "knowledge dependency" in blocked.text
+    assert shared.status_code == 201
+    assert shared.json()["agent"]["knowledge_references"] == ["team-handbook"]
+    assert [item["knowledgeBaseReference"] for item in workspace.json()["knowledge"]] == [
+        "team-handbook"
+    ]
 
 
 @pytest.mark.asyncio
@@ -125,16 +295,14 @@ async def test_removing_member_revokes_run_access_for_existing_shared_session() 
     version = await container.agents.publish(
         "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_id}
     bob = {**base, "X-User-ID": bob_id}
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        created = await client.post(
-            "/v1/spaces", headers=alice, json={"name": "撤权验收组"}
-        )
+        created = await client.post("/v1/spaces", headers=alice, json={"name": "撤权验收组"})
         space_id = created.json()["space"]["spaceId"]
         await client.put(
             f"/v1/spaces/{space_id}/members",
@@ -162,9 +330,7 @@ async def test_removing_member_revokes_run_access_for_existing_shared_session() 
             },
         )
         session_id = session.json()["session_id"]
-        removed = await client.delete(
-            f"/v1/spaces/{space_id}/members/{bob_id}", headers=alice
-        )
+        removed = await client.delete(f"/v1/spaces/{space_id}/members/{bob_id}", headers=alice)
         run = await client.post(
             f"/v1/sessions/{session_id}/runs",
             headers={**bob, "Idempotency-Key": "revoked-member-run"},
@@ -189,7 +355,7 @@ async def test_workspace_agent_releases_promote_and_acl_endpoints() -> None:
     version_v1 = await container.agents.publish(
         "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_id}
@@ -231,6 +397,9 @@ async def test_workspace_agent_releases_promote_and_acl_endpoints() -> None:
             json={"grantee_type": "user", "grantee_id": bob_id, "permission": "chat"},
         )
         assert acl.status_code == 201
+        catalog = await client.get("/v1/agents", headers=bob)
+        catalog_item = next(item for item in catalog.json() if item.get("agent_id") == agent_id)
+        assert catalog_item["can_chat"] is True
         session = await client.post(
             "/v1/sessions",
             headers=bob,
@@ -297,7 +466,7 @@ async def test_agent_transfer_and_draft_etag_endpoints() -> None:
     version = await container.agents.publish(
         "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_id}
@@ -378,13 +547,10 @@ async def test_agent_transfer_and_draft_etag_endpoints() -> None:
             json={"user_id": bob_id},
         )
         assert member.status_code == 201
-        removed = await client.delete(
-            f"/v1/groups/{group_id}/members/{bob_id}", headers=alice
-        )
+        removed = await client.delete(f"/v1/groups/{group_id}/members/{bob_id}", headers=alice)
         assert removed.status_code == 204
         deleted = await client.delete(f"/v1/groups/{group_id}", headers=alice)
         assert deleted.status_code == 204
-
 
 
 @pytest.mark.asyncio
@@ -401,7 +567,7 @@ async def test_space_credentials_and_service_owned_session_mode() -> None:
     version = await container.agents.publish(
         "local", alice_id, "agents/lead-agent/agent.yaml", environment="production"
     )
-    app = cast(FastAPI, create_app(container))
+    app = create_app(container)
     token = container.api_bearer_token.get_secret_value()
     base = {"Authorization": f"Bearer {token}", "X-Tenant-ID": "local"}
     alice = {**base, "X-User-ID": alice_id}
@@ -442,9 +608,7 @@ async def test_space_credentials_and_service_owned_session_mode() -> None:
         )
         assert configured.status_code == 200
         assert configured.json()["configured"] is True
-        listed = await client.get(
-            f"/v1/spaces/{space_id}/mcp/credentials", headers=alice
-        )
+        listed = await client.get(f"/v1/spaces/{space_id}/mcp/credentials", headers=alice)
         assert [item["reference"] for item in listed.json()] == ["tavily-readonly"]
 
         # A session against the service_owned release pins the mode so the

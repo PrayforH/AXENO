@@ -31,8 +31,11 @@ export async function loadTaskModelRoutes(): Promise<TaskModelRoute[]> {
   return catalog.modelRoutes
     // A task override is a route ID, so selectable routes must resolve to one
     // unambiguous provider model. Legacy grouped routes remain runtime-only.
+    // Keep retired platform routes out during rolling upgrades where an older
+    // API instance may still return them from its durable catalog projection.
     .filter(
       (route) =>
+        route.routeId !== "anthropic-official" &&
         route.enabled &&
         route.models.length === 1 &&
         route.modelType !== "image_generation" &&

@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AgentThread } from "../components/agent-thread";
 import { AuthProvider, useAuth } from "../components/auth-provider";
 import { AssistantRuntimeShell } from "../components/assistant-runtime-shell";
-import { LangfuseTraceLink } from "../components/langfuse-trace-link";
-import { TaskAgentSwitcher } from "../components/task-agent-switcher";
+import { ContextRecoveryPanel } from "../components/context-recovery-panel";
+import { DeveloperDrawer } from "../components/developer-drawer";
+import { ProductivityCommandCenter } from "../components/productivity-command-center";
+import { RunDetailsProvider } from "../components/run-details-context";
+import {
+  TaskAgentSwitcher,
+  taskAgentSwitchMode,
+} from "../components/task-agent-switcher";
 import { TaskSidebar } from "../components/task-sidebar";
+import { useRunViewModel } from "../lib/activity-store";
+import { useRunStream } from "../lib/run-stream-store";
 import {
   bindThreadAgent,
   createUserScopedStorage,
@@ -16,7 +24,6 @@ import {
   selectThread,
 } from "../lib/thread-store";
 import {
-  agentIdentity,
   agentItemKey,
   chatUsableAgents,
   findTaskAgent,
@@ -30,6 +37,13 @@ import {
   saveTaskModelOverride,
   type TaskModelRoute,
 } from "../lib/task-model-catalog";
+import {
+  resolveTaskLaunchMode,
+  type TaskThreadState,
+} from "../lib/task-launch";
+import type { RunActivity } from "../lib/activity-schema";
+
+const TASK_SIDEBAR_COMPACT_QUERY = "(max-width: 820px)";
 
 export default function Home() {
   return (
@@ -48,36 +62,118 @@ function AuthenticatedHome() {
   const [modelRouteOverride, setModelRouteOverride] = useState<string | null>(null);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [agentsError, setAgentsError] = useState("");
+  const [catalogRefreshKey, setCatalogRefreshKey] = useState(0);
   const [taskSidebarOpen, setTaskSidebarOpen] = useState(true);
+  const [compactTaskSidebar, setCompactTaskSidebar] = useState(false);
+  const [currentThreadState, setCurrentThreadState] =
+    useState<TaskThreadState>("unknown");
+  const [inspectedActivity, setInspectedActivity] = useState<RunActivity | null>(null);
+  const runView = useRunViewModel();
+  const runStream = useRunStream();
+  const currentTaskBusy = runStream.status === "running" || (
+    runView?.phase === "queued" ||
+    runView?.phase === "running" ||
+    runView?.phase === "waiting_approval"
+  );
 
   useEffect(() => {
-    if (window.matchMedia("(max-width: 820px)").matches) {
-      setTaskSidebarOpen(false);
-    }
+    const compactViewport = window.matchMedia(TASK_SIDEBAR_COMPACT_QUERY);
+    const syncCompactViewport = (matches: boolean) => {
+      setCompactTaskSidebar(matches);
+      if (matches) setTaskSidebarOpen(false);
+    };
+    syncCompactViewport(compactViewport.matches);
+    const handleViewportChange = (event: MediaQueryListEvent) => {
+      syncCompactViewport(event.matches);
+    };
+    compactViewport.addEventListener("change", handleViewportChange);
+    return () => compactViewport.removeEventListener("change", handleViewportChange);
   }, []);
+
+  useEffect(() => {
+    setInspectedActivity(null);
+  }, [threadId]);
 
   useEffect(() => {
     let active = true;
     const storage = createUserScopedStorage(window.localStorage, user.user_id);
-    const currentThreadId = loadOrCreateThread(storage);
-    setThreadId(currentThreadId);
+    const storedThreadId = loadOrCreateThread(storage);
+    const initialSearch = new URLSearchParams(window.location.search);
+    const requestedThreadId = initialSearch.get("thread");
+    const initialThreadId = requestedThreadId
+      ? selectThread(storage, requestedThreadId)
+      : storedThreadId;
+    const hasRequestedAgent = Boolean(
+      initialSearch.get("agent") &&
+      initialSearch.get("version") &&
+      (initialSearch.get("space") || initialSearch.get("owner")),
+    );
+    setThreadId(initialThreadId);
+    // The concrete thread-to-Agent binding is already durable in this
+    // browser. Restore it immediately so returning from Studio can mount the
+    // conversation/history while the authoritative catalogs revalidate in
+    // the background. Deep links deliberately wait for catalog authorization.
+    const restoredBinding = hasRequestedAgent
+      ? null
+      : loadThreadAgent(storage, initialThreadId);
+    if (restoredBinding) {
+      const restoredAgent: TaskAgent = {
+        ...restoredBinding,
+        displayName: restoredBinding.displayName ?? restoredBinding.name,
+        domain: restoredBinding.domain ?? "restored",
+      };
+      setSelectedAgent(restoredAgent);
+      setTaskAgents([restoredAgent]);
+    }
     async function loadAgentBinding() {
       setAgentsLoading(true);
+      setAgentsError("");
       try {
-        const [catalog, routes, tasks] = await Promise.all([
+        const [catalog, routes, taskHistory] = await Promise.all([
           loadTaskAgentCatalog(user.user_id),
           loadTaskModelRoutes().catch(() => []),
-          loadTasks().catch(() => []),
+          loadTasks()
+            .then((tasks) => ({ available: true as const, tasks }))
+            .catch(() => ({ available: false as const, tasks: [] as TaskSummary[] })),
         ]);
         if (!active) return;
-        const currentTask = tasks.find(
+        const search = initialSearch;
+        const requestedName = search.get("agent");
+        const requestedVersion = search.get("version");
+        const requestedSpaceId = search.get("space");
+        const requestedOwnerUserId = search.get("owner");
+        const requestedAgent = requestedName && requestedVersion &&
+          (requestedSpaceId || requestedOwnerUserId)
+          ? findTaskAgent(catalog.agents, {
+              name: requestedName,
+              version: requestedVersion,
+              spaceId: requestedSpaceId ?? undefined,
+              ownerUserId: requestedOwnerUserId ?? undefined,
+            })
+          : undefined;
+        if (hasRequestedAgent && !requestedAgent) {
+          throw new Error(
+            `指定的智能体版本不可用：${requestedName}@${requestedVersion}。请返回智能体中心重新选择当前版本。`,
+          );
+        }
+        const currentThreadId = requestedAgent
+          ? createNewThread(storage)
+          : initialThreadId;
+        if (requestedAgent) {
+          setThreadId(currentThreadId);
+          window.history.replaceState({}, "", "/");
+        }
+        const currentTask = taskHistory.tasks.find(
           (task) => task.thread_id === currentThreadId,
+        );
+        setCurrentThreadState(
+          currentTask ? "durable" : taskHistory.available ? "empty" : "unknown",
         );
         const stored = loadThreadAgent(storage, currentThreadId);
         const storedAgent = stored
           ? findTaskAgent(catalog.agents, stored)
           : undefined;
-        const coordinates = currentTask
+        const coordinates = requestedAgent ?? (currentTask
           ? {
               name: currentTask.agent_name,
               version: currentTask.agent_version,
@@ -85,7 +181,7 @@ function AuthenticatedHome() {
               scope: currentTask.space_id ? "team" as const : "personal" as const,
               spaceId: currentTask.space_id ?? undefined,
             }
-          : storedAgent ?? catalog.defaultAgent;
+          : storedAgent ?? catalog.defaultAgent);
         const selected = findTaskAgent(catalog.agents, coordinates) ??
           (currentTask
             ? {
@@ -137,20 +233,64 @@ function AuthenticatedHome() {
     return () => {
       active = false;
     };
-  }, [user.user_id]);
+  }, [catalogRefreshKey, user.user_id]);
+
+  const availableTaskAgents = useMemo(() => taskAgents, [taskAgents]);
+
+  useEffect(() => {
+    if (runStream.threadId === threadId && runStream.runId) {
+      setCurrentThreadState("durable");
+    }
+  }, [runStream.runId, runStream.threadId, threadId]);
 
   function taskStorage() {
     return createUserScopedStorage(window.localStorage, user.user_id);
   }
 
-  function startNewTask() {
-    if (!selectedAgent) return;
-    const storage = taskStorage();
+  const closeCompactTaskSidebar = useCallback(() => {
+    if (compactTaskSidebar) setTaskSidebarOpen(false);
+  }, [compactTaskSidebar]);
+
+  const focusTaskComposer = useCallback(() => {
+    closeCompactTaskSidebar();
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
+    });
+  }, [closeCompactTaskSidebar]);
+
+  const createTaskWithAgent = useCallback((nextAgent: TaskAgent) => {
+    const storage = createUserScopedStorage(window.localStorage, user.user_id);
     const nextThreadId = createNewThread(storage);
-    bindThreadAgent(storage, nextThreadId, selectedAgent);
+    bindThreadAgent(storage, nextThreadId, nextAgent);
+    setSelectedAgent(nextAgent);
     setThreadId(nextThreadId);
+    setCurrentThreadState("empty");
     setModelRouteOverride(null);
-  }
+    closeCompactTaskSidebar();
+  }, [closeCompactTaskSidebar, user.user_id]);
+
+  const startTaskWithAgent = useCallback((nextAgent: TaskAgent) => {
+    const launchMode = resolveTaskLaunchMode(currentThreadState, "select-agent");
+    if (launchMode === "reuse-current") {
+      const storage = createUserScopedStorage(window.localStorage, user.user_id);
+      bindThreadAgent(storage, threadId, nextAgent);
+      setSelectedAgent(nextAgent);
+      setModelRouteOverride(null);
+      focusTaskComposer();
+      return;
+    }
+    createTaskWithAgent(nextAgent);
+  }, [createTaskWithAgent, currentThreadState, focusTaskComposer, threadId, user.user_id]);
+
+  const startNewTask = useCallback(() => {
+    if (!selectedAgent) return;
+    const launchMode = resolveTaskLaunchMode(currentThreadState, "new-task");
+    if (launchMode === "focus-current") {
+      focusTaskComposer();
+      return;
+    }
+    createTaskWithAgent(selectedAgent);
+  }, [createTaskWithAgent, currentThreadState, focusTaskComposer, selectedAgent]);
 
   function switchTask(task: TaskSummary) {
     const nextAgent =
@@ -187,57 +327,81 @@ function AuthenticatedHome() {
         ? storedModelRoute
         : null,
     );
+    setCurrentThreadState("durable");
     setThreadId(selectThread(storage, task.thread_id));
+    closeCompactTaskSidebar();
   }
 
   function switchAgent(nextAgent: TaskAgent) {
-    if (
-      selectedAgent &&
-      agentIdentity(selectedAgent) === agentIdentity(nextAgent) &&
-      selectedAgent.version === nextAgent.version
-    ) {
-      return;
-    }
-    const sameAgent = Boolean(
-      selectedAgent &&
-      agentIdentity(selectedAgent) === agentIdentity(nextAgent),
-    );
-    if (sameAgent) {
+    const mode = taskAgentSwitchMode(selectedAgent, nextAgent);
+    if (mode === "current" || (mode === "version" && currentTaskBusy)) return;
+    if (mode === "version") {
       bindThreadAgent(taskStorage(), threadId, nextAgent);
       setSelectedAgent(nextAgent);
       return;
     }
-    const storage = taskStorage();
-    const nextThreadId = createNewThread(storage);
-    bindThreadAgent(storage, nextThreadId, nextAgent);
-    setSelectedAgent(nextAgent);
-    setModelRouteOverride(null);
-    setThreadId(nextThreadId);
+    startTaskWithAgent(nextAgent);
+  }
+
+  function openRunDetails(activity: RunActivity) {
+    if (compactTaskSidebar) setTaskSidebarOpen(false);
+    setInspectedActivity(activity);
   }
 
   return (
-    <main className="console-shell" id="main-content">
+    <main
+      className="console-shell"
+      id="main-content"
+      data-task-thread-state={currentThreadState}
+    >
+      <RunDetailsProvider
+        selectedRunId={inspectedActivity?.run_id ?? null}
+        onOpen={openRunDetails}
+      >
       <div
         className={`workspace-stage ${taskSidebarOpen ? "tasks-open" : ""}`}
       >
+        {compactTaskSidebar && taskSidebarOpen && (
+          <button
+            className="task-sidebar-scrim"
+            type="button"
+            aria-label="关闭任务列表"
+            tabIndex={-1}
+            onClick={() => setTaskSidebarOpen(false)}
+          />
+        )}
         <TaskSidebar
           currentThreadId={threadId}
           collapsed={!taskSidebarOpen}
-          onToggle={() => setTaskSidebarOpen((current) => !current)}
+          overlayOpen={compactTaskSidebar && taskSidebarOpen}
+          onToggle={() => {
+            if (compactTaskSidebar) setInspectedActivity(null);
+            setTaskSidebarOpen((current) => !current);
+          }}
           onSelect={switchTask}
           onNewTask={startNewTask}
         />
-        <div className="task-content-shell">
+        <div
+          className="task-content-shell"
+          aria-hidden={compactTaskSidebar && taskSidebarOpen ? true : undefined}
+        >
           <header className="console-header">
             <TaskAgentSwitcher
-              agents={taskAgents}
+              agents={availableTaskAgents}
               selected={selectedAgent}
               loading={agentsLoading}
+              currentTaskBusy={currentTaskBusy}
               onChange={switchAgent}
             />
 
             <div className="header-actions">
-              <LangfuseTraceLink />
+              <ProductivityCommandCenter
+                agents={availableTaskAgents}
+                onNewTask={startNewTask}
+                onSelectTask={switchTask}
+                onStartWithAgent={startTaskWithAgent}
+              />
+              <ContextRecoveryPanel threadId={threadId} />
             </div>
           </header>
           <section className="chat-stage" aria-label="Agent 任务对话">
@@ -258,27 +422,50 @@ function AuthenticatedHome() {
                     setModelRouteOverride(routeId);
                   }}
                 >
-                  <AgentThread />
+                  <AgentThread userId={user.user_id} threadId={threadId} />
                 </AssistantRuntimeShell>
               ) : (
-                <div className="chat-loading" role="status" aria-busy="true">
-                  <div className="chat-loading-skeleton" aria-hidden="true">
-                    <span className="chat-loading-avatar" />
-                    <span className="chat-loading-line" />
-                    <span className="chat-loading-line" />
-                    <span className="chat-loading-card" />
-                  </div>
-                  <span>
-                    {agentsError
-                      ? `智能体目录不可用：${agentsError}`
-                      : "正在恢复任务与智能体版本…"}
-                  </span>
+                <div
+                  className={`chat-loading${agentsError ? " is-error" : ""}`}
+                  role={agentsError ? "alert" : "status"}
+                  aria-busy={!agentsError}
+                >
+                  {agentsError ? (
+                    <div className="chat-loading-error">
+                      <strong>无法进入任务工作台</strong>
+                      <span>{agentsError}</span>
+                      <button
+                        type="button"
+                        onClick={() => setCatalogRefreshKey((current) => current + 1)}
+                      >
+                        重新连接
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="chat-loading-skeleton" aria-hidden="true">
+                        <span className="chat-loading-avatar" />
+                        <span className="chat-loading-line" />
+                        <span className="chat-loading-line" />
+                        <span className="chat-loading-card" />
+                      </div>
+                      <span>正在恢复任务与智能体版本…</span>
+                    </>
+                  )}
                 </div>
               )}
             </div>
           </section>
         </div>
+        {inspectedActivity ? (
+          <DeveloperDrawer
+            threadId={threadId}
+            activity={inspectedActivity}
+            onClose={() => setInspectedActivity(null)}
+          />
+        ) : null}
       </div>
+      </RunDetailsProvider>
     </main>
   );
 }

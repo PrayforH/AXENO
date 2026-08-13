@@ -1,3 +1,5 @@
+import asyncio
+from datetime import datetime
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -13,7 +15,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
-from harness.sharing.models import AgentPermission, WorkspaceAgent
+from harness.sharing.models import WorkspaceAgent
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -21,6 +23,17 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 class TransferAgentRequest(BaseModel):
     to_user_id: str | None = Field(default=None, min_length=1)
     to_space_id: str | None = Field(default=None, min_length=1)
+
+
+class PersonalAgentVersionItem(BaseModel):
+    agent_id: str
+    name: str
+    version: str
+    display_name: str
+    manifest_hash: str
+    package_hash: str | None
+    created_at: datetime
+    current_version: str | None
 
 
 def _manifest_mapping(version: AgentVersion) -> dict[str, object]:
@@ -59,41 +72,44 @@ async def list_agents(
     container: Annotated[ApiContainer, Depends(get_container)],
 ) -> list[AgentCatalogItem]:
     ensure_permission(identity, "tasks:read")
-    await container.agents.ensure_user_default(identity.tenant_id, identity.user_id)
-    versions = await container.agents.list_published(identity.tenant_id, identity.user_id)
+    versions, personal_agents, shared_agents = await asyncio.gather(
+        container.agents.list_published_catalog(identity.tenant_id, identity.user_id),
+        container.workspace_agents.list_personal_agents(identity.tenant_id, identity.user_id),
+        container.team_spaces.list_accessible_agents(identity.tenant_id, identity.user_id),
+    )
     dependency_coordinates = {
         coordinate for version in versions for coordinate in _subagent_coordinates(version)
     }
-    personal_by_name = {
-        agent.name: agent
-        for agent in await container.workspace_agents.list_personal_agents(
-            identity.tenant_id, identity.user_id
+    personal_by_name = {agent.name: agent for agent in personal_agents}
+    personal: list[AgentCatalogItem] = []
+    for version in versions:
+        if f"{version.name}@{version.version}" in dependency_coordinates or _is_internal(version):
+            continue
+        workspace_agent = personal_by_name.get(version.name)
+        personal.append(
+            AgentCatalogItem.from_version(
+                version,
+                can_edit=True,
+                agent_id=(
+                    workspace_agent.agent_id
+                    if workspace_agent is not None
+                    else version.agent_id
+                ),
+                current_version=(
+                    workspace_agent.current_version
+                    if workspace_agent is not None
+                    else version.version
+                ),
+            )
         )
-    }
-    personal = [
-        AgentCatalogItem.from_version(
-            version,
-            can_edit=True,
-            agent_id=personal_by_name[version.name].agent_id
-            if version.name in personal_by_name
-            else None,
-            current_version=version.version,
-        )
-        for version in versions
-        if f"{version.name}@{version.version}" not in dependency_coordinates
-        and not _is_internal(version)
-    ]
     shared: list[AgentCatalogItem] = []
-    for space, _member, agent, release, version in (
-        await container.team_spaces.list_accessible_agents(
-            identity.tenant_id, identity.user_id
-        )
-    ):
+    for entry in shared_agents:
+        space = entry.space
+        agent = entry.agent
+        release = entry.release
+        version = entry.version
         if _is_internal(version):
             continue
-        permissions = await container.team_spaces.effective_permissions(
-            identity.tenant_id, identity.user_id, space.space_id, agent.agent_id
-        )
         shared.append(
             AgentCatalogItem.from_version(
                 version,
@@ -104,7 +120,7 @@ async def list_agents(
                 agent_id=agent.agent_id,
                 current_version=agent.current_version,
                 connection_mode=release.connection_mode.value,
-                can_chat=AgentPermission.CHAT in permissions,
+                can_chat=entry.can_chat,
             )
         )
     items: list[AgentCatalogItem] = [*personal, *shared]
@@ -129,6 +145,64 @@ async def list_agents(
             )
         )
     return projected
+
+
+@router.get(
+    "/{agent_id}/versions",
+    response_model=list[PersonalAgentVersionItem],
+)
+async def list_personal_agent_versions(
+    agent_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> list[PersonalAgentVersionItem]:
+    ensure_permission(identity, "tasks:read")
+    agent, versions = await container.team_spaces.list_personal_releases(
+        identity.tenant_id, identity.user_id, agent_id
+    )
+    return [
+        PersonalAgentVersionItem(
+            agent_id=agent.agent_id,
+            name=version.name,
+            version=version.version,
+            display_name=AgentCatalogItem.from_version(version).display_name,
+            manifest_hash=version.manifest_hash,
+            package_hash=version.package_hash,
+            created_at=version.created_at,
+            current_version=agent.current_version,
+        )
+        for version in versions
+    ]
+
+
+@router.post(
+    "/{agent_id}/versions/{version}/promote",
+    response_model=PersonalAgentVersionItem,
+)
+async def promote_personal_agent_version(
+    agent_id: str,
+    version: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> PersonalAgentVersionItem:
+    ensure_permission(identity, "agents:publish")
+    agent = await container.team_spaces.promote_personal_release(
+        identity.tenant_id, identity.user_id, agent_id, version
+    )
+    _, versions = await container.team_spaces.list_personal_releases(
+        identity.tenant_id, identity.user_id, agent_id
+    )
+    selected = next(item for item in versions if item.version == version)
+    return PersonalAgentVersionItem(
+        agent_id=agent.agent_id,
+        name=selected.name,
+        version=selected.version,
+        display_name=AgentCatalogItem.from_version(selected).display_name,
+        manifest_hash=selected.manifest_hash,
+        package_hash=selected.package_hash,
+        created_at=selected.created_at,
+        current_version=agent.current_version,
+    )
 
 
 @router.post("", response_model=AgentVersion, status_code=status.HTTP_201_CREATED)

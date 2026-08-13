@@ -1,4 +1,7 @@
+# pyright: reportPrivateUsage=false
+
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -67,26 +70,19 @@ def test_networked_research_agent_uses_production_profile_and_multiple_mcp() -> 
         "tavily-readonly",
         "knowledge-search",
     ]
-    coverage = {
-        tag
-        for case in spec["evaluationCases"]  # type: ignore[union-attr]
-        for tag in case["tags"]
-    }
+    cases = cast(list[dict[str, object]], spec["evaluationCases"])
+    coverage: set[str] = {str(tag) for case in cases for tag in cast(list[object], case["tags"])}
     assert {"happy", "ambiguous", "safety"} <= coverage
 
 
 def test_archive_studio_spec_pins_internal_classifier() -> None:
-    spec = studio_spec_from_manifest(
-        ROOT / "agents" / "archive-assistant-agent" / "agent.yaml"
-    )
+    spec = studio_spec_from_manifest(ROOT / "agents" / "archive-assistant-agent" / "agent.yaml")
 
     assert spec["subagents"] == [
         {
             "alias": "file-classifier",
             "ref": "archive-file-classifier-agent@0.1.1",
-            "responsibility": (
-                "只读并行分类文件，返回门类、期限、依据、可信度和待复核项。"
-            ),
+            "responsibility": ("只读并行分类文件，返回门类、期限、依据、可信度和待复核项。"),
             "background": True,
         }
     ]

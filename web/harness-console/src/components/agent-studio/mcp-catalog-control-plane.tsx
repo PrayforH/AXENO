@@ -1,7 +1,16 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAuth } from "../auth-provider";
+import { useDialogFocus } from "../../lib/use-dialog-focus";
+import { useDismissablePopovers } from "../../lib/use-dismissable-popovers";
 import {
   studioClient,
   type StudioCapabilities,
@@ -20,6 +29,16 @@ const MCP_IDENTIFIER_PATTERN =
   /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/;
 const MCP_IDENTIFIER_INPUT_PATTERN =
   "[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*";
+const MANAGED_AUTH_HEADER_NAMES = new Set([
+  "authorization",
+  "cookie",
+  "proxy-authorization",
+  "set-cookie",
+  "x-api-key",
+  "api-key",
+  "apikey",
+]);
+const EDITABLE_PLATFORM_MCP_REFERENCES = new Set(["tavily-readonly"]);
 
 const EMPTY_MCP: McpCapability = {
   reference: "",
@@ -31,6 +50,7 @@ const EMPTY_MCP: McpCapability = {
   description: "",
   endpointUrl: "",
   transport: "http",
+  customHeaders: {},
   tools: [],
   risk: "medium",
   networkAccess: "external",
@@ -89,6 +109,7 @@ export function McpCatalogControlPlane({
   const category = knowledgeMode ? "knowledge" : "tool";
   const { membership } = useAuth();
   const canManage = membership.role !== "viewer";
+  useDismissablePopovers();
   const [record, setRecord] = useState<StudioCapabilityCatalogRecord | null>(
     null,
   );
@@ -97,10 +118,19 @@ export function McpCatalogControlPlane({
   const [discovery, setDiscovery] =
     useState<StudioMcpDiscoveryResult | null>(null);
   const [toolQuery, setToolQuery] = useState("");
+  const [customHeaderRows, setCustomHeaderRows] = useState<Array<{
+    key: string;
+    value: string;
+  }>>([]);
   const [editingReference, setEditingReference] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [pendingDisable, setPendingDisable] =
     useState<StudioCatalogImpact | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    impact: StudioCatalogImpact;
+    item: McpCapability;
+  } | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [pendingSync, setPendingSync] = useState<CatalogSyncImpact | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -109,6 +139,9 @@ export function McpCatalogControlPlane({
   const [credentialStatuses, setCredentialStatuses] = useState<
     Record<string, StudioMcpCredentialStatus>
   >({});
+  const editorDialogRef = useRef<HTMLElement>(null);
+  const syncDialogRef = useRef<HTMLElement>(null);
+  const deleteDialogRef = useRef<HTMLElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -131,6 +164,29 @@ export function McpCatalogControlPlane({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const closeEditor = useCallback(() => {
+    if (busy !== "save" && busy !== "discover") setShowForm(false);
+  }, [busy]);
+
+  const closeSync = useCallback(() => setPendingSync(null), []);
+  const closeDelete = useCallback(() => setPendingDelete(null), []);
+
+  useDialogFocus({
+    open: Boolean(showForm && canManage),
+    panelRef: editorDialogRef,
+    onEscape: closeEditor,
+  });
+  useDialogFocus({
+    open: Boolean(pendingSync),
+    panelRef: syncDialogRef,
+    onEscape: closeSync,
+  });
+  useDialogFocus({
+    open: Boolean(pendingDelete),
+    panelRef: deleteDialogRef,
+    onEscape: closeDelete,
+  });
 
   const entries = useMemo(
     () =>
@@ -163,8 +219,10 @@ export function McpCatalogControlPlane({
     );
     setDiscovery(null);
     setToolQuery("");
+    setCustomHeaderRows([]);
     setEditingReference(null);
     setPendingDisable(null);
+    setPendingDelete(null);
     setPendingSync(null);
     setNotice("");
     setError("");
@@ -190,8 +248,12 @@ export function McpCatalogControlPlane({
       })),
     });
     setToolQuery("");
+    setCustomHeaderRows(
+      Object.entries(item.customHeaders).map(([key, value]) => ({ key, value })),
+    );
     setEditingReference(item.reference);
     setPendingDisable(null);
+    setPendingDelete(null);
     setPendingSync(null);
     setNotice("");
     setError("");
@@ -204,6 +266,8 @@ export function McpCatalogControlPlane({
     if (!record || !canManage) return;
     const reference = draft.reference.trim();
     const serverName = draft.serverName?.trim() || reference;
+    const customHeaders = customHeadersFromRows();
+    if (!customHeaders) return;
     if (
       !MCP_IDENTIFIER_PATTERN.test(reference)
       || !MCP_IDENTIFIER_PATTERN.test(serverName)
@@ -256,6 +320,7 @@ export function McpCatalogControlPlane({
           label: draft.label.trim(),
           description: draft.description.trim(),
           endpointUrl: draft.endpointUrl.trim(),
+          customHeaders,
           tools: draft.tools,
           credentialReference:
             draft.authMode === "none"
@@ -340,6 +405,26 @@ export function McpCatalogControlPlane({
     setToolQuery("");
   }
 
+  function customHeadersFromRows(): Record<string, string> | null {
+    const entries = customHeaderRows
+      .map((item) => [item.key.trim(), item.value.trim()] as const)
+      .filter(([key, value]) => key || value);
+    if (entries.some(([key, value]) => !key || !value)) {
+      setError("自定义请求头的名称和值必须同时填写。");
+      return null;
+    }
+    const normalized = entries.map(([key]) => key.toLowerCase());
+    if (new Set(normalized).size !== normalized.length) {
+      setError("自定义请求头名称不能重复。");
+      return null;
+    }
+    if (normalized.some((name) => MANAGED_AUTH_HEADER_NAMES.has(name))) {
+      setError("密钥、Token 和 Cookie 不能放入自定义请求头，请使用受管鉴权。");
+      return null;
+    }
+    return Object.fromEntries(entries);
+  }
+
   function toggleAllowedProfile(profileId: string) {
     setAllowedProfileIds((current) =>
       current.includes(profileId)
@@ -351,6 +436,8 @@ export function McpCatalogControlPlane({
   async function discover() {
     const reference = draft.reference.trim();
     const serverName = draft.serverName?.trim() || reference;
+    const customHeaders = customHeadersFromRows();
+    if (!customHeaders) return;
     if (
       !MCP_IDENTIFIER_PATTERN.test(reference) ||
       !MCP_IDENTIFIER_PATTERN.test(serverName) ||
@@ -382,6 +469,7 @@ export function McpCatalogControlPlane({
         serverName,
         endpointUrl: draft.endpointUrl.trim(),
         networkAccess: draft.networkAccess,
+        customHeaders,
         authMode: draft.authMode,
         authName: draft.authName?.trim() || null,
         authKey: draft.authKey,
@@ -471,18 +559,50 @@ export function McpCatalogControlPlane({
     }
   }
 
+  async function inspectDelete(item: McpCapability) {
+    setBusy(item.reference);
+    setError("");
+    setNotice("");
+    try {
+      const impact = await studioClient.catalogImpact("mcp", item.reference);
+      setDeleteConfirmation("");
+      setPendingDelete({ impact, item });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "删除影响范围读取失败。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteResource() {
+    if (!record || !canManage || !pendingDelete) return;
+    const { impact, item } = pendingDelete;
+    if (impact.draftIds.length > 0 || deleteConfirmation.trim() !== item.reference) {
+      return;
+    }
+    setBusy(item.reference);
+    setError("");
+    try {
+      const result = await studioClient.deleteMcp(item.reference, record.revision);
+      setRecord(result.record);
+      setCredentialStatuses((current) => {
+        const next = { ...current };
+        delete next[item.reference];
+        return next;
+      });
+      setPendingDelete(null);
+      setDeleteConfirmation("");
+      setNotice(`${item.label} 已永久删除。`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "资源未能删除。");
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <main className={styles.shell} id="main-content">
-      <StudioSidebar active={knowledgeMode ? "knowledge" : "capabilities"}>
-        <div className={styles.railCopy}>
-          <strong>{knowledgeMode ? "外部知识" : "MCP 治理"}</strong>
-          <p>
-            {knowledgeMode
-              ? "平台只登记外部知识服务与检索工具，不上传资料、不切片，也不保存向量。"
-              : "MCP 目录、认证凭据与智能体绑定相互分离；密钥加密保存且不会再次回显。"}
-          </p>
-        </div>
-      </StudioSidebar>
+      <StudioSidebar active={knowledgeMode ? "knowledge" : "capabilities"} />
 
       <section className={styles.content}>
         <header className={styles.hero}>
@@ -539,6 +659,7 @@ export function McpCatalogControlPlane({
               aria-labelledby="catalog-sync-title"
               aria-modal="true"
               className={styles.syncDialog}
+              ref={syncDialogRef}
               role="dialog"
             >
               <header>
@@ -580,7 +701,7 @@ export function McpCatalogControlPlane({
                 </ul>
               </div>
               <footer>
-                <button type="button" onClick={() => setPendingSync(null)}>
+                <button type="button" onClick={closeSync}>
                   稍后处理
                 </button>
                 <a
@@ -590,6 +711,69 @@ export function McpCatalogControlPlane({
                 >
                   去智能体更新
                 </a>
+              </footer>
+            </section>
+          </div>
+        )}
+        {pendingDelete && (
+          <div className={styles.dialogBackdrop}>
+            <section
+              aria-labelledby="catalog-delete-title"
+              aria-modal="true"
+              className={styles.deleteDialog}
+              ref={deleteDialogRef}
+              role="dialog"
+            >
+              <header>
+                <div>
+                  <p>Permanent deletion</p>
+                  <h2 id="catalog-delete-title">
+                    删除「{pendingDelete.item.label}」？
+                  </h2>
+                </div>
+                <button
+                  aria-label="关闭删除确认"
+                  type="button"
+                  onClick={closeDelete}
+                >
+                  ×
+                </button>
+              </header>
+              {pendingDelete.impact.draftIds.length > 0 ? (
+                <div className={styles.deleteBlocked}>
+                  <strong>暂时不能删除</strong>
+                  <span>
+                    仍有 {pendingDelete.impact.draftIds.length} 个智能体草稿引用此资源。请先解除绑定：
+                    {pendingDelete.impact.draftIds.join("、")}
+                  </span>
+                </div>
+              ) : (
+                <label className={styles.deleteConfirmation}>
+                  <span>
+                    删除后连接定义与托管凭据都会移除，且无法恢复。请输入引用标识
+                    <code>{pendingDelete.item.reference}</code>确认。
+                  </span>
+                  <input
+                    value={deleteConfirmation}
+                    onChange={(event) => setDeleteConfirmation(event.target.value)}
+                  />
+                </label>
+              )}
+              <footer>
+                <button type="button" onClick={closeDelete}>
+                  取消
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    pendingDelete.impact.draftIds.length > 0
+                    || deleteConfirmation.trim() !== pendingDelete.item.reference
+                    || busy === pendingDelete.item.reference
+                  }
+                  onClick={() => void deleteResource()}
+                >
+                  永久删除
+                </button>
               </footer>
             </section>
           </div>
@@ -665,28 +849,41 @@ export function McpCatalogControlPlane({
                           ? "凭据已配置"
                           : "等待配置凭据"}
                     </span>
-                    {canManage && item.ownerUserId && (
+                    {canManage && (item.ownerUserId || EDITABLE_PLATFORM_MCP_REFERENCES.has(item.reference)) && (
                       <div>
                         <button type="button" onClick={() => startEdit(item)}>
                           编辑
                         </button>
-                        {item.enabled ? (
-                          <button
-                            type="button"
-                            disabled={busy === item.reference}
-                            onClick={() => void inspectDisable(item.reference)}
-                          >
-                            停用
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled={busy === item.reference}
-                            onClick={() => void enable(item)}
-                          >
-                            重新启用
-                          </button>
-                        )}
+                        <details className={styles.actionMenu} data-dismiss-on-outside>
+                          <summary aria-label={`${item.label} 更多操作`}>更多</summary>
+                          <div>
+                            {item.enabled ? (
+                              <button
+                                type="button"
+                                disabled={busy === item.reference}
+                                onClick={() => void inspectDisable(item.reference)}
+                              >
+                                停用
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy === item.reference}
+                                onClick={() => void enable(item)}
+                              >
+                                重新启用
+                              </button>
+                            )}
+                            <button
+                              className={styles.deleteAction}
+                              type="button"
+                              disabled={busy === item.reference}
+                              onClick={() => void inspectDelete(item)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </details>
                       </div>
                     )}
                   </footer>
@@ -720,15 +917,30 @@ export function McpCatalogControlPlane({
         </section>
 
         {showForm && canManage && (
-          <section className={styles.editor}>
+          <div className={styles.editorBackdrop}>
+          <section
+            aria-labelledby="catalog-editor-title"
+            aria-modal="true"
+            className={styles.editor}
+            ref={editorDialogRef}
+            role="dialog"
+          >
             <header>
               <div>
                 <p>Catalog entry</p>
-                <h2>{editingReference ? (knowledgeMode ? "编辑知识库连接" : "编辑 MCP") : (knowledgeMode ? "连接外部知识库" : "注册 MCP")}</h2>
+                <h2 id="catalog-editor-title">{editingReference ? (knowledgeMode ? "编辑知识库连接" : "编辑 MCP") : (knowledgeMode ? "连接外部知识库" : "注册 MCP")}</h2>
               </div>
-              <button type="button" onClick={() => setShowForm(false)}>关闭</button>
+              <button type="button" onClick={closeEditor}>关闭</button>
             </header>
             <form onSubmit={save}>
+              <section className={styles.formSection}>
+              <div className={styles.formSectionTitle}>
+                <span>01</span>
+                <div>
+                  <strong>基本信息</strong>
+                  <small>稳定标识、名称和用途边界</small>
+                </div>
+              </div>
               <label>
                 <span>引用标识</span>
                 <input
@@ -789,6 +1001,15 @@ export function McpCatalogControlPlane({
                   }
                 />
               </label>
+              </section>
+              <section className={styles.formSection}>
+              <div className={styles.formSectionTitle}>
+                <span>02</span>
+                <div>
+                  <strong>连接配置</strong>
+                  <small>地址、网络范围和非敏感请求头</small>
+                </div>
+              </div>
               <label className={styles.endpointField}>
                 <span>{knowledgeMode ? "知识服务 MCP 地址" : "MCP 地址"}</span>
                 <input
@@ -805,6 +1026,67 @@ export function McpCatalogControlPlane({
                   <small>已自动识别：{TRANSPORT_LABELS[discovery.transport]}</small>
                 )}
               </label>
+              <div className={styles.transportReadout}>
+                <span>传输类型</span>
+                <strong>{discovery ? TRANSPORT_LABELS[discovery.transport] : "自动检测"}</strong>
+                <small>检测连接时自动识别 SSE 或 Streamable HTTP，避免手工选错。</small>
+              </div>
+              <section className={styles.customHeaders}>
+                <header>
+                  <div>
+                    <strong>自定义请求头（可选）</strong>
+                    <span>用于网关路由和链路标记；密钥、Token、Cookie 必须走下方受管鉴权。</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={customHeaderRows.length >= 20}
+                    onClick={() =>
+                      setCustomHeaderRows((current) => [...current, { key: "", value: "" }])
+                    }
+                  >
+                    添加请求头
+                  </button>
+                </header>
+                {customHeaderRows.length > 0 && (
+                  <div>
+                    {customHeaderRows.map((item, index) => (
+                      <div className={styles.customHeaderRow} key={index}>
+                        <input
+                          aria-label={`请求头 ${index + 1} 名称`}
+                          placeholder="X-Tenant-ID"
+                          value={item.key}
+                          onChange={(event) =>
+                            setCustomHeaderRows((current) => current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, key: event.target.value } : row
+                            ))
+                          }
+                        />
+                        <input
+                          aria-label={`请求头 ${index + 1} 值`}
+                          placeholder="公开路由值（不要填写密钥）"
+                          value={item.value}
+                          onChange={(event) =>
+                            setCustomHeaderRows((current) => current.map((row, rowIndex) =>
+                              rowIndex === index ? { ...row, value: event.target.value } : row
+                            ))
+                          }
+                        />
+                        <button
+                          aria-label={`删除请求头 ${index + 1}`}
+                          type="button"
+                          onClick={() =>
+                            setCustomHeaderRows((current) =>
+                              current.filter((_, rowIndex) => rowIndex !== index)
+                            )
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
               <label>
                 <span>风险级别</span>
                 <select
@@ -848,6 +1130,15 @@ export function McpCatalogControlPlane({
                   }
                 />
               </label>
+              </section>
+              <section className={styles.formSection}>
+              <div className={styles.formSectionTitle}>
+                <span>03</span>
+                <div>
+                  <strong>鉴权</strong>
+                  <small>凭据加密托管，保存后不再回显</small>
+                </div>
+              </div>
               <label>
                 <span>鉴权方式</span>
                 <select
@@ -920,6 +1211,15 @@ export function McpCatalogControlPlane({
                   <small>对应服务端引用 JSON 中的键。</small>
                 </label>
               )}
+              </section>
+              <section className={styles.formSection}>
+              <div className={styles.formSectionTitle}>
+                <span>04</span>
+                <div>
+                  <strong>运行边界</strong>
+                  <small>Execution Profile、数据发送和预检要求</small>
+                </div>
+              </div>
               <section className={styles.profileAuthorization}>
                 <header>
                   <div>
@@ -969,6 +1269,15 @@ export function McpCatalogControlPlane({
                   })}
                 </div>
               </section>
+              </section>
+              <section className={styles.formSection}>
+              <div className={styles.formSectionTitle}>
+                <span>05</span>
+                <div>
+                  <strong>连接测试与工具</strong>
+                  <small>真实执行 initialize 与 tools/list 后再保存</small>
+                </div>
+              </div>
               <div className={styles.discoveryAction}>
                 <div>
                   <strong>检测连接并识别工具</strong>
@@ -1080,6 +1389,7 @@ export function McpCatalogControlPlane({
                   <span>运行前必须通过预检</span>
                 </label>
               </div>
+              </section>
               <div className={styles.formActions}>
                 <span>已审核 {draft.tools.length} 个工具；保存后可在「智能体 → 工具与 MCP」中绑定。</span>
                 <button type="button" onClick={() => setShowForm(false)}>取消</button>
@@ -1089,6 +1399,7 @@ export function McpCatalogControlPlane({
               </div>
             </form>
           </section>
+          </div>
         )}
 
         <section className={styles.runtime}>

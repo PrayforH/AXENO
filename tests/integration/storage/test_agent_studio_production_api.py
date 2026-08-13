@@ -24,7 +24,7 @@ def production_settings() -> Settings:
         api_bearer_token=SecretStr(SERVICE_TOKEN),
         database_url=os.getenv(
             "HARNESS_TEST_DATABASE_URL",
-            "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+            "postgresql+asyncpg://harness:harness@127.0.0.1:5432/harness_test",
         ),
         redis_url=f"{os.getenv('HARNESS_TEST_REDIS_BASE_URL', 'redis://localhost:6379')}/0",
         minio_access_key=SecretStr("test-minio-access"),

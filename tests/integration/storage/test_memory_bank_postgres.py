@@ -15,7 +15,7 @@ from harness.storage.memory_bank_repository import PostgresMemoryBankRepository
 NOW = datetime(2026, 7, 16, 12, tzinfo=UTC)
 DATABASE_URL = os.getenv(
     "HARNESS_TEST_DATABASE_URL",
-    "postgresql+asyncpg://harness:harness@localhost:5432/harness",
+    "postgresql+asyncpg://harness:harness@127.0.0.1:5432/harness_test",
 )
 
 
@@ -46,17 +46,11 @@ def identity(user: str = "user-a") -> ExecutionIdentity:
 async def test_memory_bank_is_durable_scoped_and_fenced(
     memory_database: SessionFactory,
 ) -> None:
-    first = MemoryBankService(
-        PostgresMemoryBankRepository(memory_database), clock=lambda: NOW
-    )
+    first = MemoryBankService(PostgresMemoryBankRepository(memory_database), clock=lambda: NOW)
     proposal = await first.propose_agent(identity(), "用户偏好中文月报")
-    confirmed = await first.confirm(
-        "tenant-a", "user-a", proposal.entry_id, proposal.version
-    )
+    confirmed = await first.confirm("tenant-a", "user-a", proposal.entry_id, proposal.version)
 
-    restarted = MemoryBankService(
-        PostgresMemoryBankRepository(memory_database), clock=lambda: NOW
-    )
+    restarted = MemoryBankService(PostgresMemoryBankRepository(memory_database), clock=lambda: NOW)
     hits = await restarted.search("tenant-a", "user-a", "agent-a", "中文月报")
     assert len(hits) == 1 and hits[0].entry.status is MemoryStatus.ACTIVE
     with pytest.raises(NotFoundError):
@@ -70,12 +64,8 @@ async def test_memory_bank_is_durable_scoped_and_fenced(
         content="用户偏好中文周报",
         confidence=0.9,
     )
-    stale = confirmed.model_copy(
-        update={"content": "stale", "version": confirmed.version + 1}
-    )
-    assert not await restarted.repository.compare_and_set_entry(
-        confirmed.version, stale
-    )
+    stale = confirmed.model_copy(update={"content": "stale", "version": confirmed.version + 1})
+    assert not await restarted.repository.compare_and_set_entry(confirmed.version, stale)
     assert edited.version == 3
 
 
@@ -83,9 +73,7 @@ async def test_memory_bank_is_durable_scoped_and_fenced(
 async def test_consent_policy_is_durable_and_never_auto_accepts_sensitive_memory(
     memory_database: SessionFactory,
 ) -> None:
-    service = MemoryBankService(
-        PostgresMemoryBankRepository(memory_database), clock=lambda: NOW
-    )
+    service = MemoryBankService(PostgresMemoryBankRepository(memory_database), clock=lambda: NOW)
     await service.replace_consent(
         "tenant-a",
         "user-a",

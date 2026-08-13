@@ -25,6 +25,11 @@ export interface TaskSummary {
   pending_approval?: (ApprovalDetails & { status: string }) | null;
 }
 
+const taskListRequests = new Map<boolean, Promise<TaskSummary[]>>();
+const taskListSnapshots = new Map<boolean, { receivedAt: number; tasks: TaskSummary[] }>();
+const taskListCoalesceMs = 250;
+export const TASK_LIST_REQUEST_TIMEOUT_MS = 8_000;
+
 interface ThreadHistoryResponse {
   thread_id: string;
   status: string;
@@ -103,18 +108,51 @@ function publishHistoryActivity(history: ThreadHistoryResponse, threadId: string
   if (restoredActivity) activityStore.publish(restoredActivity, threadId);
 }
 
-async function json<T>(url: string): Promise<T> {
-  const response = requireAuthenticatedResponse(
-    await fetch(url, { cache: "no-store" }),
-  );
-  if (!response.ok) {
-    throw new Error((await response.text()) || `HTTP ${response.status}`);
+async function json<T>(url: string, timeoutMs?: number): Promise<T> {
+  const controller = new AbortController();
+  const timeout = timeoutMs === undefined
+    ? undefined
+    : globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = requireAuthenticatedResponse(
+      await fetch(url, { cache: "no-store", signal: controller.signal }),
+    );
+    if (!response.ok) {
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
+    }
+    return response.json() as Promise<T>;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("任务列表读取超时，请重试", { cause: error });
+    }
+    throw error;
+  } finally {
+    if (timeout !== undefined) globalThis.clearTimeout(timeout);
   }
-  return response.json() as Promise<T>;
 }
 
 export function loadTasks(archived = false): Promise<TaskSummary[]> {
-  return json<TaskSummary[]>(`/api/agui/threads?archived=${archived}`);
+  const inFlight = taskListRequests.get(archived);
+  if (inFlight) return inFlight;
+  const snapshot = taskListSnapshots.get(archived);
+  if (snapshot && Date.now() - snapshot.receivedAt < taskListCoalesceMs) {
+    return Promise.resolve(snapshot.tasks);
+  }
+  const request = json<TaskSummary[]>(
+    `/api/agui/threads?archived=${archived}`,
+    TASK_LIST_REQUEST_TIMEOUT_MS,
+  )
+    .then((tasks) => {
+      taskListSnapshots.set(archived, { receivedAt: Date.now(), tasks });
+      return tasks;
+    })
+    .finally(() => {
+      if (taskListRequests.get(archived) === request) {
+        taskListRequests.delete(archived);
+      }
+    });
+  taskListRequests.set(archived, request);
+  return request;
 }
 
 export async function setTaskArchived(
@@ -157,11 +195,17 @@ export function createThreadHistoryAdapter(
       const activeAssistant = repository.messages.find(
         (item) => item.message.id === activeAssistantId,
       );
+      const resumeRepository = ExportedMessageRepository.fromArray(
+        repository.messages
+          .filter((item) => item.message.id !== activeAssistantId)
+          .map((item) => item.message),
+      );
       return {
-        ...repository,
-        // Resume replaces the partial assistant snapshot. Rewind to its
-        // parent so assistant-ui does not append a duplicate response.
-        headId: activeAssistant?.parentId ?? repository.messages.at(-1)?.message.id ?? null,
+        ...resumeRepository,
+        // Do not briefly render the durable partial response and then replace
+        // it with assistant-ui's resumed placeholder.  Loading only through
+        // its parent keeps one stable visual response slot throughout restore.
+        headId: activeAssistant?.parentId ?? resumeRepository.messages.at(-1)?.message.id ?? null,
         unstable_resume: true,
       };
     },

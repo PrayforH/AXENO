@@ -88,10 +88,7 @@ class AgentDraftCompiler:
         if spec.tool_exposure_mode == "on_demand" and "tool_search" not in required_capabilities:
             required_capabilities.append("tool_search")
         tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
-        tools.extend(
-            {"python": f"bundle:tools/{tool.name}.py"}
-            for tool in spec.python_tools
-        )
+        tools.extend({"python": f"bundle:tools/{tool.name}.py"} for tool in spec.python_tools)
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
         manifest = AgentManifest.model_validate(
             {
@@ -163,8 +160,7 @@ class AgentDraftCompiler:
         issues = list(self._catalog_issues(draft))
         report: AgentPackageReport | None = None
         if not any(
-            issue.severity is ValidationSeverity.ERROR
-            and issue.stage is ValidationStage.PUBLISH
+            issue.severity is ValidationSeverity.ERROR and issue.stage is ValidationStage.PUBLISH
             for issue in issues
         ):
             with TemporaryDirectory(prefix="harness-agent-studio-check-") as directory:
@@ -195,8 +191,7 @@ class AgentDraftCompiler:
                             )
         issues.extend(self._deployment_warnings(draft))
         publish_ready = not any(
-            issue.severity is ValidationSeverity.ERROR
-            and issue.stage is ValidationStage.PUBLISH
+            issue.severity is ValidationSeverity.ERROR and issue.stage is ValidationStage.PUBLISH
             for issue in issues
         )
         return DraftValidationResult(
@@ -255,11 +250,15 @@ class AgentDraftCompiler:
 
         if "Bash" in spec.builtin_tools or spec.python_tools:
             risk = CapabilityRisk.HIGH
-            approval = (
-                "自定义算子在隔离 Sandbox 执行；高风险系统动作仍由策略拦截"
-                if spec.python_tools
-                else "工作区文件写入自动允许；Bash 默认进入人工审批"
-            )
+            if spec.python_tools:
+                approval = (
+                    "自定义算子在隔离 Sandbox 执行；高风险、越界或不确定动作由策略拒绝或请求确认"
+                )
+            else:
+                approval = (
+                    "隔离 Sandbox 内常规 Bash 自动允许；"
+                    "高风险、越界或不确定动作由策略拒绝或请求确认"
+                )
         elif any(tool in spec.builtin_tools for tool in ("Write", "Edit", "Task")):
             risk = CapabilityRisk.MEDIUM
             approval = "工作区文件写入自动允许；委派受权限上限约束"
@@ -590,9 +589,7 @@ class AgentDraftCompiler:
             reference = f"bundle:tools/{tool.name}.py"
             entries.append(
                 ToolDirectoryEntry(
-                    name=(
-                        f"mcp__harness-python-{draft.spec.name}__{tool.name}"
-                    ),
+                    name=(f"mcp__harness-python-{draft.spec.name}__{tool.name}"),
                     source="python",
                     logicalReference=reference,
                     description=tool.description,
@@ -630,9 +627,7 @@ class AgentDraftCompiler:
                 if file.content is not None:
                     target.write_text(file.content, encoding="utf-8")
                 else:
-                    target.write_bytes(
-                        base64.b64decode(file.content_base64 or "", validate=True)
-                    )
+                    target.write_bytes(base64.b64decode(file.content_base64 or "", validate=True))
 
         tools_root = root / "tools"
         for tool in spec.python_tools:

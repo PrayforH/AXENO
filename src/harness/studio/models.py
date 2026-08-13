@@ -326,6 +326,7 @@ class ImportedAgentBundle(StudioModel):
 class AgentDraftSummary(StudioModel):
     draft_id: str = Field(alias="draftId")
     agent_id: str | None = Field(default=None, alias="agentId")
+    space_id: str | None = Field(default=None, alias="spaceId")
     name: str
     display_name: str = Field(alias="displayName")
     domain: str
@@ -340,6 +341,7 @@ class AgentDraftSummary(StudioModel):
         return cls(
             draftId=draft.draft_id,
             agentId=draft.agent_id,
+            spaceId=draft.space_id,
             name=draft.spec.name,
             displayName=draft.spec.display_name,
             domain=draft.spec.domain,
@@ -420,6 +422,35 @@ class BuiltinToolCapability(StudioModel):
 
 
 _MCP_IDENTIFIER_PATTERN = r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$"
+_MCP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+_SENSITIVE_MCP_HEADERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "proxy-authorization",
+        "set-cookie",
+        "x-api-key",
+        "api-key",
+        "apikey",
+    }
+)
+
+
+def _validate_public_mcp_headers(headers: dict[str, str]) -> None:
+    if len(headers) > 20:
+        raise ValueError("MCP custom headers cannot exceed 20 entries")
+    normalized: set[str] = set()
+    for name, value in headers.items():
+        lowered = name.lower()
+        if not name or len(name) > 128 or not _MCP_HEADER_NAME_PATTERN.fullmatch(name):
+            raise ValueError("MCP custom header name is invalid")
+        if lowered in normalized:
+            raise ValueError("duplicate MCP custom header")
+        if lowered in _SENSITIVE_MCP_HEADERS:
+            raise ValueError("MCP secrets must use managed authentication, not custom headers")
+        if len(value) > 1024 or "\n" in value or "\r" in value:
+            raise ValueError("MCP custom header value is invalid")
+        normalized.add(lowered)
 
 
 class McpCapability(StudioModel):
@@ -439,6 +470,7 @@ class McpCapability(StudioModel):
     description: str
     endpoint_url: str | None = Field(default=None, alias="endpointUrl", max_length=2048)
     transport: Literal["http", "sse"] = "http"
+    custom_headers: dict[str, str] = Field(default_factory=dict, alias="customHeaders")
     tools: tuple[str, ...]
     risk: CapabilityRisk
     network_access: NetworkAccess = Field(alias="networkAccess")
@@ -467,6 +499,7 @@ class McpCapability(StudioModel):
 
     @model_validator(mode="after")
     def valid_endpoint_and_auth(self) -> McpCapability:
+        _validate_public_mcp_headers(self.custom_headers)
         if self.endpoint_url is not None:
             parsed = urlsplit(self.endpoint_url)
             if (
@@ -482,6 +515,12 @@ class McpCapability(StudioModel):
                 )
         if self.auth_mode in {"header", "query"} and not self.auth_name:
             raise ValueError("MCP header/query authentication requires authName")
+        if (
+            self.auth_mode == "header"
+            and self.auth_name
+            and self.auth_name.lower() in {name.lower() for name in self.custom_headers}
+        ):
+            raise ValueError("MCP authentication header duplicates a custom header")
         if self.auth_mode != "none" and self.credential_reference is None:
             raise ValueError("authenticated MCP requires credentialReference")
         if len(self.tools) != len(set(self.tools)):
@@ -498,6 +537,7 @@ class McpDiscoveryRequest(StudioModel):
     server_name: str = Field(alias="serverName", pattern=_MCP_IDENTIFIER_PATTERN)
     endpoint_url: str = Field(alias="endpointUrl", min_length=1, max_length=2048)
     network_access: Literal["internal", "external"] = Field(alias="networkAccess")
+    custom_headers: dict[str, str] = Field(default_factory=dict, alias="customHeaders")
     auth_mode: Literal["none", "bearer", "header", "query"] = Field(
         default="none",
         alias="authMode",
@@ -514,6 +554,17 @@ class McpDiscoveryRequest(StudioModel):
         min_length=1,
         max_length=16_384,
     )
+
+    @model_validator(mode="after")
+    def valid_custom_headers(self) -> McpDiscoveryRequest:
+        _validate_public_mcp_headers(self.custom_headers)
+        if (
+            self.auth_mode == "header"
+            and self.auth_name
+            and self.auth_name.lower() in {name.lower() for name in self.custom_headers}
+        ):
+            raise ValueError("MCP authentication header duplicates a custom header")
+        return self
 
 
 class McpDiscoveredTool(StudioModel):

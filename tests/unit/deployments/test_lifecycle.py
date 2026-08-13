@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from harness.api.dependencies import ApiContainer, build_memory_container
+from harness.config import Settings
 from harness.core.errors import ConflictError
 from harness.deployments.models import (
     CredentialScope,
@@ -20,6 +21,7 @@ from harness.deployments.models import (
 from harness.knowledge.models import (
     CreateKnowledgeBaseRequest,
     CreateKnowledgeSourceRequest,
+    FileKnowledgeConfig,
     ReplaceKnowledgeSourceRequest,
 )
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
@@ -264,7 +266,7 @@ async def test_environment_policy_denies_agent_resources_and_workload_scope() ->
         EnvironmentName.PRODUCTION,
     )
     denied_route_policy = current.resource_policy.model_copy(
-        update={"allowed_model_routes": ("anthropic-official",)}
+        update={"allowed_model_routes": ("glm-5-2",)}
     )
     denied = await container.deployments.replace_environment_policy(
         tenant_id=TENANT,
@@ -438,16 +440,18 @@ async def test_environment_allows_only_registered_knowledge_and_sessions_pin_sna
             displayName=current.display_name,
             description=current.description,
             acl=current.acl,
-            config={
-                "type": "file",
-                "documents": [
-                    {
-                        "documentId": "leave",
-                        "title": "Leave",
-                        "content": "Policy revision two.",
-                    }
-                ],
-            },
+            config=FileKnowledgeConfig.model_validate(
+                {
+                    "type": "file",
+                    "documents": [
+                        {
+                            "documentId": "leave",
+                            "title": "Leave",
+                            "content": "Policy revision two.",
+                        }
+                    ],
+                }
+            ),
         ),
     )
     await container.knowledge.sync_source(TENANT, USER, "handbook")
@@ -636,7 +640,7 @@ async def test_deployment_idempotency_and_secret_free_config_contract() -> None:
 
 @pytest.mark.asyncio
 async def test_deployment_promotion_quota_rejects_before_snapshot_is_created() -> None:
-    container = build_memory_container()
+    container = build_memory_container(settings=Settings(quota_enforcement_enabled=True))
     draft, first_version, second_version = await published_versions(
         container, "quota-deployment-agent"
     )

@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 from datetime import UTC, datetime
 
 import pytest
@@ -18,6 +20,7 @@ from harness.sharing.service import TeamSpaceService
 from harness.sharing.workspace_repositories import InMemoryWorkspaceAgentRepository
 from harness.studio.models import (
     AgentDraftSpec,
+    AgentTemplate,
     DraftModelSelection,
     DraftSkill,
 )
@@ -51,12 +54,10 @@ def service() -> tuple[TeamSpaceService, InMemoryAgentRegistry, InMemoryWorkspac
 
 @pytest.mark.asyncio
 async def test_sharing_creates_workspace_agent_with_release_and_current_version() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER)
     shared_agent, release = await team.share_agent(
         "tenant-a",
         "alice",
@@ -91,10 +92,11 @@ async def test_sharing_creates_workspace_agent_with_release_and_current_version(
 
     # The catalog shows one entry per workspace Agent with its current Release.
     accessible = await team.list_accessible_agents("tenant-a", "bob")
-    assert [(item[0].space_id, item[2].agent_id, item[3].version) for item in accessible] == [
-        ("space-one", shared_agent.agent_id, "1.1.0")
-    ]
-    assert accessible[0][4].manifest_hash == "hash-alice-1.1.0"
+    assert [
+        (item.space.space_id, item.agent.agent_id, item.release.version) for item in accessible
+    ] == [("space-one", shared_agent.agent_id, "1.1.0")]
+    assert accessible[0].version.manifest_hash == "hash-alice-1.1.0"
+    assert accessible[0].can_chat is False
 
     # Runtime access gate resolves coordinates through Releases.
     release_row = await team.require_agent_access(
@@ -109,15 +111,11 @@ async def test_promote_switches_current_version_without_changing_identity() -> N
     await registry.add(agent("alice", version="1.0.0"))
     await registry.add(agent("alice", version="1.1.0"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR)
     shared_agent, _ = await team.share_agent(
         "tenant-a", "alice", space.space_id, "alice", "research-agent", "1.0.0"
     )
-    await team.share_agent(
-        "tenant-a", "alice", space.space_id, "alice", "research-agent", "1.1.0"
-    )
+    await team.share_agent("tenant-a", "alice", space.space_id, "alice", "research-agent", "1.1.0")
     # The most recently shared Release becomes the current version.
     stored = await workspace.get_agent("tenant-a", shared_agent.agent_id)
     assert stored.current_version == "1.1.0"
@@ -127,12 +125,42 @@ async def test_promote_switches_current_version_without_changing_identity() -> N
         await team.promote_release(
             "tenant-a", "bob", space.space_id, shared_agent.agent_id, "1.0.0"
         )
-    await team.promote_release(
-        "tenant-a", "alice", space.space_id, shared_agent.agent_id, "1.0.0"
-    )
+    await team.promote_release("tenant-a", "alice", space.space_id, shared_agent.agent_id, "1.0.0")
     stored = await workspace.get_agent("tenant-a", shared_agent.agent_id)
     assert stored.agent_id == shared_agent.agent_id
     assert stored.current_version == "1.0.0"
+
+
+@pytest.mark.asyncio
+async def test_personal_release_history_and_promote_are_owner_scoped() -> None:
+    team, registry, workspace = service()
+    personal = WorkspaceAgent(
+        tenantId="tenant-a",
+        agentId="personal-agent",
+        scope=AgentScope.PERSONAL,
+        ownerUserId="alice",
+        name="research-agent",
+        currentVersion="1.1.0",
+        createdBy="alice",
+        createdAt=datetime(2026, 8, 3, tzinfo=UTC),
+        updatedAt=datetime(2026, 8, 3, tzinfo=UTC),
+    )
+    await workspace.add_agent(personal)
+    await registry.add(agent("alice", version="1.0.0"))
+    await registry.add(agent("alice", version="1.1.0"))
+
+    stored, releases = await team.list_personal_releases("tenant-a", "alice", personal.agent_id)
+    assert stored.current_version == "1.1.0"
+    assert [item.version for item in releases] == ["1.0.0", "1.1.0"]
+
+    promoted = await team.promote_personal_release("tenant-a", "alice", personal.agent_id, "1.0.0")
+    assert promoted.agent_id == personal.agent_id
+    assert promoted.current_version == "1.0.0"
+
+    with pytest.raises(NotFoundError):
+        await team.list_personal_releases("tenant-a", "bob", personal.agent_id)
+    with pytest.raises(NotFoundError):
+        await team.promote_personal_release("tenant-a", "alice", personal.agent_id, "9.9.9")
 
 
 @pytest.mark.asyncio
@@ -143,25 +171,21 @@ async def test_unsharing_last_release_clears_current_version() -> None:
     shared_agent, _ = await team.share_agent(
         "tenant-a", "alice", space.space_id, "alice", "research-agent", "1.0.0"
     )
-    await team.unshare_agent(
-        "tenant-a", "alice", space.space_id, shared_agent.agent_id, "1.0.0"
-    )
+    await team.unshare_agent("tenant-a", "alice", space.space_id, shared_agent.agent_id, "1.0.0")
     stored = await workspace.get_agent("tenant-a", shared_agent.agent_id)
     assert stored.current_version is None
-    assert await team.list_releases(
-        "tenant-a", "alice", space.space_id, shared_agent.agent_id
-    ) == []
+    assert (
+        await team.list_releases("tenant-a", "alice", space.space_id, shared_agent.agent_id) == []
+    )
 
 
 @pytest.mark.asyncio
 async def test_viewer_run_policy_and_membership_revocation_fail_closed() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER
-    )
-    shared_agent, _ = await team.share_agent(
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER)
+    _shared_agent, _ = await team.share_agent(
         "tenant-a",
         "alice",
         space.space_id,
@@ -184,12 +208,10 @@ async def test_viewer_run_policy_and_membership_revocation_fail_closed() -> None
 
 @pytest.mark.asyncio
 async def test_acl_can_grant_chat_to_a_viewer() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER)
     shared_agent, _ = await team.share_agent(
         "tenant-a",
         "alice",
@@ -251,7 +273,7 @@ async def test_acl_can_grant_chat_to_a_viewer() -> None:
 
 @pytest.mark.asyncio
 async def test_acl_grants_must_reference_space_members() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
     shared_agent, _ = await team.share_agent(
@@ -271,38 +293,30 @@ async def test_acl_grants_must_reference_space_members() -> None:
 
 @pytest.mark.asyncio
 async def test_fork_copies_current_release_to_personal_scope() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice", version="1.0.0"))
     await registry.add(agent("alice", version="1.1.0"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR)
     shared_agent, _ = await team.share_agent(
         "tenant-a", "alice", space.space_id, "alice", "research-agent", "1.0.0"
     )
-    await team.share_agent(
-        "tenant-a", "alice", space.space_id, "alice", "research-agent", "1.1.0"
-    )
+    await team.share_agent("tenant-a", "alice", space.space_id, "alice", "research-agent", "1.1.0")
     # Fork resolves the current Release (1.1.0) of the workspace Agent.
     fork = await team.fork_agent("tenant-a", "bob", space.space_id, shared_agent.agent_id)
     assert fork.owner_user_id == "bob"
     assert fork.version == "1.1.0"
     assert fork.manifest_hash == "hash-alice-1.1.0"
-    original = await registry.get(
-        "tenant-a", "alice", "research-agent", "1.1.0"
-    )
+    original = await registry.get("tenant-a", "alice", "research-agent", "1.1.0")
     assert original.owner_user_id == "alice"
 
 
 @pytest.mark.asyncio
 async def test_contributor_cannot_share_another_users_agent() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.CONTRIBUTOR)
     with pytest.raises(PermissionDeniedError):
         await team.share_agent(
             "tenant-a", "bob", space.space_id, "alice", "research-agent", "1.0.0"
@@ -311,15 +325,11 @@ async def test_contributor_cannot_share_another_users_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_user_group_grants_batch_agent_access() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER
-    )
-    await team.put_member(
-        "tenant-a", "alice", space.space_id, "carol", SpaceRole.VIEWER
-    )
+    await team.put_member("tenant-a", "alice", space.space_id, "bob", SpaceRole.VIEWER)
+    await team.put_member("tenant-a", "alice", space.space_id, "carol", SpaceRole.VIEWER)
     shared_agent, _ = await team.share_agent(
         "tenant-a",
         "alice",
@@ -367,7 +377,7 @@ async def test_user_group_grants_batch_agent_access() -> None:
 
 @pytest.mark.asyncio
 async def test_group_acl_grant_requires_existing_group() -> None:
-    team, registry, workspace = service()
+    team, registry, _workspace = service()
     await registry.add(agent("alice"))
     space = await team.create("tenant-a", "alice", "调查组")
     shared_agent, _ = await team.share_agent(
@@ -423,7 +433,7 @@ async def test_transfer_personal_agent_rekeys_versions_and_preserves_identity() 
             displayName="Research Agent",
             description="research",
             domain="research",
-            template="analyst",
+            template=AgentTemplate.ANALYST,
             model=DraftModelSelection(routeId="route-1", model="model-1"),
             systemPrompt="## Mission\npurpose",
             skills=(DraftSkill(name="skill-1", description="d", instructions="i"),),
@@ -444,9 +454,7 @@ async def test_transfer_personal_agent_rekeys_versions_and_preserves_identity() 
     await drafts.add(draft)
     personal_id = await _personal_agent(workspace, "alice")
 
-    transferred = await team.transfer_agent(
-        "tenant-a", "alice", personal_id, to_user_id="bob"
-    )
+    transferred = await team.transfer_agent("tenant-a", "alice", personal_id, to_user_id="bob")
     assert transferred.owner_user_id == "bob"
     assert transferred.agent_id == personal_id
 
@@ -469,14 +477,10 @@ async def test_transfer_conflicts_and_permissions_fail_closed() -> None:
     await _personal_agent(workspace, "bob")
 
     with pytest.raises(PermissionDeniedError):
-        await team.transfer_agent(
-            "tenant-a", "bob", alice_agent_id, to_user_id="bob"
-        )
+        await team.transfer_agent("tenant-a", "bob", alice_agent_id, to_user_id="bob")
     with pytest.raises(ConflictError):
         # bob already owns research-agent@1.0.0 -> version coordinate conflict.
-        await team.transfer_agent(
-            "tenant-a", "alice", alice_agent_id, to_user_id="bob"
-        )
+        await team.transfer_agent("tenant-a", "alice", alice_agent_id, to_user_id="bob")
     with pytest.raises(ConflictError):
         await team.transfer_agent("tenant-a", "alice", alice_agent_id)
 

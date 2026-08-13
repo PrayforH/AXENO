@@ -44,6 +44,14 @@ describe("task model selection", () => {
           capabilities: ["streaming", "tool_use"],
           enabled: true,
         },
+        {
+          routeId: "anthropic-official",
+          label: "Anthropic official",
+          provider: "anthropic",
+          models: ["claude-sonnet-4-6"],
+          capabilities: ["streaming", "tool_use", "tool_search"],
+          enabled: true,
+        },
       ],
     }), { status: 200 })));
 

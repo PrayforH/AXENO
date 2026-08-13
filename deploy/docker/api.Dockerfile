@@ -1,5 +1,7 @@
-ARG KUBECTL_IMAGE=registry.k8s.io/kubectl:v1.33.1
-ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm
+# Both upstreams are immutable. The Chainguard kubectl image is also verified
+# with Cosign in CI before Docker is allowed to copy its binary into our image.
+ARG KUBECTL_IMAGE=cgr.dev/chainguard/kubectl@sha256:1e1aa9dedf0d9008e5a3710b23f2072bc2ab83117146d503c689b5d2592add3d
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:4766d8b510c428e595d74b9cc5bbb2fae8e26316fffb4adc89908d79aacd58a2
 FROM ${KUBECTL_IMAGE} AS kubectl
 
 FROM ${PYTHON_IMAGE} AS builder
@@ -34,23 +36,26 @@ COPY scripts/seed_docker.py ./scripts/seed_docker.py
 RUN .venv/bin/pip install --no-cache-dir \
     --index-url "${UV_DEFAULT_INDEX}" \
     --no-deps \
+    --no-compile \
+    --prefix /app/project \
     .
 
 FROM ${PYTHON_IMAGE} AS runtime
 
-ENV PATH="/app/.venv/bin:$PATH" \
+ENV PATH="/app/project/bin:/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/project/lib/python3.12/site-packages" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --system --gid 10001 harness \
+# The pinned Python image already carries CA certificates, and the healthcheck
+# uses urllib. Keeping runtime setup package-manager-free makes rebuilds
+# deterministic even when a Debian mirror is slow or unavailable.
+RUN groupadd --system --gid 10001 harness \
     && useradd --system --uid 10001 --gid harness --home-dir /app harness
 
 WORKDIR /app
 COPY --from=builder --chown=harness:harness /app/.venv /app/.venv
-COPY --from=builder --chown=harness:harness /app/src /app/src
+COPY --from=builder --chown=harness:harness /app/project /app/project
 COPY --from=builder --chown=harness:harness /app/migrations /app/migrations
 COPY --from=builder --chown=harness:harness /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=harness:harness /app/agents /app/agents

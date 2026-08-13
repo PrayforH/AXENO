@@ -24,18 +24,19 @@ class AgentDraftRepository(Protocol):
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None: ...
 
-    async def get_by_agent(
-        self, tenant_id: str, agent_id: str
-    ) -> AgentDraft | None:
+    async def get_by_agent(self, tenant_id: str, agent_id: str) -> AgentDraft | None:
         """The shared draft of a workspace Agent, if one exists."""
+        ...
 
     async def get_shared(self, tenant_id: str, draft_id: str) -> AgentDraft | None:
         """A space-bound draft resolved across creators by draft_id."""
+        ...
 
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
     ) -> int:
         """Re-key drafts of one personal Agent to a new owner."""
+        ...
 
 
 class InMemoryAgentDraftRepository:
@@ -69,9 +70,7 @@ class InMemoryAgentDraftRepository:
             reverse=True,
         )
 
-    async def list_summaries(
-        self, tenant_id: str, owner_user_id: str
-    ) -> list[AgentDraftSummary]:
+    async def list_summaries(self, tenant_id: str, owner_user_id: str) -> list[AgentDraftSummary]:
         return [
             AgentDraftSummary.from_draft(draft)
             for draft in await self.list_for_user(tenant_id, owner_user_id)
@@ -103,9 +102,7 @@ class InMemoryAgentDraftRepository:
                 raise ConflictError("Agent draft replacement must increment revision once")
             self._items[key] = draft
 
-    async def get_by_agent(
-        self, tenant_id: str, agent_id: str
-    ) -> AgentDraft | None:
+    async def get_by_agent(self, tenant_id: str, agent_id: str) -> AgentDraft | None:
         for draft in self._items.values():
             if draft.tenant_id == tenant_id and draft.agent_id == agent_id:
                 return draft
@@ -129,8 +126,7 @@ class InMemoryAgentDraftRepository:
         moved_keys = [
             key
             for key in self._items
-            if key[0] == tenant_id and key[1] == from_user_id
-            and self._items[key].spec.name == name
+            if key[0] == tenant_id and key[1] == from_user_id and self._items[key].spec.name == name
         ]
         async with self._lock:
             for key in moved_keys:

@@ -4,6 +4,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, model_validator
 
+from harness.core.agent_dependencies import dependencies_from_snapshot
 from harness.core.models import AgentVersion, ApprovalStatus
 
 
@@ -19,6 +20,8 @@ class AgentCatalogItem(BaseModel):
     model_route: str | None = None
     model: str | None = None
     model_capabilities: tuple[str, ...] = ()
+    mcp_references: tuple[str, ...] = ()
+    knowledge_references: tuple[str, ...] = ()
     owner_user_id: str
     scope: Literal["personal", "team"] = "personal"
     space_id: str | None = None
@@ -65,10 +68,11 @@ class AgentCatalogItem(BaseModel):
         model_values = cast(dict[str, Any], model_spec) if isinstance(model_spec, dict) else {}
         raw_capabilities = model_values.get("requiredCapabilities")
         capabilities = (
-            tuple(str(value) for value in raw_capabilities)
+            tuple(str(value) for value in cast(list[object], raw_capabilities))
             if isinstance(raw_capabilities, list)
             else ()
         )
+        dependencies = dependencies_from_snapshot(version.snapshot)
         return cls(
             name=version.name,
             version=version.version,
@@ -77,6 +81,8 @@ class AgentCatalogItem(BaseModel):
             model_route=(str(model_values["route"]) if model_values.get("route") else None),
             model=str(model_values["model"]) if model_values.get("model") else None,
             model_capabilities=capabilities,
+            mcp_references=dependencies.mcp_references,
+            knowledge_references=dependencies.knowledge_references,
             owner_user_id=version.owner_user_id,
             scope=scope,
             space_id=space_id,

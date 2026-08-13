@@ -1,6 +1,8 @@
 """Team-space RBAC, workspace Agent identities, Releases and ACLs."""
 
+import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -66,6 +68,23 @@ _ROLE_PERMISSIONS: dict[SpaceRole, frozenset[AgentPermission]] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class AccessibleAgentCatalogEntry:
+    """Resolved workspace Agent entry for the task catalog.
+
+    ``can_chat`` includes both role/ACL grants and the Release-level
+    ``runnable_by_viewer`` switch. Keeping this decision in the sharing
+    service avoids repeating authorization reads in the API layer.
+    """
+
+    space: TeamSpace
+    member: TeamSpaceMember
+    agent: WorkspaceAgent
+    release: AgentRelease
+    version: AgentVersion
+    can_chat: bool
+
+
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
@@ -89,6 +108,57 @@ class TeamSpaceService:
         self._audit = audit
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._ids: IdGenerator = id_generator or _id
+
+    async def list_personal_releases(
+        self, tenant_id: str, owner_user_id: str, agent_id: str
+    ) -> tuple[WorkspaceAgent, list[AgentVersion]]:
+        """Return one owner's immutable personal release history."""
+
+        agent = await self._workspace_agents.get_agent(tenant_id, agent_id)
+        if agent.scope is not AgentScope.PERSONAL or agent.owner_user_id != owner_user_id:
+            # Do not disclose another user's stable Agent identity.
+            raise NotFoundError(f"personal Agent not found: {agent_id}")
+        releases = [
+            version
+            for version in await self._agents.list_for_user(tenant_id, owner_user_id)
+            if version.status is AgentVersionStatus.PUBLISHED
+            and (
+                version.agent_id == agent_id
+                or (version.agent_id is None and version.name == agent.name)
+            )
+        ]
+        releases.sort(key=lambda item: item.created_at, reverse=True)
+        return agent, releases
+
+    async def promote_personal_release(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        version: str,
+    ) -> WorkspaceAgent:
+        """Switch a personal Agent's current pointer without mutating a release."""
+
+        agent, releases = await self.list_personal_releases(tenant_id, owner_user_id, agent_id)
+        if not any(item.version == version for item in releases):
+            raise NotFoundError(f"personal Agent release not found: {agent_id}@{version}")
+        if agent.current_version == version:
+            return agent
+        updated = agent.model_copy(update={"current_version": version, "updated_at": self._clock()})
+        await self._workspace_agents.update_agent(updated)
+        await self._record_audit(
+            tenant_id=tenant_id,
+            user_id=owner_user_id,
+            action="agent.promote",
+            resource_type="personal_agent",
+            resource_id=agent_id,
+            details={
+                "name": agent.name,
+                "version": version,
+                "previous_version": agent.current_version,
+            },
+        )
+        return updated
 
     async def _record_audit(
         self,
@@ -233,9 +303,7 @@ class TeamSpaceService:
         if agent_version.status is not AgentVersionStatus.PUBLISHED:
             raise ConflictError("only published Agent versions can be shared")
         now = self._clock()
-        agent = await self._workspace_agents.get_workspace_agent(
-            tenant_id, space_id, name
-        )
+        agent = await self._workspace_agents.get_workspace_agent(tenant_id, space_id, name)
         if agent is None:
             agent = WorkspaceAgent(
                 tenantId=tenant_id,
@@ -269,8 +337,7 @@ class TeamSpaceService:
             )
             if existing.runnable_by_viewer != runnable_by_viewer:
                 raise ConflictError(
-                    f"agent release already shared with different settings: "
-                    f"{name}@{version}"
+                    f"agent release already shared with different settings: {name}@{version}"
                 ) from None
             return agent, existing
         if agent.current_version is None:
@@ -314,9 +381,7 @@ class TeamSpaceService:
         if (
             member.role is SpaceRole.CONTRIBUTOR
             and agent.created_by != actor_id
-            and not await self._effective(
-                tenant_id, member, agent, AgentPermission.MANAGE
-            )
+            and not await self._effective(tenant_id, member, agent, AgentPermission.MANAGE)
         ):
             raise PermissionDeniedError(
                 "contributors can only unshare Agents they created or manage"
@@ -326,9 +391,7 @@ class TeamSpaceService:
         )
         if not deleted:
             raise NotFoundError(f"agent release not found: {agent_id}@{version}")
-        remaining = await self._workspace_agents.list_releases(
-            tenant_id, space_id, agent_id
-        )
+        remaining = await self._workspace_agents.list_releases(tenant_id, space_id, agent_id)
         if not remaining:
             await self._workspace_agents.update_agent(
                 agent.model_copy(update={"current_version": None, "updated_at": self._clock()})
@@ -352,13 +415,9 @@ class TeamSpaceService:
             raise NotFoundError(f"workspace agent not found: {agent_id}")
         if not await self._effective(tenant_id, member, agent, AgentPermission.PUBLISH):
             raise PermissionDeniedError("space role does not allow publishing this Agent")
-        release = await self._workspace_agents.get_release(
-            tenant_id, space_id, agent_id, version
-        )
+        release = await self._workspace_agents.get_release(tenant_id, space_id, agent_id, version)
         if release.source_owner_user_id != actor_id and member.role is SpaceRole.CONTRIBUTOR:
-            raise PermissionDeniedError(
-                "contributors can only promote their own Agent releases"
-            )
+            raise PermissionDeniedError("contributors can only promote their own Agent releases")
         promoted = await self._promote_locked(tenant_id, agent, version, actor_id)
         await self._record_audit(
             tenant_id=tenant_id,
@@ -454,9 +513,7 @@ class TeamSpaceService:
         if agent.space_id != space_id:
             raise NotFoundError(f"workspace agent not found: {agent_id}")
         result: list[tuple[AgentRelease, AgentVersion]] = []
-        for release in await self._workspace_agents.list_releases(
-            tenant_id, space_id, agent_id
-        ):
+        for release in await self._workspace_agents.list_releases(tenant_id, space_id, agent_id):
             try:
                 version = await self._agents.get(
                     tenant_id,
@@ -472,32 +529,135 @@ class TeamSpaceService:
 
     async def list_accessible_agents(
         self, tenant_id: str, user_id: str
-    ) -> list[tuple[TeamSpace, TeamSpaceMember, WorkspaceAgent, AgentRelease, AgentVersion]]:
-        """One catalog entry per workspace Agent using its current Release."""
-        result: list[
-            tuple[TeamSpace, TeamSpaceMember, WorkspaceAgent, AgentRelease, AgentVersion]
-        ] = []
-        for space in await self.repository.list_spaces_for_user(tenant_id, user_id):
-            member = await self._require_member(tenant_id, space.space_id, user_id)
-            for agent in await self.list_agents(tenant_id, user_id, space.space_id):
-                if agent.current_version is None:
-                    continue
-                release = await self._workspace_agents.get_release(
-                    tenant_id, space.space_id, agent.agent_id, agent.current_version
+    ) -> list[AccessibleAgentCatalogEntry]:
+        """Resolve the current task-catalog entry for every accessible Agent.
+
+        The catalog is a read-heavy navigation dependency, so independent
+        space and Agent lookups run concurrently. ``asyncio.gather`` preserves
+        repository ordering while the database pool bounds actual I/O
+        concurrency. Authorization remains authoritative on every request; no
+        permission result is cached.
+        """
+        spaces = await self.repository.list_spaces_for_user(tenant_id, user_id)
+
+        async def load_space(
+            space: TeamSpace,
+        ) -> tuple[TeamSpace, TeamSpaceMember, list[WorkspaceAgent]]:
+            member, agents = await asyncio.gather(
+                self._require_member(tenant_id, space.space_id, user_id),
+                self._workspace_agents.list_agents_for_space(tenant_id, space.space_id),
+            )
+            return (
+                space,
+                member,
+                [agent for agent in agents if agent.status is WorkspaceAgentStatus.ACTIVE],
+            )
+
+        space_rows = await asyncio.gather(*(load_space(space) for space in spaces))
+        candidates = [
+            (space, member, agent)
+            for space, member, agents in space_rows
+            for agent in agents
+            if agent.current_version is not None
+        ]
+
+        async def resolve_current(
+            space: TeamSpace,
+            member: TeamSpaceMember,
+            agent: WorkspaceAgent,
+        ) -> (
+            tuple[
+                TeamSpace,
+                TeamSpaceMember,
+                WorkspaceAgent,
+                AgentRelease,
+                AgentVersion,
+            ]
+            | None
+        ):
+            release = await self._workspace_agents.get_release(
+                tenant_id,
+                space.space_id,
+                agent.agent_id,
+                agent.current_version or "",
+            )
+            try:
+                version = await self._agents.get(
+                    tenant_id,
+                    release.source_owner_user_id,
+                    release.source_name,
+                    release.version,
                 )
-                try:
-                    version = await self._agents.get(
-                        tenant_id,
-                        release.source_owner_user_id,
-                        release.source_name,
-                        release.version,
-                    )
-                except NotFoundError:
+            except NotFoundError:
+                return None
+            if version.status is not AgentVersionStatus.PUBLISHED:
+                return None
+            return space, member, agent, release, version
+
+        resolved = [
+            row
+            for row in await asyncio.gather(
+                *(resolve_current(space, member, agent) for space, member, agent in candidates)
+            )
+            if row is not None
+        ]
+        restricted_viewers = [
+            row
+            for row in resolved
+            if row[1].role is SpaceRole.VIEWER and not row[3].runnable_by_viewer
+        ]
+        group_ids: set[str] = (
+            set(await self._workspace_agents.list_groups_for_user(tenant_id, user_id))
+            if restricted_viewers
+            else set()
+        )
+
+        async def viewer_has_chat_acl(
+            row: tuple[
+                TeamSpace,
+                TeamSpaceMember,
+                WorkspaceAgent,
+                AgentRelease,
+                AgentVersion,
+            ],
+        ) -> bool:
+            _space, member, agent, _release, _version = row
+            for acl in await self._workspace_agents.list_acls(tenant_id, agent.agent_id):
+                if acl.permission is not AgentPermission.CHAT:
                     continue
-                if version.status is not AgentVersionStatus.PUBLISHED:
-                    continue
-                result.append((space, member, agent, release, version))
-        return result
+                if acl.grantee_type is GranteeType.USER and acl.grantee_id == user_id:
+                    return True
+                if (
+                    acl.grantee_type is GranteeType.SPACE_ROLE
+                    and acl.grantee_id == member.role.value
+                ):
+                    return True
+                if acl.grantee_type is GranteeType.GROUP and acl.grantee_id in group_ids:
+                    return True
+            return False
+
+        restricted_access = await asyncio.gather(
+            *(viewer_has_chat_acl(row) for row in restricted_viewers)
+        )
+        viewer_acl_by_agent = {
+            row[2].agent_id: can_chat
+            for row, can_chat in zip(restricted_viewers, restricted_access, strict=True)
+        }
+        return [
+            AccessibleAgentCatalogEntry(
+                space=space,
+                member=member,
+                agent=agent,
+                release=release,
+                version=version,
+                can_chat=(
+                    AgentPermission.CHAT in _ROLE_PERMISSIONS[member.role]
+                    or release.runnable_by_viewer
+                    or viewer_acl_by_agent.get(agent.agent_id, False)
+                ),
+            )
+            for space, member, agent, release, version in resolved
+        ]
 
     async def get_release_version(
         self,
@@ -512,9 +672,7 @@ class TeamSpaceService:
         agent = await self._workspace_agents.get_agent(tenant_id, agent_id)
         if agent.space_id != space_id:
             raise NotFoundError(f"workspace agent not found: {agent_id}")
-        release = await self._workspace_agents.get_release(
-            tenant_id, space_id, agent_id, version
-        )
+        release = await self._workspace_agents.get_release(tenant_id, space_id, agent_id, version)
         version_row = await self._agents.get(
             tenant_id,
             release.source_owner_user_id,
@@ -584,9 +742,7 @@ class TeamSpaceService:
         if grantee_type is GranteeType.USER:
             grantee = await self.repository.get_member(tenant_id, space_id, grantee_id)
             if grantee is None:
-                raise NotFoundError(
-                    f"grantee is not a member of this space: {grantee_id}"
-                )
+                raise NotFoundError(f"grantee is not a member of this space: {grantee_id}")
         if grantee_type is GranteeType.GROUP:
             await self._workspace_agents.get_group(tenant_id, grantee_id)
         acl = AgentAcl(
@@ -639,9 +795,7 @@ class TeamSpaceService:
         if agent.space_id != space_id:
             raise NotFoundError(f"workspace agent not found: {agent_id}")
         baseline = _ROLE_PERMISSIONS[member.role]
-        explicit = await self._explicit_permissions(
-            tenant_id, member, agent_id
-        )
+        explicit = await self._explicit_permissions(tenant_id, member, agent_id)
         return frozenset(baseline.union(explicit))
 
     async def _effective(
@@ -655,9 +809,7 @@ class TeamSpaceService:
         baseline = _ROLE_PERMISSIONS[member.role]
         if permission in baseline:
             return True
-        return permission in await self._explicit_permissions(
-            tenant_id, member, agent.agent_id
-        )
+        return permission in await self._explicit_permissions(tenant_id, member, agent.agent_id)
 
     async def _explicit_permissions(
         self, tenant_id: str, member: TeamSpaceMember, agent_id: str
@@ -665,9 +817,7 @@ class TeamSpaceService:
         """ACL rows granted to this user directly, via their space role, or
         via tenant user groups."""
         explicit: set[AgentPermission] = set()
-        group_ids = await self._workspace_agents.list_groups_for_user(
-            tenant_id, member.user_id
-        )
+        group_ids = await self._workspace_agents.list_groups_for_user(tenant_id, member.user_id)
         for acl in await self._workspace_agents.list_acls(tenant_id, agent_id):
             if acl.grantee_type is GranteeType.USER and acl.grantee_id == member.user_id:
                 explicit.add(acl.permission)
@@ -745,9 +895,7 @@ class TeamSpaceService:
         self, tenant_id: str, actor_id: str, space_id: str, reference: str
     ) -> None:
         await self._require_role(tenant_id, space_id, actor_id, _MANAGE_ROLES)
-        if not await self.repository.delete_shared_knowledge(
-            tenant_id, space_id, reference
-        ):
+        if not await self.repository.delete_shared_knowledge(tenant_id, space_id, reference):
             raise NotFoundError(f"shared knowledge base not found: {reference}")
 
     async def has_knowledge_access(
@@ -791,9 +939,7 @@ class TeamSpaceService:
     async def list_groups(self, tenant_id: str) -> list[UserGroup]:
         return await self._workspace_agents.list_groups(tenant_id)
 
-    async def get_group(
-        self, tenant_id: str, group_id: str
-    ) -> tuple[UserGroup, list[GroupMember]]:
+    async def get_group(self, tenant_id: str, group_id: str) -> tuple[UserGroup, list[GroupMember]]:
         group = await self._workspace_agents.get_group(tenant_id, group_id)
         members = await self._workspace_agents.list_group_members(tenant_id, group_id)
         return group, members
@@ -802,9 +948,7 @@ class TeamSpaceService:
         if not await self._workspace_agents.delete_group(tenant_id, group_id):
             raise NotFoundError(f"user group not found: {group_id}")
 
-    async def add_group_member(
-        self, tenant_id: str, group_id: str, user_id: str
-    ) -> GroupMember:
+    async def add_group_member(self, tenant_id: str, group_id: str, user_id: str) -> GroupMember:
         await self._workspace_agents.get_group(tenant_id, group_id)
         member = GroupMember(
             tenantId=tenant_id,
@@ -819,12 +963,8 @@ class TeamSpaceService:
             return member
         return member
 
-    async def remove_group_member(
-        self, tenant_id: str, group_id: str, user_id: str
-    ) -> None:
-        if not await self._workspace_agents.delete_group_member(
-            tenant_id, group_id, user_id
-        ):
+    async def remove_group_member(self, tenant_id: str, group_id: str, user_id: str) -> None:
+        if not await self._workspace_agents.delete_group_member(tenant_id, group_id, user_id):
             raise NotFoundError(f"group member not found: {group_id}:{user_id}")
 
     # ------------------------------------------------------------------
@@ -863,9 +1003,7 @@ class TeamSpaceService:
                 tenant_id, to_user_id, agent.name
             )
             if existing is not None:
-                raise ConflictError(
-                    f"target user already owns an Agent named {agent.name}"
-                )
+                raise ConflictError(f"target user already owns an Agent named {agent.name}")
             moved_versions = await self._agents.move_owner(
                 tenant_id, agent.owner_user_id, to_user_id, agent.name
             )
@@ -887,9 +1025,7 @@ class TeamSpaceService:
                 tenant_id, to_space_id, agent.name
             )
             if existing is not None:
-                raise ConflictError(
-                    f"target space already owns an Agent named {agent.name}"
-                )
+                raise ConflictError(f"target space already owns an Agent named {agent.name}")
             moved_versions = 0
             moved_drafts = 0
             updated = agent.model_copy(
@@ -922,9 +1058,7 @@ class TeamSpaceService:
     # Guards
     # ------------------------------------------------------------------
 
-    async def _require_member(
-        self, tenant_id: str, space_id: str, user_id: str
-    ) -> TeamSpaceMember:
+    async def _require_member(self, tenant_id: str, space_id: str, user_id: str) -> TeamSpaceMember:
         member = await self.repository.get_member(tenant_id, space_id, user_id)
         if member is None:
             raise NotFoundError(f"team space not found: {space_id}")

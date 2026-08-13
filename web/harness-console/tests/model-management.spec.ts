@@ -11,6 +11,7 @@ const management = readFileSync(
 describe("model management settings", () => {
   it("shows the control plane only to workspace administrators", () => {
     expect(settings).toContain('membership.role === "owner" || membership.role === "admin"');
+    expect(settings).toContain('item.href !== "#models" || canManageModels');
     expect(settings).toContain("{canManageModels && (");
     expect(settings).toContain("<ModelManagement />");
   });

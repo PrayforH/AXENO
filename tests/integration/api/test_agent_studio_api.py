@@ -75,12 +75,7 @@ def draft_request(name: str = "policy-researcher") -> dict[str, str]:
 
 
 def tavily_resource() -> dict[str, Any]:
-    return cast(
-        dict[str, Any],
-        default_capability_catalog().mcp_servers[0].model_dump(
-            mode="json", by_alias=True
-        ),
-    )
+    return default_capability_catalog().mcp_servers[0].model_dump(mode="json", by_alias=True)
 
 
 async def drain_eval(container: ApiContainer, eval_run_id: str) -> None:
@@ -129,7 +124,9 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
     assert capabilities.status_code == 200
-    assert capabilities.json()["mcpServers"] == []
+    assert [
+        item["reference"] for item in capabilities.json()["mcpServers"]
+    ] == ["tavily-readonly"]
     assert created.status_code == 201
     assert created.json()["tenantId"] == "tenant-a"
     assert created.json()["createdBy"] == "builder-a"
@@ -197,6 +194,69 @@ async def test_studio_manages_mcp_credentials_without_returning_secret_values() 
     }
     assert secret not in configured.text
     assert secret not in listed.text
+
+
+@pytest.mark.asyncio
+async def test_user_can_permanently_delete_an_unreferenced_personal_mcp() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-delete-resource",
+        "X-User-ID": "builder-a",
+    }
+    resource = {
+        **tavily_resource(),
+        "reference": "company-knowledge",
+        "serverName": "company_knowledge",
+        "label": "企业知识库",
+        "category": "knowledge",
+        "authMode": "none",
+        "credentialReference": None,
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        initial = await client.get("/v1/studio/catalog", headers=headers)
+        created = await client.put(
+            "/v1/studio/catalog/mcp/company-knowledge",
+            headers=headers,
+            json={
+                "expectedRevision": initial.json()["revision"],
+                "resource": resource,
+                "allowedExecutionProfileIds": ["isolated-default"],
+            },
+        )
+        deleted = await client.delete(
+            "/v1/studio/catalog/mcp/company-knowledge/permanent",
+            headers=headers,
+            params={"expected_revision": created.json()["record"]["revision"]},
+        )
+
+    assert created.status_code == 200, created.text
+    assert deleted.status_code == 200, deleted.text
+    assert "company-knowledge" not in {
+        item["reference"]
+        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_tavily_has_the_same_edit_and_delete_controls_as_other_mcp() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-delete-tavily",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        initial = await client.get("/v1/studio/catalog", headers=headers)
+        deleted = await client.delete(
+            "/v1/studio/catalog/mcp/tavily-readonly/permanent",
+            headers=headers,
+            params={"expected_revision": initial.json()["revision"]},
+        )
+
+    assert deleted.status_code == 200, deleted.text
+    assert "tavily-readonly" not in {
+        item["reference"]
+        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+    }
 
 
 @pytest.mark.asyncio
@@ -367,8 +427,7 @@ async def test_studio_installs_large_skill_without_returning_every_file_content(
         )
         payload = installed.json()
         installed_skill = next(
-            skill for skill in payload["draft"]["spec"]["skills"]
-            if skill["name"] == "ppt-master"
+            skill for skill in payload["draft"]["spec"]["skills"] if skill["name"] == "ppt-master"
         )
         installed_skill["description"] = "Updated without resending hidden files."
         saved = await client.put(
@@ -423,6 +482,21 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
                 "allowedExecutionProfileIds": ["isolated-default"],
             },
         )
+        route = await client.put(
+            "/v1/studio/catalog/modelRoute/on-demand-test",
+            headers=headers,
+            json={
+                "expectedRevision": registered.json()["record"]["revision"],
+                "resource": {
+                    "routeId": "on-demand-test",
+                    "label": "On-demand test route",
+                    "provider": "test",
+                    "models": ["deepseek-v4-pro"],
+                    "capabilities": ["streaming", "tool_use", "tool_search"],
+                    "credentialReference": "NEW_API_KEY",
+                },
+            },
+        )
         created = await client.post(
             "/v1/studio/drafts",
             headers=headers,
@@ -431,8 +505,8 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
         spec = created.json()["spec"]
         spec["model"] = {
             **spec["model"],
-            "routeId": "anthropic-official",
-            "model": "claude-sonnet-4-6",
+            "routeId": "on-demand-test",
+            "model": "deepseek-v4-pro",
             "requiredCapabilities": [
                 "streaming",
                 "tool_use",
@@ -457,6 +531,7 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
 
     assert credential.status_code == 200, credential.text
     assert registered.status_code == 200, registered.text
+    assert route.status_code == 200, route.text
     assert replaced.status_code == 200, replaced.text
     assert replaced.json()["spec"]["toolExposureMode"] == "on_demand"
     assert validation.status_code == 200, validation.text
@@ -1284,8 +1359,7 @@ async def test_changed_published_content_auto_increments_patch_version() -> None
     assert republished.json()["version"] == "0.1.1"
     audits = await container.audit.list_for_tenant("tenant-a", limit=20)
     assert not any(
-        entry.action == "studio.publish" and entry.outcome == "denied"
-        for entry in audits
+        entry.action == "studio.publish" and entry.outcome == "denied" for entry in audits
     )
 
 

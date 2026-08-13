@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   agentIdentity,
   agentItemKey,
@@ -13,6 +13,18 @@ export interface TaskAgentGroup {
   displayName: string;
   domain: string;
   agents: TaskAgent[];
+}
+
+export type TaskAgentSwitchMode = "current" | "version" | "new-task";
+
+export function taskAgentSwitchMode(
+  selected: TaskAgent | null,
+  next: TaskAgent,
+): TaskAgentSwitchMode {
+  if (!selected || agentIdentity(selected) !== agentIdentity(next)) {
+    return "new-task";
+  }
+  return agentItemKey(selected) === agentItemKey(next) ? "current" : "version";
 }
 
 export function groupTaskAgents(
@@ -60,59 +72,78 @@ export function TaskAgentSwitcher({
   agents,
   selected,
   loading,
+  currentTaskBusy,
   onChange,
 }: {
   agents: readonly TaskAgent[];
   selected: TaskAgent | null;
   loading: boolean;
+  currentTaskBusy: boolean;
   onChange: (agent: TaskAgent) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
   const groups = useMemo(() => groupTaskAgents(agents, query), [agents, query]);
   const disabled = loading || agents.length === 0;
 
+  const closeMenu = useCallback((restoreTrigger = false) => {
+    setOpen(false);
+    setQuery("");
+    if (restoreTrigger) {
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     searchRef.current?.focus();
-    const close = (event: MouseEvent) => {
+    const closeFromPointer = (event: MouseEvent) => {
       if (
         event.target instanceof Node &&
         !rootRef.current?.contains(event.target)
       ) {
-        setOpen(false);
+        closeMenu();
+      }
+    };
+    const closeFromFocus = (event: FocusEvent) => {
+      if (
+        event.target instanceof Node &&
+        !rootRef.current?.contains(event.target)
+      ) {
+        closeMenu();
       }
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setOpen(false);
+        event.preventDefault();
+        closeMenu(true);
       }
     };
-    document.addEventListener("mousedown", close);
+    document.addEventListener("mousedown", closeFromPointer);
+    document.addEventListener("focusin", closeFromFocus);
     document.addEventListener("keydown", escape);
     return () => {
-      document.removeEventListener("mousedown", close);
+      document.removeEventListener("mousedown", closeFromPointer);
+      document.removeEventListener("focusin", closeFromFocus);
       document.removeEventListener("keydown", escape);
     };
-  }, [open]);
+  }, [closeMenu, open]);
 
   const choose = (agent: TaskAgent) => {
-    setOpen(false);
-    setQuery("");
-    if (
-      agentItemKey(agent) !==
-      (selected ? agentItemKey(selected) : "")
-    ) {
-      onChange(agent);
-    }
+    const mode = taskAgentSwitchMode(selected, agent);
+    if (mode === "version" && currentTaskBusy) return;
+    closeMenu(true);
+    if (mode !== "current") onChange(agent);
   };
 
   return (
     <div className="task-agent-switcher" ref={rootRef} data-open={open || undefined}>
       <button
+        ref={triggerRef}
         className="task-agent-switcher-trigger"
         type="button"
         disabled={disabled}
@@ -148,7 +179,11 @@ export function TaskAgentSwitcher({
               <strong>选择智能体</strong>
               <small>{agents.length} 个已发布版本</small>
             </div>
-            <span>同 Agent 换版本可续聊</span>
+            <span data-version-locked={currentTaskBusy || undefined}>
+              {currentTaskBusy
+                ? "当前任务运行中，版本暂锁定"
+                : "同 Agent 换版本可续聊"}
+            </span>
           </header>
           <label className="task-agent-search">
             <span aria-hidden="true" />
@@ -174,6 +209,7 @@ export function TaskAgentSwitcher({
                     );
                     const preferred = activeAgent ?? group.agents[0];
                     const groupActive = Boolean(activeAgent);
+                    const versionLocked = currentTaskBusy && groupActive;
                     return (
                       <>
                         <button
@@ -198,6 +234,9 @@ export function TaskAgentSwitcher({
                           <label className="task-agent-version-select">
                             <select
                               aria-label={`${group.displayName} 版本`}
+                              aria-describedby={versionLocked ? `${listboxId}-version-lock` : undefined}
+                              disabled={versionLocked}
+                              title={versionLocked ? "当前任务结束后可切换版本" : undefined}
                               value={agentItemKey(preferred)}
                               onChange={(event) => {
                                 const next = group.agents.find(
@@ -222,6 +261,11 @@ export function TaskAgentSwitcher({
               ))
             )}
           </div>
+          {currentTaskBusy && (
+            <p className="task-agent-version-lock" id={`${listboxId}-version-lock`} role="status">
+              当前任务完成或停止后可切换版本；选择其他智能体仍会创建新任务。
+            </p>
+          )}
         </div>
       )}
     </div>

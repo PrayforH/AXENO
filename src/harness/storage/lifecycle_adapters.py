@@ -40,6 +40,8 @@ from harness.storage.models import (
     QualityScoreRow,
     RunRow,
     SdkSessionEntryRow,
+    SessionContextDigestRow,
+    SessionContextStateRow,
     SessionRow,
     ThreadFileRow,
     UserMemoryRow,
@@ -436,6 +438,31 @@ class PostgresLifecycleAdapter:
                 if index.artifact_ids
                 else []
             )
+            session_ids = [item.session_id for item in index.sessions]
+            context_states = (
+                (
+                    await db.scalars(
+                        select(SessionContextStateRow).where(
+                            SessionContextStateRow.tenant_id == job.tenant_id,
+                            SessionContextStateRow.session_id.in_(session_ids),
+                        )
+                    )
+                ).all()
+                if session_ids
+                else []
+            )
+            context_digests = (
+                (
+                    await db.scalars(
+                        select(SessionContextDigestRow).where(
+                            SessionContextDigestRow.tenant_id == job.tenant_id,
+                            SessionContextDigestRow.session_id.in_(session_ids),
+                        )
+                    )
+                ).all()
+                if session_ids
+                else []
+            )
             eval_runs = (
                 (
                     await db.scalars(
@@ -477,6 +504,8 @@ class PostgresLifecycleAdapter:
             "events": [row.payload for row in events],
             "approvals": [row.payload for row in approvals],
             "artifacts": [row.payload for row in artifacts],
+            "contextStates": [row.payload for row in context_states],
+            "contextDigests": [row.payload for row in context_digests],
             "evalRuns": [row.payload for row in eval_runs],
             "audit": audit_payloads,
         }
@@ -528,6 +557,14 @@ class PostgresLifecycleAdapter:
                         delete(AguiThreadBindingRow).where(
                             AguiThreadBindingRow.tenant_id == job.tenant_id,
                             AguiThreadBindingRow.session_id.in_(session_ids),
+                        ),
+                        delete(SessionContextDigestRow).where(
+                            SessionContextDigestRow.tenant_id == job.tenant_id,
+                            SessionContextDigestRow.session_id.in_(session_ids),
+                        ),
+                        delete(SessionContextStateRow).where(
+                            SessionContextStateRow.tenant_id == job.tenant_id,
+                            SessionContextStateRow.session_id.in_(session_ids),
                         ),
                         delete(SessionRow).where(
                             SessionRow.tenant_id == job.tenant_id,

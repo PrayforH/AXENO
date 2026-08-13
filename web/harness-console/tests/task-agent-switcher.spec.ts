@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   groupTaskAgents,
+  taskAgentSwitchMode,
   type TaskAgentGroup,
 } from "../src/components/task-agent-switcher";
 import type { TaskAgent } from "../src/lib/task-agent-catalog";
@@ -52,6 +53,13 @@ describe("task agent switcher", () => {
     expect(groupTaskAgents(agents, "missing")).toEqual([]);
   });
 
+  it("distinguishes current, in-thread version and new-task Agent switches", () => {
+    expect(taskAgentSwitchMode(agents[0], agents[0])).toBe("current");
+    expect(taskAgentSwitchMode(agents[0], agents[2])).toBe("version");
+    expect(taskAgentSwitchMode(agents[0], agents[1])).toBe("new-task");
+    expect(taskAgentSwitchMode(null, agents[0])).toBe("new-task");
+  });
+
   it("uses an accessible agent list and reserves a select for internal versions", () => {
     expect(component).toContain('aria-haspopup="listbox"');
     expect(component).toContain('role="listbox"');
@@ -62,5 +70,10 @@ describe("task agent switcher", () => {
     expect(component).toContain("task-agent-version-select");
     expect(component).toContain("group.agents.length > 1");
     expect(component).toContain("`${selected.displayName} · ${selected.version}`");
+    expect(component).toContain('document.addEventListener("focusin", closeFromFocus)');
+    expect(component).toContain("closeMenu(true)");
+    expect(component).toContain("当前任务运行中，版本暂锁定");
+    expect(component).toContain("disabled={versionLocked}");
+    expect(component).toContain("选择其他智能体仍会创建新任务");
   });
 });

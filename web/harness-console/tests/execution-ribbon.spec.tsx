@@ -387,11 +387,47 @@ describe("execution ribbon", () => {
     });
     const html = renderToStaticMarkup(<ActivitySummary activity={textOnly} />);
 
-    expect(html).toContain("正在准备运行环境");
-    expect(html).not.toContain("模型正在处理");
+    expect(html).toContain("已准备运行环境");
+    expect(html).toContain("模型处理完成");
     expect(html).not.toContain("正在生成本轮回复");
     expect(html).toContain("模型执行完成");
     expect(html).not.toContain("这是单独渲染的最终回答。");
+  });
+
+  it("ends environment preparation as soon as the run starts", () => {
+    const modelPending = runActivitySchema.parse({
+      run_id: "run-model-pending",
+      status: "running",
+      started_at: "2026-07-14T00:00:00Z",
+      metrics: {},
+      items: [
+        {
+          id: "provisioning",
+          event_type: "run.provisioning",
+          kind: "run",
+          status: "running",
+          title: "正在准备运行环境",
+          timestamp: "2026-07-14T00:00:00.100Z",
+          sequence: 1,
+          metadata: {},
+        },
+        {
+          id: "running",
+          event_type: "run.running",
+          kind: "run",
+          status: "running",
+          title: "Agent 开始执行",
+          timestamp: "2026-07-14T00:00:00.300Z",
+          sequence: 2,
+          metadata: {},
+        },
+      ],
+    });
+    const html = renderToStaticMarkup(<ActivitySummary activity={modelPending} />);
+
+    expect(html).toContain("已准备运行环境");
+    expect(html).toContain("模型正在处理");
+    expect(html).not.toContain(">正在准备运行环境<");
   });
 
   it("renders tasks and tools as flat Codex actions without nested disclosures", () => {

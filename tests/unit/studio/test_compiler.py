@@ -24,6 +24,7 @@ from harness.studio.models import (
     DraftSkillFile,
     DraftSubagent,
     McpCapability,
+    ModelRouteCapability,
     NetworkAccess,
     ValidationSeverity,
 )
@@ -169,8 +170,8 @@ def test_nexau_export_is_deterministic_and_round_trips_editable_assets() -> None
         description="只读公网搜索。",
         endpointUrl="https://mcp.tavily.com/mcp/",
         tools=("mcp__tavily__tavily_search",),
-        risk="medium",
-        networkAccess="external",
+        risk=CapabilityRisk.MEDIUM,
+        networkAccess=NetworkAccess.EXTERNAL,
         sendsUserData=True,
         readOnly=True,
         executionLocation="external-mcp",
@@ -239,14 +240,10 @@ def test_nexau_export_is_deterministic_and_round_trips_editable_assets() -> None
         assert "subagents/fact-researcher/agent.yaml" in archive.namelist()
         assert "subagents/fact-researcher/systemprompt.md" in archive.namelist()
         assert "NAC-DEPLOYMENT.md" in archive.namelist()
-        assert "skills 根目录位于 /home/user/.skills/" in archive.read(
-            "systemprompt.md"
-        ).decode()
+        assert "skills 根目录位于 /home/user/.skills/" in archive.read("systemprompt.md").decode()
         deployment_guide = archive.read("NAC-DEPLOYMENT.md").decode()
         assert "`LLM_MODEL`" in deployment_guide
-        subagent_config = yaml.safe_load(
-            archive.read("subagents/fact-researcher/agent.yaml")
-        )
+        subagent_config = yaml.safe_load(archive.read("subagents/fact-researcher/agent.yaml"))
         assert subagent_config["llm_config"]["model"] == "${env.LLM_MODEL}"
         assert subagent_config["skills"] == []
 
@@ -444,6 +441,7 @@ def test_nexau_export_imports_python_bindings_skills_and_unlimited_runtime() -> 
     assert "def run(arguments)" in imported.spec.python_tools[0].code
     assert imported.spec.skills[0].name == "grid-system"
     assert imported.spec.skills[0].files[0].path == "scripts/grid.py"
+    assert imported.spec.skills[0].files[0].content is not None
     assert "outputs/detection_output/grid.jpg" in imported.spec.skills[0].files[0].content
     assert imported.spec.skills[1].name.startswith("imported-skill-")
     assert imported.spec.limits.max_turns is None
@@ -571,8 +569,24 @@ def test_tavily_is_a_controlled_external_mcp_capability_not_general_network() ->
 
 
 def test_on_demand_bundle_pins_reviewed_tool_directory_and_route_capability() -> None:
+    catalog = default_capability_catalog()
+    catalog = catalog.model_copy(
+        update={
+            "model_routes": (
+                *catalog.model_routes,
+                ModelRouteCapability(
+                    routeId="on-demand-test",
+                    label="On-demand test route",
+                    provider="test",
+                    models=("deepseek-v4-pro",),
+                    capabilities=("streaming", "tool_use", "tool_search"),
+                    credentialReference="NEW_API_KEY",
+                ),
+            )
+        }
+    )
     compiler = AgentDraftCompiler(
-        default_capability_catalog(),
+        catalog,
         catalog_revision=9,
     )
     current = draft()
@@ -582,8 +596,8 @@ def test_on_demand_bundle_pins_reviewed_tool_directory_and_route_capability() ->
                 update={
                     "model": current.spec.model.model_copy(
                         update={
-                            "route_id": "anthropic-official",
-                            "model": "claude-sonnet-4-6",
+                            "route_id": "on-demand-test",
+                            "model": "deepseek-v4-pro",
                             "required_capabilities": (
                                 "streaming",
                                 "tool_use",
@@ -667,8 +681,19 @@ def test_sandbox_is_mandatory_and_provider_is_not_authored_by_domain_agent() -> 
 
     assert contract.sandbox == "isolated"
     assert contract.risk is CapabilityRisk.HIGH
-    assert "Bash 默认进入人工审批" in contract.approval_summary
+    assert "常规 Bash 自动允许" in contract.approval_summary
     assert "sandbox_provider" not in AgentDraftSpec.model_fields
+
+
+def test_operator_contract_uses_the_shared_sandbox_risk_copy() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    operator = draft(AgentTemplate.OPERATOR)
+
+    contract = compiler.effective_contract(operator)
+
+    assert contract.risk is CapabilityRisk.HIGH
+    assert "常规 Bash 自动允许" in contract.approval_summary
+    assert "高风险、越界或不确定动作" in contract.approval_summary
 
 
 def test_local_development_profile_is_explicitly_preview_only() -> None:

@@ -403,6 +403,72 @@ class AgentStudioService:
         await self._repository.add(draft)
         return draft
 
+    async def ensure_workspace_draft_from_source(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        space_id: str,
+        agent_id: str,
+        source_owner_user_id: str,
+        source_name: str,
+        source_version: str,
+    ) -> AgentDraft | None:
+        """Clone the authoring draft when a personal release enters a space."""
+
+        if self._draft_permissions is None:
+            raise RuntimeError("shared draft permission checker is not configured")
+        await self._draft_permissions.require_draft_permission(
+            tenant_id,
+            user_id,
+            space_id,
+            agent_id,
+            AgentPermission.EDIT,
+        )
+        existing = await self._repository.get_by_agent(tenant_id, agent_id)
+        if existing is not None:
+            return existing
+
+        candidates = [
+            draft
+            for draft in await self._repository.list_for_user(
+                tenant_id, source_owner_user_id
+            )
+            if draft.space_id is None and draft.spec.name == source_name
+        ]
+        source = next(
+            (
+                draft
+                for draft in candidates
+                if draft.published_version == source_version
+            ),
+            candidates[0] if candidates else None,
+        )
+        if source is None:
+            return None
+
+        now = self._clock()
+        source_is_release = source.published_version == source_version
+        shared = AgentDraft(
+            draftId=self._id_generator(),
+            tenantId=tenant_id,
+            revision=1,
+            spec=source.spec,
+            createdBy=user_id,
+            updatedBy=user_id,
+            createdAt=now,
+            updatedAt=now,
+            agentId=agent_id,
+            spaceId=space_id,
+            publishedVersion=source_version,
+            publishedHash=source.published_hash if source_is_release else None,
+            publishedPackageHash=(
+                source.published_package_hash if source_is_release else None
+            ),
+        )
+        await self._repository.add(shared)
+        return shared
+
     async def list(self, tenant_id: str, owner_user_id: str) -> list[AgentDraftSummary]:
         return await self._repository.list_summaries(tenant_id, owner_user_id)
 

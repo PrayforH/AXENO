@@ -2,9 +2,11 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
+import { ModelManagement } from "../../components/model-management";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../../components/product-brand";
+import { ProductIcon, type ProductIconName } from "../../components/product-icon";
 import { ThemeSelector } from "../../components/theme-toggle";
 import { WorkspaceMembers } from "../../components/workspace-members";
-import { ModelManagement } from "../../components/model-management";
 import {
   loadTasks,
   setTaskArchived,
@@ -19,6 +21,22 @@ const ROLE_LABELS = {
 } as const;
 
 type Message = { kind: "success" | "error"; text: string } | null;
+
+const SETTINGS_NAV: ReadonlyArray<{
+  href: string;
+  label: string;
+  icon: ProductIconName;
+}> = [
+  { href: "#profile", label: "个人资料", icon: "profile" },
+  { href: "#members", label: "工作区成员", icon: "members" },
+  { href: "#models", label: "模型管理", icon: "agent" },
+  { href: "#appearance", label: "外观", icon: "appearance" },
+  { href: "#security", label: "账户安全", icon: "security" },
+  { href: "#data", label: "我的数据", icon: "data" },
+  { href: "#memory", label: "长期记忆", icon: "memory" },
+  { href: "#session", label: "登录会话", icon: "session" },
+  { href: "#archived", label: "已归档", icon: "archive" },
+];
 
 function errorMessage(payload: unknown, fallback: string): string {
   if (
@@ -175,9 +193,9 @@ function SettingsContent() {
   return (
     <main className="settings-shell" id="main-content">
       <header className="settings-header">
-        <a className="settings-brand" href="/" aria-label="返回 Agent Studio">
-          <span className="brand-mark" aria-hidden="true">AS</span>
-          <span><strong>Agent Studio</strong><small>智能任务工作台</small></span>
+        <a className="settings-brand" href="/" aria-label={`返回${PRODUCT_NAME}`}>
+          <ProductBrandMark />
+          <ProductBrandCopy />
         </a>
         <div className="settings-header-actions">
           <a className="settings-back" href="/">返回工作台</a>
@@ -187,15 +205,14 @@ function SettingsContent() {
       <div className="settings-layout">
         <aside className="settings-index" aria-label="设置目录">
           <p>设置</p>
-          <a href="#profile">个人资料</a>
-          <a href="#members">工作区成员</a>
-          {canManageModels && <a href="#models">模型管理</a>}
-          <a href="#appearance">外观</a>
-          <a href="#security">账户安全</a>
-          <a href="#data">我的数据</a>
-          <a href="#memory">长期记忆</a>
-          <a href="#session">登录会话</a>
-          <a href="#archived">已归档</a>
+          {SETTINGS_NAV.filter(
+            (item) => item.href !== "#models" || canManageModels,
+          ).map((item) => (
+            <a href={item.href} key={item.href}>
+              <ProductIcon name={item.icon} />
+              <span>{item.label}</span>
+            </a>
+          ))}
         </aside>
 
         <div className="settings-content">
@@ -255,7 +272,7 @@ function SettingsContent() {
           <section className="settings-section" id="appearance">
             <div className="settings-section-copy">
               <h2>外观</h2>
-              <p>整个 Agent Studio 使用同一主题偏好。</p>
+              <p>整个{PRODUCT_NAME}使用同一主题偏好。</p>
             </div>
             <div className="settings-form settings-appearance">
               <div>

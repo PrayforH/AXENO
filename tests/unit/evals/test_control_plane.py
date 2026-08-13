@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 
@@ -22,6 +23,7 @@ from harness.studio.models import (
     CreateAgentDraftRequest,
     ReplaceAgentDraftRequest,
 )
+from tests.support.policies import fake_runtime_review_profiles
 
 
 class MutableClock:
@@ -49,6 +51,7 @@ class FailFirstSessionService(SessionService):
         team_ids: tuple[str, ...] = (),
         api_key_id: str | None = None,
         agent_owner_user_id: str | None = None,
+        connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
     ) -> Session:
         self.calls += 1
         if self.calls == 1:
@@ -63,6 +66,7 @@ class FailFirstSessionService(SessionService):
             team_ids=team_ids,
             api_key_id=api_key_id,
             agent_owner_user_id=agent_owner_user_id,
+            connection_mode=connection_mode,
         )
 
 
@@ -315,7 +319,7 @@ async def test_new_controller_resumes_an_in_flight_case_without_duplicate_run() 
 
 @pytest.mark.asyncio
 async def test_expected_waiting_approval_is_scored_then_child_run_is_cancelled() -> None:
-    container = build_memory_container()
+    container = build_memory_container(policy_profiles=fake_runtime_review_profiles())
     draft = await container.studio.create(
         tenant_id="tenant-a",
         user_id="builder-a",

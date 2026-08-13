@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   ActionBarPrimitive,
   AttachmentPrimitive,
@@ -19,6 +20,8 @@ import {
   type FormEvent,
   useContext,
   useEffect,
+  useMemo,
+  useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
@@ -61,7 +64,14 @@ import {
   type RunStreamStatus,
   useRunStream,
 } from "../lib/run-stream-store";
+import { normalizeMessageText } from "../lib/message-text";
+
+export { normalizeMessageText } from "../lib/message-text";
 import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
+import {
+  loadTaskComposerDraft,
+  persistTaskComposerDraft,
+} from "../lib/task-composer-draft";
 import {
   type UploadFeedback,
   uploadFeedbackStore,
@@ -138,15 +148,97 @@ export function shouldShowPreResponseActivity(
   );
 }
 
+export async function writeMessageToClipboard(value: string): Promise<boolean> {
+  const text = normalizeMessageText(value);
+  if (!text) return false;
+
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // HTTP deployments and restrictive browser policies can reject the modern
+    // Clipboard API. Fall through to the selection-based copy path below.
+  }
+
+  if (typeof document === "undefined" || !document.body) return false;
+  const activeElement = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.inset = "0 auto auto -9999px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    activeElement?.focus({ preventScroll: true });
+  }
+}
+
+function MessageCopyButton({
+  text,
+  className,
+  label,
+}: {
+  text: string;
+  className: string;
+  label: string;
+}) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+  }, []);
+
+  async function copy() {
+    const copied = await writeMessageToClipboard(text);
+    setCopyState(copied ? "copied" : "failed");
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopyState("idle"), 1800);
+  }
+
+  const feedback = copyState === "copied"
+    ? "已复制"
+    : copyState === "failed"
+      ? "复制失败，请手动选择"
+      : label;
+  return (
+    <button
+      className={className}
+      type="button"
+      aria-label={feedback}
+      title={feedback}
+      data-copy-state={copyState}
+      onClick={() => void copy()}
+    >
+      {copyState === "copied" ? <CopySuccessIcon /> : <CopyMessageIcon />}
+      <span className="message-copy-status" aria-live="polite">{feedback}</span>
+    </button>
+  );
+}
+
 function HarnessComposer() {
   const aui = useAui();
   const threadRunning = useAuiState((state) => state.thread.isRunning);
+  const composerText = useAuiState((state) => state.composer.text);
   const composerAttachments = useAuiState((state) => state.composer.attachments);
   const stream = useRunStream();
   const runView = useRunViewModel();
   const pendingApproval = usePendingApproval();
   const reuseNotice = useRunReuseNotice();
   const runLocked = selectComposerDisabled(runView);
+  const draftRestored = useTaskComposerDraft(composerText);
   useEffect(() => {
     const visibleApprovalId = pendingApproval.details?.approval_id;
     if (
@@ -245,21 +337,12 @@ function HarnessComposer() {
         {showStop ? (
           <button
             type="button"
-            className="aui-button aui-button-primary aui-button-icon aui-composer-cancel"
+            className="aui-button aui-button-icon aui-composer-cancel"
             aria-label="停止运行"
-            title="停止运行"
             onClick={() => aui.thread().cancelRun()}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-              />
-              <rect x="8" y="8" width="8" height="8" rx="1.25" fill="currentColor" />
+              <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
             </svg>
           </button>
         ) : (
@@ -268,10 +351,70 @@ function HarnessComposer() {
       </Composer.Root>
       <div className="composer-meta" aria-live="polite">
         <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
-        <span className="composer-hint">{composerHint}</span>
+        <span className="composer-hint">
+          {composerText && draftRestored ? "未发送内容已保存在当前浏览器" : composerHint}
+        </span>
       </div>
     </div>
   );
+}
+
+type ComposerDraftScope = {
+  userId: string;
+  threadId: string;
+};
+
+const ComposerDraftContext = createContext<ComposerDraftScope | null>(null);
+
+function useTaskComposerDraft(text: string) {
+  const scope = useContext(ComposerDraftContext);
+  const aui = useAui();
+  const auiRef = useRef(aui);
+  const latestText = useRef(text);
+  const [restored, setRestored] = useState(false);
+  auiRef.current = aui;
+  latestText.current = text;
+
+  useEffect(() => {
+    if (!scope) return;
+    setRestored(false);
+    const saved = loadTaskComposerDraft(
+      window.localStorage,
+      scope.userId,
+      scope.threadId,
+    );
+    if (saved && !latestText.current) {
+      auiRef.current.composer().setText(saved);
+    }
+    setRestored(true);
+  }, [scope]);
+
+  useEffect(() => {
+    if (!scope || !restored) return;
+    const timer = window.setTimeout(() => {
+      persistTaskComposerDraft(
+        window.localStorage,
+        scope.userId,
+        scope.threadId,
+        text,
+      );
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [restored, scope, text]);
+
+  useEffect(() => {
+    if (!scope) return;
+    return () => {
+      persistTaskComposerDraft(
+        window.localStorage,
+        scope.userId,
+        scope.threadId,
+        latestText.current,
+      );
+    };
+  }, [scope]);
+
+  return restored;
 }
 
 function ApprovalToolBridge({
@@ -315,9 +458,9 @@ export function UserTaskWelcome() {
       <ThreadWelcome.Center className="user-task-hero">
         <div className="user-task-intro">
           <p className="user-task-kicker"><span aria-hidden="true" />开始一项任务</p>
-          <h2>把目标交给 Agent</h2>
+          <h1>把目标交给 Agent</h1>
           <p>
-            描述期望结果，或附上资料。Agent 会规划步骤、调用工具，并在关键操作前请求确认。
+            描述期望结果，或附上资料。Agent 会规划步骤、调用工具；常规操作自动完成，仅在高风险边界需要你确认。
           </p>
         </div>
       </ThreadWelcome.Center>
@@ -340,9 +483,20 @@ export function UserTaskWelcome() {
         ))}
       </div>
 
+      <nav className="user-task-shortcuts" aria-label="生产力快捷入口">
+        <Link href="/studio/spaces">
+          <span aria-hidden="true">→</span>
+          从团队空间选择智能体
+        </Link>
+        <Link href="/studio/agents">
+          <span aria-hidden="true">+</span>
+          创建或调整智能体
+        </Link>
+      </nav>
+
       <p className="user-task-trust">
         <span aria-hidden="true" />
-        工具在隔离工作区运行 · 支持人工审批 · 产物可直接下载
+        隔离执行 · 自动风险分级 · 产物可直接下载
       </p>
     </ThreadWelcome.Root>
   );
@@ -571,11 +725,16 @@ function TurnActivity({
   messageId: string;
 }) {
   const activity = useRunActivity();
-  const ownedActivity = activity && messageOwnsRun(messageId, activity.run_id)
-    ? activity
-    : undefined;
   const runView = useRunViewModel();
   const isLast = useAuiState((state) => state.message.isLast);
+  const ownedActivity = activity && turnOwnsRun(
+    messageId,
+    activity.run_id,
+    isLast,
+    runView?.runId,
+  )
+    ? activity
+    : undefined;
   const responseStarted = useAssistantResponseStarted();
   const [capturedActivity, setCapturedActivity] = useState(ownedActivity);
 
@@ -602,7 +761,10 @@ function TurnActivity({
     isLast,
     hasDurableProjection,
   );
-  if (!displayed || !messageOwnsRun(messageId, displayed.run_id)) return null;
+  if (
+    !displayed ||
+    !turnOwnsRun(messageId, displayed.run_id, isLast, runView?.runId)
+  ) return null;
 
   return (
     <div
@@ -648,6 +810,12 @@ export function incompleteRunGuidance(isLast: boolean) {
     : "该条历史运行未完整结束，可打开“运行详情”查看原因。";
 }
 
+export function shouldOfferIncompleteRetry(
+  status: { type?: string; reason?: string } | undefined,
+) {
+  return status?.type === "incomplete" && status.reason !== "cancelled";
+}
+
 export function ownsLiveResponse(
   isLast: boolean,
   messageId: string,
@@ -668,19 +836,43 @@ export function messageOwnsRun(messageId: string, runId: string) {
   return messageId === prefix || messageId.startsWith(`${prefix}-`);
 }
 
+export function turnOwnsRun(
+  messageId: string,
+  activityRunId: string,
+  isLast: boolean,
+  viewRunId: string | undefined,
+) {
+  // History recovery creates an optimistic assistant message whose random ID
+  // cannot contain the durable server run ID.  The current Activity snapshot
+  // is still authoritative for the latest turn, so keep it attached there.
+  return messageOwnsRun(messageId, activityRunId) || (
+    isLast && viewRunId === activityRunId
+  );
+}
+
 function HarnessAssistantMessage() {
   const live = useLiveResponse();
   const isLast = useAuiState((state) => state.message.isLast);
   const messageId = useAuiState((state) => state.message.id);
-  const isIncomplete = useAuiState(
-    (state) => state.message.status?.type === "incomplete",
-  );
+  const messageStatus = useAuiState((state) => state.message.status);
+  const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus);
   const content = useAuiState((state) => state.message.content);
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
   // this only on visible text lets assistant-ui paint the same preface once.
   const ownsLive = ownsLiveResponse(isLast, messageId, live.messageId);
   const directStream = ownsLive && live.status !== "idle";
+  const copyText = ownsLive && live.text.trim()
+    ? normalizeMessageText(live.text)
+    : normalizeMessageText(
+        content
+          .flatMap((part, index) => (
+            part.type === "text" && !isIntermediateAssistantTextPart(content, index)
+              ? [part.text]
+              : []
+          ))
+          .join("\n"),
+      );
   return (
     <AssistantMessage.Root
       className="harness-assistant-message"
@@ -697,7 +889,7 @@ function HarnessAssistantMessage() {
           Reasoning: ReasoningPart,
         }}
       />
-      {isIncomplete ? (
+      {showIncompleteRecovery ? (
         <div className="aui-message-error">
           <span>{incompleteRunGuidance(isLast)}</span>
           <ActionBarPrimitive.Reload
@@ -711,7 +903,18 @@ function HarnessAssistantMessage() {
       ) : null}
       <div className="assistant-message-controls">
         <HarnessBranchPicker />
-        <AssistantActionBar />
+        <AssistantActionBar.Root
+          hideWhenRunning
+          autohide="not-last"
+          autohideFloat="single-branch"
+        >
+          <AssistantActionBar.SpeechControl />
+          <MessageCopyButton
+            className="assistant-message-copy"
+            label="复制回答"
+            text={copyText}
+          />
+        </AssistantActionBar.Root>
       </div>
     </AssistantMessage.Root>
   );
@@ -760,6 +963,14 @@ function CopyMessageIcon() {
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <rect x="6.5" y="6.5" width="9" height="9" rx="1.5" />
       <path d="M13.5 6.5v-2a1.5 1.5 0 0 0-1.5-1.5H4.5A1.5 1.5 0 0 0 3 4.5V12A1.5 1.5 0 0 0 4.5 13h2" />
+    </svg>
+  );
+}
+
+function CopySuccessIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m4.5 10.2 3.4 3.4 7.6-7.7" />
     </svg>
   );
 }
@@ -950,10 +1161,12 @@ function HarnessUserMessage() {
   });
   const thread = useThreadRuntime();
   const { editor, setEditor } = useMessageEditor();
-  const originalText = message.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
+  const originalText = normalizeMessageText(
+    message.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"),
+  );
   const editing = editor?.messageId === message.id;
   const draft = editing ? editor.draft : originalText;
 
@@ -993,27 +1206,29 @@ function HarnessUserMessage() {
         />
         <MessagePrimitive.If hasContent>
           {editing ? (
-            <form className="user-message-editor" onSubmit={submitEdit}>
-              <textarea
-                className="user-message-editor-input"
-                aria-label="编辑用户输入"
-                value={draft}
-                onChange={(event) => {
-                  setEditor({ messageId: message.id, draft: event.target.value });
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setEditor(null);
-                }}
-                autoFocus
-                rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-              />
-              <div className="user-message-editor-actions">
-                <button type="button" onClick={() => setEditor(null)}>取消</button>
-                <button type="submit" disabled={!draft.trim() || threadRunning}>
-                  发送
-                </button>
-              </div>
-            </form>
+            <div className="user-message-edit-shell">
+              <form className="user-message-editor" onSubmit={submitEdit}>
+                <textarea
+                  className="user-message-editor-input"
+                  aria-label="编辑用户输入"
+                  value={draft}
+                  onChange={(event) => {
+                    setEditor({ messageId: message.id, draft: event.target.value });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setEditor(null);
+                  }}
+                  autoFocus
+                  rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+                />
+                <div className="user-message-editor-actions">
+                  <button type="button" onClick={() => setEditor(null)}>取消</button>
+                  <button type="submit" disabled={!draft.trim() || threadRunning}>
+                    发送
+                  </button>
+                </div>
+              </form>
+            </div>
           ) : (
             <>
               <UserMessage.Content />
@@ -1021,14 +1236,11 @@ function HarnessUserMessage() {
                 className="harness-user-action-bar"
                 autohide="never"
               >
-                <ActionBarPrimitive.Copy
+                <MessageCopyButton
                   className="user-message-action"
-                  aria-label="复制消息"
-                  title="复制消息"
-                  copiedDuration={1800}
-                >
-                  <CopyMessageIcon />
-                </ActionBarPrimitive.Copy>
+                  label="复制消息"
+                  text={originalText}
+                />
                 {isLatestUserMessage && !threadRunning ? (
                   <button
                     className="user-message-action"
@@ -1058,17 +1270,28 @@ function HarnessUserMessage() {
   );
 }
 
-export function AgentThread() {
+export function AgentThread({
+  userId,
+  threadId,
+}: {
+  userId: string;
+  threadId: string;
+}) {
   const [editor, setEditor] = useState<MessageEditorState>(null);
+  const composerDraftScope = useMemo(
+    () => ({ userId, threadId }),
+    [threadId, userId],
+  );
   return (
-    <MessageEditorContext.Provider value={{ editor, setEditor }}>
-      <Thread
+    <ComposerDraftContext.Provider value={composerDraftScope}>
+      <MessageEditorContext.Provider value={{ editor, setEditor }}>
+        <Thread
       assistantMessage={{
-        allowCopy: true,
-        allowReload: true,
+        allowCopy: false,
+        allowReload: false,
         allowSpeak: true,
-        allowFeedbackPositive: true,
-        allowFeedbackNegative: true,
+        allowFeedbackPositive: false,
+        allowFeedbackNegative: false,
         components: { ToolFallback: HarnessToolPart },
       }}
       userMessage={{ allowEdit: true }}
@@ -1087,10 +1310,6 @@ export function AgentThread() {
           reload: { tooltip: "重新运行" },
           copy: { tooltip: "复制回答" },
           speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
-          feedback: {
-            positive: { tooltip: "回答有帮助" },
-            negative: { tooltip: "回答需改进" },
-          },
         },
         branchPicker: {
           previous: { tooltip: "上一个分支" },
@@ -1105,7 +1324,8 @@ export function AgentThread() {
         },
         editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
       }}
-      />
-    </MessageEditorContext.Provider>
+        />
+      </MessageEditorContext.Provider>
+    </ComposerDraftContext.Provider>
   );
 }

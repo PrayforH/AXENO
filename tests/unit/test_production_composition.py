@@ -1,3 +1,5 @@
+# pyright: reportPrivateUsage=false
+
 import json
 import os
 import subprocess
@@ -165,9 +167,7 @@ async def test_production_container_uses_durable_event_and_queue_adapters() -> N
 
 @pytest.mark.asyncio
 async def test_production_container_can_disable_all_quota_enforcement() -> None:
-    container = build_production_container(
-        production_settings(quota_enforcement_enabled=False)
-    )
+    container = build_production_container(production_settings(quota_enforcement_enabled=False))
 
     try:
         runtime = cast(RegistryClaudeRuntime, container.runtime)

@@ -372,3 +372,28 @@ class AgentIdentityService:
                 return existing.agent_id
             raise
         return agent.agent_id
+
+    async def promote_personal_agent_version(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+        version: str,
+    ) -> None:
+        """Point a personal identity at a newly published immutable version."""
+
+        agent = await self._repository.get_agent(tenant_id, agent_id)
+        if agent.scope is AgentScope.WORKSPACE:
+            return
+        if agent.owner_user_id != owner_user_id or agent.name != name:
+            raise ConflictError(
+                f"personal Agent identity does not match publication: {agent_id}"
+            )
+        if agent.current_version == version:
+            return
+        await self._repository.update_agent(
+            agent.model_copy(
+                update={"current_version": version, "updated_at": self._clock()}
+            )
+        )

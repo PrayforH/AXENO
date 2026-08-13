@@ -105,7 +105,11 @@ def _run_migration(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str
 
     monkeypatch.setattr(migration, "op", _FakeOp())
     monkeypatch.setattr(migration.Base, "metadata", _FakeMetadata())
-    monkeypatch.setattr(migration.sa, "inspect", lambda _bind: inspector)
+
+    def inspect(_bind: object) -> _StatefulInspector:
+        return inspector
+
+    monkeypatch.setattr(migration.sa, "inspect", inspect)
     migration.upgrade()
     inspector.post = True
     migration.downgrade()

@@ -2,6 +2,7 @@
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useAuth } from "../auth-provider";
+import { useConfirmationDialog } from "../confirmation-dialog";
 import { StudioSidebar } from "./studio-sidebar";
 import {
   lifecycleClient,
@@ -69,6 +70,7 @@ function Jobs({ jobs, refresh }: { jobs: DataLifecycleJob[]; refresh: () => Prom
 
 export function DataLifecycleControlPlane() {
   const { user, membership } = useAuth();
+  const { requestConfirmation, confirmationDialog } = useConfirmationDialog();
   const canAdmin = membership.role === "owner" || membership.role === "admin";
   const [overview, setOverview] = useState<DataLifecycleOverview | null>(null);
   const [selfJobs, setSelfJobs] = useState<DataLifecycleJob[]>([]);
@@ -130,7 +132,13 @@ export function DataLifecycleControlPlane() {
   }
 
   async function run(kind: DataLifecycleJob["kind"], scope: LifecycleScope) {
-    if (kind === "delete" && !window.confirm("删除后无法恢复。确认删除你的 Harness 数据？")) return;
+    if (kind === "delete" && !(await requestConfirmation({
+      title: "删除你的 Harness 数据？",
+      description: "删除任务会级联处理会话、文件、记忆与观测副本，且无法恢复。Legal Hold、审计与部署证据仍按治理规则保留。",
+      confirmLabel: "确认删除",
+      context: <span>范围：当前用户 <code>{user.user_id}</code></span>,
+      tone: "danger",
+    }))) return;
     setBusy(true);
     try {
       await lifecycleClient.createJob(kind, scope, key(kind));
@@ -167,5 +175,6 @@ export function DataLifecycleControlPlane() {
 
       <section className={styles.history}><div className={styles.historyHead}><div><p>Lifecycle jobs</p><h2>{canAdmin ? "租户处理记录" : "我的处理记录"}</h2></div><button onClick={() => void load()}>刷新</button></div><Jobs jobs={jobs} refresh={load}/></section>
     </section>
+    {confirmationDialog}
   </main>;
 }

@@ -42,7 +42,7 @@ from harness.studio.model_configuration import (
     ConfigureModelRequest,
     ModelConfigurationService,
 )
-from harness.studio.models import AgentDraft, AgentTemplate
+from harness.studio.models import AgentDraft, AgentTemplate, ModelRouteCapability
 from harness.studio.repositories import InMemoryAgentDraftRepository
 
 
@@ -270,8 +270,8 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
             update={
                 "model": base_spec.model.model_copy(
                     update={
-                        "route_id": "anthropic-official",
-                        "model": "claude-sonnet-4-6",
+                        "route_id": "on-demand-test",
+                        "model": "deepseek-v4-pro",
                         "required_capabilities": (
                             "streaming",
                             "tool_use",
@@ -288,8 +288,24 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         createdAt=now,
         updatedAt=now,
     )
+    catalog = default_capability_catalog()
+    catalog = catalog.model_copy(
+        update={
+            "model_routes": (
+                *catalog.model_routes,
+                ModelRouteCapability(
+                    routeId="on-demand-test",
+                    label="On-demand test route",
+                    provider="test",
+                    models=("deepseek-v4-pro",),
+                    capabilities=("streaming", "tool_use", "tool_search"),
+                    credentialReference="NEW_API_KEY",
+                ),
+            )
+        }
+    )
     compiled = AgentDraftCompiler(
-        default_capability_catalog(),
+        catalog,
         catalog_revision=4,
     ).compile(draft)
     snapshot = compiled.report.snapshot
@@ -323,9 +339,10 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
     runtime = RegistryClaudeRuntime(
         registry=registry,
         config=CcSwitchClaudeConfig(
-            base_url="https://api.anthropic.com",
-            model="claude-sonnet-4-6",
-            provider="anthropic",
+            route_id="on-demand-test",
+            base_url="https://new-api.example",
+            model="deepseek-v4-pro",
+            provider="new-api",
             credential=SecretStr("directory-route-secret"),
             capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
         ),
@@ -384,6 +401,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         "tool_count": 2,
         "reason": "credential_unavailable",
     }
+    assert isinstance(captured[0].mcp_servers, dict)
     assert "tavily" not in captured[0].mcp_servers
     assert "directory-route-secret" not in repr(events)
     assert "api.anthropic.com" not in repr(directory_event.payload)
@@ -409,8 +427,8 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             update={
                 "model": base_spec.model.model_copy(
                     update={
-                        "route_id": "anthropic-official",
-                        "model": "claude-sonnet-4-6",
+                        "route_id": "glm-5-2",
+                        "model": "shdata-glm",
                     }
                 )
             }
@@ -459,12 +477,12 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
             credential=SecretStr("new-api-secret"),
         ),
         fallback_config=CcSwitchClaudeConfig(
-            route_id="anthropic-official",
-            base_url="https://api.anthropic.com",
-            model="claude-sonnet-4-6",
-            provider="anthropic",
-            credential=SecretStr("anthropic-secret"),
-            capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
+            route_id="glm-5-2",
+            base_url="https://glm.example",
+            model="shdata-glm",
+            provider="new-api",
+            credential=SecretStr("glm-secret"),
+            capabilities=frozenset({"streaming", "tool_use"}),
         ),
         route_configs=(
             CcSwitchClaudeConfig(
@@ -502,14 +520,19 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
 
     events = [event async for event in runtime.execute(context)]
 
-    assert captured[0].env["ANTHROPIC_BASE_URL"] == "https://api.anthropic.com"
-    assert captured[0].model == "claude-sonnet-4-6"
-    assert captured[0].env["ANTHROPIC_API_KEY"] == "anthropic-secret"
-    assert "ANTHROPIC_AUTH_TOKEN" not in captured[0].env
+    assert captured[0].env["ANTHROPIC_BASE_URL"] == "https://glm.example"
+    assert captured[0].model == "shdata-glm"
+    assert captured[0].permission_mode == "dontAsk"
+    assert captured[0].allowed_tools == []
+    assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == "glm-secret"
+    assert "ANTHROPIC_API_KEY" not in captured[0].env
     assert (
         next(event for event in events if event.type == "model.route.selected").payload["route_id"]
-        == "anthropic-official"
+        == "glm-5-2"
     )
+    assert next(
+        event for event in events if event.type == "model.route.selected"
+    ).payload["permission_mode"] == "dontAsk"
 
     override_context = RuntimeContext(
         run=Run(
@@ -541,11 +564,12 @@ async def test_manifest_primary_route_selects_its_route_bound_gateway(
 
     assert captured[1].env["ANTHROPIC_BASE_URL"] == "https://new-api.example"
     assert captured[1].model == "shdata-glm"
+    assert captured[1].permission_mode == "dontAsk"
     selected = next(event for event in override_events if event.type == "model.route.selected")
     assert selected.payload["route_id"] == "deepseek-v4-pro"
     assert selected.payload["model"] == "shdata-glm"
     assert selected.payload["selection_source"] == "task_override"
-    assert selected.payload["agent_default_route"] == "anthropic-official"
+    assert selected.payload["agent_default_route"] == "glm-5-2"
 
 
 @pytest.mark.asyncio
@@ -1061,6 +1085,7 @@ async def test_subagent_receives_its_declared_mcp_tools(tmp_path: Path) -> None:
 
     options = captured[0]
     assert options.agents is not None
+    assert options.agents["helper"].tools is not None
     assert "mcp__crm__search" in options.agents["helper"].tools
     assert options.allowed_tools == ["mcp__crm__search"]
     assert options.mcp_servers == {"crm": config}

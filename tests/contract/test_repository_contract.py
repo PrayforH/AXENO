@@ -60,8 +60,15 @@ async def test_session_repository_is_tenant_scoped() -> None:
     await repository.add(session)
 
     assert await repository.get("tenant-a", "session-1") == session
+    assert await repository.list_for_ids("tenant-a", ["session-1", "session-1"]) == [
+        session,
+        session,
+    ]
+    assert await repository.list_for_ids("tenant-a", []) == []
     with pytest.raises(NotFoundError):
         await repository.get("tenant-b", "session-1")
+    with pytest.raises(NotFoundError):
+        await repository.list_for_ids("tenant-a", ["session-1", "missing"])
 
 
 @pytest.mark.asyncio
@@ -85,6 +92,10 @@ async def test_session_repository_binds_claude_session_once() -> None:
     ) == bound
     with pytest.raises(ConflictError, match="already bound"):
         await repository.bind_claude_session_id("tenant-a", "session-1", "claude-session-2")
+    cleared = await repository.clear_claude_session_id("tenant-a", "session-1", "claude-session-1")
+    assert cleared.claude_session_id is None
+    rebound = await repository.bind_claude_session_id("tenant-a", "session-1", "claude-session-2")
+    assert rebound.claude_session_id == "claude-session-2"
 
 
 @pytest.mark.asyncio

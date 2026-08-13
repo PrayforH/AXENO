@@ -3,10 +3,17 @@
 import {
   AssistantRuntimeProvider,
   WebSpeechSynthesisAdapter,
+  useThreadRuntime,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
 import type { ReactNode } from "react";
-import { useEffect, useLayoutEffect, useMemo } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+} from "react";
 import { activityStore, useRunViewModel } from "../lib/activity-store";
 import { HarnessHttpAgent } from "../lib/harness-agent";
 import { createInputAttachmentAdapter } from "../lib/input-attachment-adapter";
@@ -18,6 +25,44 @@ import { createThreadHistoryAdapter } from "../lib/task-history";
 import { activateRuntimeThread } from "../lib/runtime-thread-scope";
 import type { TaskModelRoute } from "../lib/task-model-catalog";
 import { TaskModelProvider } from "./task-model-context";
+
+function DurableHistorySync({
+  revision,
+  history,
+}: {
+  revision: number;
+  history: ReturnType<typeof createThreadHistoryAdapter>;
+}) {
+  const thread = useThreadRuntime();
+
+  useEffect(() => {
+    if (revision === 0) return;
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      void history
+        .load()
+        .then((repository) => {
+          if (!disposed && repository && !thread.getState().isRunning) {
+            thread.import(repository);
+          }
+        })
+        .catch((error: unknown) => {
+          if (!disposed) {
+            console.error(
+              "[Harness Console] Failed to refresh durable history",
+              error,
+            );
+          }
+        });
+    }, 120);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [history, revision, thread]);
+
+  return null;
+}
 
 export function AssistantRuntimeShell({
   threadId,
@@ -43,6 +88,10 @@ export function AssistantRuntimeShell({
   children: ReactNode;
 }) {
   const runView = useRunViewModel();
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const refreshDurableHistory = useCallback(() => {
+    setHistoryRevision((current) => current + 1);
+  }, []);
   const agent = useMemo(() => {
     const query = new URLSearchParams({
       agent_name: agentName,
@@ -53,10 +102,19 @@ export function AssistantRuntimeShell({
     const next = new HarnessHttpAgent({
       url: `/api/agui?${query.toString()}`,
       modelRouteOverride,
+      onRunSucceeded: refreshDurableHistory,
     });
     next.threadId = threadId;
     return next;
-  }, [agentName, agentOwnerUserId, agentVersion, modelRouteOverride, spaceId, threadId]);
+  }, [
+    agentName,
+    agentOwnerUserId,
+    agentVersion,
+    modelRouteOverride,
+    refreshDurableHistory,
+    spaceId,
+    threadId,
+  ]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
   const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const history = useMemo(
@@ -92,6 +150,7 @@ export function AssistantRuntimeShell({
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <DurableHistorySync revision={historyRevision} history={history} />
       <TaskModelProvider
         routes={modelRoutes}
         agentDefaultRouteId={agentDefaultModelRoute}

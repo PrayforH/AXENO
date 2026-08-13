@@ -128,6 +128,7 @@ def _catalog_registration(
             {"type": capability.transport, "url": capability.endpoint_url},
         ),
         allowed_tools=capability.tools,
+        static_headers=tuple(capability.custom_headers.items()),
         credential_headers=credential_headers,
         credential_header_prefixes=credential_header_prefixes,
         credential_query_parameters=credential_query_parameters,
