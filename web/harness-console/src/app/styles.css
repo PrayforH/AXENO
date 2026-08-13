@@ -3970,6 +3970,37 @@ textarea:not(.aui-composer-input):focus-visible,
   outline: none;
 }
 
+.harness-composer-shell .aui-composer-attachments {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 12px 4px 8px;
+  flex: 1 0 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(102 118 109 / 36%) transparent;
+}
+
+.harness-composer-shell .aui-composer-attachments::-webkit-scrollbar {
+  height: 5px;
+}
+
+.harness-composer-shell .aui-composer-attachments::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(102 118 109 / 36%);
+}
+
+.harness-composer-shell .aui-composer-attachments::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.harness-composer-shell .aui-composer-attachments .aui-attachment-root {
+  margin-top: 0;
+  flex: 0 0 10rem;
+}
+
 .harness-composer-shell .aui-composer-attach,
 .harness-composer-shell .aui-composer-send,
 .harness-composer-shell .aui-composer-cancel {

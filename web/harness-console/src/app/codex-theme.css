@@ -915,7 +915,6 @@ body.codex-theme-v1 .upload-feedback-item.error {
 }
 
 body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
-  padding-inline: 0;
   gap: 8px;
 }
 
