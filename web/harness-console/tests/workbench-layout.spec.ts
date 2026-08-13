@@ -510,10 +510,16 @@ describe("full-page agent workbench", () => {
       /\.harness-composer-shell \.aui-composer-input\s*\{[^}]*padding:\s*8px 8px 8px 2px;/s,
     );
     expect(styles).toMatch(
-      /\.harness-composer-shell \.aui-composer-attachments\s*\{[^}]*max-width:\s*100%;[^}]*flex:\s*1 0 100%;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s,
+      /\.harness-composer-shell \.aui-composer-attachments\s*\{[^}]*max-width:\s*100%;[^}]*padding:\s*6px;[^}]*flex:\s*1 0 100%;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-composer-shell \.aui-composer-attachments:empty\s*\{[^}]*display:\s*none;/s,
     );
     expect(styles).toMatch(
       /\.harness-composer-shell \.aui-composer-attachments \.aui-attachment-root\s*\{[^}]*flex:\s*0 0 10rem;/s,
+    );
+    expect(styles).toMatch(
+      /\.harness-composer-shell \.aui-composer-attachments \.aui-attachment-remove\s*\{[^}]*top:\s*-4px;[^}]*right:\s*-4px;/s,
     );
   });
 
