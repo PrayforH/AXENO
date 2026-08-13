@@ -2,6 +2,7 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
+import { ApiIntegration } from "../../components/api-integration";
 import { ModelManagement } from "../../components/model-management";
 import {
   PRODUCT_NAME,
@@ -34,6 +35,7 @@ type SettingsSectionId =
   | "profile"
   | "members"
   | "models"
+  | "api"
   | "appearance"
   | "security"
   | "data"
@@ -68,6 +70,13 @@ const SETTINGS_NAV: ReadonlyArray<{
     label: "模型管理",
     description: "配置对话、视觉和图像生成模型，并指定内置 Agent 的默认模型。",
     icon: "agent",
+  },
+  {
+    id: "api",
+    href: "#api",
+    label: "API 集成",
+    description: "创建按能力授权的 API 密钥，将对话、任务和 Agent 安全接入外部系统。",
+    icon: "api",
   },
   {
     id: "appearance",
@@ -203,7 +212,7 @@ function SettingsContent() {
   const canManageModels =
     membership.role === "owner" || membership.role === "admin";
   const visibleNavigation = SETTINGS_NAV.filter(
-    (item) => item.id !== "models" || canManageModels,
+    (item) => !(["models", "api"] as SettingsSectionId[]).includes(item.id) || canManageModels,
   );
   const [activeSection, setActiveSection] =
     useState<SettingsSectionId>("profile");
@@ -217,7 +226,7 @@ function SettingsContent() {
       const requested = window.location.hash.slice(1) as SettingsSectionId;
       const canOpenRequested = SETTINGS_NAV.some(
         (item) =>
-          item.id === requested && (item.id !== "models" || canManageModels),
+          item.id === requested && (!["models", "api"].includes(item.id) || canManageModels),
       );
       const next = canOpenRequested ? requested : "profile";
       setActiveSection(next);
@@ -411,6 +420,16 @@ function SettingsContent() {
                 hidden={activeSection !== "models"}
               >
                 <ModelManagement />
+              </section>
+            )}
+
+            {canManageModels && (
+              <section
+                className="settings-section"
+                id="api"
+                hidden={activeSection !== "api"}
+              >
+                <ApiIntegration />
               </section>
             )}
 

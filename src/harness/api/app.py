@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from harness.agent_package import AgentBundleValidationError, AgentPackageCheckError
 from harness.agui import routes as agui_routes
-from harness.api.dependencies import ApiContainer, build_memory_container
+from harness.api.dependencies import ApiContainer, Identity, build_memory_container
 from harness.api.routes import agents, approvals, artifacts, auth, input_artifacts, runs, sessions
 from harness.config import Settings
 from harness.core.errors import (
@@ -178,6 +178,27 @@ async def _authenticate_request(request: Request, call_next: RequestResponseEndp
     if not protected or path.startswith("/v1/auth"):
         return await call_next(request)
     container: ApiContainer = request.app.state.container
+    api_key = request.headers.get("X-API-Key", "")
+    if api_key:
+        record = await container.api_access.authenticate(api_key)
+        if record is None:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": {
+                        "code": "api_key_invalid",
+                        "message": "API key is invalid or has been revoked",
+                    }
+                },
+            )
+        request.state.api_key_identity = Identity(
+            tenant_id=record.tenant_id,
+            user_id=record.user_id,
+            roles=frozenset(),
+            authentication_method="api_key",
+            permissions=frozenset(record.permissions),
+        )
+        return await call_next(request)
     expected = container.api_bearer_token.get_secret_value()
     if not expected:
         return await call_next(request)

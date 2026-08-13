@@ -20,7 +20,7 @@ describe("model management settings", () => {
     expect(settings).toContain(
       'membership.role === "owner" || membership.role === "admin"',
     );
-    expect(settings).toContain('item.id !== "models" || canManageModels');
+    expect(settings).toContain('["models", "api"]');
     expect(settings).toContain("{canManageModels && (");
     expect(settings).toContain("<ModelManagement />");
   });

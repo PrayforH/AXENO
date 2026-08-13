@@ -1,5 +1,6 @@
 export type ProductIconName =
   | "agent"
+  | "api"
   | "appearance"
   | "archive"
   | "book"
@@ -24,6 +25,8 @@ export function ProductIcon({
     switch (name) {
       case "agent":
         return <><circle cx="6" cy="6" r="2" /><circle cx="14" cy="6" r="2" /><circle cx="10" cy="14" r="2" /><path d="m7.7 7.1 1.4 4.8m3.2-4.8-1.4 4.8M8 6h4" /></>;
+      case "api":
+        return <><path d="M7.5 4 4 7.5 7.5 11m5-7L16 7.5 12.5 11M11.5 2.8 8.5 13" /><path d="M4 15.5h12" /></>;
       case "appearance":
         return <><path d="M10 3.5a6.5 6.5 0 1 0 0 13c1.2 0 1.7-.7 1.2-1.6-.5-.9.2-1.8 1.2-1.8h1.1a3 3 0 0 0 3-3A6.5 6.5 0 0 0 10 3.5Z" /><circle cx="6.8" cy="8" r=".7" /><circle cx="9.3" cy="5.9" r=".7" /><circle cx="12.3" cy="6.5" r=".7" /></>;
       case "archive":

@@ -19,6 +19,8 @@ type ManagedModel = {
   capabilities: string[];
   enabled: boolean;
   credentialConfigured: boolean;
+  source: "server" | "workspace";
+  serverAvailable: boolean;
   version: number;
 };
 
@@ -49,9 +51,9 @@ const PROVIDER_PRESETS: Record<Exclude<ProviderPreset, "custom">, {
   minimax: {
     label: "MiniMax",
     provider: "MiniMax",
-    baseUrl: "https://api.minimaxi.com/v1",
-    apiFormat: "openai_compatible",
-    authScheme: "bearer",
+    baseUrl: "https://api.minimaxi.com/anthropic/v1",
+    apiFormat: "anthropic_compatible",
+    authScheme: "x-api-key",
   },
   openai: {
     label: "OpenAI",
@@ -177,6 +179,24 @@ export function ModelManagement() {
     }
   }
 
+  async function restoreServer(model: ManagedModel) {
+    if (!window.confirm(`恢复“${model.label}”的服务器配置？当前工作区覆盖和单独保存的密钥将被移除。`)) return;
+    setBusy(`restore:${model.routeId}`);
+    setMessage(null);
+    try {
+      const next = await api<ModelState>(
+        `/api/studio/models/${encodeURIComponent(model.routeId)}/restore-server?expectedRevision=${state.revision}`,
+        { method: "POST" },
+      );
+      setState(next);
+      setMessage({ kind: "success", text: `${model.label} 已恢复为 174 服务器配置。` });
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "服务器配置未能恢复。" });
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function bindAgent(agentName: string, routeId: string) {
     setBusy(`bind:${agentName}`);
     try {
@@ -229,6 +249,7 @@ export function ModelManagement() {
                 <p>{model.model}</p>
                 <small>{model.provider} · {TYPE_COPY[model.modelType].description}</small>
                 <div className={styles.statusRow}>
+                  <span data-ok>{model.source === "server" ? "服务器配置" : "工作区覆盖"}</span>
                   <span data-ok={Boolean(model.baseUrl)}>端点{model.baseUrl ? "已配置" : "待配置"}</span>
                   <span data-ok={model.credentialConfigured}>密钥{model.credentialConfigured ? "已保存" : "待配置"}</span>
                 </div>
@@ -238,6 +259,7 @@ export function ModelManagement() {
                 <button type="button" disabled={!model.baseUrl || !model.credentialConfigured || busy !== ""} onClick={() => void testConnection(model)}>
                   {busy === `test:${model.routeId}` ? "测试中" : "测试"}
                 </button>
+                {model.source === "workspace" && model.serverAvailable && <button type="button" disabled={busy !== ""} onClick={() => void restoreServer(model)}>恢复服务器配置</button>}
                 {model.enabled && <button type="button" className={styles.danger} disabled={busy !== ""} onClick={() => void disable(model)}>停用</button>}
               </div>
             </article>

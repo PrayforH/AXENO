@@ -40,6 +40,7 @@ from harness.application.memory import UserMemoryService
 from harness.application.runs import RunQuotaPlan, RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
+from harness.auth.api_access import ApiAccessService, InMemoryApiAccessKeyRepository
 from harness.auth.audit import AuditService
 from harness.auth.repositories import InMemoryAuditRepository, InMemoryAuthRepository
 from harness.auth.service import (
@@ -187,6 +188,7 @@ class Identity:
     email: str = ""
     display_name: str = ""
     authentication_method: str = "service"
+    permissions: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -194,6 +196,7 @@ class ApiContainer:
     environment: str
     api_bearer_token: SecretStr
     auth: AuthService
+    api_access: ApiAccessService
     audit: AuditService
     agent_drafts: AgentDraftRepository
     capability_catalogs: CapabilityCatalogService
@@ -304,6 +307,7 @@ def build_memory_container(
         ),
     )
     audit = AuditService(InMemoryAuditRepository())
+    api_access = ApiAccessService(InMemoryApiAccessKeyRepository(), audit=audit)
     active_policy_profiles = policy_profiles or default_policy_profiles()
     governance = GovernanceService(
         governance_repository,
@@ -924,6 +928,7 @@ def build_memory_container(
         environment=resolved_settings.environment,
         api_bearer_token=resolved_settings.api_bearer_token,
         auth=auth,
+        api_access=api_access,
         audit=audit,
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
@@ -997,6 +1002,10 @@ async def require_identity(
     user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
 ) -> Identity:
     container: ApiContainer = request.app.state.container
+    api_key_identity = getattr(request.state, "api_key_identity", None)
+    if isinstance(api_key_identity, Identity):
+        request.state.identity = api_key_identity
+        return api_key_identity
     scheme, separator, credential = (authorization or "").partition(" ")
     service_authenticated = bool(getattr(request.state, "service_authenticated", False))
     if separator and scheme.lower() == "bearer" and credential.count(".") == 2:
@@ -1077,6 +1086,16 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 
 def ensure_permission(identity: Identity, permission: str) -> None:
+    if identity.permissions is not None:
+        if permission not in identity.permissions:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "permission_denied",
+                    "message": f"API key permission required: {permission}",
+                },
+            )
+        return
     granted: set[str] = set()
     for role in identity.roles:
         granted.update(_ROLE_PERMISSIONS.get(role, frozenset()))

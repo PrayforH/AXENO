@@ -1,4 +1,13 @@
-.controlPlane { min-width: 0; display: grid; gap: 14px; }
+.controlPlane {
+  --ink: #17211b;
+  --muted-ink: #69756d;
+  --line: #e4e9e5;
+  --rail: #16b364;
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  color: var(--ink);
+}
 .guardrail { padding: 13px 14px; display: grid; grid-template-columns: 30px 1fr; gap: 10px; border: 1px solid #cfe0d7; border-radius: 12px; background: #f1f7f3; }
 .guardrail > div { display: grid; gap: 3px; }
 .guardrail strong { color: #315a49; font-size: 11px; }

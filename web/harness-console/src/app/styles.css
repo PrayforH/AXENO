@@ -9,7 +9,9 @@
   --rail: #276650;
   --rail-soft: #dce9e2;
   --signal: #b97922;
-  font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
   background: var(--paper);
   color: var(--ink);
 }

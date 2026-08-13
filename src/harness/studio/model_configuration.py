@@ -8,6 +8,7 @@ included in API responses, logs, manifests, or task input.
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -65,6 +66,8 @@ class ModelConfiguration(StudioModel):
     capabilities: tuple[str, ...]
     enabled: bool
     credential_configured: bool = Field(alias="credentialConfigured")
+    source: Literal["server", "workspace"]
+    server_available: bool = Field(alias="serverAvailable")
     version: int
 
 
@@ -110,11 +113,15 @@ class ModelConfigurationService:
         credentials: McpCredentialService,
         *,
         environment: str = "local",
+        server_routes: Iterable[CcSwitchClaudeConfig] = (),
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._catalogs = catalogs
         self._credentials = credentials
         self._environment = environment
+        self._server_routes = {
+            route.route_id: route for route in server_routes if route.route_id is not None
+        }
         self._http_client = http_client
 
     async def list(self, tenant_id: str) -> ModelConfigurationList:
@@ -131,15 +138,19 @@ class ModelConfigurationService:
                 ModelConfiguration(
                     routeId=route.route_id,
                     label=route.label,
-                    modelType=route.model_type,
+                    modelType=self._effective_route(route).model_type,
                     provider=route.provider,
-                    model=route.models[0],
-                    baseUrl=route.base_url,
-                    apiFormat=route.api_format,
-                    authScheme=route.auth_scheme,
-                    capabilities=route.capabilities,
+                    model=self._effective_route(route).models[0],
+                    baseUrl=self._effective_route(route).base_url,
+                    apiFormat=self._effective_route(route).api_format,
+                    authScheme=self._effective_route(route).auth_scheme,
+                    capabilities=self._effective_route(route).capabilities,
                     enabled=route.enabled,
-                    credentialConfigured=route.route_id in stored,
+                    credentialConfigured=(
+                        route.route_id in stored or route.route_id in self._server_routes
+                    ),
+                    source="server" if route.base_url is None else "workspace",
+                    serverAvailable=route.route_id in self._server_routes,
                     version=route.version,
                 )
                 for route in record.catalog.model_routes
@@ -165,7 +176,11 @@ class ModelConfigurationService:
         credential = await self._credentials.repository.get(
             tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
         )
-        if request.api_key is None and credential is None:
+        if (
+            request.api_key is None
+            and credential is None
+            and route_id not in self._server_routes
+        ):
             raise ConflictError("an API key is required when creating a model connection")
         capabilities = {
             "chat": ("streaming", "tool_use"),
@@ -199,6 +214,63 @@ class ModelConfigurationService:
         )
         if request.api_key is not None:
             await self._store_secret(tenant_id, user_id, route_id, request.api_key)
+        return await self.list(tenant_id)
+
+    async def restore_server(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        expected_revision: int,
+    ) -> ModelConfigurationList:
+        """Remove a workspace override and return to the trusted server route."""
+
+        server = self._server_routes.get(route_id)
+        if server is None:
+            raise NotFoundError(f"server model configuration not found: {route_id}")
+        record = await self._catalogs.get(tenant_id)
+        if record.revision != expected_revision:
+            raise ConflictError("model catalog revision changed; reload before restoring")
+        current = next(
+            (route for route in record.catalog.model_routes if route.route_id == route_id),
+            None,
+        )
+        if current is None:
+            raise NotFoundError(f"configured model not found: {route_id}")
+        restored = current.model_copy(
+            update={
+                "models": (server.model,),
+                "capabilities": tuple(sorted(server.capabilities)),
+                "model_type": self._server_model_type(server),
+                "base_url": None,
+                "api_format": "anthropic_compatible",
+                "auth_scheme": server.resolved_auth_scheme,
+                "version": current.version + 1,
+                "enabled": True,
+            }
+        )
+        await self._catalogs.upsert(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            resource_type="modelRoute",
+            resource_id=route_id,
+            request=UpsertCatalogResourceRequest(
+                expectedRevision=record.revision,
+                resource=restored,
+            ),
+        )
+        await self._credentials.repository.delete(
+            tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
+        )
+        if self._credentials.audit is not None:
+            await self._credentials.audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.model_configuration.restore_server",
+                resource_type="model_route",
+                resource_id=route_id,
+                details={},
+            )
         return await self.list(tenant_id)
 
     async def disable(
@@ -262,12 +334,14 @@ class ModelConfigurationService:
         route = next(
             (item for item in record.catalog.model_routes if item.route_id == route_id), None
         )
-        if (
-            route is None
-            or not route.enabled
-            or route.base_url is None
-            or route.model_type == "image_generation"
-        ):
+        if route is None or not route.enabled:
+            return None
+        if route.base_url is None:
+            server = self._server_routes.get(route.route_id)
+            if server is not None:
+                return server
+        route = self._effective_route(route)
+        if route.base_url is None or route.model_type == "image_generation":
             return None
         secret = await self._secret(tenant_id, route_id)
         if secret is None:
@@ -391,10 +465,16 @@ class ModelConfigurationService:
         route = next(
             (item for item in record.catalog.model_routes if item.route_id == route_id), None
         )
-        if route is None or route.base_url is None:
+        if route is None:
             raise NotFoundError(f"configured model not found: {route_id}")
-        self._validate_endpoint(route.base_url)
-        return route
+        effective = self._effective_route(route)
+        if effective.base_url is None:
+            raise NotFoundError(f"configured model not found: {route_id}")
+        # Server routes are loaded from trusted deployment settings and may be
+        # internal HTTP endpoints. Workspace overrides remain SSRF-protected.
+        if route.base_url is not None:
+            self._validate_endpoint(effective.base_url)
+        return effective
 
     async def _store_secret(
         self, tenant_id: str, user_id: str, route_id: str, api_key: SecretStr
@@ -431,9 +511,45 @@ class ModelConfigurationService:
         stored = await self._credentials.repository.get(
             tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
         )
-        if stored is None:
-            return None
-        return self._credentials.cipher.decrypt(stored).get(_API_KEY)
+        if stored is not None:
+            return self._credentials.cipher.decrypt(stored).get(_API_KEY)
+        server = self._server_routes.get(route_id)
+        return server.credential if server is not None else None
+
+    def _effective_route(self, route: ModelRouteCapability) -> ModelRouteCapability:
+        if route.base_url is not None:
+            return route
+        server = self._server_routes.get(route.route_id)
+        if server is None:
+            return route
+        return route.model_copy(
+            update={
+                "models": (server.model,),
+                "capabilities": tuple(sorted(server.capabilities)),
+                "model_type": self._server_model_type(server),
+                "base_url": self._server_direct_base_url(server),
+                "api_format": "anthropic_compatible",
+                "auth_scheme": server.resolved_auth_scheme,
+            }
+        )
+
+    @staticmethod
+    def _server_model_type(
+        route: CcSwitchClaudeConfig,
+    ) -> Literal["chat", "vision", "image_generation"]:
+        return "vision" if "vision" in route.capabilities else "chat"
+
+    @staticmethod
+    def _server_direct_base_url(
+        route: CcSwitchClaudeConfig,
+    ) -> str:
+        base_url = route.base_url.rstrip("/")
+        # Deployment settings are SDK base URLs; Anthropic-compatible SDKs
+        # append /v1/messages themselves. The control-plane probe uses raw
+        # HTTP, so expose the complete API base before appending /messages.
+        if not base_url.endswith("/v1"):
+            return f"{base_url}/v1"
+        return base_url
 
     async def _require_secret(self, tenant_id: str, route_id: str) -> SecretStr:
         secret = await self._secret(tenant_id, route_id)
@@ -450,10 +566,10 @@ class ModelConfigurationService:
     ) -> httpx.Response:
         assert route.base_url is not None
         headers = {"content-type": "application/json"}
+        if route.api_format == "anthropic_compatible":
+            headers["anthropic-version"] = "2023-06-01"
         if route.auth_scheme == "x-api-key":
             headers["x-api-key"] = secret.get_secret_value()
-            if route.api_format == "anthropic_compatible":
-                headers["anthropic-version"] = "2023-06-01"
         else:
             headers["authorization"] = f"Bearer {secret.get_secret_value()}"
         client = self._http_client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)

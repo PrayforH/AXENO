@@ -5,6 +5,8 @@ import pytest
 from pydantic import SecretStr
 
 from harness.core.errors import ConflictError
+from harness.core.models import ModelCompatibility
+from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.mcp_credential_store import (
@@ -22,7 +24,10 @@ from harness.studio.repositories import InMemoryAgentDraftRepository
 
 
 def service(
-    *, environment: str = "test", client: httpx.AsyncClient | None = None
+    *,
+    environment: str = "test",
+    client: httpx.AsyncClient | None = None,
+    server_routes: tuple[CcSwitchClaudeConfig, ...] = (),
 ) -> tuple[ModelConfigurationService, CapabilityCatalogService, InMemoryMcpCredentialRepository]:
     catalogs = CapabilityCatalogService(
         InMemoryCapabilityCatalogRepository(),
@@ -39,6 +44,7 @@ def service(
             catalogs,
             credential_service,
             environment=environment,
+            server_routes=server_routes,
             http_client=client,
         ),
         catalogs,
@@ -172,3 +178,97 @@ async def test_production_rejects_insecure_or_private_model_endpoints() -> None:
             "unsafe-model",
             request(baseUrl="https://127.0.0.1/v1"),
         )
+
+
+@pytest.mark.asyncio
+async def test_server_route_is_visible_testable_and_does_not_expose_secret() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        return httpx.Response(200, json={"content": [{"type": "text", "text": "OK"}]})
+
+    route = CcSwitchClaudeConfig(
+        route_id="minimax-m3",
+        base_url="https://api.minimaxi.com/anthropic",
+        model="MiniMax-M3",
+        provider="anthropic",
+        credential=SecretStr("server-only-secret"),
+        auth_scheme="x-api-key",
+        compatibility=ModelCompatibility.FULL,
+        capabilities=frozenset({"streaming", "tool_use", "vision"}),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models, _catalogs, _credentials = service(
+            environment="production", client=client, server_routes=(route,)
+        )
+        listed = await models.list("tenant-a")
+        result = await models.test("tenant-a", "minimax-m3")
+
+    view = next(item for item in listed.models if item.route_id == "minimax-m3")
+    assert view.base_url == "https://api.minimaxi.com/anthropic/v1"
+    assert view.model_type == "vision"
+    assert view.source == "server"
+    assert view.server_available is True
+    assert view.credential_configured is True
+    assert "server-only-secret" not in listed.model_dump_json()
+    assert result.ok is True
+    assert captured[0].url == "https://api.minimaxi.com/anthropic/v1/messages"
+    assert captured[0].headers["x-api-key"] == "server-only-secret"
+    assert captured[0].headers["anthropic-version"] == "2023-06-01"
+
+
+@pytest.mark.asyncio
+async def test_trusted_server_route_may_use_private_http_but_workspace_override_cannot() -> None:
+    route = CcSwitchClaudeConfig(
+        route_id="glm-5-2",
+        base_url="http://172.20.109.174:4000",
+        model="shdata-glm",
+        provider="new-api",
+        credential=SecretStr("server-only-secret"),
+        auth_scheme="bearer",
+    )
+    models, _catalogs, _credentials = service(
+        environment="production", server_routes=(route,)
+    )
+
+    resolved = await models.resolve_runtime("tenant-a", "helper-agent", "glm-5-2")
+
+    assert resolved is not None
+    assert resolved.base_url == "http://172.20.109.174:4000"
+
+
+@pytest.mark.asyncio
+async def test_restore_server_removes_workspace_override_and_saved_secret() -> None:
+    route = CcSwitchClaudeConfig(
+        route_id="minimax-m3",
+        base_url="https://api.minimaxi.com/anthropic",
+        model="MiniMax-M3",
+        provider="anthropic",
+        credential=SecretStr("server-only-secret"),
+        auth_scheme="x-api-key",
+        capabilities=frozenset({"streaming", "tool_use", "vision"}),
+    )
+    models, _catalogs, credentials = service(server_routes=(route,))
+    configured = await models.configure(
+        "tenant-a",
+        "admin-a",
+        "minimax-m3",
+        request(
+            expectedRevision=1,
+            model="wrong-model",
+            baseUrl="https://api.minimaxi.com/v1",
+        ),
+    )
+
+    restored = await models.restore_server(
+        "tenant-a", "admin-a", "minimax-m3", configured.revision
+    )
+
+    view = next(item for item in restored.models if item.route_id == "minimax-m3")
+    assert view.source == "server"
+    assert view.base_url == "https://api.minimaxi.com/anthropic/v1"
+    assert view.model == "MiniMax-M3"
+    assert await credentials.get(
+        "tenant-a", "tenant:model-control-plane", "minimax-m3"
+    ) is None

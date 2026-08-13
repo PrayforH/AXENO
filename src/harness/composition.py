@@ -28,6 +28,7 @@ from harness.application.memory import UserMemoryService
 from harness.application.runs import RunQuotaPlan, RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
+from harness.auth.api_access import ApiAccessService
 from harness.auth.audit import AuditService
 from harness.auth.repositories import PostgresAuditRepository, PostgresAuthRepository
 from harness.auth.service import AuthService, OAuthProviderConfig
@@ -107,6 +108,7 @@ from harness.sandbox.kubernetes import (
 from harness.sandbox.local import LocalSandboxProvider
 from harness.sharing.service import TeamSpaceService
 from harness.sharing.workspace_repositories import AgentIdentityService
+from harness.storage.api_access_repository import PostgresApiAccessKeyRepository
 from harness.storage.catalog_repository import PostgresCapabilityCatalogRepository
 from harness.storage.context_repository import PostgresContextRepository
 from harness.storage.database import create_database
@@ -585,6 +587,7 @@ def build_production_container(
         ),
     )
     audit = AuditService(PostgresAuditRepository(sessions))
+    api_access = ApiAccessService(PostgresApiAccessKeyRepository(sessions), audit=audit)
     policy_profiles = default_policy_profiles()
     governance = GovernanceService(
         governance_repository,
@@ -734,6 +737,7 @@ def build_production_container(
         capability_catalogs,
         mcp_credential_service,
         environment="production",
+        server_routes=configured_gateways,
     )
     discovery_credentials = StoredMcpCredentialProvider(
         mcp_credential_service,
@@ -1307,6 +1311,7 @@ def build_production_container(
         environment="production",
         api_bearer_token=settings.api_bearer_token,
         auth=auth,
+        api_access=api_access,
         audit=audit,
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
