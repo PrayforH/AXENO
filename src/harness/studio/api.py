@@ -68,6 +68,15 @@ from harness.studio.mcp_credential_store import (
     McpCredentialStatus,
 )
 from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
+from harness.studio.model_configuration import (
+    BindAgentModelRequest,
+    ConfigureModelRequest,
+    GenerateImageRequest,
+    GenerateImageResult,
+    ModelConfigurationList,
+    ModelConfigurationService,
+    ModelConnectionTestResult,
+)
 from harness.studio.models import (
     AgentDraft,
     AgentDraftSummary,
@@ -231,6 +240,20 @@ def get_mcp_credential_service(request: Request) -> McpCredentialService:
             detail={
                 "code": "mcp_credentials_not_configured",
                 "message": "MCP credential storage is not configured",
+            },
+        )
+    return service
+
+
+def get_model_configuration_service(request: Request) -> ModelConfigurationService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "model_configurations", None)
+    if not isinstance(service, ModelConfigurationService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_configuration_not_configured",
+                "message": "Model configuration control plane is not configured",
             },
         )
     return service
@@ -765,6 +788,82 @@ async def get_catalog(
     service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
 ) -> CapabilityCatalogRecord:
     return await service.get_for_user(actor.tenant_id, actor.user_id)
+
+
+@router.get("/models", response_model=ModelConfigurationList)
+async def list_model_configurations(
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConfigurationList:
+    """List administrator-only connection metadata; credentials are status-only."""
+
+    return await service.list(actor.tenant_id)
+
+
+@router.put("/models/{route_id}", response_model=ModelConfigurationList)
+async def configure_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: ConfigureModelRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConfigurationList:
+    return await service.configure(actor.tenant_id, actor.user_id, route_id, body)
+
+
+@router.delete("/models/{route_id}", response_model=ModelConfigurationList)
+async def disable_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConfigurationList:
+    return await service.disable(
+        actor.tenant_id, actor.user_id, route_id, expected_revision
+    )
+
+
+@router.put(
+    "/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList
+)
+async def bind_agent_model(
+    agent_name: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: BindAgentModelRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConfigurationList:
+    return await service.bind_agent(actor.tenant_id, actor.user_id, agent_name, body)
+
+
+@router.post("/models/{route_id}/test", response_model=ModelConnectionTestResult)
+async def test_model_connection(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> ModelConnectionTestResult:
+    return await service.test(actor.tenant_id, route_id)
+
+
+@router.post("/models/{route_id}/images", response_model=GenerateImageResult)
+async def generate_image(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: GenerateImageRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[
+        ModelConfigurationService, Depends(get_model_configuration_service)
+    ],
+) -> GenerateImageResult:
+    ensure_permission(identity, "tasks:write")
+    return await service.generate_image(identity.tenant_id, route_id, body)
 
 
 @router.post("/mcp/discover", response_model=McpDiscoveryResult)

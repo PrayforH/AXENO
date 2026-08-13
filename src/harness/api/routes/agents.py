@@ -74,7 +74,7 @@ async def list_agents(
         AgentCatalogItem.from_version(
             version,
             can_edit=True,
-            agent_id=personal_by_name.get(version.name).agent_id
+            agent_id=personal_by_name[version.name].agent_id
             if version.name in personal_by_name
             else None,
             current_version=version.version,
@@ -83,7 +83,7 @@ async def list_agents(
         if f"{version.name}@{version.version}" not in dependency_coordinates
         and not _is_internal(version)
     ]
-    shared = []
+    shared: list[AgentCatalogItem] = []
     for space, _member, agent, release, version in (
         await container.team_spaces.list_accessible_agents(
             identity.tenant_id, identity.user_id
@@ -103,11 +103,32 @@ async def list_agents(
                 runnable_by_viewer=release.runnable_by_viewer,
                 agent_id=agent.agent_id,
                 current_version=agent.current_version,
-                connection_mode=release.connection_mode,
+                connection_mode=release.connection_mode.value,
                 can_chat=AgentPermission.CHAT in permissions,
             )
         )
-    return [*personal, *shared]
+    items: list[AgentCatalogItem] = [*personal, *shared]
+    catalog = await container.capability_catalogs.get_for_user(
+        identity.tenant_id, identity.user_id
+    )
+    routes = {route.route_id: route for route in catalog.catalog.model_routes}
+    bindings = catalog.catalog.agent_model_bindings
+    projected: list[AgentCatalogItem] = []
+    for item in items:
+        route = routes.get(bindings.get(item.name, ""))
+        if route is None or not route.enabled or route.model_type == "image_generation":
+            projected.append(item)
+            continue
+        projected.append(
+            item.model_copy(
+                update={
+                    "model_route": route.route_id,
+                    "model": route.models[0],
+                    "model_capabilities": route.capabilities,
+                }
+            )
+        )
+    return projected
 
 
 @router.post("", response_model=AgentVersion, status_code=status.HTTP_201_CREATED)

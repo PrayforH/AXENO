@@ -161,6 +161,7 @@ from harness.studio.mcp_discovery import (
     AutoDetectMcpConnector,
     McpDiscoveryService,
 )
+from harness.studio.model_configuration import ModelConfigurationService
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
     AnthropicSandboxModelProbe,
@@ -710,6 +711,11 @@ def build_production_container(
         McpCredentialCipher(settings.auth_jwt_secret),
         audit=audit,
     )
+    model_configurations = ModelConfigurationService(
+        capability_catalogs,
+        mcp_credential_service,
+        environment="production",
+    )
     discovery_credentials = StoredMcpCredentialProvider(
         mcp_credential_service,
         environment_mcp_credentials,
@@ -1014,6 +1020,7 @@ def build_production_container(
             config=primary_gateway,
             fallback_config=fallback_gateway,
             route_configs=configured_gateways,
+            model_configurations=model_configurations,
             tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
                 profiles=policy_profiles,
@@ -1280,6 +1287,7 @@ def build_production_container(
         capability_catalogs=capability_catalogs,
         mcp_discovery=mcp_discovery,
         mcp_credentials=mcp_credential_service,
+        model_configurations=model_configurations,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,

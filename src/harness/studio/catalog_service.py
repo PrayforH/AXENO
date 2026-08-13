@@ -33,6 +33,14 @@ def _upgrade_system_managed_catalog(
     route_ids = {route.route_id for route in catalog.model_routes}
     routes = list(catalog.model_routes)
     changed = False
+    normalized_routes = []
+    for route in routes:
+        if "vision" in route.capabilities and route.model_type == "chat":
+            normalized_routes.append(route.model_copy(update={"model_type": "vision"}))
+            changed = True
+        else:
+            normalized_routes.append(route)
+    routes = normalized_routes
     if not {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
         legacy = next(
             (route for route in routes if route.route_id == "new-api-default"),
@@ -226,6 +234,12 @@ class CapabilityCatalogService:
         record: CapabilityCatalogRecord,
         user_id: str,
     ) -> CapabilityCatalogRecord:
+        visible_model_routes = tuple(
+            # Endpoint details remain visible only through the administrator
+            # model-management API. Runtime users select logical route IDs.
+            item.model_copy(update={"base_url": None})
+            for item in record.catalog.model_routes
+        )
         visible = tuple(
             item
             for item in record.catalog.mcp_servers
@@ -268,6 +282,7 @@ class CapabilityCatalogService:
                 "updated_by": "personal-catalog",
                 "catalog": record.catalog.model_copy(
                     update={
+                        "model_routes": visible_model_routes,
                         "mcp_servers": visible,
                         "execution_profiles": execution_profiles,
                     }

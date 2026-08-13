@@ -302,6 +302,15 @@ class AgentDraftCompiler:
                 )
             )
         else:
+            if route.model_type == "image_generation":
+                issues.append(
+                    ValidationIssue(
+                        code="model_route_not_conversational",
+                        message=f"图像生成模型不能作为 Agent 对话路由：{spec.model.route_id}",
+                        severity=ValidationSeverity.ERROR,
+                        path="model.routeId",
+                    )
+                )
             if not route.enabled:
                 issues.append(
                     ValidationIssue(

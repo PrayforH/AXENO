@@ -785,6 +785,44 @@ def test_model_and_execution_profile_capabilities_must_be_compatible() -> None:
     }
 
 
+def test_image_generation_route_cannot_be_used_as_agent_chat_model() -> None:
+    catalog = default_capability_catalog()
+    image_route = catalog.model_routes[0].model_copy(
+        update={
+            "route_id": "image-primary",
+            "label": "图像生成",
+            "models": ("image-1",),
+            "model_type": "image_generation",
+            "api_format": "openai_images",
+            "capabilities": ("image_generation",),
+        }
+    )
+    with_image = catalog.model_copy(
+        update={"model_routes": (*catalog.model_routes, image_route)}
+    )
+    current = draft()
+    image_draft = current.model_copy(
+        update={
+            "spec": current.spec.model_copy(
+                update={
+                    "model": current.spec.model.model_copy(
+                        update={
+                            "route_id": "image-primary",
+                            "model": "image-1",
+                        }
+                    )
+                }
+            )
+        }
+    )
+
+    validation = AgentDraftCompiler(with_image).validate(image_draft)
+
+    assert "model_route_not_conversational" in {
+        issue.code for issue in validation.issues
+    }
+
+
 def test_execution_profile_egress_allows_only_registered_mcp_associations() -> None:
     catalog = default_capability_catalog()
     restricted = catalog.model_copy(

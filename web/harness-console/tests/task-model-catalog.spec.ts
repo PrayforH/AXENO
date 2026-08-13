@@ -62,6 +62,35 @@ describe("task model selection", () => {
     expect(loadTaskModelOverride(storage, "thread-2")).toBeNull();
   });
 
+  it("keeps image generation routes out of the conversation selector", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      modelRoutes: [
+        {
+          routeId: "vision-primary",
+          label: "视觉主模型",
+          provider: "example",
+          models: ["vision-1"],
+          modelType: "vision",
+          capabilities: ["streaming", "tool_use", "vision"],
+          enabled: true,
+        },
+        {
+          routeId: "image-primary",
+          label: "图像生成",
+          provider: "example",
+          models: ["image-1"],
+          modelType: "image_generation",
+          capabilities: ["image_generation"],
+          enabled: true,
+        },
+      ],
+    }), { status: 200 })));
+
+    await expect(loadTaskModelRoutes()).resolves.toEqual([
+      expect.objectContaining({ id: "vision-primary" }),
+    ]);
+  });
+
   it("clears follow-Agent selection and rejects malformed stored routes", () => {
     const storage = memoryStorage();
     storage.setItem("agent-studio.task-model:thread-1", "../../secret");

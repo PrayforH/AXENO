@@ -808,6 +808,7 @@ export type StudioCapabilities = {
     provider: string;
     models: string[];
     capabilities: string[];
+    modelType?: "chat" | "vision" | "image_generation";
     enabled: boolean;
   }>;
   builtinTools: Array<{
@@ -1689,7 +1690,12 @@ export function capabilityOptions(catalog: StudioCapabilities): {
   profiles: StudioCapabilities["executionProfiles"];
 } {
   return {
-    routes: catalog.modelRoutes.filter((item) => item.enabled).map((item) => ({
+    routes: catalog.modelRoutes.filter(
+      (item) =>
+        item.enabled &&
+        item.modelType !== "image_generation" &&
+        !item.capabilities.includes("image_generation"),
+    ).map((item) => ({
       id: item.routeId,
       label: item.label,
       provider: item.provider,

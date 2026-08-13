@@ -15,6 +15,7 @@ interface CapabilityResponse {
     provider: string;
     models: string[];
     capabilities: string[];
+    modelType?: "chat" | "vision" | "image_generation";
     enabled: boolean;
   }>;
 }
@@ -30,7 +31,13 @@ export async function loadTaskModelRoutes(): Promise<TaskModelRoute[]> {
   return catalog.modelRoutes
     // A task override is a route ID, so selectable routes must resolve to one
     // unambiguous provider model. Legacy grouped routes remain runtime-only.
-    .filter((route) => route.enabled && route.models.length === 1)
+    .filter(
+      (route) =>
+        route.enabled &&
+        route.models.length === 1 &&
+        route.modelType !== "image_generation" &&
+        !route.capabilities.includes("image_generation"),
+    )
     .map((route) => ({
       id: route.routeId,
       label: route.label,

@@ -51,6 +51,7 @@ def default_capability_catalog() -> CapabilityCatalog:
                 provider="minimax",
                 models=("MiniMax-M3",),
                 capabilities=("streaming", "tool_use", "vision"),
+                modelType="vision",
                 credentialReference="MINIMAX_M3_API_KEY",
             ),
             ModelRouteCapability(

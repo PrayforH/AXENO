@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -351,11 +352,21 @@ class AgentDraftSummary(StudioModel):
 
 
 class ModelRouteCapability(StudioModel):
-    route_id: str = Field(alias="routeId")
-    label: str
-    provider: str
-    models: tuple[str, ...]
+    route_id: str = Field(alias="routeId", pattern=r"^[a-z][a-z0-9-]*$")
+    label: str = Field(min_length=1, max_length=160)
+    provider: str = Field(min_length=1, max_length=80)
+    models: tuple[str, ...] = Field(min_length=1)
     capabilities: tuple[str, ...]
+    model_type: Literal["chat", "vision", "image_generation"] = Field(
+        default="chat", alias="modelType"
+    )
+    base_url: str | None = Field(default=None, alias="baseUrl", max_length=2048)
+    api_format: Literal[
+        "anthropic_compatible", "openai_compatible", "openai_images"
+    ] = Field(default="anthropic_compatible", alias="apiFormat")
+    auth_scheme: Literal["bearer", "x-api-key"] = Field(
+        default="bearer", alias="authScheme"
+    )
     credential_managed: bool = Field(default=True, alias="credentialManaged")
     credential_reference: str | None = Field(
         default=None,
@@ -364,6 +375,39 @@ class ModelRouteCapability(StudioModel):
     )
     version: int = Field(default=1, ge=1)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_model_connection(self) -> ModelRouteCapability:
+        if len(self.capabilities) != len(set(self.capabilities)):
+            raise ValueError("duplicate model capability")
+        required = {
+            "chat": {"streaming", "tool_use"},
+            "vision": {"streaming", "tool_use", "vision"},
+            "image_generation": {"image_generation"},
+        }[self.model_type]
+        if not required.issubset(self.capabilities):
+            raise ValueError(
+                f"{self.model_type} model is missing required capabilities: "
+                + ", ".join(sorted(required - set(self.capabilities)))
+            )
+        if self.model_type == "image_generation" and self.api_format != "openai_images":
+            raise ValueError("image generation models must use the openai_images API format")
+        if self.model_type != "image_generation" and self.api_format == "openai_images":
+            raise ValueError("openai_images is only valid for image generation models")
+        if self.base_url is not None:
+            parsed = urlsplit(self.base_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "model Base URL must be HTTP(S) without credentials, query, or fragment"
+                )
+        return self
 
 
 class BuiltinToolCapability(StudioModel):
@@ -540,6 +584,9 @@ class CapabilityCatalog(StudioModel):
         default=(), alias="executionProfiles"
     )
     templates: tuple[TemplateCapability, ...]
+    agent_model_bindings: dict[str, str] = Field(
+        default_factory=dict, alias="agentModelBindings"
+    )
 
     @model_validator(mode="after")
     def unique_managed_ids(self) -> CapabilityCatalog:
@@ -567,6 +614,18 @@ class CapabilityCatalog(StudioModel):
         )
         if duplicate_mcp:
             raise ValueError(f"duplicate MCP: {', '.join(duplicate_mcp)}")
+        route_ids = {item.route_id for item in self.model_routes}
+        invalid_agents = sorted(
+            name
+            for name, route_id in self.agent_model_bindings.items()
+            if not name
+            or not re.fullmatch(r"[a-z][a-z0-9-]*", name)
+            or route_id not in route_ids
+        )
+        if invalid_agents:
+            raise ValueError(
+                "invalid Agent model bindings: " + ", ".join(invalid_agents)
+            )
         return self
 
 

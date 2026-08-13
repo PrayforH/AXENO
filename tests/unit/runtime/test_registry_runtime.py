@@ -28,9 +28,22 @@ from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.tools import McpServerRegistration, ToolResolver
 from harness.studio.catalog import default_capability_catalog
+from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
+from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import AgentDraftCompiler
 from harness.studio.factory import create_draft_spec
+from harness.studio.mcp_credential_store import (
+    InMemoryMcpCredentialRepository,
+    McpCredentialCipher,
+    McpCredentialService,
+)
+from harness.studio.model_configuration import (
+    BindAgentModelRequest,
+    ConfigureModelRequest,
+    ModelConfigurationService,
+)
 from harness.studio.models import AgentDraft, AgentTemplate
+from harness.studio.repositories import InMemoryAgentDraftRepository
 
 
 @pytest.mark.asyncio
@@ -124,6 +137,117 @@ async def test_model_route_uses_run_scoped_broker_lease_without_secret_events(
     assert lease_event.payload["secret_reference"] == "vault://tenant-a/model/default"
     assert broker_secret not in repr(events)
     assert "static-secret-must-not-be-used" not in repr(captured[0].env)
+
+
+@pytest.mark.asyncio
+async def test_admin_model_binding_replaces_manifest_gateway_at_runtime(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_manifest("agents/helper-agent/agent.yaml")
+    registry = InMemoryAgentRegistry()
+    await registry.add(
+        AgentVersion(
+            tenant_id="tenant-a",
+            owner_user_id="user-a",
+            name="helper-agent",
+            version="1.0.0",
+            status=AgentVersionStatus.PUBLISHED,
+            manifest_hash=snapshot.content_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=datetime.now(UTC),
+        )
+    )
+    catalogs = CapabilityCatalogService(
+        InMemoryCapabilityCatalogRepository(),
+        InMemoryAgentDraftRepository(),
+    )
+    model_configurations = ModelConfigurationService(
+        catalogs,
+        McpCredentialService(
+            InMemoryMcpCredentialRepository(),
+            McpCredentialCipher(SecretStr("test-model-encryption")),
+        ),
+        environment="test",
+    )
+    configured = await model_configurations.configure(
+        "tenant-a",
+        "admin-a",
+        "frontend-vision",
+        ConfigureModelRequest(
+            expectedRevision=1,
+            label="Frontend Vision",
+            modelType="vision",
+            provider="Example",
+            model="vision-from-settings",
+            baseUrl="https://models.example.test/v1",
+            apiFormat="openai_compatible",
+            authScheme="bearer",
+            apiKey="settings-secret",
+        ),
+    )
+    await model_configurations.bind_agent(
+        "tenant-a",
+        "admin-a",
+        "helper-agent",
+        BindAgentModelRequest(
+            expectedRevision=configured.revision,
+            routeId="frontend-vision",
+        ),
+    )
+    captured: list[ClaudeAgentOptions] = []
+
+    async def fake_query(_prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
+        captured.append(options)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="sdk-session",
+        )
+
+    runtime = RegistryClaudeRuntime(
+        registry=registry,
+        config=CcSwitchClaudeConfig(
+            base_url="https://static.example.test",
+            model="static-model",
+            provider="new-api",
+            credential=SecretStr("static-secret"),
+        ),
+        query_factory=fake_query,
+        model_configurations=model_configurations,
+    )
+    now = datetime.now(UTC)
+    context = RuntimeContext(
+        run=Run(
+            run_id="run-configured-model",
+            session_id="session-configured-model",
+            tenant_id="tenant-a",
+            status=RunStatus.RUNNING,
+            idempotency_key="configured-model",
+            created_at=now,
+            updated_at=now,
+            input={"prompt": "inspect this image"},
+        ),
+        session=Session(
+            session_id="session-configured-model",
+            tenant_id="tenant-a",
+            user_id="developer",
+            agent_owner_user_id="user-a",
+            agent_name="helper-agent",
+            agent_version="1.0.0",
+            created_at=now,
+        ),
+        workspace=tmp_path,
+    )
+
+    events = [event async for event in runtime.execute(context)]
+
+    assert captured[0].model == "vision-from-settings"
+    assert captured[0].env["ANTHROPIC_AUTH_TOKEN"] == "settings-secret"
+    selected = next(event for event in events if event.type == "model.route.selected")
+    assert selected.payload["route_id"] == "frontend-vision"
 
 
 @pytest.mark.asyncio

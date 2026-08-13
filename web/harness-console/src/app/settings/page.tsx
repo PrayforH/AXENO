@@ -4,6 +4,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { AuthProvider, useAuth } from "../../components/auth-provider";
 import { ThemeSelector } from "../../components/theme-toggle";
 import { WorkspaceMembers } from "../../components/workspace-members";
+import { ModelManagement } from "../../components/model-management";
 import {
   loadTasks,
   setTaskArchived,
@@ -106,6 +107,7 @@ function ArchivedTasksSettings() {
 
 function SettingsContent() {
   const { user, membership, passwordEnabled } = useAuth();
+  const canManageModels = membership.role === "owner" || membership.role === "admin";
   const [profileMessage, setProfileMessage] = useState<Message>(null);
   const [passwordMessage, setPasswordMessage] = useState<Message>(null);
   const [profilePending, setProfilePending] = useState(false);
@@ -187,6 +189,7 @@ function SettingsContent() {
           <p>设置</p>
           <a href="#profile">个人资料</a>
           <a href="#members">工作区成员</a>
+          {canManageModels && <a href="#models">模型管理</a>}
           <a href="#appearance">外观</a>
           <a href="#security">账户安全</a>
           <a href="#data">我的数据</a>
@@ -198,7 +201,7 @@ function SettingsContent() {
         <div className="settings-content">
           <header className="settings-title">
             <p>账户设置</p>
-            <h1>管理账户、工作区成员与登录安全</h1>
+            <h1>管理账户、模型与登录安全</h1>
             <span>个人设置只影响当前用户；工作区角色管理仅对 Owner / Admin 开放。</span>
           </header>
 
@@ -238,6 +241,16 @@ function SettingsContent() {
               currentRole={membership.role}
             />
           </section>
+
+          {canManageModels && (
+            <section className="settings-section settings-section-models" id="models">
+              <div className="settings-section-copy">
+                <h2>模型管理</h2>
+                <p>配置对话、视觉和图像生成模型，并指定内置 Agent 的默认模型。</p>
+              </div>
+              <ModelManagement />
+            </section>
+          )}
 
           <section className="settings-section" id="appearance">
             <div className="settings-section-copy">

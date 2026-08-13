@@ -8,7 +8,10 @@ from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
 from harness.core.models import ModelRoute, Session
 from harness.core.ports import AgentRegistry
-from harness.deployments.boundaries import enforce_runtime_environment
+from harness.deployments.boundaries import (
+    enforce_runtime_environment,
+    enforce_runtime_model_route,
+)
 from harness.execution.credentials import (
     CredentialBroker,
     CredentialLease,
@@ -25,6 +28,7 @@ from harness.runtime.claude_sdk import ClaudeSdkRuntime, QueryFactory
 from harness.runtime.mcp_credentials import DynamicMcpCredentialProvider
 from harness.runtime.sdk_tool_gate import ToolGate
 from harness.runtime.tools import ToolResolver
+from harness.studio.model_configuration import ModelConfigurationService
 
 
 class RegistryClaudeRuntime:
@@ -47,6 +51,7 @@ class RegistryClaudeRuntime:
         session_store_factory: Callable[[Session], object] | None = None,
         observability: Observability | None = None,
         credential_broker: CredentialBroker | None = None,
+        model_configurations: ModelConfigurationService | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
@@ -74,6 +79,7 @@ class RegistryClaudeRuntime:
         self._session_store_factory = session_store_factory
         self._observability = observability
         self._credential_broker = credential_broker
+        self._model_configurations = model_configurations
 
     def _config_for_route(
         self,
@@ -114,10 +120,26 @@ class RegistryClaudeRuntime:
         raw_override = context.run.input.get("model_route_override")
         route_override = raw_override if isinstance(raw_override, str) else None
         route_id = route_override or configured_route
-        selected_config = self._config_for_route(
-            route_id,
-            strict=route_override is not None,
+        dynamic_config = (
+            await self._model_configurations.resolve_runtime(
+                session.tenant_id,
+                session.agent_name,
+                route_id,
+                apply_agent_binding=route_override is None,
+            )
+            if self._model_configurations is not None
+            else None
         )
+        if dynamic_config is not None:
+            selected_config = dynamic_config
+            assert selected_config.route_id is not None
+            route_id = selected_config.route_id
+        else:
+            selected_config = self._config_for_route(
+                route_id,
+                strict=route_override is not None,
+            )
+        enforce_runtime_model_route(session, route_id)
         route = ModelRoute(
             route_id=route_id,
             provider=selected_config.provider,
@@ -132,7 +154,7 @@ class RegistryClaudeRuntime:
         )
         routes = [route]
         issued_leases: list[CredentialLease] = []
-        if self._credential_broker is None:
+        if dynamic_config is not None or self._credential_broker is None:
             route_secret = selected_config.credential.get_secret_value()
         else:
             assert context.identity is not None
@@ -233,5 +255,19 @@ class RegistryClaudeRuntime:
                 type="credential.lease.issued",
                 payload=lease.audit_record(),
             )
-        async for event in runtime.execute(context):
+        effective_context = context
+        if route_override is None and route_id != configured_route:
+            effective_context = context.model_copy(
+                update={
+                    "run": context.run.model_copy(
+                        update={
+                            "input": {
+                                **context.run.input,
+                                "model_route_override": route_id,
+                            }
+                        }
+                    )
+                }
+            )
+        async for event in runtime.execute(effective_context):
             yield event

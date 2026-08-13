@@ -1650,6 +1650,54 @@ async def test_catalog_is_admin_managed_secret_free_and_drives_live_validation()
 
 
 @pytest.mark.asyncio
+async def test_model_management_is_admin_only_and_never_returns_api_keys() -> None:
+    owner_headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-a",
+        "X-User-ID": "owner-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        await register(client, "model-owner@example.com")
+        member = await register(client, "model-member@example.com")
+        member_headers = {"Authorization": f"Bearer {member['access_token']}"}
+
+        initial = await client.get("/v1/studio/models", headers=owner_headers)
+        configured = await client.put(
+            "/v1/studio/models/vision-primary",
+            headers=owner_headers,
+            json={
+                "expectedRevision": initial.json()["revision"],
+                "label": "视觉主模型",
+                "modelType": "vision",
+                "provider": "Example AI",
+                "model": "vision-1",
+                "baseUrl": "https://models.example.test/v1",
+                "apiFormat": "openai_compatible",
+                "authScheme": "bearer",
+                "apiKey": "api-key-must-never-be-returned",
+                "enabled": True,
+            },
+        )
+        denied = await client.get("/v1/studio/models", headers=member_headers)
+        runtime_catalog = await client.get("/v1/studio/catalog", headers=owner_headers)
+
+    assert initial.status_code == 200
+    assert configured.status_code == 200
+    assert "api-key-must-never-be-returned" not in configured.text
+    model = next(
+        item for item in configured.json()["models"] if item["routeId"] == "vision-primary"
+    )
+    assert model["credentialConfigured"] is True
+    assert denied.status_code == 403
+    public_route = next(
+        item
+        for item in runtime_catalog.json()["catalog"]["modelRoutes"]
+        if item["routeId"] == "vision-primary"
+    )
+    assert public_route["baseUrl"] is None
+
+
+@pytest.mark.asyncio
 async def test_each_studio_writer_can_discover_mcp_tools() -> None:
     class Connector:
         async def discover(
