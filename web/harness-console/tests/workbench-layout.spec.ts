@@ -61,6 +61,18 @@ describe("full-page agent workbench", () => {
     );
   });
 
+  it("keeps user edits aligned to the original message and omits unused ratings", () => {
+    expect(agentThread).toContain('className="user-message-edit-shell"');
+    expect(agentThread).toContain('className="user-message-edit-measure"');
+    expect(styles).toMatch(
+      /\.user-message-edit-shell\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*min\(82%,\s*40rem\);/s,
+    );
+    expect(agentThread).not.toContain("<AssistantActionBar.FeedbackPositive");
+    expect(agentThread).not.toContain("<AssistantActionBar.FeedbackNegative");
+    expect(agentThread).toContain("allowFeedbackPositive: false");
+    expect(agentThread).toContain("allowFeedbackNegative: false");
+  });
+
   it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {
     expect(codexStyles).toMatch(
       /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*width:\s*34px;[^}]*height:\s*34px;[^}]*border-radius:\s*999px;[^}]*background:\s*var\(--codex-ink-soft\);[^}]*box-shadow:\s*none;/s,
@@ -490,7 +502,10 @@ describe("full-page agent workbench", () => {
 
   it("shows an explicit inline editor for message reruns", () => {
     expect(styles).toMatch(
-      /\.user-message-editor\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*min\(82%,\s*40rem\);[^}]*align-self:\s*flex-end;[^}]*border-radius:\s*16px 16px 4px 16px;[^}]*background:\s*#eceeeb;/s,
+      /\.user-message-edit-shell\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*min\(82%,\s*40rem\);[^}]*align-self:\s*flex-end;/s,
+    );
+    expect(styles).toMatch(
+      /\.user-message-editor\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*border-radius:\s*16px 16px 4px 16px;[^}]*background:\s*#eceeeb;/s,
     );
     expect(styles).toMatch(
       /\.user-message-editor-actions button:last-child\s*\{[^}]*background:\s*#202522;/s,

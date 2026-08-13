@@ -219,7 +219,7 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("有效运行契约");
     expect(sidebar).toContain("<ProductBrandMark");
     expect(sidebar).toContain("<ProductBrandCopy");
-    expect(productBrand).toContain('PRODUCT_NAME = "序枢"');
+    expect(productBrand).toContain('PRODUCT_NAME = "AXENO"');
     expect(sidebar).toContain("<WorkspaceNavigation");
     expect(workspaceNavigation).toContain('aria-label="工作区"');
     expect(workspaceNavigation).toContain('href: "/"');

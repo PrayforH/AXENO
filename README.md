@@ -1,8 +1,8 @@
-# 序枢 · Agent Operations Platform
+# AXENO · Agent Operations Platform
 
-序枢是面向组织的智能体任务、能力与运行治理平台。它以 Claude Agent SDK 为执行内核，把智能体定义、任务运行、能力装配、协作权限、评测发布和审计治理收束到一条可恢复的执行链路中。
+AXENO 是面向组织的智能体任务、能力与运行治理平台。它以 Claude Agent SDK 为执行内核，把智能体定义、任务运行、能力装配、协作权限、评测发布和审计治理收束到一条可恢复的执行链路中。
 
-当前发布候选为 **序枢 0.2.0**。Claude Agent SDK 提供 Agent Loop、工具、Skills、
+当前发布候选为 **AXENO 0.2.0**。Claude Agent SDK 提供 Agent Loop、工具、Skills、
 Sub Agent、MCP、Hooks 与 Session Resume；本项目补齐多租户服务、版本治理、分布式 Run、
 可恢复审批、隔离执行、统一 API/Web、上下文工程、评测和可审计发布，不重写 SDK 的执行语义。
 
@@ -40,7 +40,7 @@ cd web/harness-console && npm ci --registry=https://registry.npmmirror.com && cd
 make dev-up
 ```
 
-平台完整架构、序枢构建区、Lead + Sub、多层记忆、安全、评测、发布和分阶段路线见 [docs/agent-production-platform-design.md](docs/agent-production-platform-design.md)，个人 Agent、团队空间 RBAC、共享版本/知识库与任务隔离见 [docs/team-spaces.md](docs/team-spaces.md)，Webhook、A2A 1.0、AG-UI、MCP 职责边界与 Bundle 可逆交付见 [docs/external-agent-exposure.md](docs/external-agent-exposure.md)，可直接交给 Codex/Claude 执行的目标树和循环见 [docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md](docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md)。领域 Agent 的 prompt、Skill、Python Tool、外部 MCP、权限、bundle 发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)，单 Agent 上线检查见 [docs/production-agent-runbook.md](docs/production-agent-runbook.md)，平台构建一次、签名、环境晋级和回滚见 [docs/runbooks/release-promotion.md](docs/runbooks/release-promotion.md)。仓库中的 `public-opinion-agent` 是可运行的编排型参考实现。
+平台完整架构、AXENO 构建区、Lead + Sub、多层记忆、安全、评测、发布和分阶段路线见 [docs/agent-production-platform-design.md](docs/agent-production-platform-design.md)，个人 Agent、团队空间 RBAC、共享版本/知识库与任务隔离见 [docs/team-spaces.md](docs/team-spaces.md)，Webhook、A2A 1.0、AG-UI、MCP 职责边界与 Bundle 可逆交付见 [docs/external-agent-exposure.md](docs/external-agent-exposure.md)，可直接交给 Codex/Claude 执行的目标树和循环见 [docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md](docs/plans/2026-07-16-agent-production-platform-goals-and-loops.md)。领域 Agent 的 prompt、Skill、Python Tool、外部 MCP、权限、bundle 发布与评测流程见 [docs/domain-agents.md](docs/domain-agents.md)，单 Agent 上线检查见 [docs/production-agent-runbook.md](docs/production-agent-runbook.md)，平台构建一次、签名、环境晋级和回滚见 [docs/runbooks/release-promotion.md](docs/runbooks/release-promotion.md)。仓库中的 `public-opinion-agent` 是可运行的编排型参考实现。
 
 当前平台版本与发布说明见 [CHANGELOG.md](CHANGELOG.md)。正式 Release 会校验 Python、Web、
 Helm 和 Changelog 使用同一 SemVer，并把该版本与 source commit、镜像 digest、SBOM 和 Agent

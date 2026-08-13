@@ -920,8 +920,6 @@ function HarnessAssistantMessage() {
             label="复制回答"
             text={copyText}
           />
-          <AssistantActionBar.FeedbackPositive />
-          <AssistantActionBar.FeedbackNegative />
         </AssistantActionBar.Root>
       </div>
     </AssistantMessage.Root>
@@ -1214,27 +1212,32 @@ function HarnessUserMessage() {
         />
         <MessagePrimitive.If hasContent>
           {editing ? (
-            <form className="user-message-editor" onSubmit={submitEdit}>
-              <textarea
-                className="user-message-editor-input"
-                aria-label="编辑用户输入"
-                value={draft}
-                onChange={(event) => {
-                  setEditor({ messageId: message.id, draft: event.target.value });
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") setEditor(null);
-                }}
-                autoFocus
-                rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-              />
-              <div className="user-message-editor-actions">
-                <button type="button" onClick={() => setEditor(null)}>取消</button>
-                <button type="submit" disabled={!draft.trim() || threadRunning}>
-                  发送
-                </button>
-              </div>
-            </form>
+            <div className="user-message-edit-shell">
+              <span className="user-message-edit-measure" aria-hidden="true">
+                {originalText || "\u00a0"}
+              </span>
+              <form className="user-message-editor" onSubmit={submitEdit}>
+                <textarea
+                  className="user-message-editor-input"
+                  aria-label="编辑用户输入"
+                  value={draft}
+                  onChange={(event) => {
+                    setEditor({ messageId: message.id, draft: event.target.value });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setEditor(null);
+                  }}
+                  autoFocus
+                  rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+                />
+                <div className="user-message-editor-actions">
+                  <button type="button" onClick={() => setEditor(null)}>取消</button>
+                  <button type="submit" disabled={!draft.trim() || threadRunning}>
+                    发送
+                  </button>
+                </div>
+              </form>
+            </div>
           ) : (
             <>
               <UserMessage.Content />
@@ -1296,8 +1299,8 @@ export function AgentThread({
         allowCopy: false,
         allowReload: false,
         allowSpeak: true,
-        allowFeedbackPositive: true,
-        allowFeedbackNegative: true,
+        allowFeedbackPositive: false,
+        allowFeedbackNegative: false,
         components: { ToolFallback: HarnessToolPart },
       }}
       userMessage={{ allowEdit: true }}
@@ -1316,10 +1319,6 @@ export function AgentThread({
           reload: { tooltip: "重新运行" },
           copy: { tooltip: "复制回答" },
           speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
-          feedback: {
-            positive: { tooltip: "回答有帮助" },
-            negative: { tooltip: "回答需改进" },
-          },
         },
         branchPicker: {
           previous: { tooltip: "上一个分支" },
