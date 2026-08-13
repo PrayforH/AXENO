@@ -251,8 +251,8 @@
   display: grid;
   align-content: start;
   flex: 1 1 auto;
-  gap: 4px;
-  padding: 0 10px 16px;
+  gap: 3px;
+  padding: 0 9px;
   overflow-y: auto;
 }
 
@@ -266,12 +266,12 @@
 .agentRow,
 .agentRowActive {
   width: 100%;
-  min-height: 64px;
+  min-height: 58px;
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  padding: 9px 10px;
+  padding: 8px;
   border: 1px solid transparent;
   border-radius: 10px;
   text-align: left;
@@ -300,8 +300,8 @@
 }
 
 .agentMonogram {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   color: var(--studio-violet);
@@ -2173,8 +2173,8 @@
 }
 
 .agentList {
-  gap: 4px;
-  padding: 0 10px 16px;
+  gap: 2px;
+  padding: 0 8px 14px;
 }
 
 .agentRow,
