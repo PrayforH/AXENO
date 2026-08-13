@@ -154,6 +154,8 @@ describe("Agent Studio management page", () => {
   it("exports the current draft as a NexAU ZIP package", () => {
     expect(workbench).toContain("studioClient.downloadNexauBundle");
     expect(workbench).toContain("导出 NexAU ZIP");
+    expect(workbench).toContain("导入与导出");
+    expect(workbench).not.toContain("在隔离环境中完成真实预检");
     expect(studioClient).toContain("/nexau-bundle");
   });
 
@@ -259,12 +261,12 @@ describe("Agent Studio management page", () => {
 
   it("uses one action-button contract and structured overflow menu states", () => {
     expect(workbench.match(/styles\.headerActionButton/g)).toHaveLength(5);
-    expect(workbench.match(/className=\{styles\.actionMenuItem\}/g)).toHaveLength(4);
+    expect(workbench.match(/className=\{styles\.actionMenuItem\}/g)).toHaveLength(3);
     expect(workbench).toContain("<HeaderActionIcon name=\"task\"");
     expect(workbench).toContain("<HeaderActionIcon name=\"save\"");
     expect(workbench).toContain("<HeaderActionIcon name=\"release\"");
     expect(workbench).toContain("<HeaderActionIcon name=\"contract\"");
-    expect(workbench).toContain("导入、预览与导出");
+    expect(workbench).toContain("导入与导出");
     expect(styles).toContain(".headerActions .headerActionButton");
     expect(styles).toContain(".actionMenuItem:disabled");
     expect(workbench).toContain("useDismissablePopovers()");

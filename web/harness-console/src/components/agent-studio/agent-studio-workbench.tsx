@@ -2037,7 +2037,7 @@ export function AgentStudioWorkbench() {
               <div className={styles.actionMenuPopover}>
                 <header className={styles.actionMenuHeader}>
                   <strong>更多操作</strong>
-                  <small>导入、预览与导出</small>
+                  <small>导入与导出</small>
                 </header>
                 <input
                   ref={bundleInputRef}
@@ -2060,19 +2060,6 @@ export function AgentStudioWorkbench() {
                   }}
                 >
                   <span><strong>{importingBundle ? "正在导入 Agent" : "导入 Agent / NexAU"}</strong><small>支持 Harness Bundle 与 NexAU ZIP，导入后可继续编辑</small></span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.actionMenuItem}
-                  data-icon="◇"
-                  disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
-                  title="创建绑定当前 Draft 双 Hash 的短时测试环境，并执行真实 Model、Sandbox 与 MCP Preflight"
-                  onClick={(event) => {
-                    event.currentTarget.closest("details")?.removeAttribute("open");
-                    void createPreview();
-                  }}
-                >
-                  <span><strong>{creatingPreview ? "正在创建 Preview" : "创建 Preview"}</strong><small>在隔离环境中完成真实预检</small></span>
                 </button>
                 <button
                   type="button"
