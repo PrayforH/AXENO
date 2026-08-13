@@ -82,7 +82,7 @@ html[data-color-mode="light"] body.codex-theme-v1 .task-sidebar-brand-copy stron
 }
 
 html[data-color-mode="light"] body.codex-theme-v1 .task-sidebar-primary {
-  padding: 5px 8px 4px;
+  padding: 5px 8px 2px;
 }
 
 html[data-color-mode="light"] body.codex-theme-v1 .task-sidebar-primary button {

@@ -10,6 +10,10 @@ const page = readFileSync(
   join(process.cwd(), "src/app/studio/knowledge/page.tsx"),
   "utf8",
 );
+const styles = readFileSync(
+  join(process.cwd(), "src/components/agent-studio/mcp-catalog-control-plane.module.css"),
+  "utf8",
+);
 
 describe("Knowledge control plane", () => {
   it("is a first-class Studio page for external knowledge only", () => {
@@ -35,5 +39,10 @@ describe("Knowledge control plane", () => {
     expect(component).toContain("个人能力目录");
     expect(component).toContain("只属于当前用户");
     expect(component).toContain("不会因共享智能体而共享");
+  });
+
+  it("uses the shared Studio page header divider rhythm", () => {
+    expect(styles).toContain("var(--studio-page-content-max,1320px)");
+    expect(styles).toContain("var(--studio-page-header-divider-gap,20px)");
   });
 });

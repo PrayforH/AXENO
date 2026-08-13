@@ -46,12 +46,15 @@
   --codex-control-radius: 8px;
   --codex-control-transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
   /* One primary-navigation contract shared by Tasks and every Studio route. */
-  --app-sidebar-expanded-width: 264px;
+  --app-sidebar-expanded-width: 292px;
   --app-sidebar-collapsed-width: 52px;
-  --app-sidebar-mobile-max-width: 300px;
+  --app-sidebar-mobile-max-width: 320px;
   --studio-sidebar-expanded-width: var(--app-sidebar-expanded-width);
   --studio-sidebar-collapsed-width: var(--app-sidebar-collapsed-width);
   --studio-sidebar-mobile-max-width: var(--app-sidebar-mobile-max-width);
+  --studio-page-content-max: 1320px;
+  --studio-page-inline-padding: clamp(24px, 3.2vw, 42px);
+  --studio-page-header-divider-gap: 20px;
   --codex-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
   --codex-font-mono: "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace;
 
@@ -2649,7 +2652,7 @@ body.codex-theme-v1 .task-sidebar-brand {
 }
 
 body.codex-theme-v1 .task-sidebar-primary {
-  padding: 5px 8px 3px;
+  padding: 5px 8px 2px;
   border-bottom: 0;
 }
 
@@ -2669,6 +2672,10 @@ body.codex-theme-v1 .task-sidebar-primary button:hover {
 
 body.codex-theme-v1 .task-sidebar-mode {
   padding-top: 0;
+}
+
+body.codex-theme-v1 .task-sidebar-mode [data-workspace-navigation="expanded"] {
+  margin-top: 2px;
 }
 
 body.codex-theme-v1 .task-list-toolbar {

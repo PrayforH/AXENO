@@ -61,12 +61,14 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("keeps user edits aligned to the original message and omits unused ratings", () => {
+  it("keeps user edits aligned to the response column and omits unused ratings", () => {
     expect(agentThread).toContain('className="user-message-edit-shell"');
-    expect(agentThread).toContain('className="user-message-edit-measure"');
+    expect(agentThread).not.toContain('className="user-message-edit-measure"');
     expect(styles).toMatch(
-      /\.user-message-edit-shell\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*min\(82%,\s*40rem\);/s,
+      /\.user-message-edit-shell\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*align-self:\s*stretch;/s,
     );
+    expect(styles).toMatch(/\.user-message-editor-input\s*\{[^}]*resize:\s*none;/s);
+    expect(styles).toContain(".user-message-editor-input:focus-visible");
     expect(agentThread).not.toContain("<AssistantActionBar.FeedbackPositive");
     expect(agentThread).not.toContain("<AssistantActionBar.FeedbackNegative");
     expect(agentThread).toContain("allowFeedbackPositive: false");
@@ -149,7 +151,7 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /\.workspace-stage:not\(\.tasks-open\)\s*\{[^}]*grid-template-columns:\s*var\(--app-sidebar-collapsed-width,\s*52px\) minmax\(0,\s*1fr\);/s,
     );
-    expect(codexStyles).toContain("--app-sidebar-expanded-width: 264px");
+    expect(codexStyles).toContain("--app-sidebar-expanded-width: 292px");
     expect(codexStyles).toContain(
       "grid-template-columns: var(--app-sidebar-expanded-width) minmax(0, 1fr)",
     );
@@ -502,7 +504,7 @@ describe("full-page agent workbench", () => {
 
   it("shows an explicit inline editor for message reruns", () => {
     expect(styles).toMatch(
-      /\.user-message-edit-shell\s*\{[^}]*width:\s*fit-content;[^}]*max-width:\s*min\(82%,\s*40rem\);[^}]*align-self:\s*flex-end;/s,
+      /\.user-message-edit-shell\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*none;[^}]*align-self:\s*stretch;/s,
     );
     expect(styles).toMatch(
       /\.user-message-editor\s*\{[^}]*width:\s*100%;[^}]*max-width:\s*100%;[^}]*border-radius:\s*16px 16px 4px 16px;[^}]*background:\s*#eceeeb;/s,

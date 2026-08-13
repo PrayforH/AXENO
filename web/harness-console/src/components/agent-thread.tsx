@@ -1207,9 +1207,6 @@ function HarnessUserMessage() {
         <MessagePrimitive.If hasContent>
           {editing ? (
             <div className="user-message-edit-shell">
-              <span className="user-message-edit-measure" aria-hidden="true">
-                {originalText || "\u00a0"}
-              </span>
               <form className="user-message-editor" onSubmit={submitEdit}>
                 <textarea
                   className="user-message-editor-input"

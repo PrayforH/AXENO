@@ -64,6 +64,8 @@ describe("collaboration workspace product surface", () => {
     expect(styles).toContain(".resourceTabs");
     expect(styles).toContain(".runLink");
     expect(component).toContain("创建第一个协作空间");
+    expect(styles).toContain("var(--studio-page-content-max, 1320px)");
+    expect(styles).toContain("var(--studio-page-header-divider-gap, 20px)");
   });
 
   it("creates spaces in the shared right-side authoring pattern", () => {

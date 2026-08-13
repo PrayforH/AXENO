@@ -5451,27 +5451,10 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 .user-message-edit-shell {
-  width: fit-content;
-  max-width: min(82%, 40rem);
+  width: 100%;
+  max-width: none;
   display: grid;
-  align-self: flex-end;
-}
-
-.user-message-edit-measure,
-.user-message-editor {
-  grid-area: 1 / 1;
-}
-
-.user-message-edit-measure {
-  max-width: 100%;
-  padding: 10px 14px;
-  visibility: hidden;
-  border: 1px solid transparent;
-  font-size: 14px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-  pointer-events: none;
-  white-space: pre-wrap;
+  align-self: stretch;
 }
 
 .user-message-editor {
@@ -5493,7 +5476,7 @@ textarea:not(.aui-composer-input):focus-visible,
   min-height: 24px;
   max-height: 12rem;
   padding: 0 2px;
-  resize: vertical;
+  resize: none;
   border: 0;
   border-radius: 0;
   color: var(--ink);
@@ -5502,7 +5485,9 @@ textarea:not(.aui-composer-input):focus-visible,
   outline: none;
 }
 
-.user-message-editor-input:focus {
+.user-message-editor-input:focus,
+.user-message-editor-input:focus-visible {
+  outline: none;
   box-shadow: none;
 }
 
