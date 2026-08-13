@@ -235,9 +235,14 @@ html[data-color-mode="light"] .settings-header {
   box-shadow: 0 1px 0 rgb(36 60 45 / 2%);
 }
 
+html[data-color-mode="light"] .settings-dialog {
+  border-color: var(--codex-line);
+  background: #ffffff;
+  box-shadow: 0 30px 90px rgb(36 60 45 / 14%);
+}
+
 html[data-color-mode="light"] .settings-layout {
-  grid-template-columns: 180px minmax(0, 780px);
-  gap: 64px;
+  grid-template-columns: 220px minmax(0, 1fr);
 }
 
 html[data-color-mode="light"] .settings-index a {
@@ -248,10 +253,11 @@ html[data-color-mode="light"] .settings-index a {
 }
 
 html[data-color-mode="light"] .settings-index a:hover,
-html[data-color-mode="light"] .settings-index a:focus-visible {
-  border-color: transparent;
+html[data-color-mode="light"] .settings-index a:focus-visible,
+html[data-color-mode="light"] .settings-index a[aria-current="page"] {
+  border-color: var(--codex-line);
   color: var(--codex-accent);
-  background: var(--codex-accent-faint);
+  background: #ffffff;
 }
 
 html[data-color-mode="light"] .settings-section {
@@ -286,7 +292,7 @@ html[data-color-mode="light"] .settings-facts code {
 
 @media (max-width: 760px) {
   html[data-color-mode="light"] .settings-layout {
-    display: block;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   html[data-color-mode="light"] .settings-index a {

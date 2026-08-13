@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { SecretInput } from "./secret-input";
 import styles from "./model-management.module.css";
 
 type ModelType = "chat" | "vision" | "image_generation";
@@ -320,7 +321,7 @@ function ModelDialog({
               <label>接口格式<select name="apiFormat" defaultValue={model?.apiFormat ?? "anthropic_compatible"}><option value="anthropic_compatible">Anthropic 兼容</option><option value="openai_compatible">OpenAI 兼容</option></select></label>
             )}
             <label>鉴权方式<select name="authScheme" defaultValue={model?.authScheme ?? "bearer"}><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option></select></label>
-            <label className={styles.full}>API Key<input name="apiKey" type="password" autoComplete="new-password" required={!model?.credentialConfigured} placeholder={model?.credentialConfigured ? "已安全保存；留空则保持不变" : "输入 API Key"} /><small>保存后不会再次显示明文。</small></label>
+            <label className={styles.full}>API Key<SecretInput name="apiKey" autoComplete="new-password" required={!model?.credentialConfigured} placeholder={model?.credentialConfigured ? "已安全保存；留空则保持不变" : "输入 API Key"} revealLabel="API Key" /><small>保存后不会再次显示明文。</small></label>
           </div>
           {error && <p className={`${styles.message} ${styles.error}`} role="alert">{error}</p>}
           <footer><button type="button" onClick={onClose}>取消</button><button type="submit" className={styles.save} disabled={pending}>{pending ? "正在保存…" : "保存模型"}</button></footer>

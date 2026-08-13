@@ -20,10 +20,7 @@ const studioSidebar = readFileSync(
   "utf8",
 );
 const studioStyles = readFileSync(
-  join(
-    process.cwd(),
-    "src/components/agent-studio/agent-studio.module.css",
-  ),
+  join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
 );
 const workspaceNavigationStyles = readFileSync(
@@ -66,7 +63,7 @@ describe("Weknora-inspired product theme", () => {
 
   it("keeps settings and Studio on the same quiet surface hierarchy", () => {
     expect(theme).toMatch(
-      /\.settings-layout\s*\{[^}]*grid-template-columns:\s*180px minmax\(0, 780px\);/s,
+      /\.settings-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\);/s,
     );
     expect(theme).toMatch(
       /\.settings-form\s*\{[^}]*border-radius:\s*12px;[^}]*background:\s*#ffffff;/s,

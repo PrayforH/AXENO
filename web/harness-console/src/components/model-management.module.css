@@ -1,5 +1,5 @@
 .controlPlane { min-width: 0; display: grid; gap: 14px; }
-.guardrail { padding: 13px 14px; display: grid; grid-template-columns: 30px 1fr; gap: 10px; border: 1px solid #cfe0d7; background: #f1f7f3; }
+.guardrail { padding: 13px 14px; display: grid; grid-template-columns: 30px 1fr; gap: 10px; border: 1px solid #cfe0d7; border-radius: 12px; background: #f1f7f3; }
 .guardrail > div { display: grid; gap: 3px; }
 .guardrail strong { color: #315a49; font-size: 11px; }
 .guardrail small { color: #62736b; font-size: 10px; line-height: 1.55; }
@@ -12,7 +12,7 @@
 .addButton { min-height: 34px; padding: 0 12px; flex: none; border: 1px solid var(--rail); border-radius: 3px; color: white; background: var(--rail); cursor: pointer; font-size: 10px; font-weight: 700; }
 
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.modelCard { min-width: 0; padding: 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; border: 1px solid var(--line); background: white; box-shadow: 0 8px 24px rgb(29 45 37 / 4%); }
+.modelCard { min-width: 0; padding: 14px; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; border: 1px solid var(--line); border-radius: 14px; background: white; box-shadow: 0 8px 24px rgb(29 45 37 / 4%); }
 .typeMark { width: 38px; height: 38px; display: grid; place-items: center; border: 1px solid; border-radius: 10px; font: 750 11px/1 var(--font-mono); }
 .chat { border-color: #bad0f0; color: #3868a6; background: #eff5fd; }
 .vision { border-color: #d4c5ed; color: #7456a5; background: #f4f0fa; }
@@ -32,13 +32,13 @@
 .cardActions button { min-height: 27px; padding: 0 8px; border: 1px solid #d3d9d6; border-radius: 3px; color: #53605a; background: white; cursor: pointer; font-size: 9px; }
 .cardActions button:disabled { cursor: not-allowed; opacity: .45; }
 .cardActions .danger { color: #935047; }
-.emptyCard { min-height: 162px; display: grid; place-items: center; align-content: center; gap: 5px; border: 1px dashed #cdd5d1; color: #727d77; background: rgb(255 255 255 / 55%); cursor: pointer; }
+.emptyCard { min-height: 162px; display: grid; place-items: center; align-content: center; gap: 5px; border: 1px dashed #cdd5d1; border-radius: 14px; color: #727d77; background: rgb(255 255 255 / 55%); cursor: pointer; }
 .emptyCard span { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: var(--rail); background: #eaf4ee; font-size: 20px; }
 .emptyCard strong { font-size: 10px; }
 .emptyCard small { color: #929a96; font-size: 9px; }
 .empty { margin: 0; padding: 18px; color: #7d8882; background: white; font-size: 10px; text-align: center; }
 
-.bindings { padding: 16px; display: grid; gap: 10px; border: 1px solid var(--line); background: #fafbfa; }
+.bindings { padding: 16px; display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 14px; background: #fafbfa; }
 .bindings > div:first-child { display: grid; gap: 3px; }
 .bindings > div:first-child strong { font-size: 11px; }
 .bindings > div:first-child small { color: #7a8580; font-size: 9px; line-height: 1.55; }
@@ -53,7 +53,7 @@
 .error { border-color: #a24a42; color: #843c36; background: #f7eae8; }
 
 .backdrop { position: fixed; z-index: 80; inset: 0; padding: 24px; display: grid; place-items: center; background: rgb(18 25 22 / 38%); backdrop-filter: blur(2px); }
-.dialog { width: min(720px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; border: 1px solid #bdc7c1; background: #fbfcfb; box-shadow: 0 28px 90px rgb(13 24 18 / 24%); }
+.dialog { width: min(720px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto; border: 1px solid #bdc7c1; border-radius: 20px; background: #fbfcfb; box-shadow: 0 28px 90px rgb(13 24 18 / 24%); }
 .dialog > header { min-height: 76px; padding: 15px 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: white; }
 .dialog > header > div { display: flex; align-items: center; gap: 12px; }
 .dialog > header > div > span:last-child { display: grid; gap: 3px; }

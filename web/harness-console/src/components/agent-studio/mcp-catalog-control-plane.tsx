@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { useAuth } from "../auth-provider";
+import { SecretInput } from "../secret-input";
 import { useDialogFocus } from "../../lib/use-dialog-focus";
 import { useDismissablePopovers } from "../../lib/use-dismissable-popovers";
 import {
@@ -1165,9 +1166,8 @@ export function McpCatalogControlPlane({
               {draft.authMode !== "none" && (
                 <label>
                   <span>认证凭据</span>
-                  <input
+                  <SecretInput
                     required={!credentialStatuses[draft.reference.trim()]?.configured}
-                    type="password"
                     autoComplete="new-password"
                     placeholder={
                       credentialStatuses[draft.reference.trim()]?.configured
@@ -1176,6 +1176,7 @@ export function McpCatalogControlPlane({
                     }
                     value={credentialValue}
                     onChange={(event) => setCredentialValue(event.target.value)}
+                    revealLabel="认证凭据"
                   />
                   <small>
                     {credentialStatuses[draft.reference.trim()]?.configured

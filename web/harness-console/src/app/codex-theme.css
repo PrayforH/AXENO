@@ -1611,6 +1611,12 @@ body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
     var(--codex-surface);
 }
 
+.settings-dialog {
+  border-color: var(--codex-line);
+  background: var(--codex-surface-raised);
+  box-shadow: 0 30px 90px rgb(0 0 0 / 36%);
+}
+
 .settings-header {
   border-color: var(--codex-line);
   background: rgb(24 24 24 / 84%);
@@ -1651,12 +1657,18 @@ body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
   color: var(--codex-faint);
 }
 
+.settings-index {
+  border-color: var(--codex-line);
+  background: var(--codex-surface-subtle);
+}
+
 .settings-index a {
   color: var(--codex-muted);
 }
 
 .settings-index a:hover,
-.settings-index a:focus-visible {
+.settings-index a:focus-visible,
+.settings-index a[aria-current="page"] {
   border-color: var(--codex-accent);
   color: var(--codex-ink);
   background: var(--codex-accent-faint);
