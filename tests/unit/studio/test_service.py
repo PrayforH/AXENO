@@ -313,6 +313,20 @@ class DriftRegistry:
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         return await self._delegate.list_for_user(tenant_id, owner_user_id)
 
+    async def list_catalog_for_user(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentVersion]:
+        return await self._delegate.list_catalog_for_user(tenant_id, owner_user_id)
+
+    async def move_owner(
+        self,
+        tenant_id: str,
+        from_user_id: str,
+        to_user_id: str,
+        name: str,
+    ) -> int:
+        return await self._delegate.move_owner(tenant_id, from_user_id, to_user_id, name)
+
 
 @pytest.mark.asyncio
 async def test_subagent_hash_drift_blocks_lead_publication() -> None:

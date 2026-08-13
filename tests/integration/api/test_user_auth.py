@@ -62,7 +62,7 @@ def test_local_account_registration_login_profile_and_audit() -> None:
         )
         audit = client.get(
             "/v1/auth/audit-logs",
-            headers={"Authorization": f"Bearer {registered['access_token']}"},
+            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
         )
 
     assert profile.status_code == 200
@@ -141,6 +141,33 @@ def test_refresh_tokens_rotate_and_reuse_revokes_the_family() -> None:
     assert replay.status_code == 401
     assert replay.json()["error"]["code"] == "refresh_invalid"
     assert replacement.status_code == 401
+
+
+def test_new_login_immediately_replaces_the_previous_device_session() -> None:
+    with _client() as client:
+        first = _register(client)
+        second = client.post(
+            "/v1/auth/login",
+            json={"email": "owner@example.com", "password": "SecurePass123"},
+        ).json()
+        old_access = client.get(
+            "/v1/auth/me",
+            headers={"Authorization": f"Bearer {first['access_token']}"},
+        )
+        old_refresh = client.post(
+            "/v1/auth/refresh",
+            json={"refresh_token": first["refresh_token"]},
+        )
+        current_access = client.get(
+            "/v1/auth/me",
+            headers={"Authorization": f"Bearer {second['access_token']}"},
+        )
+
+    assert old_access.status_code == 401
+    assert old_access.json()["error"]["code"] == "session_replaced"
+    assert old_access.headers["x-harness-auth-error"] == "session_replaced"
+    assert old_refresh.status_code == 401
+    assert current_access.status_code == 200
 
 
 def test_registration_can_be_disabled_without_disabling_login_endpoint() -> None:

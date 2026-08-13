@@ -61,14 +61,6 @@ def default_capability_catalog() -> CapabilityCatalog:
                 capabilities=("streaming", "tool_use"),
                 credentialReference="GLM_5_2_API_KEY",
             ),
-            ModelRouteCapability(
-                routeId="anthropic-official",
-                label="Anthropic official",
-                provider="anthropic",
-                models=("claude-sonnet-4-6",),
-                capabilities=("streaming", "tool_use", "tool_search"),
-                credentialReference="ANTHROPIC_API_KEY",
-            ),
         ),
         builtinTools=(
             BuiltinToolCapability(
@@ -160,7 +152,9 @@ def default_capability_catalog() -> CapabilityCatalog:
             PolicyCapability(
                 policyId="production-standard",
                 label="生产标准",
-                description="允许受控文件写入，命令和高风险动作进入审批。",
+                description=(
+                    "工作区写入及策略允许的命令自动执行；高风险、越界或不确定动作拒绝或确认。"
+                ),
                 risk=CapabilityRisk.MEDIUM,
             ),
             PolicyCapability(
@@ -271,7 +265,9 @@ def default_capability_catalog() -> CapabilityCatalog:
             TemplateCapability(
                 template=AgentTemplate.OPERATOR,
                 label="执行型",
-                description="在隔离工作区中生成或修改文件，高风险操作需审批。",
+                description=(
+                    "在隔离工作区中生成或修改文件；常规操作自动完成，仅在高风险边界需要确认。"
+                ),
             ),
             TemplateCapability(
                 template=AgentTemplate.ORCHESTRATOR,

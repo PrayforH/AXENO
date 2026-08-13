@@ -6,6 +6,7 @@ from typing import Literal
 
 from harness.agent_package import (
     AgentBundleValidationError,
+    AgentPackageReport,
     check_agent_package,
     extract_agent_bundle,
 )
@@ -38,6 +39,7 @@ class AgentService:
         self._default_manifest_path = (
             Path(default_manifest_path) if default_manifest_path is not None else None
         )
+        self._default_report: AgentPackageReport | None = None
         self._agent_ids = agent_ids
 
     def validate(
@@ -60,20 +62,92 @@ class AgentService:
             if version.status is AgentVersionStatus.PUBLISHED
         ]
 
+    async def get_published(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        name: str,
+        version: str,
+    ) -> AgentVersion:
+        value = await self._registry.get(tenant_id, owner_user_id, name, version)
+        if value.status is not AgentVersionStatus.PUBLISHED:
+            raise ConflictError("only published Agent versions can be shared")
+        return value
+
+    async def list_published_catalog(
+        self, tenant_id: str, owner_user_id: str
+    ) -> list[AgentVersion]:
+        """Return lightweight published versions and provision the default once.
+
+        Unlike the legacy route sequence, this performs a single version-list
+        query and never loads packaged files into the navigation request.
+        """
+        versions = await self._registry.list_catalog_for_user(tenant_id, owner_user_id)
+        default = await self._ensure_user_default_from(
+            tenant_id,
+            owner_user_id,
+            versions,
+        )
+        if default is not None and not any(
+            item.name == default.name and item.version == default.version
+            for item in versions
+        ):
+            versions.append(default)
+            versions.sort(key=lambda item: (item.name, item.version))
+        return [
+            version
+            for version in versions
+            if version.status is AgentVersionStatus.PUBLISHED
+        ]
+
     async def ensure_user_default(
         self, tenant_id: str, owner_user_id: str
     ) -> AgentVersion | None:
         """Idempotently provision the platform default into a user's private catalog."""
 
+        existing_versions = await self._registry.list_catalog_for_user(
+            tenant_id, owner_user_id
+        )
+        default = await self._ensure_user_default_from(
+            tenant_id,
+            owner_user_id,
+            existing_versions,
+        )
+        if default is None:
+            return None
+        if any(
+            item.name == default.name and item.version == default.version
+            for item in existing_versions
+        ):
+            # Preserve the public method's full-version contract. The catalog
+            # path calls the private helper directly and avoids this payload.
+            return await self._registry.get(
+                tenant_id,
+                owner_user_id,
+                default.name,
+                default.version,
+            )
+        return default
+
+    async def _ensure_user_default_from(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        existing_versions: list[AgentVersion],
+    ) -> AgentVersion | None:
+        """Provision the default using an already-loaded catalog projection."""
+
         if self._default_manifest_path is None:
             return None
-        report = check_agent_package(
-            self._default_manifest_path, environment="production"
-        )
+        if self._default_report is None:
+            self._default_report = check_agent_package(
+                self._default_manifest_path, environment="production"
+            )
+        report = self._default_report
         snapshot = report.snapshot
         name = snapshot.manifest.metadata.name
         version = snapshot.manifest.metadata.version
-        for existing in await self._registry.list_for_user(tenant_id, owner_user_id):
+        for existing in existing_versions:
             if (
                 existing.name == name
                 and existing.version == version
@@ -168,5 +242,24 @@ class AgentService:
                 package_hash is not None and existing.package_hash != package_hash
             ):
                 raise
+            if self._agent_ids is not None and existing.agent_id is not None:
+                # A repeated immutable publish is also the recovery path when
+                # the registry write succeeded but the current pointer update
+                # was interrupted.
+                await self._agent_ids.promote_personal_agent_version(
+                    tenant_id,
+                    owner_user_id,
+                    existing.agent_id,
+                    existing.name,
+                    existing.version,
+                )
             return existing
+        if self._agent_ids is not None and version.agent_id is not None:
+            await self._agent_ids.promote_personal_agent_version(
+                tenant_id,
+                owner_user_id,
+                version.agent_id,
+                version.name,
+                version.version,
+            )
         return version

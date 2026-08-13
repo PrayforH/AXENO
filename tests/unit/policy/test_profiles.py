@@ -94,7 +94,7 @@ def test_standard_profile_uses_trusted_sandbox_facts() -> None:
         )
         is PolicyDecision.ALLOW
     )
-    assert _decision("production-standard", "Bash") is PolicyDecision.ASK
+    assert _decision("production-standard", "Bash") is PolicyDecision.ALLOW
     assert (
         _decision("production-standard", "mcp__novel-search__sag_get_document")
         is PolicyDecision.ALLOW

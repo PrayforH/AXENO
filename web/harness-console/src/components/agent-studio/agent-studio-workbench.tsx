@@ -1,12 +1,18 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAuth } from "../auth-provider";
+import { useConfirmationDialog } from "../confirmation-dialog";
+import { ProductIcon } from "../product-icon";
+import { PRODUCT_NAME, ProductBrandMark } from "../product-brand";
 import { StudioSidebar } from "./studio-sidebar";
 import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
   applyStudioDraftUpdate,
+  createPersonalStudioDraft,
   evaluateStudioDraft,
   mcpOptionsForDraft,
   type StudioDraft,
@@ -25,19 +31,26 @@ import {
   type StudioDraftSummary,
   type StudioEnvironment,
   type StudioGovernedPolicy,
+  type PersonalAgentVersion,
   type StudioEvalDataset,
   type StudioEvalGate,
   type StudioEvalRun,
   type StudioPreflightCheck,
   type StudioPreview,
   type StudioQualityGate,
-  type StudioQualityIncident,
-  type StudioQualityRule,
-  type StudioQualityScore,
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import { createRandomId } from "../../lib/random-id";
+import {
+  createUnsavedHistoryGuard,
+  guardedNavigationDestination,
+  navigationLabel,
+  type UnsavedHistoryGuard,
+} from "../../lib/unsaved-navigation";
+import { useDialogFocus } from "../../lib/use-dialog-focus";
+import { useDismissablePopovers } from "../../lib/use-dismissable-popovers";
+import { parseEvalDatasetFile } from "../../lib/eval-dataset-import";
 import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
 import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import { GovernanceControlPlane } from "./governance-control-plane";
@@ -68,6 +81,23 @@ function riskLabel(risk: "low" | "medium" | "high") {
   return risk === "high" ? "高" : risk === "medium" ? "中" : "低";
 }
 
+function HeaderActionIcon({
+  name,
+}: {
+  name: "task" | "save" | "release" | "contract";
+}) {
+  if (name === "task") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9m-3-3 3 3-3 3" /></svg>;
+  }
+  if (name === "save") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h8.2L13 5.3v7.2H3zM5 3.5v3h5v-3M5.5 12v-3h5v3" /></svg>;
+  }
+  if (name === "release") {
+    return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.2 6.1 11 13 4.5" /></svg>;
+  }
+  return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5h9v9h-9zM6 6h4m-4 2h4m-4 2h2.5" /></svg>;
+}
+
 function runtimeRecommendation(draft: StudioDraft) {
   const delegates =
     draft.builtinTools.includes("Task") || draft.subagents.length > 0;
@@ -85,7 +115,7 @@ function runtimeRecommendation(draft: StudioDraft) {
   if (writes) {
     return {
       label: "文件交付",
-      description: "读取自动通过，写入、编辑和命令按生产规则审批。",
+      description: "常规文件与命令在沙箱自动执行，敏感边界才需要确认。",
       policy: "production-standard",
       maxTurns: 64,
     };
@@ -247,7 +277,14 @@ function validationIssueSection(
 }
 
 export function AgentStudioWorkbench() {
-  const { membership } = useAuth();
+  const router = useRouter();
+  const { membership, user } = useAuth();
+  useDismissablePopovers();
+  const {
+    requestConfirmation,
+    requestDecision,
+    confirmationDialog,
+  } = useConfirmationDialog();
   const [draft, setDraft] = useState<StudioDraft>({
     ...DEFAULT_STUDIO_DRAFT,
     id: "",
@@ -269,18 +306,24 @@ export function AgentStudioWorkbench() {
   const [evalRuns, setEvalRuns] = useState<StudioEvalRun[]>([]);
   const [evalGate, setEvalGate] = useState<StudioEvalGate | null>(null);
   const [evalAction, setEvalAction] = useState<"dataset" | "run" | "cancel" | "">("");
+  const [evalManagerOpen, setEvalManagerOpen] = useState(false);
+  const [evalImporting, setEvalImporting] = useState(false);
+  const [evalImportPreview, setEvalImportPreview] = useState<{
+    fileName: string;
+    cases: StudioEvalCase[];
+    errors: string[];
+  } | null>(null);
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
   const [deployments, setDeployments] = useState<StudioDeployment[]>([]);
   const [deploymentSnapshots, setDeploymentSnapshots] = useState<StudioDeploymentSnapshot[]>([]);
   const [deploymentAction, setDeploymentAction] = useState("");
-  const [qualityScores, setQualityScores] = useState<StudioQualityScore[]>([]);
-  const [qualityIncidents, setQualityIncidents] = useState<StudioQualityIncident[]>([]);
-  const [qualityRules, setQualityRules] = useState<StudioQualityRule[]>([]);
   const [qualityGate, setQualityGate] = useState<StudioQualityGate | null>(null);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [reloadingConflict, setReloadingConflict] = useState(false);
   const [versionConflict, setVersionConflict] = useState(false);
   const [serverValidation, setServerValidation] = useState<StudioValidation | null>(null);
+  const [releaseFeedbackOpen, setReleaseFeedbackOpen] = useState(false);
   const [activeSection, setActiveSection] =
     useState<StudioSection>("capabilities");
   const [agentQuery, setAgentQuery] = useState("");
@@ -294,11 +337,34 @@ export function AgentStudioWorkbench() {
     warnings: string[];
   } | null>(null);
   const [contractOpen, setContractOpen] = useState(false);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [personalVersions, setPersonalVersions] = useState<PersonalAgentVersion[]>([]);
+  const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
+  const [versionHistoryError, setVersionHistoryError] = useState("");
+  const [promoteTarget, setPromoteTarget] = useState("");
+  const [promotingVersion, setPromotingVersion] = useState("");
+  const [switchingDraftId, setSwitchingDraftId] = useState("");
   const [notice, setNotice] = useState("正在读取控制面草稿…");
   const promptEditorRef = useRef<HTMLTextAreaElement>(null);
-  const releaseAssistantRef = useRef<HTMLElement>(null);
   const bundleInputRef = useRef<HTMLInputElement>(null);
   const skillInputRef = useRef<HTMLInputElement>(null);
+  const contractTriggerRef = useRef<HTMLButtonElement>(null);
+  const contractRailRef = useRef<HTMLElement>(null);
+  const contractCloseRef = useRef<HTMLButtonElement>(null);
+  const versionHistoryTriggerRef = useRef<HTMLButtonElement>(null);
+  const versionHistoryRailRef = useRef<HTMLElement>(null);
+  const versionHistoryCloseRef = useRef<HTMLButtonElement>(null);
+  const evalManagerRef = useRef<HTMLDivElement>(null);
+  const evalManagerCloseRef = useRef<HTMLButtonElement>(null);
+  const evalImportInputRef = useRef<HTMLInputElement>(null);
+  const leavePromptOpenRef = useRef(false);
+  const allowNavigationRef = useRef(false);
+  const draftSwitchingRef = useRef(false);
+  const conflictReloadingRef = useRef(false);
+  const historyGuardRef = useRef<UnsavedHistoryGuard | null>(null);
+  const saveDraftRef = useRef<() => Promise<StudioDraft | null>>(async () => null);
+  const savingRef = useRef(saving);
+  savingRef.current = saving;
   const canEdit = membership.role !== "viewer";
   const canPublish = membership.role === "owner" || membership.role === "admin";
   const options = useMemo(
@@ -307,6 +373,27 @@ export function AgentStudioWorkbench() {
       : { routes: [], tools: [], mcp: [], profiles: [] },
     [capabilities],
   );
+  useDialogFocus({
+    open: contractOpen,
+    panelRef: contractRailRef,
+    initialFocusRef: contractCloseRef,
+    onEscape: () => setContractOpen(false),
+  });
+  useDialogFocus({
+    open: evalManagerOpen,
+    panelRef: evalManagerRef,
+    initialFocusRef: evalManagerCloseRef,
+    onEscape: () => setEvalManagerOpen(false),
+  });
+  useDialogFocus({
+    open: versionHistoryOpen,
+    panelRef: versionHistoryRailRef,
+    initialFocusRef: versionHistoryCloseRef,
+    onEscape: () => {
+      setVersionHistoryOpen(false);
+      setPromoteTarget("");
+    },
+  });
   const visibleMcpOptions = useMemo(
     () => mcpOptionsForDraft(draft, options.mcp),
     [draft.name, draft.domain, options.mcp],
@@ -367,7 +454,7 @@ export function AgentStudioWorkbench() {
         ref: `${item.name}@${item.version}`,
         label: item.displayName,
         description: `${item.domain} · ${item.publishedVersion ? "已发布版本" : `可编辑草稿 r${item.revision}`}`,
-        policy: item.publishedVersion ? "已发布快照" : "Studio 草稿",
+        policy: item.publishedVersion ? "已发布快照" : "构建草稿",
         tools: [] as string[],
         status: item.publishedVersion ? "approved" as const : "draft" as const,
       })),
@@ -385,33 +472,56 @@ export function AgentStudioWorkbench() {
   }, [agentQuery, drafts]);
 
   useEffect(() => {
+    if (!releaseFeedbackOpen) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setReleaseFeedbackOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [releaseFeedbackOpen]);
+
+  useEffect(() => {
+    if (!draft.agentId || draft.spaceId || !draft.publishedVersion) {
+      setPersonalVersions([]);
+      setVersionHistoryError("");
+      setVersionHistoryLoading(false);
+      return;
+    }
+    let active = true;
+    setVersionHistoryLoading(true);
+    setVersionHistoryError("");
+    void studioClient.listPersonalAgentVersions(draft.agentId)
+      .then((versions) => {
+        if (active) setPersonalVersions(versions);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setVersionHistoryError(
+            error instanceof Error ? error.message : "版本历史暂时不可用",
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setVersionHistoryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [draft.agentId, draft.spaceId, draft.publishedVersion]);
+
+  useEffect(() => {
     let active = true;
     async function load() {
       setLoading(true);
       setLoadError("");
       try {
-        const [
-          serverDrafts,
-          serverCapabilities,
-          serverPreviews,
-          serverDatasets,
-          serverEvalRuns,
-          serverGovernedPolicies,
-        ] = await Promise.all([
-          studioClient.listDrafts(),
+        const [serverDrafts, serverCapabilities] = await Promise.all([
+          studioClient.listAccessibleDrafts(),
           studioClient.capabilities(),
-          studioClient.listPreviews(),
-          studioClient.listEvalDatasets(),
-          studioClient.listEvalRuns(),
-          studioClient.listGovernedPolicies(),
         ]);
         if (!active) return;
         setCapabilities(serverCapabilities);
         setDrafts(serverDrafts);
-        setPreviews(serverPreviews);
-        setEvalDatasets(serverDatasets);
-        setEvalRuns(serverEvalRuns);
-        setGovernedPolicies(serverGovernedPolicies);
         const navigationState = new URLSearchParams(window.location.search);
         const requestedDraftId = navigationState.get("draft");
         const requestedSection = navigationState.get("section");
@@ -428,7 +538,9 @@ export function AgentStudioWorkbench() {
         );
         if (!active) return;
         if (targetDraft) {
-          const selected = await studioClient.getDraft(targetDraft.draftId);
+          const selected = await studioClient.getDraft(targetDraft.draftId, {
+            expectedRevision: targetDraft.revision,
+          });
           if (!active) return;
           setDraft(apiDraftToStudioDraft(selected));
           setNotice(
@@ -438,21 +550,24 @@ export function AgentStudioWorkbench() {
           );
         } else if (migration.status === "imported") {
           setDraft(migration.draft);
-          setDrafts(await studioClient.listDrafts());
+          setDrafts(await studioClient.listAccessibleDrafts());
           setNotice("旧浏览器草稿已一次性导入控制面");
         } else if (serverDrafts.length > 0) {
-          const selected = await studioClient.getDraft(serverDrafts[0].draftId);
+          const selected = await studioClient.getDraft(serverDrafts[0].draftId, {
+            expectedRevision: serverDrafts[0].revision,
+          });
           if (!active) return;
           setDraft(apiDraftToStudioDraft(selected));
           setNotice("已从控制面加载草稿");
         } else {
-          setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
+          setDraft(createPersonalStudioDraft());
+          setActiveSection("identity");
           setNotice(canEdit ? "当前没有草稿，可新建第一个 Agent" : "当前没有可查看的草稿");
         }
       } catch (error) {
         if (!active) return;
         setLoadError(
-          error instanceof Error ? error.message : "Agent Studio API 当前不可用",
+          error instanceof Error ? error.message : `${PRODUCT_NAME}服务当前不可用`,
         );
       } finally {
         if (active) setLoading(false);
@@ -462,12 +577,43 @@ export function AgentStudioWorkbench() {
     return () => { active = false; };
   }, [canEdit]);
 
+  useEffect(() => {
+    if (loading || loadError) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void Promise.all([
+        studioClient.listPreviews(),
+        studioClient.listEvalDatasets(),
+        studioClient.listEvalRuns(),
+        studioClient.listGovernedPolicies(),
+      ]).then(([
+        serverPreviews,
+        serverDatasets,
+        serverEvalRuns,
+        serverGovernedPolicies,
+      ]) => {
+        if (!active) return;
+        setPreviews(serverPreviews);
+        setEvalDatasets(serverDatasets);
+        setEvalRuns(serverEvalRuns);
+        setGovernedPolicies(serverGovernedPolicies);
+      }).catch(() => {
+        // These panels are secondary; the primary editor remains available.
+      });
+    }, 0);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [loadError, loading]);
+
   function updateDraft(update: Partial<StudioDraft>) {
     const next = applyStudioDraftUpdate(draft, update);
     const versionAutoBumped = next.version !== draft.version && !("version" in update);
     setDraft(next);
     setInspected(false);
     setServerValidation(null);
+    setReleaseFeedbackOpen(false);
     setDirty(true);
     setConflict(false);
     setVersionConflict(false);
@@ -510,6 +656,35 @@ export function AgentStudioWorkbench() {
         (_testCase, currentIndex) => currentIndex !== index,
       ),
     });
+  }
+
+  async function importEvalDataset(file: File) {
+    setEvalImporting(true);
+    setEvalImportPreview(null);
+    try {
+      const result = await parseEvalDatasetFile(file);
+      setEvalImportPreview({ fileName: file.name, ...result });
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "评测集解析失败");
+    } finally {
+      setEvalImporting(false);
+      if (evalImportInputRef.current) evalImportInputRef.current.value = "";
+    }
+  }
+
+  function confirmEvalDatasetImport() {
+    if (!evalImportPreview?.cases.length) return;
+    const used = new Set(draft.evalCases.map((testCase) => testCase.id));
+    const imported = evalImportPreview.cases.map((testCase) => {
+      let id = testCase.id;
+      let suffix = 2;
+      while (used.has(id)) id = `${testCase.id}-${suffix++}`;
+      used.add(id);
+      return id === testCase.id ? testCase : { ...testCase, id };
+    });
+    updateDraft({ evalCases: [...draft.evalCases, ...imported] });
+    setNotice(`已导入 ${imported.length} 条评测场景，请保存草稿后固化 Dataset`);
+    setEvalImportPreview(null);
   }
 
   function moveToPromptSection(heading: string) {
@@ -699,7 +874,7 @@ export function AgentStudioWorkbench() {
       }
       const next = apiDraftToStudioDraft(saved);
       setDraft(next);
-      setDrafts(await studioClient.listDrafts());
+      setDrafts(await studioClient.listAccessibleDrafts());
       setDirty(false);
       setConflict(false);
       setVersionConflict(false);
@@ -718,6 +893,150 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  saveDraftRef.current = () => saveDraft();
+
+  useEffect(() => {
+    const historyGuard = createUnsavedHistoryGuard(
+      window.history,
+      `agent-studio-${createRandomId()}`,
+    );
+    historyGuardRef.current = historyGuard;
+
+    function protectHistoryNavigation(event: PopStateEvent) {
+      if (allowNavigationRef.current) return;
+      if (historyGuard.handlePopState(event.state) !== "prompt") return;
+      if (leavePromptOpenRef.current) return;
+      if (savingRef.current) {
+        setNotice("正在保存当前草稿，完成后再离开");
+        return;
+      }
+
+      leavePromptOpenRef.current = true;
+      void requestDecision({
+        title: "有未保存的修改",
+        description: "可以保存后返回，也可以放弃这次修改直接离开。",
+        confirmLabel: "保存并返回",
+        cancelLabel: "继续编辑",
+        discardLabel: "放弃修改并返回",
+        context: <span>浏览器历史：返回上一页</span>,
+      }).then(async (decision) => {
+        if (decision === "cancel") return;
+        if (decision === "confirm") {
+          const saved = await saveDraftRef.current();
+          if (!saved) return;
+        }
+        historyGuard.deactivate(() => {
+          window.setTimeout(() => {
+            allowNavigationRef.current = true;
+            window.history.back();
+          }, 0);
+        });
+      }).finally(() => {
+        leavePromptOpenRef.current = false;
+      });
+    }
+
+    window.addEventListener("popstate", protectHistoryNavigation);
+    return () => {
+      window.removeEventListener("popstate", protectHistoryNavigation);
+      if (historyGuardRef.current === historyGuard) {
+        historyGuardRef.current = null;
+      }
+    };
+  }, [requestDecision]);
+
+  useEffect(() => {
+    const historyGuard = historyGuardRef.current;
+    if (!historyGuard) return;
+    if (dirty) {
+      allowNavigationRef.current = false;
+      historyGuard.activate(window.location.href);
+    } else {
+      historyGuard.deactivate();
+    }
+  }, [dirty]);
+
+  useEffect(() => {
+    if (!dirty) return;
+
+    function protectBrowserNavigation(event: BeforeUnloadEvent) {
+      if (allowNavigationRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+
+    function protectLinkedNavigation(event: MouseEvent) {
+      const eventTarget = event.target;
+      const anchor = eventTarget instanceof Element
+        ? eventTarget.closest<HTMLAnchorElement>("a[href]")
+        : null;
+      if (!anchor) return;
+      const destination = guardedNavigationDestination({
+        currentHref: window.location.href,
+        targetHref: anchor.href,
+        button: event.button,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        target: anchor.getAttribute("target"),
+        download: anchor.hasAttribute("download"),
+      });
+      if (!destination) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (leavePromptOpenRef.current) return;
+      if (saving) {
+        setNotice("正在保存当前草稿，完成后再离开");
+        return;
+      }
+
+      leavePromptOpenRef.current = true;
+      const destinationName = navigationLabel(
+        anchor.getAttribute("aria-label") ?? anchor.textContent,
+        destination,
+      );
+      void requestDecision({
+        title: "有未保存的修改",
+        description: "可以保存后前往目标页面，也可以放弃这次修改直接离开。",
+        confirmLabel: "保存并离开",
+        cancelLabel: "继续编辑",
+        discardLabel: "放弃修改并离开",
+        context: <span>前往：{destinationName}</span>,
+      }).then(async (decision) => {
+        if (decision === "cancel") return;
+        if (decision === "confirm") {
+          const saved = await saveDraft();
+          if (!saved) return;
+        }
+        const navigate = () => {
+          allowNavigationRef.current = true;
+          if (destination.origin === window.location.origin) {
+            router.push(`${destination.pathname}${destination.search}${destination.hash}`);
+          } else {
+            window.location.assign(destination.href);
+          }
+        };
+        const historyGuard = historyGuardRef.current;
+        if (historyGuard?.isActive()) {
+          historyGuard.deactivate(() => window.setTimeout(navigate, 0));
+        } else {
+          navigate();
+        }
+      }).finally(() => {
+        leavePromptOpenRef.current = false;
+      });
+    }
+
+    window.addEventListener("beforeunload", protectBrowserNavigation);
+    document.addEventListener("click", protectLinkedNavigation, true);
+    return () => {
+      window.removeEventListener("beforeunload", protectBrowserNavigation);
+      document.removeEventListener("click", protectLinkedNavigation, true);
+    };
+  }, [canEdit, dirty, draft, requestDecision, router, saving]);
+
   async function applyRecommendedExecutionProfile(profileId: string) {
     const saved = await saveDraft({ ...draft, executionProfile: profileId });
     if (!saved?.id) return;
@@ -726,6 +1045,11 @@ export function AgentStudioWorkbench() {
       const validation = await studioClient.validateDraft(saved.id);
       setServerValidation(validation);
       setInspected(true);
+      setReleaseFeedbackOpen(
+        validation.issues.some((issue) =>
+          issue.severity === "error" || issue.severity === "warning"
+        ),
+      );
       setNotice(
         validation.productionEligible
           ? `已切换、保存并检查 · ${profileId} 可用于生产`
@@ -753,6 +1077,9 @@ export function AgentStudioWorkbench() {
         (issue) => issue.severity === "error" && issue.stage === "production",
       );
       const warnings = validation.issues.filter((issue) => issue.severity === "warning");
+      setReleaseFeedbackOpen(
+        errors.length + productionErrors.length + warnings.length > 0,
+      );
       setNotice(
         validation.ready
           ? productionErrors.length
@@ -774,22 +1101,11 @@ export function AgentStudioWorkbench() {
   async function handleReleaseAction() {
     if (!canEdit || saving || inspecting || publishing) return;
     if (dirty || !serverValidation) {
-      const validation = await inspectDraft();
-      if (validation && !validation.ready) {
-        window.requestAnimationFrame(() => {
-          releaseAssistantRef.current?.scrollIntoView({
-            behavior: "smooth",
-            block: "nearest",
-          });
-        });
-      }
+      await inspectDraft();
       return;
     }
     if (!serverValidation.ready) {
-      releaseAssistantRef.current?.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-      });
+      setReleaseFeedbackOpen(true);
       return;
     }
     if (!canPublish) {
@@ -799,29 +1115,109 @@ export function AgentStudioWorkbench() {
     await publishDraft();
   }
 
+  function beginNewDraft(reservedNames: string[] = []) {
+    setDraft(createPersonalStudioDraft([
+      ...drafts.map((item) => item.name),
+      ...reservedNames,
+    ]));
+    setDirty(true);
+    setConflict(false);
+    setVersionConflict(false);
+    setServerValidation(null);
+    setReleaseFeedbackOpen(false);
+    setActiveSection("identity");
+    setNotice("新草稿尚未保存到控制面");
+  }
+
+  async function startNewDraft() {
+    if (!canEdit || saving) return;
+    if (!dirty) {
+      beginNewDraft();
+      return;
+    }
+    const confirmed = await requestConfirmation({
+      title: "保存当前修改并新建？",
+      description: `${PRODUCT_NAME}会先保存当前草稿，再创建一个新的个人智能体；保存失败或发生版本冲突时会保留当前编辑内容。`,
+      confirmLabel: "保存并新建",
+      cancelLabel: "继续编辑",
+      context: <span>当前草稿：{draft.displayName}</span>,
+    });
+    if (!confirmed) return;
+    const saved = await saveDraft();
+    if (!saved) return;
+    beginNewDraft([saved.name]);
+  }
+
   async function selectDraft(draftId: string) {
-    if (dirty && !window.confirm("当前修改尚未保存，仍要切换草稿吗？")) return;
+    if (draftId === draft.id || draftSwitchingRef.current) return;
+    draftSwitchingRef.current = true;
     try {
-      const selected = await studioClient.getDraft(draftId);
+      const target = drafts.find((item) => item.draftId === draftId);
+      if (dirty) {
+        const confirmed = await requestConfirmation({
+          title: "保存当前修改并切换？",
+          description: `${PRODUCT_NAME}会先保存当前草稿，再切换智能体；保存失败或发生版本冲突时会保留当前编辑内容。`,
+          confirmLabel: "保存并切换",
+          cancelLabel: "继续编辑",
+          context: <span>切换到：{target?.displayName ?? "所选智能体"}</span>,
+        });
+        if (!confirmed) return;
+        const saved = await saveDraft();
+        if (!saved) return;
+      }
+      setSwitchingDraftId(draftId);
+      setNotice(`正在切换到 ${target?.displayName ?? "所选智能体"}…`);
+      const selected = await studioClient.getDraft(draftId, {
+        expectedRevision: target?.revision,
+      });
       setDraft(apiDraftToStudioDraft(selected));
       setDirty(false);
       setConflict(false);
       setVersionConflict(false);
       setServerValidation(null);
+      setReleaseFeedbackOpen(false);
       setNotice("已从控制面切换草稿");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "加载草稿失败");
+    } finally {
+      setSwitchingDraftId("");
+      draftSwitchingRef.current = false;
     }
   }
 
   async function reloadAfterConflict() {
-    if (!draft.id) return;
-    const selected = await studioClient.getDraft(draft.id);
-    setDraft(apiDraftToStudioDraft(selected));
-    setDirty(false);
-    setConflict(false);
-    setVersionConflict(false);
-    setNotice("已加载控制面最新 revision");
+    if (!draft.id || conflictReloadingRef.current) return;
+    const confirmed = await requestConfirmation({
+      title: "放弃本地修改并加载控制面版本？",
+      description:
+        "控制面版本会替换当前表单里所有尚未保存的修改。"
+        + `${PRODUCT_NAME}不会为这些本地修改生成恢复点。`,
+      confirmLabel: "放弃并加载",
+      cancelLabel: "继续编辑",
+      tone: "danger",
+      context: <span>{draft.displayName} · 本地 revision {draft.revision}</span>,
+    });
+    if (!confirmed || conflictReloadingRef.current) return;
+    conflictReloadingRef.current = true;
+    setReloadingConflict(true);
+    try {
+      const selected = await studioClient.getDraft(draft.id, { maxAgeMs: 0 });
+      const latest = apiDraftToStudioDraft(selected);
+      setDraft(latest);
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setNotice(`已放弃本地修改并加载控制面 revision ${latest.revision}`);
+    } catch (error) {
+      setNotice(
+        `控制面版本加载失败，本地修改仍保留：${
+          error instanceof Error ? error.message : "请稍后重试"
+        }`,
+      );
+    } finally {
+      setReloadingConflict(false);
+      conflictReloadingRef.current = false;
+    }
   }
 
   async function downloadBundle() {
@@ -847,19 +1243,26 @@ export function AgentStudioWorkbench() {
   }
 
   async function importBundle(file: File) {
-    if (dirty && !window.confirm("当前修改尚未保存，导入 Bundle 将切换到新 Agent，是否继续？")) {
+    if (dirty && !(await requestConfirmation({
+      title: "导入并离开当前草稿？",
+      description: "当前未保存修改会丢失。导入完成后将切换到 Bundle 中的 Agent，已有不可变版本不会被覆盖。",
+      confirmLabel: "继续导入",
+      context: <code>{file.name}</code>,
+      tone: "danger",
+    }))) {
       return;
     }
     setImportingBundle(true);
     try {
       const imported = await studioClient.importBundle(file);
-      const rows = await studioClient.listDrafts();
+      const rows = await studioClient.listAccessibleDrafts();
       setDraft(apiDraftToStudioDraft(imported.draft));
       setDrafts(rows);
       setDirty(false);
       setConflict(false);
       setVersionConflict(false);
       setServerValidation(null);
+      setReleaseFeedbackOpen(false);
       setInspected(false);
       setNotice(
         imported.lossless && imported.roundTripVerified
@@ -889,7 +1292,7 @@ export function AgentStudioWorkbench() {
         (candidate) => candidate.name === installed.skillName,
       );
       setDraft(saved);
-      setDrafts(await studioClient.listDrafts());
+      setDrafts(await studioClient.listAccessibleDrafts());
       setDirty(false);
       setConflict(false);
       setVersionConflict(false);
@@ -928,11 +1331,14 @@ export function AgentStudioWorkbench() {
     const installed = draft.skills.find((candidate) => candidate.name === name);
     if (!installed || saving || !canEdit) return;
     const fileCount = installed.files?.length ?? 0;
-    const confirmed = window.confirm(
-      `卸载 Skill“${name}”？\n\n`
-      + `它及其 ${fileCount.toLocaleString("zh-CN")} 个附加文件将从当前草稿中移除。`
-      + "已发布的不可变历史版本不会被修改。",
-    );
+    const confirmed = await requestConfirmation({
+      title: `从草稿卸载 Skill“${name}”？`,
+      description:
+        `它及其 ${fileCount.toLocaleString("zh-CN")} 个附加文件将从当前草稿中移除。`
+        + "已发布的不可变历史版本不会被修改。",
+      confirmLabel: "卸载 Skill",
+      tone: "danger",
+    });
     if (!confirmed) return;
     const skills = draft.skills.filter((candidate) => candidate.name !== name);
     const saved = await saveDraft({ ...draft, skills });
@@ -954,7 +1360,7 @@ export function AgentStudioWorkbench() {
       const version = await studioClient.publishDraft(draft.id, draft.revision);
       const [refreshed, rows] = await Promise.all([
         studioClient.getDraft(draft.id),
-        studioClient.listDrafts(),
+        studioClient.listAccessibleDrafts(),
       ]);
       setDraft(apiDraftToStudioDraft(refreshed));
       setDrafts(rows);
@@ -971,6 +1377,31 @@ export function AgentStudioWorkbench() {
       setNotice(error instanceof Error ? error.message : "发布失败");
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function promotePersonalVersion(version: string) {
+    if (!draft.agentId || draft.spaceId || !canPublish || promotingVersion) return;
+    setPromotingVersion(version);
+    try {
+      const promoted = await studioClient.promotePersonalAgentVersion(
+        draft.agentId,
+        version,
+      );
+      setPersonalVersions((current) =>
+        current.map((item) => ({
+          ...item,
+          current_version: promoted.current_version,
+        })),
+      );
+      setPromoteTarget("");
+      setNotice(`已将 ${draft.name}@${version} 设为当前版本；新任务立即生效`);
+    } catch (error) {
+      setVersionHistoryError(
+        error instanceof Error ? error.message : "版本切换失败",
+      );
+    } finally {
+      setPromotingVersion("");
     }
   }
 
@@ -1210,17 +1641,23 @@ export function AgentStudioWorkbench() {
     && draft.publishedPackageHash
     && serverValidation?.packageHash === draft.publishedPackageHash
   );
+  const currentPersonalVersion = draft.agentId
+    ? personalVersions.find((version) => version.agent_id === draft.agentId)?.current_version
+      ?? null
+    : draft.publishedVersion;
+  const taskVersion = draft.spaceId
+    ? draft.publishedVersion
+    : currentPersonalVersion;
+  const taskHref = taskVersion
+    ? draft.spaceId
+      ? `/?space=${encodeURIComponent(draft.spaceId)}&agent=${encodeURIComponent(draft.name)}&version=${encodeURIComponent(taskVersion)}`
+      : `/?agent=${encodeURIComponent(draft.name)}&version=${encodeURIComponent(taskVersion)}&owner=${encodeURIComponent(user.user_id)}`
+    : null;
   const snapshotById = new Map(
     deploymentSnapshots.map((snapshot) => [snapshot.snapshotId, snapshot]),
   );
   const activeDeployment = deployments.find((item) =>
     ["queued", "reconciling"].includes(item.deployment.status),
-  );
-  const latestQualityScores = Array.from(
-    new Map(qualityScores.map((score) => [score.name, score])).values(),
-  );
-  const openQualityIncidents = qualityIncidents.filter(
-    (incident) => incident.state === "open",
   );
   const deployedCurrent = environments.some((environment) =>
     environment.routes.some((route) =>
@@ -1306,19 +1743,6 @@ export function AgentStudioWorkbench() {
               : publishedCurrent
                 ? "重新核验发布"
                 : `发布 ${draft.version}`;
-  const releaseTitle = dirty
-    ? "先保存当前修改，再检查发布条件"
-    : !serverValidation
-      ? "配置已保存，尚未检查发布条件"
-      : validationErrors.length
-        ? `${validationErrors.length} 项配置阻止发布`
-        : productionValidationErrors.length
-          ? `可以发布，生产部署还有 ${productionValidationErrors.length} 项限制`
-        : validationWarnings.length
-          ? `可以发布，另有 ${validationWarnings.length} 项上线前提醒`
-          : publishedCurrent
-            ? `${draft.version} 已是当前不可变版本`
-            : `${draft.version} 已准备好发布`;
   const lifecycleLabel = validationErrors.length
     ? "发布被阻止"
     : dirty
@@ -1426,24 +1850,12 @@ export function AgentStudioWorkbench() {
 
   useEffect(() => {
     if (!draft.id || !draft.name || !draft.publishedVersion) {
-      setQualityScores([]);
-      setQualityIncidents([]);
-      setQualityRules([]);
       setQualityGate(null);
       return;
     }
     let active = true;
-    void Promise.all([
-      studioClient.listQualityScores(draft.name),
-      studioClient.listQualityIncidents(draft.name),
-      studioClient.listQualityRules(draft.name),
-      studioClient.getQualityGate(draft.name, draft.publishedVersion),
-    ]).then(([scores, incidents, rules, gate]) => {
-      if (!active) return;
-      setQualityScores(scores);
-      setQualityIncidents(incidents);
-      setQualityRules(rules);
-      setQualityGate(gate);
+    void studioClient.getQualityGate(draft.name, draft.publishedVersion).then((gate) => {
+      if (active) setQualityGate(gate);
     }).catch(() => {
       if (active) setQualityGate(null);
     });
@@ -1451,28 +1863,25 @@ export function AgentStudioWorkbench() {
   }, [draft.id, draft.name, draft.publishedVersion]);
 
   if (loading) {
-    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><span className={styles.studioStateMark}>AS</span><h1>正在读取 Agent Studio</h1><p>正在恢复你的智能体草稿与能力目录。</p></section></main>;
+    return <main className={styles.studioStateShell} id="main-content" aria-busy="true"><section className={styles.studioStateCard}><ProductBrandMark className={styles.studioStateMark} /><h1>正在读取{PRODUCT_NAME}</h1><p>正在恢复你的智能体草稿与能力目录。</p></section></main>;
   }
   if (loadError) {
-    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>Agent Studio 数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
+    return <main className={styles.studioStateShell} id="main-content"><section className={styles.studioStateCard} role="alert"><span className={styles.studioStateMark}>!</span><h1>{PRODUCT_NAME}数据暂不可用</h1><p>{loadError}</p><button type="button" onClick={() => window.location.reload()}>重新加载</button></section></main>;
   }
 
   return (
     <main className={styles.studioShell} id="main-content" data-studio-integration="api">
       <StudioSidebar active="agents">
         <div className={styles.railHeading}>
-          <span>我的智能体</span>
+          <span className={styles.railHeadingLabel}>
+            <ProductIcon name="agent" />
+            智能体
+          </span>
           <button
             type="button"
             aria-label="新建智能体"
-            disabled={!canEdit}
-            onClick={() => {
-              setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
-              setDirty(true);
-              setConflict(false);
-              setVersionConflict(false);
-              setNotice("新草稿尚未保存到控制面");
-            }}
+            disabled={!canEdit || saving}
+            onClick={() => void startNewDraft()}
           >
             +
           </button>
@@ -1496,6 +1905,13 @@ export function AgentStudioWorkbench() {
               key={agent.draftId}
               className={agent.draftId === draft.id ? styles.agentRowActive : styles.agentRow}
               aria-current={agent.draftId === draft.id ? "page" : undefined}
+              disabled={saving || Boolean(switchingDraftId) || agent.draftId === draft.id}
+              onPointerEnter={() => {
+                void studioClient.prefetchDraft(agent.draftId, agent.revision).catch(() => {});
+              }}
+              onFocus={() => {
+                void studioClient.prefetchDraft(agent.draftId, agent.revision).catch(() => {});
+              }}
               onClick={() => void selectDraft(agent.draftId)}
             >
               <span className={styles.agentMonogram} aria-hidden="true">
@@ -1504,7 +1920,9 @@ export function AgentStudioWorkbench() {
               <span className={styles.agentRowCopy}>
                 <strong>{agent.displayName}</strong>
                 <small>
-                  {agent.version} · {agent.publishedVersion ? `已发布 ${agent.publishedVersion}` : "草稿"} · r{agent.revision}
+                  {switchingDraftId === agent.draftId
+                    ? "正在切换…"
+                    : `${agent.spaceId ? "协作" : "个人"} · ${agent.version} · ${agent.publishedVersion ? `已发布 ${agent.publishedVersion}` : "草稿"} · r${agent.revision}`}
                 </small>
               </span>
             </button>
@@ -1516,17 +1934,23 @@ export function AgentStudioWorkbench() {
       </StudioSidebar>
 
       <section className={styles.editorShell} data-readonly={!canEdit}>
-        {drafts.length === 0 && !draft.id && (
-          <div className={styles.emptyBanner} role="status">
-            <strong>你还没有智能体草稿</strong>
-            <span>{canEdit ? "填写模板并保存，即可创建第一个私人草稿。" : "当前角色只能查看自己已有的智能体。"}</span>
-          </div>
-        )}
         <header className={styles.editorHeader}>
           <div className={styles.titleBlock}>
             <div className={styles.eyebrow}>
               <span className={styles.draftDot} />
               {publishedCurrent ? "已发布" : "草稿"} · {draft.domain}
+              <span className={styles.syncState} data-dirty={dirty} role="status">
+                <span aria-hidden="true">·</span>
+                {saving
+                  ? "保存中"
+                  : inspecting
+                    ? "检查中"
+                    : dirty
+                      ? "未保存"
+                      : draft.id
+                        ? `已保存 r${draft.revision}`
+                        : "尚未保存"}
+              </span>
             </div>
             <div className={styles.titleLine}>
               <h1>{draft.displayName}</h1>
@@ -1538,55 +1962,83 @@ export function AgentStudioWorkbench() {
                 <span>{publishedCurrent ? "不可变版本已发布" : "存在历史发布版本"}</span>
                 <code>{draft.name}@{draft.publishedVersion}</code>
                 {draft.publishedHash && <code>{draft.publishedHash.slice(0, 12)}</code>}
+                {draft.agentId && !draft.spaceId && (
+                  <button
+                    type="button"
+                    ref={versionHistoryTriggerRef}
+                    className={styles.versionHistoryButton}
+                    aria-expanded={versionHistoryOpen}
+                    aria-controls="personal-version-history"
+                    onClick={() => {
+                      setContractOpen(false);
+                      setVersionHistoryOpen(true);
+                    }}
+                  >
+                    版本历史
+                    <small>{versionHistoryLoading ? "…" : personalVersions.length}</small>
+                  </button>
+                )}
               </div>
             )}
           </div>
           <div className={styles.headerActions}>
-            <span className={styles.syncState} data-dirty={dirty}>
-              <i aria-hidden="true" />
-              {saving
-                ? "正在保存"
-                : inspecting
-                  ? "正在检查"
-                  : dirty
-                    ? "有未保存更改"
-                    : `已同步 r${draft.revision}`}
-            </span>
+            {taskHref && (
+              <Link
+                className={`${styles.headerActionButton} ${styles.startTaskButton}`}
+                href={taskHref}
+                title={`使用当前版本 ${draft.name}@${taskVersion} 开始新任务`}
+              >
+                <HeaderActionIcon name="task" />
+                <span>开始任务</span>
+              </Link>
+            )}
             <button
               type="button"
-              className={styles.secondaryButton}
+              className={`${styles.headerActionButton} ${styles.secondaryButton}`}
               disabled={!canEdit || saving || inspecting || !dirty}
               onClick={() => void saveDraft()}
             >
+              <HeaderActionIcon name="save" />
               <span>{saving ? "保存中…" : "仅保存"}</span>
             </button>
             <button
               type="button"
-              className={styles.publishButton}
+              className={`${styles.headerActionButton} ${styles.publishButton}`}
               data-state={releaseTone}
               disabled={!canEdit || saving || inspecting || publishing}
               title="保存与检查会自动衔接；发布不可变版本前仍需一次明确点击"
               onClick={() => void handleReleaseAction()}
             >
-              {releaseActionLabel}
+              <HeaderActionIcon name="release" />
+              <span>{releaseActionLabel}</span>
             </button>
             <button
               type="button"
-              className={styles.contractToggleButton}
+              ref={contractTriggerRef}
+              className={`${styles.headerActionButton} ${styles.contractToggleButton}`}
               data-ready={contract.ready}
               aria-expanded={contractOpen}
               aria-controls="effective-contract-drawer"
               onClick={() => setContractOpen(true)}
             >
               <i aria-hidden="true" />
+              <HeaderActionIcon name="contract" />
               <span>运行契约</span>
               <small>{contract.ready ? "就绪" : contract.issues.length}</small>
             </button>
-            <details className={styles.actionMenu}>
-              <summary aria-label="更多智能体操作" title="更多操作">
+            <details className={styles.actionMenu} data-dismiss-on-outside>
+              <summary
+                className={`${styles.headerActionButton} ${styles.iconActionButton}`}
+                aria-label="更多智能体操作"
+                title="更多操作"
+              >
                 <span aria-hidden="true">•••</span>
               </summary>
               <div className={styles.actionMenuPopover}>
+                <header className={styles.actionMenuHeader}>
+                  <strong>更多操作</strong>
+                  <small>导入与导出</small>
+                </header>
                 <input
                   ref={bundleInputRef}
                   hidden
@@ -1599,7 +2051,8 @@ export function AgentStudioWorkbench() {
                 />
                 <button
                   type="button"
-                  className={styles.secondaryButton}
+                  className={styles.actionMenuItem}
+                  data-icon="↙"
                   disabled={!canEdit || importingBundle}
                   onClick={(event) => {
                     event.currentTarget.closest("details")?.removeAttribute("open");
@@ -1610,19 +2063,8 @@ export function AgentStudioWorkbench() {
                 </button>
                 <button
                   type="button"
-                  className={styles.previewButton}
-                  disabled={!canEdit || !draft.id || dirty || !serverValidation?.ready || creatingPreview}
-                  title="创建绑定当前 Draft 双 Hash 的短时测试环境，并执行真实 Model、Sandbox 与 MCP Preflight"
-                  onClick={(event) => {
-                    event.currentTarget.closest("details")?.removeAttribute("open");
-                    void createPreview();
-                  }}
-                >
-                  <span><strong>{creatingPreview ? "正在创建 Preview" : "创建 Preview"}</strong><small>在隔离环境中完成真实预检</small></span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.secondaryButton}
+                  className={styles.actionMenuItem}
+                  data-icon="↓"
                   disabled={!draft.id || saving}
                   onClick={(event) => {
                     event.currentTarget.closest("details")?.removeAttribute("open");
@@ -1633,7 +2075,8 @@ export function AgentStudioWorkbench() {
                 </button>
                 <button
                   type="button"
-                  className={styles.secondaryButton}
+                  className={styles.actionMenuItem}
+                  data-icon="↗"
                   disabled={!draft.id || saving}
                   onClick={(event) => {
                     event.currentTarget.closest("details")?.removeAttribute("open");
@@ -1649,8 +2092,14 @@ export function AgentStudioWorkbench() {
 
         {conflict && (
           <div className={styles.conflictBanner} role="alert">
-            <div><strong>控制面已有更新</strong><span>本地修改仍保留。加载最新 revision 后再重新编辑。</span></div>
-            <button type="button" onClick={() => void reloadAfterConflict()}>加载最新版本</button>
+            <div><strong>控制面已有更新</strong><span>本地修改仍保留；加载控制面版本会放弃这些未保存内容。</span></div>
+            <button
+              type="button"
+              disabled={saving || reloadingConflict}
+              onClick={() => void reloadAfterConflict()}
+            >
+              {reloadingConflict ? "正在加载…" : "加载控制面版本"}
+            </button>
           </div>
         )}
         {versionConflict && (
@@ -1662,172 +2111,124 @@ export function AgentStudioWorkbench() {
             <button type="button" onClick={() => setActiveSection("identity")}>修改版本号</button>
           </div>
         )}
-        <section
-          ref={releaseAssistantRef}
-          className={styles.releaseAssistant}
-          data-tone={releaseTone}
-          aria-live="polite"
-          aria-label="发布准备"
-        >
-          <header>
-            <span className={styles.releaseSignal} aria-hidden="true" />
-            <div>
-              <small>发布准备</small>
-              <strong>{releaseTitle}</strong>
-              <p>
-                {dirty
-                  ? "点击“保存并检查”会先同步当前草稿，再运行服务端发布校验。"
-                  : !serverValidation
-                    ? "检查会验证版本、Prompt、Skills、Tools、执行档位和固定依赖。"
-                    : validationErrors.length
-                      ? "发布按钮保持可操作，用于回到这里查看原因；每个阻断项都可以直接跳到对应配置。"
-                      : productionValidationErrors.length
-                        ? "当前配置可以生成不可变 Bundle；生产限制不会阻止发布，但必须在部署前处理。"
-                      : "发布会创建不可覆盖的 Bundle；Preview 和 Dataset 可按上线要求继续完成。"}
-              </p>
-            </div>
-          </header>
+        {releaseFeedbackOpen && serverValidation && (
+          validationErrors.length
+          + productionValidationErrors.length
+          + validationWarnings.length
+          + incompatibleMcpReferences.length > 0
+        ) && (
+          <aside
+            className={styles.releaseFeedbackPopover}
+            data-tone={validationErrors.length ? "blocked" : "warning"}
+            aria-live="polite"
+            aria-label="发布检查结果"
+          >
+            <header className={styles.releaseFeedbackSummary}>
+              <span aria-hidden="true">!</span>
+              <div>
+                <strong>
+                  {validationErrors.length
+                    ? `${validationErrors.length} 项配置阻止发布`
+                    : productionValidationErrors.length
+                      ? `${productionValidationErrors.length} 项生产部署限制`
+                      : `${validationWarnings.length} 项上线前提醒`}
+                </strong>
+                <small>检查结果不会占用编辑区；关闭后可从发布按钮再次打开。</small>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭发布检查结果"
+                onClick={() => setReleaseFeedbackOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className={styles.releaseFeedbackBody}>
+              {validationErrors.length + productionValidationErrors.length > 0 && (
+                <ul className={styles.releaseIssues}>
+                  {[...validationErrors, ...productionValidationErrors].map((issue) => {
+                    const section = validationIssueSection(issue);
+                    const missingCoverage = missingEvaluationCoverage(issue);
+                    const suggestedProfile = options.profiles.find(
+                      (profile) => profile.profileId === issue.suggestedProfileIds[0],
+                    );
+                    return (
+                      <li
+                        key={`${issue.stage}:${issue.code}:${issue.path ?? ""}`}
+                        data-stage={issue.stage}
+                      >
+                        <span aria-hidden="true">{issue.stage === "production" ? "P" : "!"}</span>
+                        <div>
+                          <strong>{validationIssueMessage(issue)}</strong>
+                          <small>
+                            {issue.stage === "production" ? "生产部署" : "发布"}
+                            {" · "}{validationSectionLabels[section]}
+                          </small>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReleaseFeedbackOpen(false);
+                            if (suggestedProfile) {
+                              updateDraft({ executionProfile: suggestedProfile.profileId });
+                            } else if (missingCoverage) {
+                              updateDraft({
+                                evalCases: [
+                                  ...draft.evalCases,
+                                  evaluationCoverageCase(missingCoverage, draft),
+                                ],
+                              });
+                            }
+                            setActiveSection(section);
+                          }}
+                        >
+                          {suggestedProfile
+                            ? `切换至 ${suggestedProfile.label}`
+                            : missingCoverage
+                              ? "一键补齐"
+                              : "去处理"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
 
-          <div className={styles.releaseChecks} aria-label="发布条件状态">
-            <span data-state={dirty ? "pending" : "complete"}>
-              {dirty ? "草稿待保存" : `草稿已同步 · r${draft.revision}`}
-            </span>
-            <span
-              data-state={
-                !serverValidation
-                  ? "pending"
-                  : validationErrors.length
-                    ? "blocked"
-                    : "complete"
-              }
-            >
-              {!serverValidation
-                ? "尚未检查"
-                : validationErrors.length
-                  ? `${validationErrors.length} 项阻断`
-                  : "服务端检查通过"}
-            </span>
-            <span
-              data-state={
-                !serverValidation
-                  ? "pending"
-                  : serverValidation.productionEligible
-                    ? "complete"
-                    : "blocked"
-              }
-            >
-              {!serverValidation
-                ? "生产资格待检查"
-                : serverValidation.productionEligible
-                  ? "生产配置兼容"
-                  : `${productionValidationErrors.length} 项生产限制`}
-            </span>
-            <span data-state={activePreview?.status === "ready" && !activePreview.stale ? "complete" : "optional"}>
-              {activePreview?.status === "ready" && !activePreview.stale
-                ? "真实 Preview 已就绪"
-                : "真实 Preview · 按需"}
-            </span>
-          </div>
+              {validationWarnings.length > 0 && (
+                <details className={styles.releaseWarnings}>
+                  <summary>{validationWarnings.length} 项上线前提醒</summary>
+                  <ul>
+                    {validationWarnings.map((issue) => (
+                      <li key={`${issue.code}:${issue.message}`}>{issue.message}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
 
-          {validationErrors.length + productionValidationErrors.length > 0 && (
-            <ul className={styles.releaseIssues}>
-              {[...validationErrors, ...productionValidationErrors].map((issue) => {
-                const section = validationIssueSection(issue);
-                const missingCoverage = missingEvaluationCoverage(issue);
-                const suggestedProfile = options.profiles.find(
-                  (profile) => profile.profileId === issue.suggestedProfileIds[0],
-                );
-                return (
-                  <li
-                    key={`${issue.stage}:${issue.code}:${issue.path ?? ""}`}
-                    data-stage={issue.stage}
+              {incompatibleMcpReferences.length > 0 && (
+                <div className={styles.releaseQuickFix}>
+                  <span>
+                    当前执行档位未允许：
+                    <code>{incompatibleMcpReferences.join(", ")}</code>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateDraft({
+                        mcpServers: draft.mcpServers.filter(
+                          (reference) => !incompatibleMcpReferences.includes(reference),
+                        ),
+                      });
+                      setActiveSection("capabilities");
+                    }}
                   >
-                    <span aria-hidden="true">{issue.stage === "production" ? "P" : "!"}</span>
-                    <div>
-                      <strong>{validationIssueMessage(issue)}</strong>
-                      <small>
-                        {issue.stage === "production" ? "生产部署" : "发布"}
-                        {" · "}{validationSectionLabels[section]}
-                      </small>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (suggestedProfile) {
-                          updateDraft({ executionProfile: suggestedProfile.profileId });
-                        } else if (missingCoverage) {
-                          updateDraft({
-                            evalCases: [
-                              ...draft.evalCases,
-                              evaluationCoverageCase(missingCoverage, draft),
-                            ],
-                          });
-                        }
-                        setActiveSection(section);
-                      }}
-                    >
-                      {suggestedProfile
-                        ? `切换至 ${suggestedProfile.label}`
-                        : missingCoverage
-                          ? "一键补齐"
-                          : "去处理"}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-
-          {validationWarnings.length > 0 && (
-            <details className={styles.releaseWarnings}>
-              <summary>{validationWarnings.length} 项上线前提醒</summary>
-              <ul>
-                {validationWarnings.map((issue) => (
-                  <li key={`${issue.code}:${issue.message}`}>{issue.message}</li>
-                ))}
-              </ul>
-            </details>
-          )}
-
-          {incompatibleMcpReferences.length > 0 && (
-            <div className={styles.releaseQuickFix}>
-              <span>
-                当前执行档位未允许：
-                <code>{incompatibleMcpReferences.join(", ")}</code>
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  updateDraft({
-                    mcpServers: draft.mcpServers.filter(
-                      (reference) => !incompatibleMcpReferences.includes(reference),
-                    ),
-                  });
-                  setActiveSection("capabilities");
-                }}
-              >
-                移除不兼容 MCP
-              </button>
+                    移除不兼容 MCP
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-
-          {serverValidation?.ready && !publishedCurrent && (
-            <div className={styles.releaseNextActions}>
-              <span>想先验证真实模型、Sandbox 与 MCP？Preview 不会创建正式版本。</span>
-              <button
-                type="button"
-                disabled={!canEdit || creatingPreview || Boolean(activePreview && !activePreview.stale && !["cancelled", "failed", "expired"].includes(activePreview.status))}
-                onClick={() => void createPreview()}
-              >
-                {creatingPreview
-                  ? "正在创建 Preview…"
-                  : activePreview && !activePreview.stale
-                    ? `Preview ${activePreview.status}`
-                    : "先运行真实 Preview"}
-              </button>
-            </div>
-          )}
-        </section>
+          </aside>
+        )}
         {activePreview && (
           <div className={styles.previewBanner} data-status={activePreview.status} data-stale={activePreview.stale}>
             <div className={styles.previewIdentity}>
@@ -2163,7 +2564,7 @@ export function AgentStudioWorkbench() {
                   id="orchestration-title"
                   kicker="04 / Collaboration"
                   title="让 Lead 负责决策，让专家并行取证"
-                  description="Lead 是唯一面向用户的主线；Sub Agent 可直接绑定并打开 Studio 草稿编辑，正式发布 Lead 时再固定依赖版本。"
+                  description="Lead 是唯一面向用户的主线；Sub Agent 可直接绑定并打开构建草稿编辑，正式发布 Lead 时再固定依赖版本。"
                 />
 
                 <div className={styles.orchestrationSummary} aria-label="协同运行摘要">
@@ -3065,6 +3466,15 @@ export function AgentStudioWorkbench() {
                   title="用真实失败路径证明它可以发布"
                   description="结构检查只是第一层；上线前仍要在固定版本和真实 Sandbox 中跑 live eval。"
                 />
+                {taskHref && (
+                  <div className={styles.releaseTaskShortcut}>
+                    <div>
+                      <strong>用已发布版本验证真实任务</strong>
+                      <span>{draft.name}@{draft.publishedVersion}</span>
+                    </div>
+                    <Link href={taskHref}>开始任务</Link>
+                  </div>
+                )}
                 <div className={styles.evalMode}>
                   <div>
                     <strong>Agent Eval</strong>
@@ -3089,82 +3499,19 @@ export function AgentStudioWorkbench() {
                 </div>
                 {draft.evaluationEnabled ? (
                   <>
-                    <div className={styles.evalToolbar}>
+                    <div className={styles.evalDatasetSummary}>
                       <div>
-                        {(["happy", "ambiguous", "safety"] as const).map((tag) => (
-                          <span
-                            key={tag}
-                            data-complete={draft.evalCases.some((testCase) => testCase.tag === tag)}
-                          >
-                            {evaluationCoverageLabels[tag]}
-                          </span>
-                        ))}
+                        <strong>{draft.evalCases.length} 条评测场景</strong>
+                        <span>场景编辑与文件导入已移至独立评测集管理器。</span>
                       </div>
-                      <button type="button" disabled={!canEdit} onClick={addEvalCase}>
-                        新增评测场景
-                      </button>
-                    </div>
-                    <div className={styles.evalList}>
-                      {draft.evalCases.map((testCase, index) => (
-                        <article key={testCase.id} className={styles.evalCase}>
-                          <select
-                            aria-label={`${testCase.id} 场景类型`}
-                            value={testCase.tag}
-                            disabled={!canEdit}
-                            onChange={(event) =>
-                              updateEvalCase(index, {
-                                tag: event.target.value as StudioEvalCase["tag"],
-                              })
-                            }
-                          >
-                            <option value="happy">正常 happy</option>
-                            <option value="ambiguous">歧义 ambiguous</option>
-                            <option value="safety">安全 safety</option>
-                          </select>
-                          <div className={styles.evalCaseEditor}>
-                            <input
-                              aria-label={`${testCase.id} 名称`}
-                              value={testCase.label}
-                              disabled={!canEdit}
-                              onChange={(event) =>
-                                updateEvalCase(index, { label: event.target.value })
-                              }
-                            />
-                            <textarea
-                              aria-label={`${testCase.id} 提示词`}
-                              value={testCase.prompt}
-                              disabled={!canEdit}
-                              onChange={(event) =>
-                                updateEvalCase(index, { prompt: event.target.value })
-                              }
-                            />
-                        <div className={styles.evalAssertions}>
-                          <span>终态 {testCase.expect.terminalStatuses.join(" / ")}</span>
-                          {testCase.expect.requiredTools.length > 0 && (
-                            <span>必须调用 {testCase.expect.requiredTools.join(" / ")}</span>
-                          )}
-                          {testCase.expect.forbiddenTools.length > 0 && (
-                            <span>禁止 {testCase.expect.forbiddenTools.join(" / ")}</span>
-                          )}
-                          {testCase.expect.outputContains.length > 0 && (
-                            <span>输出含 {testCase.expect.outputContains.join(" / ")}</span>
-                          )}
-                          {testCase.expect.approvalRequired && <span>必须经过审批</span>}
-                          <span>≤ {testCase.expect.maxDurationSeconds}s</span>
-                        </div>
-                          </div>
-                          <div className={styles.evalCaseActions}>
-                            <code>{testCase.id}</code>
-                            <button
-                              type="button"
-                              disabled={!canEdit || draft.evalCases.length <= 1}
-                              onClick={() => removeEvalCase(index)}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </article>
+                      {(["happy", "ambiguous", "safety"] as const).map((tag) => (
+                        <span key={tag}>
+                          {evaluationCoverageLabels[tag]} {draft.evalCases.filter((testCase) => testCase.tag === tag).length}
+                        </span>
                       ))}
+                      <button type="button" onClick={() => setEvalManagerOpen(true)}>
+                        管理评测集
+                      </button>
                     </div>
                 <section className={styles.evalControlPlane} aria-label="持久化评测控制面">
                   <header>
@@ -3290,52 +3637,6 @@ export function AgentStudioWorkbench() {
                     <span>现有用例配置会保留，重新开启后继续使用，不会删除历史 Dataset 或运行记录。</span>
                   </div>
                 )}
-                <section className={styles.qualityControlPlane} aria-label="线上质量与告警">
-                  <header>
-                    <div>
-                      <span>ONLINE QUALITY</span>
-                      <strong>规则 Score、人工反馈与 Alert</strong>
-                      <small>Run 终态不依赖 Langfuse；外部同步失败独立重试，Promotion 只读取本地耐久门禁。</small>
-                    </div>
-                    <em data-state={qualityGate?.passed === false ? "blocked" : "ready"}>
-                      {qualityGate?.passed === false
-                        ? `${qualityGate.blockingIncidentIds.length} 个阻断告警`
-                        : "质量门禁通过"}
-                    </em>
-                  </header>
-                  <div className={styles.qualityScoreGrid}>
-                    {latestQualityScores.slice(0, 6).map((score) => (
-                      <article key={score.scoreId} data-value={score.value < 0.8 ? "low" : "ok"}>
-                        <span>{score.source}</span>
-                        <strong>{score.name.replaceAll("_", " ")}</strong>
-                        <code>{score.value.toFixed(2)}</code>
-                        <small>{score.agentVersion} · Run {score.runId.slice(-8)}</small>
-                      </article>
-                    ))}
-                    {latestQualityScores.length === 0 && (
-                      <p>版本部署并产生 Run 后，将在此显示终态、工具、审批、时长、成本和 Artifact Score。</p>
-                    )}
-                  </div>
-                  {openQualityIncidents.length > 0 && (
-                    <div className={styles.qualityAlerts}>
-                      {openQualityIncidents.map((incident) => {
-                        const rule = qualityRules.find((item) => item.ruleId === incident.ruleId);
-                        return (
-                          <article key={incident.incidentId}>
-                            <span>ALERT</span>
-                            <div>
-                              <strong>{rule?.scoreName ?? incident.ruleId} · {incident.observedValue.toFixed(2)}</strong>
-                              <small>{incident.sampleCount} 个样本 · {rule?.blocksPromotion ? "阻断晋级" : "仅告警"}</small>
-                            </div>
-                            {rule?.dashboardUrl && (
-                              <a href={rule.dashboardUrl} target="_blank" rel="noreferrer">查看 Dashboard</a>
-                            )}
-                          </article>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
                 <div className={styles.releaseGate}>
                   <div>
                     <span>本地结构门禁</span>
@@ -3354,13 +3655,15 @@ export function AgentStudioWorkbench() {
                     </strong>
                   </div>
                   <div>
-                    <span>线上质量监控</span>
+                    <span>运行质量门禁</span>
                     <strong>
                       {qualityGate
                         ? qualityGate.passed
-                          ? "规则 / 人工 Score 无阻断告警"
-                          : `${qualityGate.blockingIncidentIds.length} 个 Alert 阻断晋级`
-                        : "等待版本运行样本"}
+                          ? "无阻断问题"
+                          : `${qualityGate.blockingIncidentIds.length} 项质量问题阻断发布`
+                        : draft.publishedVersion
+                          ? "等待已发布版本样本"
+                          : "发布版本后生效"}
                     </strong>
                   </div>
                 </div>
@@ -3535,6 +3838,135 @@ export function AgentStudioWorkbench() {
         </footer>
       </section>
 
+      {evalManagerOpen && (
+        <div
+          className={styles.evalManagerBackdrop}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEvalManagerOpen(false);
+          }}
+        >
+          <div
+            ref={evalManagerRef}
+            className={styles.evalManager}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="eval-manager-title"
+          >
+            <header>
+              <div>
+                <span>EVAL DATASET</span>
+                <h2 id="eval-manager-title">评测集管理器</h2>
+                <p>编辑场景，或从 JSON、CSV、Excel 批量导入；保存 Agent 草稿后即可固化 Dataset 版本。</p>
+              </div>
+              <button
+                ref={evalManagerCloseRef}
+                type="button"
+                aria-label="关闭评测集管理器"
+                onClick={() => setEvalManagerOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className={styles.evalImportBar}>
+              <div>
+                <strong>批量导入评测场景</strong>
+                <span>首行使用 id、label、tag、prompt 等字段；支持中文列名。</span>
+              </div>
+              <input
+                ref={evalImportInputRef}
+                hidden
+                type="file"
+                accept=".json,.csv,.xlsx,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (file) void importEvalDataset(file);
+                }}
+              />
+              <button
+                type="button"
+                disabled={!canEdit || evalImporting}
+                onClick={() => evalImportInputRef.current?.click()}
+              >
+                {evalImporting ? "解析中…" : "导入 JSON / CSV / Excel"}
+              </button>
+            </div>
+            {evalImportPreview && (
+              <section className={styles.evalImportPreview} aria-label="导入预览">
+                <div>
+                  <strong>{evalImportPreview.fileName}</strong>
+                  <span>{evalImportPreview.cases.length} 条有效 · {evalImportPreview.errors.length} 条需修正</span>
+                  {evalImportPreview.errors.length > 0 && (
+                    <small>{evalImportPreview.errors.slice(0, 4).join("；")}</small>
+                  )}
+                </div>
+                <button type="button" onClick={() => setEvalImportPreview(null)}>取消</button>
+                <button
+                  type="button"
+                  disabled={!evalImportPreview.cases.length}
+                  onClick={confirmEvalDatasetImport}
+                >
+                  确认追加
+                </button>
+              </section>
+            )}
+            <div className={styles.evalManagerToolbar}>
+              <span>当前 {draft.evalCases.length} 条</span>
+              <button type="button" disabled={!canEdit} onClick={addEvalCase}>新增场景</button>
+            </div>
+            <div className={styles.evalManagerList}>
+              {draft.evalCases.map((testCase, index) => (
+                <article key={testCase.id} className={styles.evalCase}>
+                  <select
+                    aria-label={`${testCase.id} 场景类型`}
+                    value={testCase.tag}
+                    disabled={!canEdit}
+                    onChange={(event) => updateEvalCase(index, {
+                      tag: event.target.value as StudioEvalCase["tag"],
+                    })}
+                  >
+                    <option value="happy">正常 happy</option>
+                    <option value="ambiguous">歧义 ambiguous</option>
+                    <option value="safety">安全 safety</option>
+                  </select>
+                  <div className={styles.evalCaseEditor}>
+                    <input
+                      aria-label={`${testCase.id} 名称`}
+                      value={testCase.label}
+                      disabled={!canEdit}
+                      onChange={(event) => updateEvalCase(index, { label: event.target.value })}
+                    />
+                    <textarea
+                      aria-label={`${testCase.id} 提示词`}
+                      value={testCase.prompt}
+                      disabled={!canEdit}
+                      onChange={(event) => updateEvalCase(index, { prompt: event.target.value })}
+                    />
+                    <details className={styles.evalExpectationEditor}>
+                      <summary>断言与运行边界</summary>
+                      <div>
+                        <label>必须调用<input value={testCase.expect.requiredTools.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, requiredTools: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
+                        <label>禁止调用<input value={testCase.expect.forbiddenTools.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, forbiddenTools: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
+                        <label>输出包含<input value={testCase.expect.outputContains.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, outputContains: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
+                        <label>最大耗时（秒）<input type="number" min={1} value={testCase.expect.maxDurationSeconds} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, maxDurationSeconds: Math.max(1, Number(event.target.value) || 1) } })} /></label>
+                        <label className={styles.evalApprovalCheck}><input type="checkbox" checked={testCase.expect.approvalRequired} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, approvalRequired: event.target.checked } })} />必须经过审批</label>
+                      </div>
+                    </details>
+                  </div>
+                  <div className={styles.evalCaseActions}>
+                    <code>{testCase.id}</code>
+                    <button type="button" disabled={!canEdit || draft.evalCases.length <= 1} onClick={() => removeEvalCase(index)}>删除</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <footer>
+              <span>修改会进入当前 Agent 草稿，尚未固化为 Dataset。</span>
+              <button type="button" onClick={() => setEvalManagerOpen(false)}>完成</button>
+            </footer>
+          </div>
+        </div>
+      )}
+
       {contractOpen && (
         <button
           type="button"
@@ -3543,10 +3975,169 @@ export function AgentStudioWorkbench() {
           onClick={() => setContractOpen(false)}
         />
       )}
+      {versionHistoryOpen && (
+        <button
+          type="button"
+          className={styles.contractBackdrop}
+          aria-label="关闭版本历史"
+          onClick={() => {
+            setVersionHistoryOpen(false);
+            setPromoteTarget("");
+          }}
+        />
+      )}
       <aside
+        ref={versionHistoryRailRef}
+        id="personal-version-history"
+        className={`${styles.contractRail} ${styles.versionHistoryRail}`}
+        aria-label="个人智能体版本历史"
+        role="dialog"
+        aria-modal="true"
+        aria-hidden={!versionHistoryOpen}
+        data-open={versionHistoryOpen}
+      >
+        <div className={styles.contractHeader}>
+          <div>
+            <span>IMMUTABLE RELEASES</span>
+            <strong>版本历史</strong>
+          </div>
+          <div className={styles.contractHeaderActions}>
+            <span className={styles.riskBadge}>
+              {personalVersions.length} 个版本
+            </span>
+            <button
+              type="button"
+              ref={versionHistoryCloseRef}
+              aria-label="关闭版本历史"
+              onClick={() => {
+                setVersionHistoryOpen(false);
+                setPromoteTarget("");
+              }}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4.5 4.5 7 7m0-7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <section className={styles.versionHistoryIntro}>
+          <span>当前运行指针</span>
+          <strong>{draft.name}@{currentPersonalVersion ?? "尚未发布"}</strong>
+          <p>切换只影响之后创建的任务。历史版本、已有任务和运行中的 Session 保持原绑定。</p>
+        </section>
+
+        {versionHistoryLoading && (
+          <div className={styles.versionHistoryState} role="status">
+            正在读取不可变版本…
+          </div>
+        )}
+        {versionHistoryError && (
+          <div className={styles.versionHistoryError} role="alert">
+            <strong>版本历史暂时不可用</strong>
+            <span>{versionHistoryError}</span>
+            {draft.agentId && (
+              <button
+                type="button"
+                onClick={() => {
+                  setVersionHistoryError("");
+                  setVersionHistoryLoading(true);
+                  void studioClient.listPersonalAgentVersions(draft.agentId as string)
+                    .then(setPersonalVersions)
+                    .catch((error: unknown) => setVersionHistoryError(
+                      error instanceof Error ? error.message : "版本历史暂时不可用",
+                    ))
+                    .finally(() => setVersionHistoryLoading(false));
+                }}
+              >
+                重新加载
+              </button>
+            )}
+          </div>
+        )}
+
+        {!versionHistoryLoading && !versionHistoryError && (
+          <ol className={styles.versionTimeline}>
+            {personalVersions.map((item, index) => {
+              const current = item.version === item.current_version;
+              const confirming = promoteTarget === item.version;
+              return (
+                <li key={item.version} data-current={current}>
+                  <span className={styles.versionSequence} aria-hidden="true">
+                    {String(personalVersions.length - index).padStart(2, "0")}
+                  </span>
+                  <article>
+                    <header>
+                      <div>
+                        <strong>{item.version}</strong>
+                        {current && <em>当前</em>}
+                      </div>
+                      <time dateTime={item.created_at}>
+                        {new Date(item.created_at).toLocaleString("zh-CN", {
+                          month: "2-digit",
+                          day: "2-digit",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    </header>
+                    <dl>
+                      <div><dt>内容</dt><dd>{item.manifest_hash.slice(0, 12)}</dd></div>
+                      <div><dt>Bundle</dt><dd>{item.package_hash?.slice(0, 12) ?? "未记录"}</dd></div>
+                    </dl>
+                    {current ? (
+                      <p className={styles.versionCurrentNote}>新任务默认使用这个版本</p>
+                    ) : confirming ? (
+                      <div className={styles.versionPromoteConfirm} role="group" aria-label={`确认切换到 ${item.version}`}>
+                        <p>将新任务切换到 {item.version}？已有任务不会改变。</p>
+                        <div>
+                          <button
+                            type="button"
+                            disabled={Boolean(promotingVersion)}
+                            onClick={() => void promotePersonalVersion(item.version)}
+                          >
+                            {promotingVersion === item.version ? "切换中…" : "确认切换"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={Boolean(promotingVersion)}
+                            onClick={() => setPromoteTarget("")}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        className={styles.versionPromoteButton}
+                        disabled={!canPublish || Boolean(promotingVersion)}
+                        onClick={() => setPromoteTarget(item.version)}
+                      >
+                        设为当前版本
+                      </button>
+                    )}
+                  </article>
+                </li>
+              );
+            })}
+            {personalVersions.length === 0 && (
+              <li className={styles.versionHistoryEmpty}>还没有可切换的发布版本。</li>
+            )}
+          </ol>
+        )}
+
+        <footer className={styles.versionHistoryFootnote}>
+          回退是移动当前指针，不会修改或删除任何不可变版本。
+        </footer>
+      </aside>
+      <aside
+        ref={contractRailRef}
         id="effective-contract-drawer"
         className={styles.contractRail}
         aria-label="有效运行契约"
+        role="dialog"
+        aria-modal="true"
         aria-hidden={!contractOpen}
         data-open={contractOpen}
       >
@@ -3561,10 +4152,13 @@ export function AgentStudioWorkbench() {
             </span>
             <button
               type="button"
+              ref={contractCloseRef}
               aria-label="关闭有效运行契约"
               onClick={() => setContractOpen(false)}
             >
-              ×
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="m4.5 4.5 7 7m0-7-7 7" />
+              </svg>
             </button>
           </div>
         </div>
@@ -3678,6 +4272,7 @@ export function AgentStudioWorkbench() {
           页面不保存 Endpoint、Token 或任意 MCP URL。凭据只在运行时按租户与执行身份注入。
         </p>
       </aside>
+      {confirmationDialog}
     </main>
   );
 }

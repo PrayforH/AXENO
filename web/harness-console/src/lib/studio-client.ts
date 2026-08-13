@@ -136,6 +136,8 @@ export type StudioQuotaUsage = {
 
 export type StudioDraftSummary = {
   draftId: string;
+  agentId: string | null;
+  spaceId: string | null;
   name: string;
   displayName: string;
   domain: string;
@@ -144,6 +146,10 @@ export type StudioDraftSummary = {
   revision: number;
   updatedAt: string;
   publishedVersion: string | null;
+};
+
+type StudioSpaceSummary = {
+  space: { spaceId: string };
 };
 
 export type StudioSkillConversationMessage = {
@@ -241,6 +247,8 @@ type ApiDraftSpec = {
 
 export type ApiAgentDraft = {
   draftId: string;
+  agentId: string | null;
+  spaceId: string | null;
   tenantId: string;
   revision: number;
   spec: ApiDraftSpec;
@@ -270,6 +278,17 @@ export type ApiAgentVersion = {
   manifest_hash: string;
   package_hash: string | null;
   created_at: string;
+};
+
+export type PersonalAgentVersion = {
+  agent_id: string;
+  name: string;
+  version: string;
+  display_name: string;
+  manifest_hash: string;
+  package_hash: string | null;
+  created_at: string;
+  current_version: string | null;
 };
 
 export type StudioKnowledgeAcl = {
@@ -827,6 +846,7 @@ export type StudioCapabilities = {
     description: string;
     endpointUrl: string | null;
     transport: "http" | "sse";
+    customHeaders: Record<string, string>;
     tools: string[];
     risk: StudioRisk;
     networkAccess: McpOption["network"];
@@ -949,6 +969,95 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function listAccessibleDrafts(): Promise<StudioDraftSummary[]> {
+  const personalRequest = request<StudioDraftSummary[]>("drafts");
+  try {
+    const [personal, response] = await Promise.all([
+      personalRequest,
+      fetch("/api/spaces", { cache: "no-store" }).then(requireAuthenticatedResponse),
+    ]);
+    if (!response.ok) return personal;
+    const spaces = await response.json() as StudioSpaceSummary[];
+    const workspace = await Promise.all(
+      spaces.map((item) => request<StudioDraftSummary[]>(
+        `drafts?spaceId=${encodeURIComponent(item.space.spaceId)}`,
+      )),
+    );
+    const unique = new Map(
+      [...personal, ...workspace.flat()].map((draft) => [draft.draftId, draft]),
+    );
+    return [...unique.values()].sort((left, right) =>
+      right.updatedAt.localeCompare(left.updatedAt)
+    );
+  } catch {
+    // Personal Studio remains usable if collaboration is temporarily degraded.
+    return personalRequest;
+  }
+}
+
+const studioDraftRequests = new Map<string, Promise<ApiAgentDraft>>();
+const studioDraftSnapshots = new Map<
+  string,
+  { receivedAt: number; draft: ApiAgentDraft }
+>();
+const STUDIO_DRAFT_CACHE_MS = 10_000;
+
+function rememberStudioDraft(draft: ApiAgentDraft): ApiAgentDraft {
+  studioDraftSnapshots.set(draft.draftId, {
+    receivedAt: Date.now(),
+    draft,
+  });
+  return draft;
+}
+
+function forgetStudioDraft(draftId: string) {
+  studioDraftSnapshots.delete(draftId);
+}
+
+function getStudioDraft(
+  draftId: string,
+  options: { expectedRevision?: number; maxAgeMs?: number } = {},
+): Promise<ApiAgentDraft> {
+  const cached = studioDraftSnapshots.get(draftId);
+  const maxAgeMs = options.maxAgeMs ?? STUDIO_DRAFT_CACHE_MS;
+  if (
+    cached
+    && Date.now() - cached.receivedAt < maxAgeMs
+    && (
+      options.expectedRevision === undefined
+      || cached.draft.revision === options.expectedRevision
+    )
+  ) {
+    return Promise.resolve(cached.draft);
+  }
+  const inFlight = studioDraftRequests.get(draftId);
+  if (inFlight) return inFlight;
+  const requestDraft = request<ApiAgentDraft>(
+    `drafts/${encodeURIComponent(draftId)}`,
+  ).then(rememberStudioDraft).finally(() => {
+    if (studioDraftRequests.get(draftId) === requestDraft) {
+      studioDraftRequests.delete(draftId);
+    }
+  });
+  studioDraftRequests.set(draftId, requestDraft);
+  return requestDraft;
+}
+
+async function agentRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = requireAuthenticatedResponse(
+    await fetch(`/api/harness/agents/${path.replace(/^\//, "")}`, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    }),
+  );
+  if (!response.ok) throw await errorFrom(response);
+  return response.json() as Promise<T>;
+}
+
 async function lifecycleRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = requireAuthenticatedResponse(
     await fetch(`/api/data-lifecycle/${path.replace(/^\//, "")}`, {
@@ -1009,6 +1118,8 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
   const spec = source.spec;
   return {
     id: source.draftId,
+    agentId: source.agentId ?? null,
+    spaceId: source.spaceId ?? null,
     revision: source.revision,
     publishedVersion: source.publishedVersion,
     publishedHash: source.publishedHash,
@@ -1277,8 +1388,13 @@ export const studioClient = {
     body: JSON.stringify({ expectedRevision, scope, limits }),
   }),
   listDrafts: () => request<StudioDraftSummary[]>("drafts"),
-  getDraft: (draftId: string) =>
-    request<ApiAgentDraft>(`drafts/${encodeURIComponent(draftId)}`),
+  listAccessibleDrafts,
+  getDraft: (
+    draftId: string,
+    options?: { expectedRevision?: number; maxAgeMs?: number },
+  ) => getStudioDraft(draftId, options),
+  prefetchDraft: (draftId: string, expectedRevision?: number) =>
+    getStudioDraft(draftId, { expectedRevision }).then(() => undefined),
   capabilities: () => request<StudioCapabilities>("capabilities"),
   continueSkillConversation: (body: {
     modelRoute: string;
@@ -1304,6 +1420,7 @@ export const studioClient = {
     serverName: string;
     endpointUrl: string;
     networkAccess: "internal" | "external";
+    customHeaders: Record<string, string>;
     authMode: "none" | "bearer" | "header" | "query";
     authName: string | null;
     authKey: string;
@@ -1355,6 +1472,11 @@ export const studioClient = {
       `catalog/mcp/${encodeURIComponent(reference)}?expected_revision=${expectedRevision}`,
       { method: "DELETE" },
     ),
+  deleteMcp: (reference: string, expectedRevision: number) =>
+    request<StudioCatalogMutationResult>(
+      `catalog/mcp/${encodeURIComponent(reference)}/permanent?expected_revision=${expectedRevision}`,
+      { method: "DELETE" },
+    ),
   createDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>("drafts", {
       method: "POST",
@@ -1365,7 +1487,7 @@ export const studioClient = {
         description: draft.description,
         template: draft.template,
       }),
-    }),
+    }).then(rememberStudioDraft),
   async importBundle(file: Blob): Promise<StudioImportedAgentBundle> {
     const response = requireAuthenticatedResponse(
       await fetch("/api/studio/drafts/import", {
@@ -1376,7 +1498,9 @@ export const studioClient = {
       }),
     );
     if (!response.ok) throw await errorFrom(response);
-    return response.json() as Promise<StudioImportedAgentBundle>;
+    const imported = await response.json() as StudioImportedAgentBundle;
+    rememberStudioDraft(imported.draft);
+    return imported;
   },
   async importSkill(file: File): Promise<StudioImportedSkill> {
     const markdown = file.name.toLowerCase().endsWith(".md");
@@ -1418,7 +1542,9 @@ export const studioClient = {
       ),
     );
     if (!response.ok) throw await errorFrom(response);
-    return response.json() as Promise<StudioInstalledSkill>;
+    const installed = await response.json() as StudioInstalledSkill;
+    rememberStudioDraft(installed.draft);
+    return installed;
   },
   replaceDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draft.id)}`, {
@@ -1427,7 +1553,7 @@ export const studioClient = {
         expectedRevision: draft.revision,
         spec: studioDraftToSpec(draft),
       }),
-    }),
+    }).then(rememberStudioDraft),
   validateDraft: (draftId: string) =>
     request<StudioValidation>(`drafts/${encodeURIComponent(draftId)}/validate`, {
       method: "POST",
@@ -1436,7 +1562,17 @@ export const studioClient = {
     request<ApiAgentVersion>(`drafts/${encodeURIComponent(draftId)}/publish`, {
       method: "POST",
       body: JSON.stringify({ expectedRevision }),
+    }).then((version) => {
+      forgetStudioDraft(draftId);
+      return version;
     }),
+  listPersonalAgentVersions: (agentId: string) =>
+    agentRequest<PersonalAgentVersion[]>(`${encodeURIComponent(agentId)}/versions`),
+  promotePersonalAgentVersion: (agentId: string, version: string) =>
+    agentRequest<PersonalAgentVersion>(
+      `${encodeURIComponent(agentId)}/versions/${encodeURIComponent(version)}/promote`,
+      { method: "POST" },
+    ),
   listPreviews: () => request<StudioPreview[]>("previews"),
   createPreview: (
     draftId: string,

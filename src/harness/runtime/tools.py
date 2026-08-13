@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from importlib import import_module
@@ -19,6 +20,7 @@ from harness.core.manifest import AgentManifest, AgentManifestSnapshot
 from harness.core.models import ExecutionIdentity
 from harness.policy.models import ContextTrust
 from harness.runtime.mcp_credentials import (
+    CredentialValues,
     DynamicMcpCredentialProvider,
     EmptyMcpCredentialProvider,
     McpCredentialError,
@@ -27,6 +29,9 @@ from harness.runtime.mcp_credentials import (
 
 class ToolResolutionError(ValueError):
     """Raised when a logical tool reference cannot be resolved safely."""
+
+
+_HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 
 @dataclass(frozen=True)
@@ -44,6 +49,7 @@ class McpServerRegistration:
     server_name: str
     config: McpServerConfig
     allowed_tools: tuple[str, ...] = ()
+    static_headers: tuple[tuple[str, str], ...] = ()
     credential_headers: tuple[tuple[str, str], ...] = ()
     credential_header_prefixes: tuple[tuple[str, str], ...] = ()
     credential_environment: tuple[tuple[str, str], ...] = ()
@@ -60,9 +66,7 @@ class McpServerRegistration:
         transport = public_config.get("type")
         raw_url = public_config.get("url")
         if transport not in {"http", "sse"} or not isinstance(raw_url, str):
-            raise ToolResolutionError(
-                "MCP registrations must use a registered HTTP(S) endpoint"
-            )
+            raise ToolResolutionError("MCP registrations must use a registered HTTP(S) endpoint")
         endpoint = urlsplit(raw_url)
         if (
             endpoint.scheme not in {"http", "https"}
@@ -70,15 +74,28 @@ class McpServerRegistration:
             or endpoint.username
             or endpoint.password
         ):
-            raise ToolResolutionError(
-                "MCP registrations must use a registered HTTP(S) endpoint"
-            )
+            raise ToolResolutionError("MCP registrations must use a registered HTTP(S) endpoint")
         targets = [name for name, _ in self.credential_headers]
         targets.extend(name for name, _ in self.credential_environment)
         targets.extend(name for name, _ in self.credential_query_parameters)
         if len(targets) != len(set(targets)):
             raise ToolResolutionError("duplicate MCP credential target")
         header_targets = {name for name, _ in self.credential_headers}
+        static_header_targets = {name.lower() for name, _ in self.static_headers}
+        if len(static_header_targets) != len(self.static_headers):
+            raise ToolResolutionError("duplicate MCP static header")
+        if any(
+            not name
+            or len(name) > 128
+            or not _HTTP_HEADER_NAME.fullmatch(name)
+            or len(value) > 1024
+            or "\n" in value
+            or "\r" in value
+            for name, value in self.static_headers
+        ):
+            raise ToolResolutionError("invalid MCP static header")
+        if static_header_targets.intersection(name.lower() for name in header_targets):
+            raise ToolResolutionError("MCP static header conflicts with a credential header")
         prefix_targets = {name for name, _ in self.credential_header_prefixes}
         if not prefix_targets.issubset(header_targets):
             raise ToolResolutionError("MCP credential prefix targets an unknown header")
@@ -94,9 +111,7 @@ class ResolvedTools:
     mcp_servers: Mapping[str, McpServerConfig]
     allowed_tools: tuple[str, ...]
     mcp_smokes: Mapping[str, McpSmokeCheck]
-    result_trust: Mapping[str, ContextTrust] = field(
-        default_factory=lambda: MappingProxyType({})
-    )
+    result_trust: Mapping[str, ContextTrust] = field(default_factory=lambda: MappingProxyType({}))
     sensitive_names: frozenset[str] = frozenset()
     sensitive_values: frozenset[str] = frozenset()
     unavailable_mcp: Mapping[str, tuple[str, ...]] = field(
@@ -139,11 +154,7 @@ class ToolResolver:
         unavailable_mcp: dict[str, tuple[str, ...]] = {}
         has_python_override = False
         mcp_registry = dict(self._mcp_registry)
-        requested_mcp = {
-            tool.mcp
-            for tool in manifest.spec.tools
-            if tool.mcp is not None
-        }
+        requested_mcp = {tool.mcp for tool in manifest.spec.tools if tool.mcp is not None}
         needs_tenant_registry = bool(requested_mcp.difference(mcp_registry))
         if self._mcp_registry_provider is not None and needs_tenant_registry:
             if identity is None and any(tool.mcp is not None for tool in manifest.spec.tools):
@@ -180,13 +191,9 @@ class ToolResolver:
             reference = cast(str, tool_spec.mcp)
             registration = mcp_registry.get(reference)
             if registration is None:
-                raise ToolResolutionError(
-                    f"MCP tool registration is not configured: {reference}"
-                )
+                raise ToolResolutionError(f"MCP tool registration is not configured: {reference}")
             if registration.server_name in mcp_servers:
-                raise ToolResolutionError(
-                    f"duplicate MCP server name: {registration.server_name}"
-                )
+                raise ToolResolutionError(f"duplicate MCP server name: {registration.server_name}")
             bindings = (
                 registration.credential_headers
                 + registration.credential_environment
@@ -198,7 +205,7 @@ class ToolResolver:
                     f"execution identity is required for MCP credentials: {reference}"
                 )
             try:
-                credentials = (
+                credentials: CredentialValues = (
                     await self._credential_provider.resolve(
                         reference,
                         identity
@@ -215,7 +222,7 @@ class ToolResolver:
                         required_keys,
                     )
                     if required_keys
-                    else {}
+                    else MappingProxyType({})
                 )
             except McpCredentialError:
                 if not tolerate_unavailable_mcp:
@@ -223,20 +230,22 @@ class ToolResolver:
                 unavailable_mcp[reference] = registration.allowed_tools
                 continue
             config = dict(cast(dict[str, object], registration.config))
+            if registration.static_headers:
+                config["headers"] = dict(registration.static_headers)
             if registration.credential_headers:
                 prefixes = dict(registration.credential_header_prefixes)
-                headers = {
-                    target: (
-                        prefixes.get(target, "")
-                        + credentials[key].get_secret_value()
-                    )
+                headers: dict[str, str] = {
+                    target: (prefixes.get(target, "") + credentials[key].get_secret_value())
                     for target, key in registration.credential_headers
                 }
-                config["headers"] = headers
+                config["headers"] = {
+                    **cast(dict[str, str], config.get("headers", {})),
+                    **headers,
+                }
                 sensitive_names.update(headers)
                 sensitive_values.update(headers.values())
             if registration.credential_environment:
-                environment = {
+                environment: dict[str, str] = {
                     target: credentials[key].get_secret_value()
                     for target, key in registration.credential_environment
                 }
@@ -252,16 +261,14 @@ class ToolResolver:
                 parsed = urlsplit(raw_url)
                 query = parse_qsl(parsed.query, keep_blank_values=True)
                 existing_names = {name for name, _ in query}
-                requested_names = {
-                    name for name, _ in registration.credential_query_parameters
-                }
+                requested_names = {name for name, _ in registration.credential_query_parameters}
                 duplicates = existing_names.intersection(requested_names)
                 if duplicates:
                     names = ", ".join(sorted(duplicates))
                     raise ToolResolutionError(
                         f"MCP query credential already present: {reference}.{names}"
                     )
-                injected = {
+                injected: dict[str, str] = {
                     target: credentials[key].get_secret_value()
                     for target, key in registration.credential_query_parameters
                 }
@@ -324,8 +331,7 @@ class ToolResolver:
             if values and all(isinstance(value, SdkMcpTool) for value in values):
                 return cast(tuple[SdkMcpTool[Any], ...], values)
         raise ToolResolutionError(
-            "python tool export must be an SdkMcpTool or a sequence of SdkMcpTool: "
-            f"{reference}"
+            f"python tool export must be an SdkMcpTool or a sequence of SdkMcpTool: {reference}"
         )
 
     @staticmethod
@@ -333,9 +339,7 @@ class ToolResolver:
         names: set[str] = set()
         for sdk_tool in tools:
             if sdk_tool.name in names:
-                raise ToolResolutionError(
-                    f"duplicate python tool name: {sdk_tool.name}"
-                )
+                raise ToolResolutionError(f"duplicate python tool name: {sdk_tool.name}")
             names.add(sdk_tool.name)
 
 
@@ -353,31 +357,19 @@ def enforce_published_tool_directory(
     mode = snapshot.manifest.spec.tool_exposure_mode
     if directory is None:
         if mode == "on_demand":
-            raise ToolResolutionError(
-                "on-demand tool exposure is missing its published directory"
-            )
+            raise ToolResolutionError("on-demand tool exposure is missing its published directory")
         return resolved
     if directory.exposure_mode != mode:
         raise ToolResolutionError(
             "published tool directory exposure mode does not match the Manifest"
         )
-    expected_builtins = {
-        entry.name for entry in directory.entries if entry.source == "builtin"
-    }
-    expected_mcp = {
-        entry.name for entry in directory.entries if entry.source in {"mcp", "python"}
-    }
+    expected_builtins = {entry.name for entry in directory.entries if entry.source == "builtin"}
+    expected_mcp = {entry.name for entry in directory.entries if entry.source in {"mcp", "python"}}
     actual_builtins = set(resolved.builtin_tools)
     actual_mcp = set(resolved.allowed_tools)
     if expected_builtins != actual_builtins:
-        raise ToolResolutionError(
-            "runtime builtin tools differ from the published tool directory"
-        )
-    unavailable_mcp = {
-        tool
-        for tools in resolved.unavailable_mcp.values()
-        for tool in tools
-    }
+        raise ToolResolutionError("runtime builtin tools differ from the published tool directory")
+    unavailable_mcp = {tool for tools in resolved.unavailable_mcp.values() for tool in tools}
     missing_mcp = expected_mcp.difference(actual_mcp).difference(unavailable_mcp)
     if missing_mcp:
         missing_names = ", ".join(sorted(missing_mcp))
@@ -386,22 +378,13 @@ def enforce_published_tool_directory(
             f"recheck and publish the Agent: {missing_names}"
         )
     if mode == "on_demand" and any(
-        tool.python_entry is not None
-        for tool in snapshot.manifest.spec.tools
+        tool.python_entry is not None for tool in snapshot.manifest.spec.tools
     ):
-        raise ToolResolutionError(
-            "on-demand loading does not support in-process Python tools"
-        )
+        raise ToolResolutionError("on-demand loading does not support in-process Python tools")
     return replace(
         resolved,
-        allowed_tools=tuple(
-            tool for tool in resolved.allowed_tools if tool in expected_mcp
-        ),
+        allowed_tools=tuple(tool for tool in resolved.allowed_tools if tool in expected_mcp),
         result_trust=MappingProxyType(
-            {
-                tool: trust
-                for tool, trust in resolved.result_trust.items()
-                if tool in expected_mcp
-            }
+            {tool: trust for tool, trust in resolved.result_trust.items() if tool in expected_mcp}
         ),
     )

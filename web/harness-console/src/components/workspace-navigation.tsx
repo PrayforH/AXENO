@@ -9,7 +9,6 @@ export type WorkspaceId =
   | "spaces"
   | "usage"
   | "data";
-export type WorkspaceMode = "tasks" | "studio";
 
 export const workspaceItems: ReadonlyArray<{
   id: WorkspaceId;
@@ -18,9 +17,9 @@ export const workspaceItems: ReadonlyArray<{
 }> = [
   { id: "tasks", href: "/", label: "任务" },
   { id: "agents", href: "/studio/agents", label: "智能体" },
-  { id: "capabilities", href: "/studio/capabilities", label: "MCP" },
+  { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力" },
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
-  { id: "data", href: "/studio/data", label: "数据" },
+  { id: "spaces", href: "/studio/spaces", label: "协作空间" },
 ];
 
 export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
@@ -112,54 +111,29 @@ export function WorkspaceNavigation({
     ? workspaceItems.filter((workspace) => visible.includes(workspace.id))
     : workspaceItems;
 
+  function renderWorkspaceLink(workspace: (typeof workspaceItems)[number]) {
+    const current = workspace.id === active;
+    return (
+      <Link
+        className={current ? styles.navigationActive : styles.navigationLink}
+        href={workspace.href}
+        aria-current={current ? "page" : undefined}
+        title={collapsed ? workspace.label : undefined}
+        key={workspace.id}
+      >
+        <WorkspaceIcon workspace={workspace.id} />
+        {!collapsed && <span>{workspace.label}</span>}
+      </Link>
+    );
+  }
+
   return (
     <nav
       className={styles.navigation}
       data-workspace-navigation={collapsed ? "collapsed" : "expanded"}
       aria-label="工作区"
     >
-      {items.map((workspace) => {
-        const current = workspace.id === active;
-        return (
-          <Link
-            className={current ? styles.navigationActive : styles.navigationLink}
-            href={workspace.href}
-            aria-current={current ? "page" : undefined}
-            title={collapsed ? workspace.label : undefined}
-            key={workspace.id}
-          >
-            <WorkspaceIcon workspace={workspace.id} />
-            {!collapsed && <span>{workspace.label}</span>}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
-
-export function WorkspaceModeSwitcher({
-  mode,
-}: {
-  mode: WorkspaceMode;
-}) {
-  return (
-    <nav className={styles.modeSwitcher} aria-label="工作模式">
-      <Link
-        className={mode === "tasks" ? styles.modeActive : styles.modeLink}
-        href="/"
-        aria-current={mode === "tasks" ? "page" : undefined}
-      >
-        <WorkspaceIcon workspace="tasks" />
-        <span>任务</span>
-      </Link>
-      <Link
-        className={mode === "studio" ? styles.modeActive : styles.modeLink}
-        href="/studio/agents"
-        aria-current={mode === "studio" ? "page" : undefined}
-      >
-        <WorkspaceIcon workspace="agents" />
-        <span>Studio</span>
-      </Link>
+      {items.map(renderWorkspaceLink)}
     </nav>
   );
 }

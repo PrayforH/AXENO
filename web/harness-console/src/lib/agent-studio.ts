@@ -98,6 +98,8 @@ export interface StudioPythonTool {
 
 export interface StudioDraft {
   id: string;
+  agentId: string | null;
+  spaceId: string | null;
   revision: number;
   publishedVersion: string | null;
   publishedHash: string | null;
@@ -196,13 +198,6 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     models: ["MiniMax-M3"],
     capabilities: ["streaming", "tool_use", "vision"],
   },
-  {
-    id: "anthropic-official",
-    label: "Anthropic 官方",
-    provider: "anthropic",
-    models: ["claude-sonnet-4-6"],
-    capabilities: ["streaming", "tool_use", "tool_search"],
-  },
 ];
 
 export const BUILTIN_TOOLS: BuiltinToolOption[] = [
@@ -246,7 +241,7 @@ export const BUILTIN_TOOLS: BuiltinToolOption[] = [
     label: "运行命令",
     description: "运行受策略约束的沙箱命令。",
     risk: "high",
-    approval: "默认人工审批",
+    approval: "自动风险分级，必要时确认",
   },
   {
     id: "Task",
@@ -277,7 +272,7 @@ export const POLICY_OPTIONS = [
   {
     id: "production-standard",
     label: "生产标准",
-    description: "工作区文件写入自动允许，命令默认审批。",
+    description: "工作区写入及策略允许的命令自动执行；高风险、越界或不确定动作拒绝或确认。",
   },
   {
     id: "production-orchestrator",
@@ -332,6 +327,8 @@ const GENERAL_LEAD_SKILL = `# 通用任务编排
 
 export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   id: "draft-lead-agent",
+  agentId: null,
+  spaceId: null,
   revision: 0,
   publishedVersion: null,
   publishedHash: null,
@@ -419,6 +416,33 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   ],
 };
 
+export function createPersonalStudioDraft(
+  existingNames: readonly string[] = [],
+): StudioDraft {
+  const occupied = new Set(existingNames);
+  const baseName = "productivity-agent";
+  let name = baseName;
+  let sequence = 2;
+  while (occupied.has(name)) {
+    name = `${baseName}-${sequence}`;
+    sequence += 1;
+  }
+  const suffix = name === baseName ? "" : ` ${sequence - 1}`;
+  return {
+    ...DEFAULT_STUDIO_DRAFT,
+    id: "",
+    revision: 0,
+    publishedVersion: null,
+    publishedHash: null,
+    publishedPackageHash: null,
+    displayName: `生产力智能体${suffix}`,
+    name,
+    description: "说明它要完成的工作、可以使用的资料，以及最终需要交付的结果。",
+    domain: "productivity",
+    version: "0.1.0",
+  };
+}
+
 export function restoreStudioDraft(value: unknown): StudioDraft | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Partial<StudioDraft>;
@@ -463,6 +487,8 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
   return {
     ...DEFAULT_STUDIO_DRAFT,
     ...raw,
+    agentId: typeof raw.agentId === "string" ? raw.agentId : null,
+    spaceId: typeof raw.spaceId === "string" ? raw.spaceId : null,
     subagents,
     pythonTools: Array.isArray(raw.pythonTools) ? raw.pythonTools : [],
     evalCases,
@@ -628,7 +654,7 @@ export function evaluateStudioDraft(
           : "不联网",
     sandboxLabel: "隔离执行 · 平台托管",
     approvalLabel: draft.builtinTools.includes("Bash")
-      ? "安全 Bash 自动放行"
+      ? "安全 Bash 自动执行 · 高风险才确认"
       : draft.builtinTools.some((tool) => ["Write", "Edit"].includes(tool))
         ? "文件写入按隔离策略"
         : "只读能力自动允许",

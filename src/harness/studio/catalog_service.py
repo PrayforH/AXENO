@@ -17,22 +17,117 @@ from harness.studio.models import (
     ModelRouteCapability,
     PolicyCapability,
     ReplaceCapabilityCatalogRequest,
+    TemplateCapability,
     UpsertCatalogResourceRequest,
 )
 from harness.studio.repositories import AgentDraftRepository
 
 CatalogResourceType = Literal["modelRoute", "mcp", "policy", "executionProfile"]
+_RETIRED_PLATFORM_MODEL_ROUTES = frozenset({"anthropic-official"})
+_EDITABLE_PLATFORM_MCP_REFERENCES = frozenset({"tavily-readonly"})
+
+
+def _mcp_is_mutable_by(item: McpCapability, user_id: str) -> bool:
+    return item.owner_user_id == user_id or (
+        item.owner_user_id is None
+        and item.reference in _EDITABLE_PLATFORM_MCP_REFERENCES
+    )
+
+
+def _retire_platform_model_routes(
+    catalog: CapabilityCatalog,
+) -> CapabilityCatalog | None:
+    routes = tuple(
+        route
+        for route in catalog.model_routes
+        if route.route_id not in _RETIRED_PLATFORM_MODEL_ROUTES
+    )
+    if len(routes) == len(catalog.model_routes):
+        return None
+    return catalog.model_copy(update={"model_routes": routes})
+
+
+def _append_missing[
+    CatalogEntry: (
+        ModelRouteCapability,
+        McpCapability,
+        PolicyCapability,
+        ExecutionProfileMetadata,
+        TemplateCapability,
+    )
+](
+    current: tuple[CatalogEntry, ...],
+    builtins: tuple[CatalogEntry, ...],
+    identifier: Callable[[CatalogEntry], str],
+) -> tuple[tuple[CatalogEntry, ...], bool]:
+    identifiers = {identifier(item) for item in current}
+    additions = tuple(item for item in builtins if identifier(item) not in identifiers)
+    return (*current, *additions), bool(additions)
+
+
+def _upgrade_known_legacy_permission_copy(
+    catalog: CapabilityCatalog,
+) -> CapabilityCatalog | None:
+    """Refresh exact historical defaults without touching tenant-authored copy."""
+
+    defaults = default_capability_catalog()
+    default_policies = {item.policy_id: item for item in defaults.policies}
+    policies: list[PolicyCapability] = []
+    changed = False
+    for policy in catalog.policies:
+        replacement = default_policies.get(policy.policy_id)
+        if (
+            replacement is not None
+            and policy.policy_id == "production-standard"
+            and policy.description == "允许受控文件写入，命令和高风险动作进入审批。"
+        ):
+            policies.append(
+                policy.model_copy(
+                    update={
+                        "description": replacement.description,
+                        "version": policy.version + 1,
+                    }
+                )
+            )
+            changed = True
+        else:
+            policies.append(policy)
+
+    default_templates = {item.template: item for item in defaults.templates}
+    templates: list[TemplateCapability] = []
+    for template in catalog.templates:
+        replacement = default_templates.get(template.template)
+        if (
+            replacement is not None
+            and template.description == "在隔离工作区中生成或修改文件，高风险操作需审批。"
+        ):
+            templates.append(
+                template.model_copy(update={"description": replacement.description})
+            )
+            changed = True
+        else:
+            templates.append(template)
+
+    if not changed:
+        return None
+    return catalog.model_copy(
+        update={"policies": tuple(policies), "templates": tuple(templates)}
+    )
 
 
 def _upgrade_system_managed_catalog(
     catalog: CapabilityCatalog,
 ) -> CapabilityCatalog | None:
-    """Add new built-ins to a system-managed catalog without dropping tenant entries."""
+    """Upgrade known system defaults without dropping tenant-authored entries."""
 
     defaults = default_capability_catalog()
     route_ids = {route.route_id for route in catalog.model_routes}
-    routes = list(catalog.model_routes)
-    changed = False
+    routes = [
+        route
+        for route in catalog.model_routes
+        if route.route_id not in _RETIRED_PLATFORM_MODEL_ROUTES
+    ]
+    changed = len(routes) != len(catalog.model_routes)
     if not {"deepseek-v4-flash", "deepseek-v4-pro"} & route_ids:
         legacy = next(
             (route for route in routes if route.route_id == "new-api-default"),
@@ -84,39 +179,46 @@ def _upgrade_system_managed_catalog(
         routes.append(glm)
         changed = True
 
-    def append_missing(current: tuple, builtins: tuple, identifier: str) -> tuple:
-        nonlocal changed
-        identifiers = {getattr(item, identifier) for item in current}
-        additions = tuple(item for item in builtins if getattr(item, identifier) not in identifiers)
-        if additions:
-            changed = True
-        return (*current, *additions)
+    routes, routes_changed = _append_missing(
+        tuple(routes), defaults.model_routes, lambda item: item.route_id
+    )
+    mcp_servers, mcp_changed = _append_missing(
+        catalog.mcp_servers, defaults.mcp_servers, lambda item: item.reference
+    )
+    policies, policies_changed = _append_missing(
+        catalog.policies, defaults.policies, lambda item: item.policy_id
+    )
+    execution_profiles, profiles_changed = _append_missing(
+        catalog.execution_profiles,
+        defaults.execution_profiles,
+        lambda item: item.profile_id,
+    )
+    templates, templates_changed = _append_missing(
+        catalog.templates,
+        defaults.templates,
+        lambda item: item.template.value,
+    )
+    changed = changed or any(
+        (
+            routes_changed,
+            mcp_changed,
+            policies_changed,
+            profiles_changed,
+            templates_changed,
+        )
+    )
 
     upgraded = catalog.model_copy(
         update={
-            "model_routes": append_missing(
-                tuple(routes),
-                defaults.model_routes,
-                "route_id",
-            ),
-            "mcp_servers": append_missing(
-                catalog.mcp_servers,
-                defaults.mcp_servers,
-                "reference",
-            ),
-            "policies": append_missing(
-                catalog.policies,
-                defaults.policies,
-                "policy_id",
-            ),
-            "execution_profiles": append_missing(
-                catalog.execution_profiles,
-                defaults.execution_profiles,
-                "profile_id",
-            ),
+            "model_routes": routes,
+            "mcp_servers": mcp_servers,
+            "policies": policies,
+            "execution_profiles": execution_profiles,
+            "templates": templates,
         }
     )
-    return upgraded if changed else None
+    permission_copy_upgrade = _upgrade_known_legacy_permission_copy(upgraded)
+    return permission_copy_upgrade or (upgraded if changed else None)
 
 
 class CapabilityCatalogService:
@@ -140,11 +242,19 @@ class CapabilityCatalogService:
             updatedAt=self._clock(),
         )
         current = await self._repository.seed(seed)
+        retired_catalog = _retire_platform_model_routes(current.catalog)
+        catalog_for_upgrade = retired_catalog or current.catalog
         if current.updated_by == "system" or current.updated_by.startswith("system-"):
-            upgraded_catalog = _upgrade_system_managed_catalog(current.catalog)
+            upgraded_catalog = (
+                _upgrade_system_managed_catalog(catalog_for_upgrade)
+                or retired_catalog
+            )
             updated_by = "system-route-migration"
         else:
-            upgraded_catalog = None
+            upgraded_catalog = (
+                _upgrade_known_legacy_permission_copy(catalog_for_upgrade)
+                or retired_catalog
+            )
             updated_by = current.updated_by
         catalog_for_scope = upgraded_catalog or current.catalog
         scoped_catalog = await self._scope_legacy_mcp_capabilities(
@@ -226,11 +336,16 @@ class CapabilityCatalogService:
         record: CapabilityCatalogRecord,
         user_id: str,
     ) -> CapabilityCatalogRecord:
-        visible = tuple(
+        personal = tuple(
+            item for item in record.catalog.mcp_servers if item.owner_user_id == user_id
+        )
+        personal_overrides = {item.reference for item in personal}
+        platform = tuple(
             item
             for item in record.catalog.mcp_servers
-            if item.owner_user_id == user_id
+            if item.owner_user_id is None and item.reference not in personal_overrides
         )
+        visible = (*platform, *personal)
         personal_references = {
             item.reference for item in record.catalog.mcp_servers if item.owner_user_id is not None
         }
@@ -252,8 +367,11 @@ class CapabilityCatalogService:
                                 *(
                                     reference
                                     for reference in profile.allowed_mcp_references
-                                    if reference not in personal_references
-                                    and reference not in platform_mcp_references
+                                    if (
+                                        reference in platform_mcp_references
+                                        and reference not in personal_overrides
+                                    )
+                                    or reference not in personal_references
                                 ),
                                 *personal_by_profile.get(profile.profile_id, ()),
                             )
@@ -271,7 +389,7 @@ class CapabilityCatalogService:
                         "mcp_servers": visible,
                         "execution_profiles": execution_profiles,
                     }
-                )
+                ),
             }
         )
 
@@ -343,8 +461,7 @@ class CapabilityCatalogService:
                 (
                     item
                     for item in current.catalog.mcp_servers
-                    if item.reference == resource_id
-                    and item.owner_user_id == user_id
+                    if item.reference == resource_id and _mcp_is_mutable_by(item, user_id)
                 ),
                 None,
             )
@@ -367,11 +484,63 @@ class CapabilityCatalogService:
         updated_entries = tuple(
             entry.model_copy(update={"enabled": False, "version": entry.version + 1})
             if getattr(entry, identifier) == resource_id
-            and (resource_type != "mcp" or entry.owner_user_id == user_id)
+            and (resource_type != "mcp" or _mcp_is_mutable_by(entry, user_id))
             else entry
             for entry in entries
         )
         updated_catalog = current.catalog.model_copy(update={field: updated_entries})
+        record = await self.replace(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=ReplaceCapabilityCatalogRequest(
+                expectedRevision=expected_revision,
+                catalog=updated_catalog,
+            ),
+        )
+        return CatalogMutationResult(
+            record=self._record_for_user(record, user_id),
+            impact=impact,
+        )
+
+    async def delete_mcp(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        resource_id: str,
+        expected_revision: int,
+    ) -> CatalogMutationResult:
+        """Permanently remove an unreferenced user-managed MCP connection."""
+
+        current = await self.get(tenant_id)
+        own_entry = next(
+            (
+                item
+                for item in current.catalog.mcp_servers
+                if item.reference == resource_id and _mcp_is_mutable_by(item, user_id)
+            ),
+            None,
+        )
+        if own_entry is None:
+            raise NotFoundError(f"Catalog resource not found: mcp/{resource_id}")
+        impact = await self.impact(tenant_id, user_id, "mcp", resource_id)
+        if impact.draft_ids:
+            raise ConflictError(
+                "Remove this capability from the affected agent drafts before deleting it: "
+                + ", ".join(impact.draft_ids)
+            )
+        updated_catalog = current.catalog.model_copy(
+            update={
+                "mcp_servers": tuple(
+                    item
+                    for item in current.catalog.mcp_servers
+                    if not (
+                        item.reference == resource_id
+                        and _mcp_is_mutable_by(item, user_id)
+                    )
+                )
+            }
+        )
         record = await self.replace(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -451,6 +620,9 @@ class CapabilityCatalogService:
         if resource_type == "mcp":
             resource_updates["owner_user_id"] = user_id
         if resource_type == "mcp" and request.allowed_execution_profile_ids is not None:
+            if not isinstance(request.resource, McpCapability):
+                raise ConflictError("Catalog resource type does not match MCP payload")
+            mcp_resource = request.resource
             selected_profile_ids = set(request.allowed_execution_profile_ids)
             profiles_by_id = {
                 profile.profile_id: profile for profile in current.catalog.execution_profiles
@@ -473,11 +645,11 @@ class CapabilityCatalogService:
             incompatible_profile_ids = {
                 profile_id
                 for profile_id in selected_profile_ids
-                if request.resource.network_access not in profiles_by_id[profile_id].network_access
+                if mcp_resource.network_access not in profiles_by_id[profile_id].network_access
             }
             if incompatible_profile_ids:
                 raise ConflictError(
-                    f"MCP network access {request.resource.network_access.value} "
+                    f"MCP network access {mcp_resource.network_access.value} "
                     "is not supported by "
                     "Execution Profiles: " + ", ".join(sorted(incompatible_profile_ids))
                 )

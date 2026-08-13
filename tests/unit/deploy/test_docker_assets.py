@@ -114,6 +114,30 @@ def test_images_run_as_non_root_and_expose_health_checks() -> None:
     assert 'output: "standalone"' in (ROOT / "web/harness-console/next.config.ts").read_text()
 
 
+def test_harbor_gray_build_reads_cache_but_pushes_one_immutable_tag() -> None:
+    script = (ROOT / "scripts/build_harbor_174.sh").read_text()
+
+    assert "docker buildx build" in script
+    assert "--push" in script
+    assert "--provenance=mode=max" in script
+    assert "--sbom=true" in script
+    assert "--provenance=false" in script
+    assert "--sbom=false" in script
+    assert '--cache-from "type=registry,ref=${cache_ref}"' in script
+    assert '--tag "${cache_ref}"' not in script
+    assert script.count('--tag "${image}"') == 1
+    assert '--cache-to "type=inline"' in script
+    assert "HARNESS_ALLOW_DIRTY_BUILD" in script
+    assert "status --porcelain" in script
+    assert '--build-arg "KUBECTL_IMAGE=${KUBECTL_IMAGE}"' in script
+
+
+def test_docker_context_excludes_macos_appledouble_metadata() -> None:
+    dockerignore = (ROOT / ".dockerignore").read_text()
+
+    assert "**/._*" in dockerignore
+
+
 def test_background_services_override_the_api_http_healthcheck() -> None:
     services = cast(dict[str, Any], compose()["services"])
 

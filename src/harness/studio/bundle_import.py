@@ -13,6 +13,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from typing import cast
 
 import yaml
 from pydantic import ValidationError
@@ -64,6 +65,21 @@ class ParsedAgentBundle:
     package_hash: str
     lossless: bool
     warnings: tuple[str, ...]
+
+
+def _object_mapping(value: object) -> dict[str, object]:
+    """Normalize an untrusted YAML/JSON object without propagating `Any`."""
+
+    if not isinstance(value, dict):
+        return {}
+    mapping = cast(dict[object, object], value)
+    return {str(key): item for key, item in mapping.items()}
+
+
+def _object_list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        return []
+    return cast(list[object], value)
 
 
 def _skill_instructions(content: str, *, skill_name: str) -> str:
@@ -320,10 +336,11 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
     with archive:
         root = _nexau_root(archive)
         try:
-            config = yaml.safe_load(_zip_text(archive, root, "agent.yaml"))
+            raw_config = cast(object, yaml.safe_load(_zip_text(archive, root, "agent.yaml")))
         except yaml.YAMLError as error:
             raise AgentBundleImportError("NexAU agent.yaml 无效") from error
-        if not isinstance(config, dict) or config.get("type") != "agent":
+        config = _object_mapping(raw_config)
+        if config.get("type") != "agent":
             raise AgentBundleImportError("ZIP 不是受支持的 NexAU Agent 导出")
         warnings: list[str] = ["已从 NexAU 结构转换；请保存并运行平台预检"]
         raw_name = str(config.get("name") or "imported-agent")
@@ -338,8 +355,10 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
 
         builtin_tools: list[str] = []
         python_tools: list[DraftPythonTool] = []
-        for entry in config.get("tools") or []:
-            if not isinstance(entry, dict):
+        tool_entries = _object_list(config.get("tools"))
+        for raw_entry in tool_entries:
+            entry = _object_mapping(raw_entry)
+            if not entry:
                 continue
             tool_name = str(entry.get("name") or "")
             builtin = _NEXAU_BUILTINS.get(tool_name)
@@ -354,7 +373,10 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
                 continue
             metadata_path = str(entry.get("yaml_path") or f"tools/{tool_name}.tool.yaml")
             try:
-                metadata = yaml.safe_load(_zip_text(archive, root, metadata_path)) or {}
+                raw_metadata = cast(
+                    object,
+                    yaml.safe_load(_zip_text(archive, root, metadata_path)),
+                )
             except yaml.YAMLError as error:
                 raise AgentBundleImportError(f"NexAU Tool YAML 无效：{metadata_path}") from error
             module_path = module_name.replace(".", "/") + ".py"
@@ -364,26 +386,31 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
                 "def run(arguments):\n"
                 "    return _NEXAU_BOUND_TOOL(**arguments)\n"
             )
+            metadata = _object_mapping(raw_metadata)
+            raw_input_schema = metadata.get("input_schema")
+            input_schema: dict[str, object]
+            if isinstance(raw_input_schema, dict):
+                input_schema = _object_mapping(cast(object, raw_input_schema))
+            else:
+                input_schema = {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                }
             python_tools.append(
                 DraftPythonTool(
                     name=_safe_name(tool_name or function_name, separator="_"),
                     description=str(metadata.get("description") or tool_name)[:2_000],
-                    inputSchema=metadata.get("input_schema")
-                    or {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": True,
-                    },
+                    inputSchema=input_schema,
                     code=source + wrapper,
                 )
             )
 
         has_visual_input = any(
-            isinstance(entry, dict) and entry.get("name") == "read_visual_file"
-            for entry in config.get("tools") or []
+            _object_mapping(entry).get("name") == "read_visual_file" for entry in tool_entries
         )
         skills: list[DraftSkill] = []
-        for index, relative in enumerate(config.get("skills") or [], start=1):
+        for index, relative in enumerate(_object_list(config.get("skills")), start=1):
             skill, warning = _nexau_skill(archive, root, str(relative), index=index)
             skills.append(skill)
             if warning:
@@ -402,32 +429,39 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
         extensions: dict[str, object] = {}
         inline_extensions = config.get("harness_extensions")
         if isinstance(inline_extensions, dict):
-            extensions = {str(key): value for key, value in inline_extensions.items()}
+            extensions = _object_mapping(cast(object, inline_extensions))
         elif f"{root}agent-studio.json" in archive.namelist():
             try:
-                raw_extensions = json.loads(_zip_text(archive, root, "agent-studio.json"))
+                raw_extensions = cast(
+                    object,
+                    json.loads(_zip_text(archive, root, "agent-studio.json")),
+                )
             except json.JSONDecodeError as error:
                 raise AgentBundleImportError("NexAU agent-studio.json 无效") from error
             if isinstance(raw_extensions, dict):
-                extensions = {str(key): value for key, value in raw_extensions.items()}
+                extensions = _object_mapping(cast(object, raw_extensions))
         native_mcp_references = tuple(
             str(item.get("source_id") or item.get("name"))
-            for item in config.get("mcp_servers") or []
-            if isinstance(item, dict) and (item.get("source_id") or item.get("name"))
+            for raw_item in _object_list(config.get("mcp_servers"))
+            if (item := _object_mapping(raw_item)) and (item.get("source_id") or item.get("name"))
         )
         extension_mcp = extensions.get("mcp_servers")
+        mcp_candidates: tuple[object, ...] = (
+            tuple(_object_list(cast(object, extension_mcp)))
+            if isinstance(extension_mcp, list)
+            else tuple(native_mcp_references)
+        )
         mcp_servers = tuple(
             str(item)
-            for item in (
-                extension_mcp if isinstance(extension_mcp, list) else native_mcp_references
-            )
+            for item in mcp_candidates
             if re.fullmatch(r"[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*", str(item))
         )
         subagents: list[DraftSubagent] = []
         extension_subagents = extensions.get("subagents")
         if isinstance(extension_subagents, list):
-            for item in extension_subagents:
-                if not isinstance(item, dict):
+            for raw_item in _object_list(cast(object, extension_subagents)):
+                item = _object_mapping(raw_item)
+                if not item:
                     continue
                 alias = str(item.get("alias") or "")
                 reference = str(item.get("ref") or "")
@@ -450,7 +484,7 @@ def _parse_nexau_bundle(content: bytes) -> ParsedAgentBundle:
 
         # Imported environment placeholders never become credentials. The user
         # selects a governed route after import.
-        llm = config.get("llm_config") if isinstance(config.get("llm_config"), dict) else {}
+        llm = _object_mapping(config.get("llm_config"))
         raw_model = str(llm.get("model") or "")
         model = (
             raw_model

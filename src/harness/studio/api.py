@@ -846,6 +846,28 @@ async def catalog_impact(
 
 
 @router.delete(
+    "/catalog/mcp/{resource_id}/permanent",
+    response_model=CatalogMutationResult,
+)
+async def delete_personal_mcp_resource(
+    resource_id: str,
+    expected_revision: int,
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[CapabilityCatalogService, Depends(get_catalog_service)],
+    credentials: Annotated[McpCredentialService, Depends(get_mcp_credential_service)],
+) -> CatalogMutationResult:
+    actor = _authorize_studio_actor(identity, "studio:write")
+    result = await service.delete_mcp(
+        tenant_id=actor.tenant_id,
+        user_id=actor.user_id,
+        resource_id=resource_id,
+        expected_revision=expected_revision,
+    )
+    await credentials.delete(actor.tenant_id, actor.user_id, resource_id)
+    return result
+
+
+@router.delete(
     "/catalog/{resource_type}/{resource_id}",
     response_model=CatalogMutationResult,
 )

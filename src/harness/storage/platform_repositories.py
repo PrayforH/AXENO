@@ -54,6 +54,15 @@ class PostgresAgentRegistry:
                     name=version.name,
                     version=version.version,
                     agent_id=version.agent_id,
+                    status=version.status.value,
+                    manifest_hash=version.manifest_hash,
+                    package_hash=version.package_hash,
+                    created_at=version.created_at,
+                    catalog_manifest=(
+                        version.snapshot.get("manifest", {})
+                        if isinstance(version.snapshot.get("manifest"), dict)
+                        else {}
+                    ),
                     payload=version.model_dump(mode="json"),
                 )
             )
@@ -94,6 +103,58 @@ class PostgresAgentRegistry:
                     loaded = loaded.model_copy(update={"agent_id": envelope_agent_id})
                 result.append(loaded)
             return result
+
+    async def list_catalog_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
+        """Load the task-catalog projection without transferring package files.
+
+        Published versions may embed large reproducible assets under
+        ``snapshot.files``. Navigation only needs the manifest, so selecting
+        JSON fields server-side prevents a single historical release from
+        turning every task-page transition into a multi-megabyte read.
+        """
+        statement = (
+            select(
+                AgentVersionRow.name,
+                AgentVersionRow.version,
+                AgentVersionRow.agent_id,
+                AgentVersionRow.status,
+                AgentVersionRow.manifest_hash,
+                AgentVersionRow.package_hash,
+                AgentVersionRow.created_at,
+                AgentVersionRow.catalog_manifest,
+            )
+            .where(
+                AgentVersionRow.tenant_id == tenant_id,
+                AgentVersionRow.owner_user_id == owner_user_id,
+            )
+            .order_by(AgentVersionRow.name, AgentVersionRow.version)
+        )
+        async with self._sessions() as session:
+            rows = (await session.execute(statement)).all()
+            return [
+                AgentVersion(
+                    tenant_id=tenant_id,
+                    owner_user_id=owner_user_id,
+                    name=name,
+                    version=version,
+                    agent_id=agent_id,
+                    status=status,
+                    manifest_hash=manifest_hash,
+                    package_hash=package_hash,
+                    created_at=created_at,
+                    snapshot={"manifest": manifest or {}},
+                )
+                for (
+                    name,
+                    version,
+                    agent_id,
+                    status,
+                    manifest_hash,
+                    package_hash,
+                    created_at,
+                    manifest,
+                ) in rows
+            ]
 
     async def move_owner(
         self, tenant_id: str, from_user_id: str, to_user_id: str, name: str
@@ -161,6 +222,26 @@ class PostgresSessionRepository:
                 raise NotFoundError(f"session not found: {session_id}")
             return Session.model_validate(row.payload)
 
+    async def list_for_ids(self, tenant_id: str, session_ids: list[str]) -> list[Session]:
+        if not session_ids:
+            return []
+        wanted = list(dict.fromkeys(session_ids))
+        statement = select(SessionRow.payload).where(
+            SessionRow.tenant_id == tenant_id,
+            SessionRow.session_id.in_(wanted),
+        )
+        async with self._sessions() as session:
+            payloads = (await session.execute(statement)).scalars().all()
+        found = {
+            item.session_id: item
+            for payload in payloads
+            for item in (Session.model_validate(payload),)
+        }
+        for session_id in wanted:
+            if session_id not in found:
+                raise NotFoundError(f"session not found: {session_id}")
+        return [found[session_id] for session_id in session_ids]
+
     async def bind_claude_session_id(
         self, tenant_id: str, session_id: str, claude_session_id: str
     ) -> Session:
@@ -182,6 +263,25 @@ class PostgresSessionRepository:
                     )
                 return current
             updated = current.model_copy(update={"claude_session_id": claude_session_id})
+            row.payload = updated.model_dump(mode="json")
+            await session.commit()
+            return updated
+
+    async def clear_claude_session_id(
+        self, tenant_id: str, session_id: str, expected_claude_session_id: str
+    ) -> Session:
+        async with self._sessions() as session:
+            row = await session.get(
+                SessionRow,
+                (tenant_id, session_id),
+                with_for_update=True,
+            )
+            if row is None:
+                raise NotFoundError(f"session not found: {session_id}")
+            current = Session.model_validate(row.payload)
+            if current.claude_session_id != expected_claude_session_id:
+                raise ConflictError(f"session {session_id} Claude session changed during recovery")
+            updated = current.model_copy(update={"claude_session_id": None})
             row.payload = updated.model_dump(mode="json")
             await session.commit()
             return updated
@@ -594,18 +694,21 @@ class PostgresAguiThreadBindingRepository:
     async def list_for_user(
         self, tenant_id: str, user_id: str, *, limit: int, archived: bool = False
     ) -> list[AguiThreadBinding]:
-        statement = select(AguiThreadBindingRow.payload).where(
-            AguiThreadBindingRow.tenant_id == tenant_id,
-            AguiThreadBindingRow.user_id == user_id,
+        archived_at = AguiThreadBindingRow.payload["archived_at"].as_string()
+        updated_at = AguiThreadBindingRow.payload["updated_at"].as_string()
+        statement = (
+            select(AguiThreadBindingRow.payload)
+            .where(
+                AguiThreadBindingRow.tenant_id == tenant_id,
+                AguiThreadBindingRow.user_id == user_id,
+                archived_at.is_not(None) if archived else archived_at.is_(None),
+            )
+            .order_by(updated_at.desc(), AguiThreadBindingRow.thread_id.desc())
+            .limit(limit)
         )
         async with self._sessions() as session:
             payloads = (await session.execute(statement)).scalars().all()
-            bindings = (AguiThreadBinding.model_validate(payload) for payload in payloads)
-            return sorted(
-                (binding for binding in bindings if (binding.archived_at is not None) is archived),
-                key=lambda binding: (binding.updated_at, binding.thread_id),
-                reverse=True,
-            )[:limit]
+            return [AguiThreadBinding.model_validate(payload) for payload in payloads]
 
     async def update_title(
         self,
@@ -667,15 +770,28 @@ class PostgresAguiThreadBindingRepository:
         user_id: str,
         thread_id: str,
         *,
+        expected_session_id: str,
         session_id: str,
         updated_at: datetime,
     ) -> AguiThreadBinding:
         async with self._sessions() as session:
-            row = await session.get(AguiThreadBindingRow, (tenant_id, user_id, thread_id))
+            row = await session.get(
+                AguiThreadBindingRow,
+                (tenant_id, user_id, thread_id),
+                with_for_update=True,
+            )
             if row is None:
                 raise NotFoundError(f"AG-UI thread binding not found: {thread_id}")
             binding = AguiThreadBinding.model_validate(row.payload)
-            previous = tuple(dict.fromkeys((*binding.previous_session_ids, binding.session_id)))
+            if binding.session_id != expected_session_id:
+                raise ConflictError("AG-UI thread Session changed concurrently")
+            if binding.session_id == session_id:
+                return binding
+            previous = tuple(
+                value
+                for value in dict.fromkeys((*binding.previous_session_ids, binding.session_id))
+                if value != session_id
+            )
             updated = binding.model_copy(
                 update={
                     "session_id": session_id,

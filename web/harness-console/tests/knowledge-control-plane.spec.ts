@@ -10,13 +10,17 @@ const page = readFileSync(
   join(process.cwd(), "src/app/studio/knowledge/page.tsx"),
   "utf8",
 );
+const styles = readFileSync(
+  join(process.cwd(), "src/components/agent-studio/mcp-catalog-control-plane.module.css"),
+  "utf8",
+);
 
 describe("Knowledge control plane", () => {
   it("is a first-class Studio page for external knowledge only", () => {
     expect(page).toContain('<McpCatalogControlPlane mode="knowledge"');
     expect(component).toContain('active={knowledgeMode ? "knowledge" : "capabilities"}');
     expect(component).toContain("接入外部知识库");
-    expect(component).toContain("不上传资料、不切片，也不保存向量");
+    expect(component).toContain("文档、切片、Embedding 与向量索引均留在外部系统");
   });
 
   it("uses governed MCP registration and manual tool discovery", () => {
@@ -35,5 +39,10 @@ describe("Knowledge control plane", () => {
     expect(component).toContain("个人能力目录");
     expect(component).toContain("只属于当前用户");
     expect(component).toContain("不会因共享智能体而共享");
+  });
+
+  it("uses the shared Studio page header divider rhythm", () => {
+    expect(styles).toContain("var(--studio-page-content-max,1320px)");
+    expect(styles).toContain("var(--studio-page-header-divider-gap,20px)");
   });
 });

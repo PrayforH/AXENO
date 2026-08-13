@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authenticatedAuthMutation,
   authenticatedAuthProxy,
+  currentSession,
 } from "../src/lib/auth-route";
 
 afterEach(() => {
@@ -48,6 +49,36 @@ describe("authenticated workspace member requests", () => {
         body: '{"role":"admin"}',
       },
     ]);
+  });
+});
+
+describe("current browser session", () => {
+  it("preserves the replaced-session reason while clearing stale cookies", async () => {
+    vi.stubEnv("HARNESS_API_URL", "http://harness.internal:8000");
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/v1/auth/refresh")) {
+        return Response.json({ error: { code: "refresh_invalid" } }, { status: 401 });
+      }
+      return Response.json(
+        { error: { code: "session_replaced" } },
+        {
+          status: 401,
+          headers: { "X-Harness-Auth-Error": "session_replaced" },
+        },
+      );
+    });
+
+    const response = await currentSession(
+      new Request("http://console.test/api/auth/session", {
+        headers: {
+          Cookie: "harness_access_token=old-jwt; harness_refresh_token=old-refresh",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("x-harness-auth-error")).toBe("session_replaced");
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 });
 

@@ -1,19 +1,28 @@
 """Run creation, lookup and cancellation use cases."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 from harness.application.events import EventService
 from harness.application.types import Clock, IdGenerator
 from harness.core.errors import ConflictError
 from harness.core.models import Run, RunStatus, Session
-from harness.core.ports import RunRepository, RunTask, SessionRepository, TaskQueue
+from harness.core.ports import (
+    CancellationWakeup,
+    RunRepository,
+    RunTask,
+    SessionRepository,
+    TaskQueue,
+)
 from harness.core.state_machine import transition
 from harness.deployments.boundaries import environment_quota_boundary
 from harness.observability.provider import Observability
 from harness.reliability.metrics import ReliabilityMetrics
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,9 +62,12 @@ RunQuotaPlanResolver = Callable[[str, str, str, str], Awaitable[RunQuotaPlan]]
 
 
 def _request_attachment_ids(value: object) -> tuple[str, ...] | None:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+    if not isinstance(value, list):
         return None
-    return tuple(sorted(value))
+    items = cast(list[object], value)
+    if not all(isinstance(item, str) for item in items):
+        return None
+    return tuple(sorted(cast(list[str], items)))
 
 
 def _same_user_request(left: dict[str, object], right: dict[str, object]) -> bool:
@@ -122,6 +134,7 @@ class RunService:
         metrics: ReliabilityMetrics | None = None,
         admission: RunAdmission | None = None,
         quota_plan_resolver: RunQuotaPlanResolver | None = None,
+        cancellation_wakeup: CancellationWakeup | None = None,
     ) -> None:
         self._sessions = sessions
         self._runs = runs
@@ -133,7 +146,26 @@ class RunService:
         self._metrics = metrics
         self._admission = admission
         self._quota_plan_resolver = quota_plan_resolver
+        self._cancellation_wakeup = cancellation_wakeup
         self._creation_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    async def _notify_cancellation(self, run: Run) -> None:
+        if self._cancellation_wakeup is None:
+            return
+        try:
+            await self._cancellation_wakeup.publish(
+                run.tenant_id,
+                run.run_id,
+                run.fencing_token,
+            )
+        except Exception:
+            # The durable status and run.cancelling event have already won.
+            # Redis only shortens convergence and must never break cancellation.
+            logger.warning(
+                "cancellation wakeup failed; durable polling remains active run_id=%s",
+                run.run_id,
+                exc_info=True,
+            )
 
     async def create(
         self,
@@ -323,6 +355,7 @@ class RunService:
                 await self._admission.release_subject(tenant_id, run_id)
             return current
         if current.status is RunStatus.CANCELLING:
+            await self._notify_cancellation(current)
             return current
         requested_from = current.status
         cancelling = current.model_copy(
@@ -346,6 +379,8 @@ class RunService:
                 session_id=current.session_id,
                 event_type="run.cancelling",
             )
+
+        await self._notify_cancellation(current)
 
         if requested_from in {RunStatus.PROVISIONING, RunStatus.RUNNING}:
             # The Worker owns active external execution. Only it may publish

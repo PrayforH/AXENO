@@ -6,6 +6,7 @@ import {
   chatUsableAgents,
   findTaskAgent,
   loadTaskAgentCatalog,
+  type TaskAgent,
 } from "../src/lib/task-agent-catalog";
 
 describe("task agent catalog", () => {
@@ -60,6 +61,31 @@ describe("task agent catalog", () => {
     const withId = { ...personal, agentId: "agent_abc" } as typeof personal & { agentId: string };
     expect(agentIdentity(withId)).toBe("agent_abc");
     expect(agentItemKey(withId)).toBe("agent_abc@0.3.11");
+  });
+
+  it("matches both stable Agent identity and the requested immutable version", () => {
+    const agents: TaskAgent[] = [
+      {
+        agentId: "agent-1",
+        name: "productivity-agent",
+        version: "0.3.12",
+        displayName: "生产力智能体",
+        domain: "productivity",
+      },
+      {
+        agentId: "agent-1",
+        name: "productivity-agent",
+        version: "0.3.13",
+        displayName: "生产力智能体",
+        domain: "productivity",
+      },
+    ];
+
+    expect(findTaskAgent(agents, {
+      agentId: "agent-1",
+      name: "productivity-agent",
+      version: "0.3.13",
+    })?.version).toBe("0.3.13");
   });
 
   it("filters the task selector by can_chat while keeping revoked historical Agents", () => {
@@ -159,6 +185,28 @@ describe("task agent catalog", () => {
     expect(agentCoordinate(catalog.agents[1])).toBe("public-opinion-agent@0.2.0");
   });
 
+  it("loads runtime, registry, and Studio versions concurrently", async () => {
+    const pending = new Map<string, (response: Response) => void>();
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      return new Promise<Response>((resolve) => pending.set(url, resolve));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const catalogPromise = loadTaskAgentCatalog();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    pending.get("/api/harness/runtime-config")?.(
+      Response.json({ name: "lead-agent", version: "1.0.0" }),
+    );
+    pending.get("/api/harness/agents")?.(Response.json([]));
+    pending.get("/api/studio/drafts")?.(Response.json([]));
+    await expect(catalogPromise).resolves.toMatchObject({
+      defaultAgent: { name: "lead-agent", version: "1.0.0" },
+    });
+  });
+
   it("falls back to the configured runtime when Studio is unavailable", async () => {
     vi.stubGlobal(
       "fetch",
@@ -216,5 +264,67 @@ describe("task agent catalog", () => {
       "public-opinion-agent@0.1.1",
     ]);
     expect(catalog.agents[1].displayName).toBe("舆情分析");
+  });
+
+  it("suppresses only the current user's duplicate Studio fallback release", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("runtime-config")) {
+          return Response.json({ name: "lead-agent", version: "1.0.0" });
+        }
+        if (url.includes("/api/harness/agents")) {
+          return Response.json([
+            {
+              agent_id: "agent-personal",
+              name: "productivity-agent",
+              version: "0.1.0",
+              display_name: "生产力智能体",
+              domain: "productivity",
+              owner_user_id: "user-1",
+              scope: "personal",
+            },
+            {
+              agent_id: "agent-team",
+              name: "productivity-agent",
+              version: "0.1.0",
+              display_name: "团队生产力智能体",
+              domain: "productivity",
+              owner_user_id: "user-2",
+              scope: "team",
+              space_id: "space-1",
+              space_name: "产品团队",
+            },
+          ]);
+        }
+        return Response.json([
+          {
+            draftId: "draft-1",
+            name: "productivity-agent",
+            displayName: "生产力智能体",
+            domain: "productivity",
+            version: "0.1.0",
+            template: "orchestrator",
+            revision: 3,
+            updatedAt: "2026-08-10T00:00:00Z",
+            publishedVersion: "0.1.0",
+          },
+        ]);
+      }),
+    );
+
+    const catalog = await loadTaskAgentCatalog("user-1");
+    const matching = catalog.agents.filter(
+      (agent) =>
+        agent.name === "productivity-agent" && agent.version === "0.1.0",
+    );
+
+    expect(matching).toHaveLength(2);
+    expect(matching.map(agentItemKey)).toEqual([
+      "agent-personal@0.1.0",
+      "agent-team@0.1.0",
+    ]);
+    expect(matching.some((agent) => !agent.ownerUserId)).toBe(false);
   });
 });

@@ -6,7 +6,7 @@ x-python-build: &python-build
   dockerfile: deploy/docker/api.Dockerfile
   args:
     UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
-    KUBECTL_IMAGE: ${KUBECTL_IMAGE:-registry.k8s.io/kubectl:v1.33.1}
+    KUBECTL_IMAGE: ${KUBECTL_IMAGE:-cgr.dev/chainguard/kubectl@sha256:1e1aa9dedf0d9008e5a3710b23f2072bc2ab83117146d503c689b5d2592add3d}
 
 x-harness-environment: &harness-environment
   HARNESS_ENVIRONMENT: production

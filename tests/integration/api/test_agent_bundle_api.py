@@ -1,3 +1,6 @@
+# pyright: reportPrivateUsage=false
+
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -79,9 +82,11 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
             "display_name": "舆情分析",
             "domain": "public-opinion",
             "model_route": "deepseek-v4-pro",
-            "model": "deepseek-v4-pro",
-            "model_capabilities": [],
-            "owner_user_id": "publisher",
+                "model": "deepseek-v4-pro",
+                "model_capabilities": [],
+                "mcp_references": ["tavily-readonly"],
+                "knowledge_references": [],
+                "owner_user_id": "publisher",
             "scope": "personal",
             "space_id": None,
             "space_name": None,
@@ -95,6 +100,50 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
         }
     ]
     assert catalog.json()[0]["agent_id"] == published.json()["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_personal_agent_version_history_can_promote_an_older_release() -> None:
+    app = create_memory_app(settings=production_settings())
+    container = app.state.container
+    newer = await container.agents.publish(
+        "tenant-a",
+        "publisher",
+        "agents/echo-agent/agent.yaml",
+        environment="production",
+    )
+    assert newer.agent_id is not None
+    older = newer.model_copy(
+        update={
+            "version": "0.4.0",
+            "manifest_hash": "0" * 64,
+            "package_hash": "1" * 64,
+            "created_at": newer.created_at - timedelta(days=1),
+        }
+    )
+    await container.agents._registry.add(older)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        history = await client.get(
+            f"/v1/agents/{newer.agent_id}/versions", headers=HEADERS
+        )
+        promoted = await client.post(
+            f"/v1/agents/{newer.agent_id}/versions/{older.version}/promote",
+            headers=HEADERS,
+        )
+        catalog = await client.get("/v1/agents", headers=HEADERS)
+
+    assert history.status_code == 200
+    assert [item["version"] for item in history.json()] == [
+        newer.version,
+        older.version,
+    ]
+    assert {item["current_version"] for item in history.json()} == {newer.version}
+    assert promoted.status_code == 200
+    assert promoted.json()["current_version"] == older.version
+    echo_entries = [item for item in catalog.json() if item["name"] == "echo-agent"]
+    assert len(echo_entries) == 2
+    assert {item["current_version"] for item in echo_entries} == {older.version}
 
 
 @pytest.mark.asyncio

@@ -62,7 +62,10 @@ import {
   inputArtifactDownloadHref,
   isIntermediateAssistantTextPart,
   messageOwnsRun,
+  turnOwnsRun,
+  normalizeMessageText,
   ownsLiveResponse,
+  shouldOfferIncompleteRetry,
   shouldSuppressNativeAssistantText,
   shouldShowComposerStop,
   shouldShowPreResponseActivity,
@@ -74,7 +77,7 @@ const agentThreadSource = readFileSync(
 );
 
 it("registers the approval renderer through the assistant-ui Thread config", () => {
-  renderToStaticMarkup(<AgentThread />);
+  renderToStaticMarkup(<AgentThread userId="user-a" threadId="thread-a" />);
 
   expect(agentThreadSource).toContain('part.toolName === "harness_request_approval"');
   expect(agentThreadSource).toContain("<ApprovalToolBridge");
@@ -85,13 +88,16 @@ it("registers the approval renderer through the assistant-ui Thread config", () 
 });
 
 it("presents task-first guidance through a custom assistant-ui welcome", () => {
-  const html = renderToStaticMarkup(<AgentThread />);
+  const html = renderToStaticMarkup(<AgentThread userId="user-a" threadId="thread-a" />);
 
   expect(html).toContain("把目标交给 Agent");
   expect(html).toContain("分析与规划");
   expect(html).toContain("阅读与整理");
   expect(html).toContain("执行与协作");
-  expect(html).toContain("在关键操作前请求确认");
+  expect(html).toContain("常规操作自动完成");
+  expect(html).toContain("仅在高风险边界需要你确认");
+  expect(html).toContain("隔离执行 · 自动风险分级 · 产物可直接下载");
+  expect(html).not.toContain("支持人工审批");
 });
 
 it("uses the current run control name in incomplete-run guidance", () => {
@@ -100,6 +106,17 @@ it("uses the current run control name in incomplete-run guidance", () => {
   expect(agentThreadSource).toContain('className="run-retry-button"');
   expect(agentThreadSource).toContain("重新运行");
   expect(agentThreadSource).not.toContain("请查看运行详情");
+});
+
+it("keeps user-stopped runs neutral and only offers retry for actual failures", () => {
+  expect(shouldOfferIncompleteRetry({ type: "incomplete", reason: "cancelled" })).toBe(false);
+  expect(shouldOfferIncompleteRetry({ type: "incomplete", reason: "error" })).toBe(true);
+  expect(shouldOfferIncompleteRetry({ type: "complete", reason: "unknown" })).toBe(false);
+  expect(agentThreadSource).toContain(
+    "const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus)",
+  );
+  expect(agentThreadSource).toContain("{showIncompleteRecovery ? (");
+  expect(agentThreadSource).not.toContain('<circle\n                cx="12"');
 });
 
 it("uses interactive answer branch primitives for regenerated responses", () => {
@@ -137,8 +154,11 @@ it("switches the composer action to stop for an active run", () => {
   expect(shouldShowComposerStop(true, "running", "failed")).toBe(false);
   expect(shouldShowComposerStop(true, "running", "cancelled")).toBe(false);
   expect(agentThreadSource).toContain(
-    'className="aui-button aui-button-primary aui-button-icon aui-composer-cancel"',
+    'className="aui-button aui-button-icon aui-composer-cancel"',
   );
+  expect(agentThreadSource).toContain('aria-label="停止运行"');
+  expect(agentThreadSource).toContain('width="10" height="10"');
+  expect(agentThreadSource).not.toContain('title="停止运行"');
   expect(agentThreadSource).toContain("aui.thread().cancelRun()");
   expect(agentThreadSource).toContain("<Composer.Send />");
   expect(agentThreadSource).not.toContain("<Composer.Action");
@@ -164,16 +184,34 @@ it("keeps assistant output avatar-free so activity rows cannot overlap it", () =
 it("places copy before edit below the user message content", () => {
   const content = agentThreadSource.indexOf("<UserMessage.Content />");
   const actions = agentThreadSource.indexOf("<ActionBarPrimitive.Root", content);
-  const copy = agentThreadSource.indexOf("<ActionBarPrimitive.Copy", actions);
+  const copy = agentThreadSource.indexOf("<MessageCopyButton", actions);
   const edit = agentThreadSource.indexOf('aria-label="编辑消息"', actions);
   expect(content).toBeGreaterThan(-1);
   expect(actions).toBeGreaterThan(content);
   expect(copy).toBeGreaterThan(actions);
   expect(edit).toBeGreaterThan(copy);
   expect(agentThreadSource).toContain("onClick={beginEdit}");
-  expect(agentThreadSource).toContain("<ActionBarPrimitive.Copy");
+  expect(agentThreadSource).toContain("<MessageCopyButton");
   expect(agentThreadSource).toContain('aria-label="编辑消息"');
-  expect(agentThreadSource).toContain('aria-label="复制消息"');
+  expect(agentThreadSource).toContain('label="复制消息"');
+});
+
+it("normalizes copied message text and provides an HTTP-safe clipboard fallback", () => {
+  expect(normalizeMessageText(" 第一行\r\n\r\n\r\n第二行  \n")).toBe("第一行\n\n第二行");
+  expect(normalizeMessageText("标题\n　\n​\n\n正文\u2029\u2029结尾")).toBe(
+    "标题\n\n正文\n\n结尾",
+  );
+  expect(normalizeMessageText("上海贤创广告有限公司 下钻")).toBe("上海贤创广告有限公司 下钻");
+  expect(agentThreadSource).toContain('document.execCommand("copy")');
+  expect(agentThreadSource).toContain('data-copy-state={copyState}');
+  expect(agentThreadSource).toContain('className="message-copy-status"');
+  expect(agentThreadSource).not.toContain('className="sr-only"');
+});
+
+it("removes answer regeneration while preserving failed-run recovery", () => {
+  expect(agentThreadSource).toContain("allowReload: false");
+  expect(agentThreadSource).not.toContain("<AssistantActionBar.Reload");
+  expect(agentThreadSource).toContain("<ActionBarPrimitive.Reload");
 });
 
 it("only edits the latest user turn and allows unchanged text to start a new run", () => {
@@ -322,5 +360,11 @@ it("keeps interrupted run activity attached to its own answer branch", () => {
   expect(messageOwnsRun("assistant-run_2", "run_2")).toBe(true);
   expect(messageOwnsRun("assistant-run_2-message_a", "run_2")).toBe(true);
   expect(messageOwnsRun("assistant-run_1-message_a", "run_2")).toBe(false);
-  expect(agentThreadSource).toContain("messageOwnsRun(messageId, activity.run_id)");
+  expect(agentThreadSource).toContain("turnOwnsRun(");
+});
+
+it("attaches a resumed run to the latest optimistic assistant turn", () => {
+  expect(turnOwnsRun("__optimistic__42", "run_2", true, "run_2")).toBe(true);
+  expect(turnOwnsRun("__optimistic__42", "run_2", false, "run_2")).toBe(false);
+  expect(turnOwnsRun("__optimistic__42", "run_2", true, "run_3")).toBe(false);
 });

@@ -4,19 +4,22 @@ import "@assistant-ui/react-ui/styles/index.css";
 import "@assistant-ui/react-ui/styles/markdown.css";
 import "./styles.css";
 import "./codex-theme.css";
+import "./weknora-theme.css";
+import { PRODUCT_DESCRIPTION, PRODUCT_NAME } from "../components/product-brand";
 
 export const metadata: Metadata = {
   title: {
-    default: "Agent Studio",
-    template: "%s · Agent Studio",
+    default: PRODUCT_NAME,
+    template: `%s · ${PRODUCT_NAME}`,
   },
-  description: "面向业务 Agent 的任务与控制工作台",
+  description: PRODUCT_DESCRIPTION,
+  applicationName: PRODUCT_NAME,
 };
 
 export const viewport: Viewport = {
   colorScheme: "light dark",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f7f7f7" },
+    { media: "(prefers-color-scheme: light)", color: "#fbfcfb" },
     { media: "(prefers-color-scheme: dark)", color: "#181818" },
   ],
 };
@@ -45,6 +48,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html
       lang="zh-CN"
       data-theme="codex-theme-v1"
+      data-product-ui="xushu"
       data-color-mode="dark"
       suppressHydrationWarning
     >

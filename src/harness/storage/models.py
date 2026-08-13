@@ -93,6 +93,11 @@ class AgentVersionRow(Base):
     name: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[str] = mapped_column(String(64), primary_key=True)
     agent_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32))
+    manifest_hash: Mapped[str] = mapped_column(String(64))
+    package_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    catalog_manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
@@ -857,6 +862,67 @@ class SessionRow(Base):
     tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(128), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class SessionContextStateRow(Base):
+    __tablename__ = "session_context_state"
+    __table_args__ = (
+        Index(
+            "ix_session_context_state_owner",
+            "tenant_id",
+            "owner_user_id",
+            "updated_at",
+        ),
+        CheckConstraint(
+            "trust_high_watermark IN ('safe', 'sensitive', 'untrusted')",
+            name="ck_session_context_state_trust",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(String(128))
+    revision: Mapped[int] = mapped_column(Integer)
+    trust_high_watermark: Mapped[str] = mapped_column(String(32))
+    latest_digest_id: Mapped[str | None] = mapped_column(String(128))
+    latest_digest_version: Mapped[int] = mapped_column(Integer, default=0)
+    transcript_checkpoint_hash: Mapped[str | None] = mapped_column(String(71))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class SessionContextDigestRow(Base):
+    __tablename__ = "session_context_digests"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "digest_id",
+            name="uq_session_context_digest_id",
+        ),
+        Index(
+            "ix_session_context_digests_owner",
+            "tenant_id",
+            "owner_user_id",
+            "session_id",
+            "version",
+        ),
+        Index(
+            "ix_session_context_digests_checkpoint",
+            "tenant_id",
+            "session_id",
+            "transcript_checkpoint_hash",
+        ),
+    )
+
+    tenant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest_id: Mapped[str] = mapped_column(String(128))
+    owner_user_id: Mapped[str] = mapped_column(String(128))
+    content_hash: Mapped[str] = mapped_column(String(71))
+    transcript_checkpoint_hash: Mapped[str] = mapped_column(String(71))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 

@@ -9,6 +9,13 @@ const component = readFileSync(
   ),
   "utf8",
 );
+const styles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/mcp-catalog-control-plane.module.css",
+  ),
+  "utf8",
+);
 const navigation = readFileSync(
   join(process.cwd(), "src/components/workspace-navigation.tsx"),
   "utf8",
@@ -21,16 +28,37 @@ const page = readFileSync(
 describe("MCP capability catalog", () => {
   it("has a discoverable Studio navigation entry and dedicated page", () => {
     expect(navigation).toContain('href: "/studio/capabilities"');
-    expect(navigation).toContain('label: "MCP"');
+    expect(navigation).toContain('label: "MCP 能力"');
     expect(page).toContain("<McpCatalogControlPlane");
   });
 
-  it("supports governed registration, impact inspection and disable", () => {
+  it("supports governed registration, impact inspection, disable and deletion", () => {
     expect(component).toContain("studioClient.upsertMcp");
     expect(component).toContain('studioClient.catalogImpact("mcp", reference)');
     expect(component).toContain("studioClient.disableMcp");
+    expect(component).toContain("studioClient.deleteMcp");
     expect(component).toContain("确认停用？");
+    expect(component).toContain("永久删除");
+    expect(component).toContain("平台内置 MCP 可见但不可修改");
     expect(component).toContain("目录变更采用 revision");
+    expect(component).toContain('EDITABLE_PLATFORM_MCP_REFERENCES = new Set(["tavily-readonly"])');
+    expect(component).toContain("item.ownerUserId || EDITABLE_PLATFORM_MCP_REFERENCES.has(item.reference)");
+  });
+
+  it("dismisses card action popovers when clicking outside", () => {
+    expect(component).toContain("useDismissablePopovers()");
+    expect(component).toContain("data-dismiss-on-outside");
+  });
+
+  it("uses one right-side authoring drawer for MCP and knowledge connections", () => {
+    expect(component).toContain("styles.editorBackdrop");
+    expect(component).toContain('aria-labelledby="catalog-editor-title"');
+    expect(component).toContain('role="dialog"');
+    expect(component).toContain("useDialogFocus");
+    expect(component).toContain("editorDialogRef");
+    expect(component).toContain("syncDialogRef");
+    expect(component).toContain("deleteDialogRef");
+    expect(component).toContain("closeEditor");
   });
 
   it("authorizes MCP access to explicit network-compatible execution profiles", () => {
@@ -55,6 +83,35 @@ describe("MCP capability catalog", () => {
     expect(component).toContain("全选");
     expect(component).toContain("清空");
     expect(component).toContain('type="search"');
+  });
+
+  it("groups real connection fields and keeps public headers separate from secrets", () => {
+    for (const title of [
+      "01",
+      "基本信息",
+      "02",
+      "连接配置",
+      "03",
+      "鉴权",
+      "04",
+      "运行边界",
+      "05",
+      "连接测试与工具",
+    ]) {
+      expect(component).toContain(title);
+    }
+    expect(component).toContain("customHeaderRows");
+    expect(component).toContain("customHeadersFromRows");
+    expect(component).toContain("自定义请求头（可选）");
+    expect(component).toContain("MANAGED_AUTH_HEADER_NAMES");
+    expect(component).toContain("密钥、Token 和 Cookie 不能放入自定义请求头");
+    expect(component).toContain("自动检测");
+    expect(styles).toMatch(/\.formSectionTitle\s*\{[^}]*grid-template-columns:\s*20px minmax\(0, 1fr\);/s);
+    expect(styles).toMatch(/\.formSectionTitle\s*>\s*span\s*\{[^}]*font:\s*700 9px\/1\.2/s);
+    expect(styles).toContain("font-variant-numeric: tabular-nums");
+    expect(component.match(/className=\{styles\.formSection\}/g)).toHaveLength(5);
+    expect(styles).toMatch(/\.formSection\s*\{[^}]*border-radius:\s*12px;[^}]*background:\s*var\(--panel\);/s);
+    expect(styles).toMatch(/@media \(max-width: 680px\)[\s\S]*?\.formSection\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\);/s);
   });
 
   it("explains which agents need resync after the reviewed tool list changes", () => {

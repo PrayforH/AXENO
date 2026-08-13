@@ -1,6 +1,8 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
+import { publishAuthEvent } from "../../lib/auth-coordination";
+import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../../components/product-brand";
 
 type AuthConfig = {
   registration_enabled: boolean;
@@ -9,6 +11,8 @@ type AuthConfig = {
 
 const ERROR_MESSAGES: Record<string, string> = {
   session_expired: "登录状态已失效，请重新登录。",
+  session_replaced: "该账号已在其他设备登录，本设备已安全退出。",
+  account_changed: "当前浏览器已登录其他账号，请确认后重新登录。",
   sso_unavailable: "该登录方式尚未配置。",
   sso_state_invalid: "登录请求已经过期，请重新尝试。",
   sso_exchange_failed: "第三方登录没有完成，请重试。",
@@ -53,10 +57,14 @@ export default function LoginPage() {
       });
       const result = (await response.json()) as {
         error?: { message?: string };
+        user?: { user_id: string };
       };
       if (!response.ok) {
         setError(result.error?.message ?? "登录信息无法验证。");
         return;
+      }
+      if (result.user?.user_id) {
+        publishAuthEvent({ type: "signed_in", userId: result.user.user_id });
       }
       window.location.replace("/");
     } catch {
@@ -69,23 +77,20 @@ export default function LoginPage() {
   const hasSso = Boolean(config?.providers.google || config?.providers.github);
   return (
     <main className="login-shell" id="main-content">
-      <section className="login-context" aria-label="Agent Studio 简介">
+      <section className="login-context" aria-label={`${PRODUCT_NAME}简介`}>
         <div className="login-brand">
-          <span className="brand-mark">AS</span>
-          <div>
-            <strong>Agent Studio</strong>
-            <span>智能任务工作台</span>
-          </div>
+          <ProductBrandMark />
+          <ProductBrandCopy />
         </div>
         <div className="login-thesis">
           <p className="login-eyebrow">从意图到可审计的执行</p>
-          <h1>把复杂任务交给 Agent，关键动作仍由你掌控。</h1>
-          <p>任务、工具、审批与制品在同一条执行轨迹中留痕。</p>
+          <h1>把复杂任务交给 Agent，风险边界仍由你掌控。</h1>
+          <p>任务、工具、风险处置与制品在同一条执行轨迹中留痕。</p>
         </div>
         <ol className="login-trace" aria-label="示例执行轨迹">
           <li><span>01</span><div><strong>理解任务</strong><small>建立范围与执行计划</small></div><em>完成</em></li>
           <li><span>02</span><div><strong>隔离执行</strong><small>工具与文件在沙箱运行</small></div><em>受控</em></li>
-          <li><span>03</span><div><strong>人工确认</strong><small>高风险动作等待批准</small></div><em>可审计</em></li>
+          <li><span>03</span><div><strong>风险确认</strong><small>仅高风险边界请求确认</small></div><em>可审计</em></li>
         </ol>
       </section>
 
@@ -94,7 +99,7 @@ export default function LoginPage() {
           <header>
             <p>{mode === "login" ? "欢迎回来" : "开始使用"}</p>
             <h2>{mode === "login" ? "登录工作台" : "创建账户"}</h2>
-            <span>{mode === "login" ? "继续处理你的任务与审批。" : "首位注册用户将成为工作区所有者。"}</span>
+            <span>{mode === "login" ? "继续处理你的任务与待确认操作。" : "首位注册用户将成为工作区所有者。"}</span>
           </header>
 
           {hasSso && (

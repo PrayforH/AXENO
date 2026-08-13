@@ -190,9 +190,7 @@ class McpCredentialService:
         items = await self.repository.list_for_user(tenant_id, owner_user_id)
         return tuple(self._status(item) for item in items)
 
-    async def is_configured(
-        self, tenant_id: str, owner_user_id: str, reference: str
-    ) -> bool:
+    async def is_configured(self, tenant_id: str, owner_user_id: str, reference: str) -> bool:
         return await self.repository.get(tenant_id, owner_user_id, reference) is not None
 
     async def configure(
@@ -265,7 +263,7 @@ class StoredMcpCredentialProvider:
             # service-owned shared run.
             stored = await self._service.repository.get(
                 identity.tenant_id,
-                _space_credential_owner(identity.team_ids[0]),
+                space_credential_owner(identity.team_ids[0]),
                 server_reference,
             )
             if stored is not None:
@@ -289,6 +287,6 @@ class StoredMcpCredentialProvider:
             raise McpCredentialError(f"missing MCP credentials: {names}") from None
 
 
-def _space_credential_owner(space_id: str) -> str:
+def space_credential_owner(space_id: str) -> str:
     """Owner identity of space-scoped MCP credentials in the shared store."""
     return f"space:{space_id}"

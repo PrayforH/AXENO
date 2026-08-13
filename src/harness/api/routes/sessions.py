@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 
 from harness.api.dependencies import (
     ApiContainer,
@@ -8,8 +8,11 @@ from harness.api.dependencies import (
     ensure_permission,
     get_container,
     require_identity,
+    require_owned_session,
 )
 from harness.api.schemas import CreateSessionRequest
+from harness.context.models import SessionContextDigest, SessionContextOverview
+from harness.context.window import context_window_view
 from harness.core.errors import ConflictError
 from harness.core.models import Session
 from harness.deployments.models import EnvironmentName
@@ -51,4 +54,55 @@ async def create_session(
         team_ids=team_ids,
         agent_owner_user_id=resolved_owner,
         connection_mode=connection_mode,
+    )
+
+
+@router.get("/{session_id}/context", response_model=SessionContextOverview)
+async def get_session_context(
+    session_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+    before_version: Annotated[int | None, Query(ge=2)] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> SessionContextOverview:
+    ensure_permission(identity, "tasks:read")
+    session = await require_owned_session(container, identity, session_id)
+    overview = await container.context.overview(
+        identity.tenant_id,
+        session.user_id,
+        session.session_id,
+        before_version=before_version,
+        limit=limit,
+    )
+    window_event = await container.events.latest_for_session_types(
+        identity.tenant_id,
+        session.session_id,
+        ("context.window.observed", "context.window.unavailable"),
+    )
+    window, window_status = context_window_view(window_event)
+    return overview.model_copy(
+        update={
+            "window": window,
+            "window_status": window_status,
+        }
+    )
+
+
+@router.get(
+    "/{session_id}/context/digests/{digest_id}",
+    response_model=SessionContextDigest,
+)
+async def get_session_context_digest(
+    session_id: str,
+    digest_id: str,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+) -> SessionContextDigest:
+    ensure_permission(identity, "tasks:read")
+    session = await require_owned_session(container, identity, session_id)
+    return await container.context.digest(
+        identity.tenant_id,
+        session.user_id,
+        session.session_id,
+        digest_id,
     )

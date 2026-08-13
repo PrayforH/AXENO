@@ -95,7 +95,9 @@ export function findTaskAgent(
 ): TaskAgent | undefined {
   return agents.find(
     (agent) =>
-      (Boolean(coordinates.agentId) && agent.agentId === coordinates.agentId) ||
+      (Boolean(coordinates.agentId) &&
+        agent.agentId === coordinates.agentId &&
+        agent.version === coordinates.version) ||
       (agent.name === coordinates.name &&
         agent.version === coordinates.version &&
         (!coordinates.ownerUserId || agent.ownerUserId === coordinates.ownerUserId) &&
@@ -141,19 +143,17 @@ function registryCoordinate(
 export async function loadTaskAgentCatalog(
   currentUserId: string | null = null,
 ): Promise<TaskAgentCatalog> {
-  const runtime = await json<RuntimeAgent>("/api/harness/runtime-config");
-  let registry: PublishedAgent[] = [];
-  try {
-    registry = await json<PublishedAgent[]>("/api/harness/agents");
-  } catch {
-    // Keep the configured runtime and Studio versions usable during API upgrades.
-  }
-  let drafts: StudioDraftSummary[] = [];
-  try {
-    drafts = await json<StudioDraftSummary[]>("/api/studio/drafts");
-  } catch {
-    // Running tasks must remain usable when Studio is temporarily unavailable.
-  }
+  const [runtime, registry, drafts] = await Promise.all([
+    json<RuntimeAgent>("/api/harness/runtime-config"),
+    json<PublishedAgent[]>("/api/harness/agents").catch(() => {
+      // Keep the configured runtime and Studio versions usable during API upgrades.
+      return [];
+    }),
+    json<StudioDraftSummary[]>("/api/studio/drafts").catch(() => {
+      // Running tasks must remain usable when Studio is temporarily unavailable.
+      return [];
+    }),
+  ]);
   const studioVersions = drafts
     .filter(
       (draft): draft is StudioDraftSummary & { publishedVersion: string } =>
@@ -161,7 +161,7 @@ export async function loadTaskAgentCatalog(
     )
     .map((draft) => ({
       name: draft.name,
-      version: draft.publishedVersion,
+      version: draft.publishedVersion!,
       displayName: draft.displayName,
       domain: draft.domain,
     }));
@@ -212,7 +212,26 @@ export async function loadTaskAgentCatalog(
       }
     );
   });
-  const published = [...registryVersions, ...studioVersions].filter(
+  // Studio drafts are a resilient fallback while the published registry is
+  // unavailable or rolling forward. Once the registry exposes this user's
+  // personal release, keep the richer scoped record and suppress only its
+  // unscoped draft projection. Other owners and team-space releases with the
+  // same name/version remain distinct identities.
+  const currentUserRegistryReleases = new Set(
+    registryVersions
+      .filter(
+        (agent) =>
+          Boolean(currentUserId) &&
+          agent.scope === "personal" &&
+          agent.ownerUserId === currentUserId,
+      )
+      .map((agent) => `${agent.name}@${agent.version}`),
+  );
+  const studioFallbackVersions = studioVersions.filter(
+    (agent) =>
+      !currentUserRegistryReleases.has(`${agent.name}@${agent.version}`),
+  );
+  const published = [...registryVersions, ...studioFallbackVersions].filter(
     (agent, index, values) =>
       values.findIndex(
         (candidate) => agentItemKey(candidate) === agentItemKey(agent),

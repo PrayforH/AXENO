@@ -19,6 +19,7 @@ import { redirectOnUnauthorized } from "./client-auth";
 export interface HarnessHttpAgentConfig extends HttpAgentConfig {
   cancelFetch?: typeof fetch;
   modelRouteOverride?: string | null;
+  onRunSucceeded?: () => void;
 }
 
 interface AssistantUiRunOptions {
@@ -173,11 +174,13 @@ export class HarnessHttpAgent extends HttpAgent {
   private activeInput?: ActiveRun;
   private cancelFetch: typeof fetch;
   private modelRouteOverride?: string;
+  private onRunSucceeded?: () => void;
 
   constructor(config: HarnessHttpAgentConfig) {
     const {
       cancelFetch,
       modelRouteOverride,
+      onRunSucceeded,
       ...httpConfig
     } = config;
     const transportFetch = httpConfig.fetch ?? globalThis.fetch.bind(globalThis);
@@ -205,6 +208,7 @@ export class HarnessHttpAgent extends HttpAgent {
     };
     super({ ...httpConfig, fetch: sessionAwareFetch });
     this.modelRouteOverride = modelRouteOverride || undefined;
+    this.onRunSucceeded = onRunSucceeded;
     const cancelTransport = cancelFetch ?? globalThis.fetch.bind(globalThis);
     this.cancelFetch = async (input, init) => {
       const response = await cancelTransport(input, init);
@@ -293,7 +297,9 @@ export class HarnessHttpAgent extends HttpAgent {
       onRunFinishedEvent: async (params) => {
         liveResponseStore.completeRun(runtimeThreadId);
         runStreamStore.completeRun(params.event.runId, runtimeThreadId);
-        return subscriber?.onRunFinishedEvent?.(params);
+        const result = await subscriber?.onRunFinishedEvent?.(params);
+        this.onRunSucceeded?.();
+        return result;
       },
       onRunErrorEvent: async (params) => {
         liveResponseStore.failRun(runtimeThreadId);
@@ -383,6 +389,7 @@ export class HarnessHttpAgent extends HttpAgent {
     const cloned = super.clone() as HarnessHttpAgent;
     cloned.cancelFetch = this.cancelFetch;
     cloned.modelRouteOverride = this.modelRouteOverride;
+    cloned.onRunSucceeded = this.onRunSucceeded;
     cloned.activeInput = this.activeInput ? { ...this.activeInput } : undefined;
     return cloned;
   }
