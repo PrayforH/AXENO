@@ -61,6 +61,9 @@
 .dialog > header small { color: #77827c; font-size: 10px; }
 .dialog > header > button { width: 32px; height: 32px; border: 0; color: #69736e; background: transparent; cursor: pointer; font-size: 23px; }
 .dialog form { padding: 18px; display: grid; gap: 18px; }
+.quickStart { margin-bottom: -4px; display: grid; gap: 3px; }
+.quickStart strong { color: #344a40; font-size: 11px; }
+.quickStart small { color: #7b8781; font-size: 9px; line-height: 1.55; }
 .typePicker { margin: 0; padding: 0 0 17px; display: flex; gap: 8px; border: 0; border-bottom: 1px solid var(--line); }
 .typePicker legend { margin-bottom: 9px; color: #4d5852; font-size: 10px; font-weight: 700; }
 .typePicker label { min-height: 50px; padding: 8px 12px; display: flex; align-items: center; gap: 8px; border: 1px solid #d5dbd8; border-radius: 7px; color: #68736d; background: white; cursor: pointer; }
@@ -75,6 +78,15 @@
 .formGrid input:disabled { color: #78827d; background: #f0f2f1; }
 .formGrid label > small { color: #858f8a; font-size: 9px; font-weight: 400; }
 .full { grid-column: 1 / -1; }
+.advanced { border: 1px solid #dce2df; border-radius: 10px; background: #f6f8f7; }
+.advanced > summary { min-height: 52px; padding: 10px 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #46534d; cursor: pointer; list-style: none; }
+.advanced > summary::-webkit-details-marker { display: none; }
+.advanced > summary > span:first-child { display: grid; gap: 2px; }
+.advanced > summary strong { font-size: 10px; }
+.advanced > summary small { color: #7f8984; font-size: 9px; }
+.advanced > summary > span:last-child { color: #7c8882; font-size: 16px; transition: transform .18s ease; }
+.advanced[open] > summary > span:last-child { transform: rotate(180deg); }
+.advanced > .formGrid { padding: 14px; border-top: 1px solid #dce2df; }
 .dialog footer { padding-top: 14px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
 .dialog footer button { min-width: 88px; min-height: 36px; border: 1px solid #cbd2ce; border-radius: 3px; color: #49554f; background: white; cursor: pointer; font-size: 10px; }
 .dialog footer .save { border-color: var(--rail); color: white; background: var(--rail); font-weight: 700; }

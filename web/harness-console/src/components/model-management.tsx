@@ -29,6 +29,7 @@ type ModelState = {
 };
 
 type AgentItem = { name: string; display_name: string };
+type ProviderPreset = "minimax" | "openai" | "anthropic" | "custom";
 
 const TYPE_COPY: Record<ModelType, { label: string; mark: string; description: string }> = {
   chat: { label: "对话", mark: "C", description: "文本理解、工具调用与流式回答" },
@@ -37,6 +38,36 @@ const TYPE_COPY: Record<ModelType, { label: string; mark: string; description: s
 };
 
 const EMPTY_STATE: ModelState = { revision: 1, models: [], agentModelBindings: {} };
+
+const PROVIDER_PRESETS: Record<Exclude<ProviderPreset, "custom">, {
+  label: string;
+  provider: string;
+  baseUrl: string;
+  apiFormat: Exclude<ApiFormat, "openai_images">;
+  authScheme: ManagedModel["authScheme"];
+}> = {
+  minimax: {
+    label: "MiniMax",
+    provider: "MiniMax",
+    baseUrl: "https://api.minimaxi.com/v1",
+    apiFormat: "openai_compatible",
+    authScheme: "bearer",
+  },
+  openai: {
+    label: "OpenAI",
+    provider: "OpenAI",
+    baseUrl: "https://api.openai.com/v1",
+    apiFormat: "openai_compatible",
+    authScheme: "bearer",
+  },
+  anthropic: {
+    label: "Anthropic",
+    provider: "Anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    apiFormat: "anthropic_compatible",
+    authScheme: "x-api-key",
+  },
+};
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...init });
@@ -60,6 +91,15 @@ function routeIdFromLabel(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .replace(/^[^a-z]+/, "");
+}
+
+function providerPresetFor(model: ManagedModel | null): ProviderPreset {
+  if (!model) return "minimax";
+  const signature = `${model.provider} ${model.baseUrl ?? ""}`.toLowerCase();
+  if (signature.includes("minimax")) return "minimax";
+  if (signature.includes("anthropic")) return "anthropic";
+  if (signature.includes("openai")) return "openai";
+  return "custom";
 }
 
 export function ModelManagement() {
@@ -253,16 +293,36 @@ function ModelDialog({
   onSaved: (next: ModelState, label: string) => void;
 }) {
   const [type, setType] = useState<ModelType>(model?.modelType ?? "chat");
+  const initialPreset = providerPresetFor(model);
+  const initialConnection = initialPreset === "custom" ? null : PROVIDER_PRESETS[initialPreset];
+  const [providerPreset, setProviderPreset] = useState<ProviderPreset>(initialPreset);
+  const [provider, setProvider] = useState(model?.provider ?? initialConnection?.provider ?? "MiniMax");
+  const [baseUrl, setBaseUrl] = useState(model?.baseUrl ?? initialConnection?.baseUrl ?? "");
+  const [apiFormat, setApiFormat] = useState<Exclude<ApiFormat, "openai_images">>(
+    model?.apiFormat === "anthropic_compatible" ? "anthropic_compatible" : initialConnection?.apiFormat ?? "openai_compatible",
+  );
+  const [authScheme, setAuthScheme] = useState<ManagedModel["authScheme"]>(model?.authScheme ?? initialConnection?.authScheme ?? "bearer");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+
+  function chooseProvider(next: ProviderPreset) {
+    setProviderPreset(next);
+    if (next === "custom") return;
+    const preset = PROVIDER_PRESETS[next];
+    setProvider(preset.provider);
+    setBaseUrl(preset.baseUrl);
+    setApiFormat(preset.apiFormat);
+    setAuthScheme(preset.authScheme);
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError("");
     const form = new FormData(event.currentTarget);
-    const label = String(form.get("label") ?? "").trim();
-    const routeId = model?.routeId ?? routeIdFromLabel(String(form.get("routeId") ?? ""));
+    const modelName = String(form.get("model") ?? "").trim();
+    const label = String(form.get("label") ?? "").trim() || modelName;
+    const routeId = model?.routeId ?? routeIdFromLabel(String(form.get("routeId") ?? "").trim() || modelName || label);
     if (!routeId) {
       setError("路由 ID 需以英文字母开头，只能包含小写字母、数字和连字符。");
       setPending(false);
@@ -277,11 +337,11 @@ function ModelDialog({
           expectedRevision: revision,
           label,
           modelType: type,
-          provider: String(form.get("provider") ?? ""),
-          model: String(form.get("model") ?? ""),
-          baseUrl: String(form.get("baseUrl") ?? ""),
-          apiFormat: type === "image_generation" ? "openai_images" : String(form.get("apiFormat") ?? "anthropic_compatible"),
-          authScheme: String(form.get("authScheme") ?? "bearer"),
+          provider,
+          model: modelName,
+          baseUrl,
+          apiFormat: type === "image_generation" ? "openai_images" : apiFormat,
+          authScheme,
           apiKey: apiKey || null,
           enabled: true,
         }),
@@ -311,18 +371,28 @@ function ModelDialog({
               </label>
             ))}
           </fieldset>
+          <div className={styles.quickStart}>
+            <strong>常用配置</strong>
+            <small>选择服务商后会自动填写接口地址和鉴权方式，通常只需确认模型名称并粘贴 API Key。</small>
+          </div>
           <div className={styles.formGrid}>
-            <label>显示名称<input name="label" defaultValue={model?.label ?? ""} required placeholder="例如：客服视觉模型" /></label>
-            <label>路由 ID<input name="routeId" defaultValue={model?.routeId ?? ""} disabled={Boolean(model)} required placeholder="例如：customer-vision" pattern="[a-z][a-z0-9-]*" /></label>
-            <label>服务商<input name="provider" defaultValue={model?.provider ?? "OpenAI"} required placeholder="OpenAI / Anthropic / 自定义" /></label>
+            <label>服务商<select value={providerPreset} onChange={(event) => chooseProvider(event.target.value as ProviderPreset)}><option value="minimax">MiniMax</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">自定义兼容接口</option></select></label>
             <label>模型名称<input name="model" defaultValue={model?.model ?? ""} required placeholder="服务商使用的实际模型名" /></label>
-            <label className={styles.full}>Base URL<input name="baseUrl" type="url" defaultValue={model?.baseUrl ?? ""} required placeholder="https://api.example.com/v1" /></label>
-            {type !== "image_generation" && (
-              <label>接口格式<select name="apiFormat" defaultValue={model?.apiFormat ?? "anthropic_compatible"}><option value="anthropic_compatible">Anthropic 兼容</option><option value="openai_compatible">OpenAI 兼容</option></select></label>
-            )}
-            <label>鉴权方式<select name="authScheme" defaultValue={model?.authScheme ?? "bearer"}><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option></select></label>
             <label className={styles.full}>API Key<SecretInput name="apiKey" autoComplete="new-password" required={!model?.credentialConfigured} placeholder={model?.credentialConfigured ? "已安全保存；留空则保持不变" : "输入 API Key"} revealLabel="API Key" /><small>保存后不会再次显示明文。</small></label>
           </div>
+          <details className={styles.advanced} open={providerPreset === "custom" ? true : undefined}>
+            <summary><span><strong>高级配置</strong><small>显示名称、路由 ID、接口地址与协议</small></span><span aria-hidden="true">⌄</span></summary>
+            <div className={styles.formGrid}>
+              <label>显示名称（可选）<input name="label" defaultValue={model?.label ?? ""} placeholder="默认使用模型名称" /></label>
+              <label>路由 ID（可选）<input name="routeId" defaultValue={model?.routeId ?? ""} disabled={Boolean(model)} placeholder="默认按模型名称生成" pattern="[a-z][a-z0-9-]*" /></label>
+              <label>服务商标识<input value={provider} onChange={(event) => setProvider(event.target.value)} required placeholder="例如：MiniMax" /></label>
+              <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required placeholder="https://api.example.com/v1" /></label>
+              {type !== "image_generation" && (
+                <label>接口格式<select value={apiFormat} onChange={(event) => setApiFormat(event.target.value as Exclude<ApiFormat, "openai_images">)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic_compatible">Anthropic 兼容</option></select></label>
+              )}
+              <label>鉴权方式<select value={authScheme} onChange={(event) => setAuthScheme(event.target.value as ManagedModel["authScheme"])}><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option></select></label>
+            </div>
+          </details>
           {error && <p className={`${styles.message} ${styles.error}`} role="alert">{error}</p>}
           <footer><button type="button" onClick={onClose}>取消</button><button type="submit" className={styles.save} disabled={pending}>{pending ? "正在保存…" : "保存模型"}</button></footer>
         </form>
