@@ -64,6 +64,9 @@ import {
   type RunStreamStatus,
   useRunStream,
 } from "../lib/run-stream-store";
+import { normalizeMessageText } from "../lib/message-text";
+
+export { normalizeMessageText } from "../lib/message-text";
 import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
 import {
   loadTaskComposerDraft,
@@ -143,15 +146,6 @@ export function shouldShowPreResponseActivity(
     runPhase === "running" ||
     runPhase === "waiting_approval"
   );
-}
-
-export function normalizeMessageText(value: string): string {
-  return value
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\t ]+\n/g, "\n")
-    .replace(/\n[\t ]+\n/g, "\n\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 export async function writeMessageToClipboard(value: string): Promise<boolean> {

@@ -573,6 +573,7 @@ describe("full-page agent workbench", () => {
     expect(markdown).toContain("table: ScrollableTable");
     expect(markdown).not.toContain("defer");
     expect(markdown).toContain("smooth={false}");
+    expect(markdown).toContain("preprocess={normalizeMessageText}");
     expect(markdown).not.toContain("codexStreamSmoothing");
     expect(styles).toMatch(
       /\.aui-table-scroll\s*\{[^}]*overflow-x:\s*auto;/s,
@@ -585,6 +586,9 @@ describe("full-page agent workbench", () => {
     );
     expect(codexStyles).toMatch(
       /body\.codex-theme-v1 \.execution-phase\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s,
+    );
+    expect(codexStyles).toMatch(
+      /body\.codex-theme-v1 \.assistant-answer \.aui-md p\s*\{[^}]*margin-block:\s*0 8px;/s,
     );
   });
 
