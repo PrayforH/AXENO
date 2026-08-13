@@ -5,10 +5,14 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
-from claude_agent_sdk import ClaudeAgentOptions, ContextUsageResponse, Transport
+from claude_agent_sdk import ClaudeAgentOptions, ContextUsageResponse, ProcessError, Transport
 
 import harness.runtime.claude_sdk as claude_runtime
-from harness.runtime.claude_sdk import ContextWindowObservation, ContextWindowUnavailable
+from harness.runtime.claude_sdk import (
+    ContextWindowObservation,
+    ContextWindowUnavailable,
+    SessionResumeRecovery,
+)
 
 
 def _usage(total: int) -> ContextUsageResponse:
@@ -259,3 +263,78 @@ async def test_fresh_session_skips_optional_context_control_api(
     observed = [item async for item in claude_runtime._default_query("hello", ClaudeAgentOptions())]
 
     assert observed == ["provider-message"]
+
+
+@pytest.mark.asyncio
+async def test_client_query_recovers_stale_resume_before_first_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resumes: list[str | None] = []
+
+    class RecoveringClient:
+        def __init__(self, *, options: ClaudeAgentOptions) -> None:
+            self.options = options
+            resumes.append(options.resume)
+
+        async def __aenter__(self) -> "RecoveringClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def query(self, _prompt: str) -> None:
+            return None
+
+        async def receive_response(self) -> AsyncIterator[object]:
+            if self.options.resume is not None:
+                raise ProcessError("stale resume", exit_code=1)
+            yield "recovered-provider-message"
+
+    monkeypatch.setattr(claude_runtime, "ClaudeSDKClient", RecoveringClient)
+    monkeypatch.setattr(claude_runtime, "SDK_STARTUP_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+
+    observed = [
+        item
+        async for item in claude_runtime._default_query(
+            "hello", ClaudeAgentOptions(resume="stale-sdk-session")
+        )
+    ]
+
+    assert resumes == ["stale-sdk-session", None]
+    assert isinstance(observed[0], SessionResumeRecovery)
+    assert observed[0].previous_session_id == "stale-sdk-session"
+    assert observed[1:] == ["recovered-provider-message"]
+
+
+@pytest.mark.asyncio
+async def test_client_query_never_retries_after_sdk_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients = 0
+
+    class PartialClient:
+        def __init__(self, *, options: ClaudeAgentOptions) -> None:
+            nonlocal clients
+            self.options = options
+            clients += 1
+
+        async def __aenter__(self) -> "PartialClient":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def query(self, _prompt: str) -> None:
+            return None
+
+        async def receive_response(self) -> AsyncIterator[object]:
+            yield "visible-provider-message"
+            raise ProcessError("late failure", exit_code=1)
+
+    monkeypatch.setattr(claude_runtime, "ClaudeSDKClient", PartialClient)
+    monkeypatch.setattr(claude_runtime, "SDK_STARTUP_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+
+    with pytest.raises(ProcessError, match="late failure"):
+        _ = [item async for item in claude_runtime._default_query("hello", ClaudeAgentOptions())]
+
+    assert clients == 1

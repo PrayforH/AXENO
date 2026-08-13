@@ -104,9 +104,7 @@ class PostgresAgentRegistry:
                 result.append(loaded)
             return result
 
-    async def list_catalog_for_user(
-        self, tenant_id: str, owner_user_id: str
-    ) -> list[AgentVersion]:
+    async def list_catalog_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         """Load the task-catalog projection without transferring package files.
 
         Published versions may embed large reproducible assets under
@@ -224,9 +222,7 @@ class PostgresSessionRepository:
                 raise NotFoundError(f"session not found: {session_id}")
             return Session.model_validate(row.payload)
 
-    async def list_for_ids(
-        self, tenant_id: str, session_ids: list[str]
-    ) -> list[Session]:
+    async def list_for_ids(self, tenant_id: str, session_ids: list[str]) -> list[Session]:
         if not session_ids:
             return []
         wanted = list(dict.fromkeys(session_ids))
@@ -267,6 +263,25 @@ class PostgresSessionRepository:
                     )
                 return current
             updated = current.model_copy(update={"claude_session_id": claude_session_id})
+            row.payload = updated.model_dump(mode="json")
+            await session.commit()
+            return updated
+
+    async def clear_claude_session_id(
+        self, tenant_id: str, session_id: str, expected_claude_session_id: str
+    ) -> Session:
+        async with self._sessions() as session:
+            row = await session.get(
+                SessionRow,
+                (tenant_id, session_id),
+                with_for_update=True,
+            )
+            if row is None:
+                raise NotFoundError(f"session not found: {session_id}")
+            current = Session.model_validate(row.payload)
+            if current.claude_session_id != expected_claude_session_id:
+                raise ConflictError(f"session {session_id} Claude session changed during recovery")
+            updated = current.model_copy(update={"claude_session_id": None})
             row.payload = updated.model_dump(mode="json")
             await session.commit()
             return updated
@@ -774,9 +789,7 @@ class PostgresAguiThreadBindingRepository:
                 return binding
             previous = tuple(
                 value
-                for value in dict.fromkeys(
-                    (*binding.previous_session_ids, binding.session_id)
-                )
+                for value in dict.fromkeys((*binding.previous_session_ids, binding.session_id))
                 if value != session_id
             )
             updated = binding.model_copy(

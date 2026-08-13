@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import shutil
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AbstractContextManager, ExitStack, nullcontext
@@ -17,6 +18,7 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
     ContextUsageResponse,
+    ProcessError,
     ResultMessage,
     SessionStore,
     StreamEvent,
@@ -56,7 +58,7 @@ from harness.runtime.base import (
     RuntimeExecutionTimeoutError,
     RuntimeResultError,
 )
-from harness.runtime.hooks import discard_sdk_stderr
+from harness.runtime.hooks import SdkDiagnosticTail, sdk_diagnostic_summary
 from harness.runtime.mcp_credentials import redact_mcp_credentials
 from harness.runtime.memory_tools import create_memory_mcp_server, memory_execution_context
 from harness.runtime.message_mapper import (
@@ -97,6 +99,7 @@ CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS = 1.0
 # could traverse the sandbox log stream.  This budget is off the TTFT path and
 # remains bounded so a provider that never answers still fails open.
 REMOTE_CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS = 3.0
+SDK_STARTUP_RETRY_DELAYS_SECONDS = (0.35, 0.9)
 VISIBLE_EXECUTION_CONTRACT = """
 ## User-visible execution contract
 
@@ -116,6 +119,7 @@ VISIBLE_EXECUTION_CONTRACT = """
   and resolve conflicts in favor of the current user request and current durable objects.
 """.strip()
 QueryFactory = Callable[[str, ClaudeAgentOptions], AsyncIterator[object]]
+logger = logging.getLogger(__name__)
 _TEXT_DELTA_FLUSH_CHARS = 64
 _TEXT_DELTA_PUNCTUATION_CHARS = 16
 _TEXT_DELTA_BOUNDARIES = frozenset("\n。！？.!?")
@@ -196,6 +200,19 @@ class ContextWindowUnavailable:
         )
 
 
+@dataclass(frozen=True)
+class SessionResumeRecovery:
+    """Signals that a stale SDK transcript binding must be replaced."""
+
+    previous_session_id: str
+
+    def event(self) -> RuntimeEvent:
+        return RuntimeEvent(
+            type="runtime.session.recovered",
+            payload={"previous_session_id": self.previous_session_id},
+        )
+
+
 def _context_window_observation(
     phase: str,
     usage: ContextUsageResponse,
@@ -227,11 +244,7 @@ async def _observe_context_window(
     *,
     timeout_seconds: float | None = None,
 ) -> ContextWindowObservation | ContextWindowUnavailable:
-    timeout = (
-        CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS
-        if timeout_seconds is None
-        else timeout_seconds
-    )
+    timeout = CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
     try:
         async with asyncio.timeout(timeout):
             usage = await client.get_context_usage()
@@ -249,39 +262,74 @@ async def _client_query(
     transport: Transport | None = None,
     context_usage_timeout_seconds: float | None = None,
 ) -> AsyncIterator[object]:
-    client = (
-        ClaudeSDKClient(options=options)
-        if transport is None
-        else ClaudeSDKClient(options=options, transport=transport)
-    )
-    async with client:
-        # Fresh sessions have no historical window to govern. On resumed
-        # sessions the optional control request runs only after the provider
-        # result, so it cannot add latency to first text.
-        observe_resumed_context = options.resume is not None
-        terminal_result: ResultMessage | None = None
-        await client.query(prompt)
-        async for message in client.receive_response():
-            if (
-                observe_resumed_context
-                and isinstance(message, ResultMessage)
-                and not message.is_error
-                and message.stop_reason == "end_turn"
-            ):
-                # The Worker treats this result as the protocol boundary and
-                # closes the runtime iterator immediately. Hold it briefly so
-                # the optional control outcome becomes durable first.
-                terminal_result = message
-                continue
-            yield message
-        if observe_resumed_context:
-            yield await _observe_context_window(
-                client,
-                "after",
-                timeout_seconds=context_usage_timeout_seconds,
+    attempt_options = options
+    recovery_session_id: str | None = None
+    for attempt in range(len(SDK_STARTUP_RETRY_DELAYS_SECONDS) + 1):
+        received_message = False
+        client = (
+            ClaudeSDKClient(options=attempt_options)
+            if transport is None
+            else ClaudeSDKClient(options=attempt_options, transport=transport)
+        )
+        try:
+            async with client:
+                # Fresh sessions have no historical window to govern. On resumed
+                # sessions the optional control request runs only after the provider
+                # result, so it cannot add latency to first text.
+                observe_resumed_context = attempt_options.resume is not None
+                terminal_result: ResultMessage | None = None
+                await client.query(prompt)
+                async for message in client.receive_response():
+                    received_message = True
+                    if recovery_session_id is not None:
+                        yield SessionResumeRecovery(recovery_session_id)
+                        recovery_session_id = None
+                    if (
+                        observe_resumed_context
+                        and isinstance(message, ResultMessage)
+                        and not message.is_error
+                        and message.stop_reason == "end_turn"
+                    ):
+                        # The Worker treats this result as the protocol boundary and
+                        # closes the runtime iterator immediately. Hold it briefly so
+                        # the optional control outcome becomes durable first.
+                        terminal_result = message
+                        continue
+                    yield message
+                if observe_resumed_context:
+                    yield await _observe_context_window(
+                        client,
+                        "after",
+                        timeout_seconds=context_usage_timeout_seconds,
+                    )
+                if terminal_result is not None:
+                    yield terminal_result
+            return
+        except ProcessError as error:
+            can_retry = (
+                transport is None
+                and not received_message
+                and attempt < len(SDK_STARTUP_RETRY_DELAYS_SECONDS)
             )
-        if terminal_result is not None:
-            yield terminal_result
+            logger.warning(
+                "Claude CLI exited before its first SDK message; "
+                "attempt=%s retry=%s resume=%s exit_code=%s diagnostic=%s",
+                attempt + 1,
+                can_retry,
+                attempt_options.resume is not None,
+                error.exit_code,
+                sdk_diagnostic_summary(attempt_options.stderr),
+            )
+            if not can_retry:
+                raise
+            # A cancelled or interrupted Run can leave a durable Session id
+            # without a complete CLI transcript. No model/tool message has
+            # been observed, so starting a fresh SDK session is safe; the
+            # platform context projection still supplies conversation state.
+            if attempt_options.resume is not None:
+                recovery_session_id = attempt_options.resume
+                attempt_options = replace(attempt_options, resume=None)
+            await asyncio.sleep(SDK_STARTUP_RETRY_DELAYS_SECONDS[attempt])
 
 
 async def _default_query(prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[object]:
@@ -772,7 +820,7 @@ class ClaudeSdkRuntime:
             session_store=store,
             session_store_flush="eager",
             resume=context.session.claude_session_id,
-            stderr=discard_sdk_stderr,
+            stderr=SdkDiagnosticTail(),
             # Native Read returns image blocks as base64 inside one SDK JSON
             # message. The upstream 1 MiB default rejects ordinary phone
             # photos before a vision-capable model can inspect them.
@@ -973,9 +1021,7 @@ class ClaudeSdkRuntime:
                     prompt,
                     options,
                     transport=transport,
-                    context_usage_timeout_seconds=(
-                        REMOTE_CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS
-                    ),
+                    context_usage_timeout_seconds=(REMOTE_CONTEXT_USAGE_CONTROL_TIMEOUT_SECONDS),
                 )
             async for message in self._model_messages(
                 query_messages,
@@ -1003,7 +1049,14 @@ class ClaudeSdkRuntime:
                     context_window_outcome_seen = True
                 mapped = (
                     [message.event()]
-                    if isinstance(message, (ContextWindowObservation, ContextWindowUnavailable))
+                    if isinstance(
+                        message,
+                        (
+                            ContextWindowObservation,
+                            ContextWindowUnavailable,
+                            SessionResumeRecovery,
+                        ),
+                    )
                     else [
                         self._redact_event(event, resolved_tools)
                         for event in map_sdk_message(message)

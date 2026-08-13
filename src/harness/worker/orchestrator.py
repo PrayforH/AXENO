@@ -1267,15 +1267,11 @@ class RunOrchestrator:
                 if not first_runtime_event_observed:
                     self._observe_run_stage("runtime_first_event", elapsed)
                     first_runtime_event_observed = True
-                if (
-                    not first_provider_event_observed
-                    and event_type
-                    not in {
-                        "model.route.selected",
-                        "tool.directory.loaded",
-                        "tool.directory.degraded",
-                    }
-                ):
+                if not first_provider_event_observed and event_type not in {
+                    "model.route.selected",
+                    "tool.directory.loaded",
+                    "tool.directory.degraded",
+                }:
                     self._observe_run_stage("provider_first_event", elapsed)
                     first_provider_event_observed = True
                 if (
@@ -1313,6 +1309,15 @@ class RunOrchestrator:
                     return latest
                 run = latest
                 payload = dict(runtime_event.payload)
+                if runtime_event.type == "runtime.session.recovered":
+                    previous_session_id = payload.get("previous_session_id")
+                    if not isinstance(previous_session_id, str) or not previous_session_id:
+                        raise ValueError("session recovery event is missing previous_session_id")
+                    session = await self._sessions.clear_claude_session_id(
+                        tenant_id,
+                        session.session_id,
+                        previous_session_id,
+                    )
                 if runtime_event.type == "runtime.result":
                     # The SDK can emit more than one cumulative ResultMessage
                     # around an inline approval/background-task continuation.

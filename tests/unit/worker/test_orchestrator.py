@@ -292,6 +292,30 @@ class SessionAwareRuntime(FakeRuntime):
         )
 
 
+class SessionRecoveryRuntime(SessionAwareRuntime):
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        self.contexts.append(context)
+        if len(self.contexts) == 2:
+            yield RuntimeEvent(
+                type="runtime.session.recovered",
+                payload={"previous_session_id": "sdk-session-1"},
+            )
+            sdk_session_id = "sdk-session-2"
+        else:
+            sdk_session_id = context.session.claude_session_id or "sdk-session-1"
+        yield RuntimeEvent(
+            type="runtime.system",
+            payload={"subtype": "init", "session_id": sdk_session_id},
+        )
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(type="message.delta", payload={"text": "ok"})
+        yield RuntimeEvent(type="message.completed")
+        yield RuntimeEvent(
+            type="runtime.result",
+            payload={"subtype": "success", "session_id": sdk_session_id},
+        )
+
+
 class FencingRefreshRuntime(FakeRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -1249,6 +1273,40 @@ async def test_next_run_receives_bound_claude_session_for_resume(
 
 
 @pytest.mark.asyncio
+async def test_stale_sdk_session_is_atomically_rebound_after_recovery(
+    tmp_path: Path,
+) -> None:
+    runtime = SessionRecoveryRuntime()
+    orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=runtime)
+
+    results = [await orchestrator.execute("tenant-a", "run-1")]
+    for sequence in (2, 3):
+        run = Run(
+            run_id=f"run-{sequence}",
+            session_id="session-1",
+            tenant_id="tenant-a",
+            status=RunStatus.QUEUED,
+            idempotency_key=f"idem-{sequence}",
+            created_at=NOW,
+            updated_at=NOW,
+            input={"prompt": f"turn {sequence}"},
+        )
+        await runs.add(run)
+        results.append(await orchestrator.execute("tenant-a", run.run_id))
+
+    assert [result.status for result in results] == [
+        RunStatus.SUCCEEDED,
+        RunStatus.SUCCEEDED,
+        RunStatus.SUCCEEDED,
+    ]
+    assert runtime.contexts[0].session.claude_session_id is None
+    assert runtime.contexts[1].session.claude_session_id == "sdk-session-1"
+    assert runtime.contexts[2].session.claude_session_id == "sdk-session-2"
+    recovered_events = await events.list_after("tenant-a", "run-2", 0)
+    assert any(event.type == "runtime.session.recovered" for event in recovered_events)
+
+
+@pytest.mark.asyncio
 async def test_runtime_timeout_has_a_distinct_terminal_status(tmp_path: Path) -> None:
     orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=TimedOutRuntime())
 
@@ -1776,9 +1834,9 @@ async def test_cancellation_does_not_wait_for_slow_runtime_cleanup(
     assert result.status is RunStatus.CANCELLED
     assert runtime.cleanup_started.is_set()
     assert runtime.cleanup_finished.is_set() is False
-    assert [
-        event.type for event in await events.list_after("tenant-a", "run-1", 0)
-    ][-1] == "run.cancelled"
+    assert [event.type for event in await events.list_after("tenant-a", "run-1", 0)][
+        -1
+    ] == "run.cancelled"
 
     runtime.cleanup_release.set()
     await asyncio.wait_for(runtime.cleanup_finished.wait(), timeout=0.1)

@@ -67,9 +67,7 @@ class InMemoryAgentRegistry:
             key=lambda version: (version.name, version.version),
         )
 
-    async def list_catalog_for_user(
-        self, tenant_id: str, owner_user_id: str
-    ) -> list[AgentVersion]:
+    async def list_catalog_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         # In-memory values do not incur payload transfer, but preserve the
         # production contract that catalog reads exclude packaged files.
         return [
@@ -128,9 +126,7 @@ class InMemorySessionRepository:
         except KeyError as error:
             raise NotFoundError(f"session not found: {session_id}") from error
 
-    async def list_for_ids(
-        self, tenant_id: str, session_ids: list[str]
-    ) -> list[Session]:
+    async def list_for_ids(self, tenant_id: str, session_ids: list[str]) -> list[Session]:
         return [await self.get(tenant_id, session_id) for session_id in session_ids]
 
     async def bind_claude_session_id(
@@ -150,6 +146,20 @@ class InMemorySessionRepository:
                     )
                 return current
             updated = current.model_copy(update={"claude_session_id": claude_session_id})
+            self._items[key] = updated
+            return updated
+
+    async def clear_claude_session_id(
+        self, tenant_id: str, session_id: str, expected_claude_session_id: str
+    ) -> Session:
+        key = (tenant_id, session_id)
+        async with self._lock:
+            current = self._items.get(key)
+            if current is None:
+                raise NotFoundError(f"session not found: {session_id}")
+            if current.claude_session_id != expected_claude_session_id:
+                raise ConflictError(f"session {session_id} Claude session changed during recovery")
+            updated = current.model_copy(update={"claude_session_id": None})
             self._items[key] = updated
             return updated
 

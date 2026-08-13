@@ -150,9 +150,10 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     session_repository = PostgresSessionRepository(sessions)
     await session_repository.add(thread)
     assert await session_repository.get("tenant-a", "session-a") == thread
-    assert await session_repository.list_for_ids(
-        "tenant-a", ["session-a", "session-a"]
-    ) == [thread, thread]
+    assert await session_repository.list_for_ids("tenant-a", ["session-a", "session-a"]) == [
+        thread,
+        thread,
+    ]
     assert await session_repository.list_for_ids("tenant-a", []) == []
     with pytest.raises(NotFoundError):
         await session_repository.list_for_ids("tenant-a", ["session-a", "missing"])
@@ -166,6 +167,14 @@ async def test_postgres_platform_repositories_are_durable_and_tenant_scoped(
     ) == bound_thread
     with pytest.raises(ConflictError, match="already bound"):
         await session_repository.bind_claude_session_id("tenant-a", "session-a", "claude-session-b")
+    cleared_thread = await session_repository.clear_claude_session_id(
+        "tenant-a", "session-a", "claude-session-a"
+    )
+    assert cleared_thread.claude_session_id is None
+    rebound_thread = await session_repository.bind_claude_session_id(
+        "tenant-a", "session-a", "claude-session-b"
+    )
+    assert rebound_thread.claude_session_id == "claude-session-b"
 
     approval = ApprovalRequest(
         approval_id="approval-a",

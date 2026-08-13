@@ -49,9 +49,7 @@ class AgentRegistry(Protocol):
 
     async def list_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]: ...
 
-    async def list_catalog_for_user(
-        self, tenant_id: str, owner_user_id: str
-    ) -> list[AgentVersion]:
+    async def list_catalog_for_user(self, tenant_id: str, owner_user_id: str) -> list[AgentVersion]:
         """List versions with only the manifest portion of ``snapshot`` loaded.
 
         Runtime callers that need packaged files must continue to use ``get``.
@@ -99,12 +97,14 @@ class SessionRepository(Protocol):
 
     async def get(self, tenant_id: str, session_id: str) -> Session: ...
 
-    async def list_for_ids(
-        self, tenant_id: str, session_ids: list[str]
-    ) -> list[Session]: ...
+    async def list_for_ids(self, tenant_id: str, session_ids: list[str]) -> list[Session]: ...
 
     async def bind_claude_session_id(
         self, tenant_id: str, session_id: str, claude_session_id: str
+    ) -> Session: ...
+
+    async def clear_claude_session_id(
+        self, tenant_id: str, session_id: str, expected_claude_session_id: str
     ) -> Session: ...
 
 
