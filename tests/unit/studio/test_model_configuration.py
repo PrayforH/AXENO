@@ -214,23 +214,39 @@ async def test_delete_rejects_model_still_bound_to_an_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_production_rejects_insecure_or_private_model_endpoints() -> None:
+async def test_production_allows_private_models_but_rejects_unsafe_endpoints() -> None:
     models, _catalogs, _credentials = service(environment="production")
+
+    configured = await models.configure(
+        "tenant-a",
+        "admin-a",
+        "private-model",
+        request(baseUrl="http://172.20.109.112:31300/v1"),
+    )
+    assert next(
+        item for item in configured.models if item.route_id == "private-model"
+    ).base_url == "http://172.20.109.112:31300/v1"
 
     with pytest.raises(ConflictError, match="require HTTPS"):
         await models.configure(
             "tenant-a",
             "admin-a",
-            "unsafe-model",
-            request(baseUrl="http://127.0.0.1:8080/v1"),
+            "public-http-model",
+            request(
+                expectedRevision=configured.revision,
+                baseUrl="http://8.8.8.8/v1",
+            ),
         )
 
-    with pytest.raises(ConflictError, match="private IP"):
+    with pytest.raises(ConflictError, match="loopback or link-local"):
         await models.configure(
             "tenant-a",
             "admin-a",
-            "unsafe-model",
-            request(baseUrl="https://127.0.0.1/v1"),
+            "loopback-model",
+            request(
+                expectedRevision=configured.revision,
+                baseUrl="https://127.0.0.1/v1",
+            ),
         )
 
 

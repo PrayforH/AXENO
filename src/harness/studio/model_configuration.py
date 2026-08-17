@@ -605,15 +605,28 @@ class ModelConfigurationService:
         }:
             return
         parsed = urlsplit(value)
-        if self._environment == "production" and parsed.scheme != "https":
-            raise ConflictError("production model connections require HTTPS")
+        if parsed.scheme not in {"http", "https"}:
+            raise ConflictError("model Base URL must use HTTP or HTTPS")
         if parsed.hostname is None:
             raise ConflictError("model Base URL must include a hostname")
         try:
             address = ipaddress.ip_address(parsed.hostname)
         except ValueError:
+            if self._environment == "production" and parsed.scheme != "https":
+                raise ConflictError(
+                    "production public model connections require HTTPS"
+                ) from None
             return
-        if self._environment == "production" and (
-            address.is_private or address.is_loopback or address.is_link_local
-        ):
-            raise ConflictError("production model connections cannot target private IP addresses")
+        if self._environment != "production":
+            return
+        if address.is_loopback or address.is_link_local or address.is_unspecified:
+            raise ConflictError(
+                "production model connections cannot target loopback or link-local addresses"
+            )
+        # Model catalog administration is permission-gated and is also the source
+        # of truth for on-premise providers. RFC1918 endpoints therefore need to
+        # remain configurable without a legacy deployment-environment exception.
+        if address.is_private:
+            return
+        if parsed.scheme != "https":
+            raise ConflictError("production public model connections require HTTPS")
