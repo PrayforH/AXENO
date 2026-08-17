@@ -182,7 +182,7 @@ async def test_admin_model_binding_replaces_manifest_gateway_at_runtime(
             baseUrl="https://models.example.test/v1",
             apiFormat="openai_compatible",
             authScheme="bearer",
-            apiKey="settings-secret",
+            apiKey=SecretStr("settings-secret"),
         ),
     )
     bound = await model_configurations.bind_agent(

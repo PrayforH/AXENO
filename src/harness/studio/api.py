@@ -1090,14 +1090,14 @@ async def list_drafts(
 @router.post("/skills/conversation", response_model=SkillConversationReply)
 async def continue_skill_conversation(
     body: SkillConversationRequest,
-    _actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[
         SkillConversationService,
         Depends(get_skill_conversation_service),
     ],
 ) -> SkillConversationReply:
     try:
-        return await service.respond(body)
+        return await service.respond(actor.tenant_id, body)
     except SkillConversationUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

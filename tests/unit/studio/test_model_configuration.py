@@ -119,6 +119,7 @@ async def test_agent_binding_changes_runtime_route_without_manifest_edit() -> No
     assert resolved is not None
     assert resolved.route_id == "vision-primary"
     assert resolved.model == "example-vision-1"
+    assert resolved.base_url == "https://models.example.test/v1"
     assert resolved.credential.get_secret_value() == "secret-value-never-returned"
 
 
@@ -291,7 +292,7 @@ async def test_trusted_server_route_may_use_private_http_but_workspace_override_
     resolved = await models.resolve_runtime("tenant-a", "helper-agent", "glm-5-2")
 
     assert resolved is not None
-    assert resolved.base_url == "http://172.20.109.174:4000/v1"
+    assert resolved.base_url == "http://172.20.109.174:4000"
 
 
 @pytest.mark.asyncio
@@ -325,4 +326,5 @@ async def test_imported_server_model_runs_without_server_fallback_after_import()
     assert view.base_url == "https://api.minimaxi.com/anthropic/v1"
     assert view.model == "MiniMax-M3"
     assert resolved is not None
+    assert resolved.base_url == "https://api.minimaxi.com/anthropic"
     assert resolved.credential.get_secret_value() == "server-only-secret"

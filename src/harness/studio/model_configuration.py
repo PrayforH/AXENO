@@ -312,7 +312,7 @@ class ModelConfigurationService:
             return None
         return CcSwitchClaudeConfig(
             route_id=route.route_id,
-            base_url=route.base_url,
+            base_url=self._runtime_sdk_base_url(route),
             model=route.models[0],
             provider=("anthropic" if route.auth_scheme == "x-api-key" else "new-api"),
             credential=secret,
@@ -550,6 +550,19 @@ class ModelConfigurationService:
         # HTTP, so expose the complete API base before appending /messages.
         if not base_url.endswith("/v1"):
             return f"{base_url}/v1"
+        return base_url
+
+    @staticmethod
+    def _runtime_sdk_base_url(route: ModelRouteCapability) -> str:
+        assert route.base_url is not None
+        base_url = route.base_url.rstrip("/")
+        # The model catalog stores the complete direct API base so connection
+        # tests can call /messages. Claude Code expects the provider root and
+        # appends /v1/messages itself. Passing the catalog URL through unchanged
+        # therefore produces /v1/v1/messages and a misleading model-not-found
+        # 404 for Anthropic-compatible routes.
+        if route.api_format == "anthropic_compatible" and base_url.endswith("/v1"):
+            return base_url[:-3]
         return base_url
 
     async def _require_secret(self, tenant_id: str, route_id: str) -> SecretStr:

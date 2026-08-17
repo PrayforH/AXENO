@@ -12,7 +12,6 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 
 from harness.agui.service import AguiRunService
-from harness.agui.task_title import AnthropicCompatibleTaskTitleGenerator
 from harness.api.dependencies import ApiContainer
 from harness.application.agent_assets import (
     resolve_published_agent_versions,
@@ -36,7 +35,7 @@ from harness.config import Settings
 from harness.context.checkpoint import ContextCheckpointService
 from harness.context.service import ContextService
 from harness.core.manifest import AgentManifest, AgentManifestSnapshot
-from harness.core.models import ModelCompatibility, RunStatus, Session
+from harness.core.models import RunStatus, Session
 from harness.core.ports import ArtifactStore, TaskQueue
 from harness.deployments.controller import DeploymentController
 from harness.deployments.queue import DeploymentTaskQueue
@@ -86,7 +85,6 @@ from harness.reliability.controller import MaintenanceReaper, ReliabilityControl
 from harness.reliability.metrics import ReliabilityMetrics
 from harness.reliability.probes import CapacityProbe, QueueStats
 from harness.reliability.service import ReliabilityService
-from harness.runtime.cc_switch import CcSwitchClaudeConfig
 from harness.runtime.default_tools import (
     TAVILY_REFERENCE,
     default_tool_resolver,
@@ -175,7 +173,7 @@ from harness.studio.mcp_discovery import (
 from harness.studio.model_configuration import ModelConfigurationService
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
-    AnthropicSandboxModelProbe,
+    ControlPlaneModelPreflightProbe,
     FakeMcpPreflightProbe,
     FakeModelPreflightProbe,
     StreamableHttpMcpProbe,
@@ -184,148 +182,9 @@ from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_queue import PreviewTaskQueue
 from harness.studio.preview_service import PreviewService
 from harness.studio.service import AgentStudioService
-from harness.studio.skill_builder import AnthropicCompatibleSkillConversationService
+from harness.studio.skill_builder import ControlPlaneSkillConversationService
 from harness.triggers.service import AgentTriggerService
 from harness.worker.orchestrator import RunOrchestrator, SandboxResolver
-
-
-def _gateway_capabilities(value: str, *, setting_name: str) -> frozenset[str]:
-    capabilities = frozenset(part.strip() for part in value.split(",") if part.strip())
-    if not capabilities:
-        raise ValueError(f"{setting_name} must not be empty")
-    return capabilities
-
-
-def _anthropic_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
-    anthropic_key = settings.anthropic_api_key.get_secret_value()
-    if not (settings.anthropic_base_url and settings.anthropic_model and anthropic_key):
-        return None
-    return CcSwitchClaudeConfig(
-        route_id="anthropic-official",
-        base_url=settings.anthropic_base_url,
-        model=settings.anthropic_model,
-        provider="anthropic",
-        credential=SecretStr(anthropic_key),
-        auth_scheme="x-api-key",
-        compatibility=ModelCompatibility.FULL,
-        capabilities=frozenset({"streaming", "tool_use", "tool_search"}),
-    )
-
-
-def _minimax_m3_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
-    minimax_key = settings.minimax_m3_api_key.get_secret_value()
-    if not (settings.minimax_m3_base_url and settings.minimax_m3_model and minimax_key):
-        return None
-    return CcSwitchClaudeConfig(
-        route_id="minimax-m3",
-        base_url=settings.minimax_m3_base_url,
-        model=settings.minimax_m3_model,
-        # MiniMax exposes the Anthropic wire protocol at this endpoint.
-        provider="anthropic",
-        credential=SecretStr(minimax_key),
-        auth_scheme=settings.minimax_m3_auth_scheme,
-        compatibility=ModelCompatibility(settings.minimax_m3_compatibility),
-        capabilities=_gateway_capabilities(
-            settings.minimax_m3_capabilities,
-            setting_name="HARNESS_MINIMAX_M3_CAPABILITIES",
-        ),
-    )
-
-
-def _glm_5_2_gateway(settings: Settings) -> CcSwitchClaudeConfig | None:
-    glm_key = settings.glm_5_2_api_key.get_secret_value()
-    if not (settings.glm_5_2_base_url and settings.glm_5_2_model and glm_key):
-        return None
-    return CcSwitchClaudeConfig(
-        route_id="glm-5-2",
-        base_url=settings.glm_5_2_base_url,
-        model=settings.glm_5_2_model,
-        # The company shdata-glm endpoint uses Anthropic messages with a
-        # bearer token, matching the applied cc-switch Claude configuration.
-        provider="new-api",
-        credential=SecretStr(glm_key),
-        auth_scheme=settings.glm_5_2_auth_scheme,
-        compatibility=ModelCompatibility(settings.glm_5_2_compatibility),
-        capabilities=_gateway_capabilities(
-            settings.glm_5_2_capabilities,
-            setting_name="HARNESS_GLM_5_2_CAPABILITIES",
-        ),
-    )
-
-
-def _gateways(
-    settings: Settings,
-) -> tuple[CcSwitchClaudeConfig, CcSwitchClaudeConfig | None]:
-    new_api_key = settings.new_api_key.get_secret_value()
-    minimax = _minimax_m3_gateway(settings)
-    glm = _glm_5_2_gateway(settings)
-    if settings.new_api_base_url and settings.new_api_model and new_api_key:
-        return (
-            CcSwitchClaudeConfig(
-                route_id="new-api-default",
-                base_url=settings.new_api_base_url,
-                model=settings.new_api_model,
-                provider="new-api",
-                credential=SecretStr(new_api_key),
-                auth_scheme=settings.new_api_auth_scheme,
-                compatibility=ModelCompatibility(settings.new_api_compatibility),
-                capabilities=_gateway_capabilities(
-                    settings.new_api_capabilities,
-                    setting_name="HARNESS_NEW_API_CAPABILITIES",
-                ),
-            ),
-            minimax or glm or _anthropic_gateway(settings),
-        )
-    if minimax is not None:
-        return minimax, glm or _anthropic_gateway(settings)
-    if glm is not None:
-        return glm, _anthropic_gateway(settings)
-    anthropic = _anthropic_gateway(settings)
-    if anthropic is not None:
-        return anthropic, None
-    raise ValueError(
-        "production requires HARNESS_NEW_API_BASE_URL/MODEL/KEY or "
-        "HARNESS_GLM_5_2_BASE_URL/MODEL/API_KEY or "
-        "HARNESS_ANTHROPIC_BASE_URL/MODEL/API_KEY"
-    )
-
-
-def _configured_model_gateways(
-    settings: Settings,
-    primary: CcSwitchClaudeConfig,
-    fallback: CcSwitchClaudeConfig | None,
-) -> tuple[CcSwitchClaudeConfig, ...]:
-    """Build executable model-specific routes plus the legacy default alias."""
-
-    gateways: list[CcSwitchClaudeConfig] = [primary]
-    if primary.route_id == "new-api-default":
-        for route_id, model in (
-            ("deepseek-v4-flash", settings.new_api_flash_model),
-            ("deepseek-v4-pro", settings.new_api_pro_model),
-        ):
-            if not model:
-                continue
-            gateways.append(
-                CcSwitchClaudeConfig(
-                    route_id=route_id,
-                    base_url=primary.base_url,
-                    model=model,
-                    provider=primary.provider,
-                    credential=primary.credential,
-                    auth_scheme=primary.auth_scheme,
-                    compatibility=primary.compatibility,
-                    capabilities=primary.capabilities,
-                )
-            )
-    for optional in (
-        fallback,
-        _minimax_m3_gateway(settings),
-        _glm_5_2_gateway(settings),
-        _anthropic_gateway(settings),
-    ):
-        if optional is not None:
-            gateways.append(optional)
-    return tuple({gateway.route_id: gateway for gateway in gateways}.values())
 
 
 def _sandbox(settings: Settings) -> SandboxProvider:
@@ -469,9 +328,6 @@ def build_production_container(
         raise ValueError("production requires HARNESS_MINIO_ACCESS_KEY and SECRET_KEY")
     execution_config: (
         tuple[
-            CcSwitchClaudeConfig,
-            CcSwitchClaudeConfig | None,
-            tuple[CcSwitchClaudeConfig, ...],
             SandboxProvider,
             SandboxProvider,
             DynamicMcpCredentialProvider,
@@ -482,20 +338,10 @@ def build_production_container(
     preflight_sandbox: SandboxProvider | None = None
     sandbox_maintenance: Callable[[], Awaitable[object]] | None = None
     credential_broker: InMemoryCredentialBroker | None = None
-    try:
-        title_gateway, title_fallback_gateway = _gateways(settings)
-        configured_gateways = _configured_model_gateways(
-            settings, title_gateway, title_fallback_gateway
-        )
-    except ValueError:
-        title_gateway = None
-        title_fallback_gateway = None
-        configured_gateways = ()
+    # Production model routes and credentials are tenant control-plane data.
+    # Environment-backed gateways remain supported by the local/dev composer,
+    # but are deliberately ignored by the production container.
     if execution_enabled:
-        primary_gateway, fallback_gateway = _gateways(settings)
-        configured_gateways = _configured_model_gateways(
-            settings, primary_gateway, fallback_gateway
-        )
         sandbox_backend = _sandbox(settings)
         preflight_sandbox = sandbox_backend
         if isinstance(sandbox_backend, KubernetesSandboxProvider):
@@ -509,12 +355,6 @@ def build_production_container(
             raise ValueError("MCP credential settings must be JSON objects")
         typed_secrets = cast(dict[object, object], secrets_raw)
         sources: dict[CredentialSourceKey, tuple[str, dict[str, SecretStr]]] = {}
-        for gateway in configured_gateways:
-            route_id = gateway.route_id or "new-api-default"
-            sources[("*", CredentialResourceKind.MODEL, route_id)] = (
-                f"settings://{gateway.provider}/{route_id}",
-                {"api_key": gateway.credential},
-            )
         for server, raw_references in cast(dict[object, object], references_raw).items():
             if not isinstance(raw_references, dict):
                 continue
@@ -533,9 +373,6 @@ def build_production_container(
         )
         credential_provider = BrokerMcpCredentialProvider(credential_broker)
         execution_config = (
-            primary_gateway,
-            fallback_gateway,
-            configured_gateways,
             sandbox,
             sandbox_backend,
             credential_provider,
@@ -737,7 +574,6 @@ def build_production_container(
         capability_catalogs,
         mcp_credential_service,
         environment="production",
-        server_routes=configured_gateways,
     )
     discovery_credentials = StoredMcpCredentialProvider(
         mcp_credential_service,
@@ -1023,9 +859,6 @@ def build_production_container(
     if execution_enabled:
         assert execution_config is not None
         (
-            primary_gateway,
-            fallback_gateway,
-            configured_gateways,
             runtime_sandbox,
             runtime_sandbox_backend,
             credential_provider,
@@ -1041,9 +874,6 @@ def build_production_container(
         )
         runtime = RegistryClaudeRuntime(
             registry=registry,
-            config=primary_gateway,
-            fallback_config=fallback_gateway,
-            route_configs=configured_gateways,
             model_configurations=model_configurations,
             tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
@@ -1067,7 +897,7 @@ def build_production_container(
             observability=observability,
             credential_broker=credential_broker,
         )
-        model_probe = AnthropicSandboxModelProbe(configured_gateways)
+        model_probe = ControlPlaneModelPreflightProbe(model_configurations)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
 
         async def resolve_runtime_sandbox(tenant_id: str, session: Session) -> SandboxProvider:
@@ -1199,17 +1029,7 @@ def build_production_container(
         input_artifacts=input_service,
         bindings=binding_repository,
         contexts=context_service,
-        title_generator=(
-            AnthropicCompatibleTaskTitleGenerator(
-                base_url=title_gateway.base_url,
-                model=title_gateway.model,
-                credential=title_gateway.credential,
-                provider=title_gateway.provider,
-                auth_scheme=title_gateway.resolved_auth_scheme,
-            )
-            if title_gateway is not None
-            else None
-        ),
+        title_generator=None,
     )
 
     async def infrastructure_facts(tenant_id: str) -> dict[str, int | None]:
@@ -1369,11 +1189,7 @@ def build_production_container(
         agui=agui,
         auto_execute=False,
         event_wakeup=bus,
-        skill_conversation=(
-            AnthropicCompatibleSkillConversationService(configured_gateways)
-            if title_gateway is not None
-            else None
-        ),
+        skill_conversation=ControlPlaneSkillConversationService(model_configurations),
         sandbox_maintenance=sandbox_maintenance,
         close=close,
     )

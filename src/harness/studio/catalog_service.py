@@ -137,7 +137,7 @@ def _upgrade_system_managed_catalog(
         if route.route_id not in _RETIRED_PLATFORM_MODEL_ROUTES
     ]
     changed = len(routes) != len(catalog.model_routes)
-    normalized_routes = []
+    normalized_routes: list[ModelRouteCapability] = []
     for route in routes:
         if "vision" in route.capabilities and route.model_type == "chat":
             normalized_routes.append(route.model_copy(update={"model_type": "vision"}))

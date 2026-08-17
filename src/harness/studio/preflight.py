@@ -324,7 +324,9 @@ class LivePreflightRunner:
 
         async def model_check() -> PreflightEvidence:
             assert manifest is not None and handle is not None
-            return await self._model_probe.verify(manifest, self._sandbox, handle)
+            return await self._model_probe.verify(
+                preview.tenant_id, manifest, self._sandbox, handle
+            )
 
         async def mcp_check() -> PreflightEvidence:
             assert draft is not None and manifest is not None and handle is not None

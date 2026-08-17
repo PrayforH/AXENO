@@ -36,7 +36,7 @@ class RegistryClaudeRuntime:
         self,
         *,
         registry: AgentRegistry,
-        config: CcSwitchClaudeConfig,
+        config: CcSwitchClaudeConfig | None = None,
         fallback_config: CcSwitchClaudeConfig | None = None,
         route_configs: Sequence[CcSwitchClaudeConfig] = (),
         query_factory: QueryFactory | None = None,
@@ -53,15 +53,24 @@ class RegistryClaudeRuntime:
         credential_broker: CredentialBroker | None = None,
         model_configurations: ModelConfigurationService | None = None,
     ) -> None:
+        if config is None and model_configurations is None:
+            raise ValueError(
+                "RegistryClaudeRuntime requires a static model or the model control plane"
+            )
         self._registry = registry
         self._config = config
         self._fallback_config = fallback_config
         ordered_configs = (
-            config,
-            *(item for item in route_configs if item.route_id != config.route_id),
+            *((config,) if config is not None else ()),
+            *(
+                item
+                for item in route_configs
+                if config is None or item.route_id != config.route_id
+            ),
             *(
                 (fallback_config,)
-                if fallback_config is not None and fallback_config.route_id != config.route_id
+                if fallback_config is not None
+                and (config is None or fallback_config.route_id != config.route_id)
                 else ()
             ),
         )
@@ -102,6 +111,8 @@ class RegistryClaudeRuntime:
         ):
             return self._fallback_config
         if strict:
+            raise ConflictError(f"task model route is not configured: {route_id}")
+        if self._config is None:
             raise ConflictError(f"task model route is not configured: {route_id}")
         return self._config
 

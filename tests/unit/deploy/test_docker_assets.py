@@ -42,7 +42,7 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
         assert "build" not in services[name]
         assert services[name]["image"] == services["api"]["image"]
     assert services["worker"]["environment"]["HARNESS_ENVIRONMENT"] == "production"
-    assert "HARNESS_NEW_API_KEY" in services["worker"]["environment"]
+    assert "HARNESS_NEW_API_KEY" not in services["worker"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" in services["worker"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" in services["worker"]["environment"]
     assert services["worker"]["environment"]["HARNESS_PREFLIGHT_TIMEOUT_SECONDS"] == (
@@ -52,10 +52,9 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
         assert services[name]["environment"]["HARNESS_QUOTA_ENFORCEMENT_ENABLED"] == (
             "${HARNESS_QUOTA_ENFORCEMENT_ENABLED:-false}"
         )
-    # The control plane uses the compatible model route for semantic task titles.
-    # Sandbox and business MCP credentials remain worker-only. The control plane
-    # receives only an optional outbound proxy URL for manual MCP discovery.
-    assert "HARNESS_NEW_API_KEY" in services["api"]["environment"]
+    # Model endpoints and credentials are stored by model management, never injected
+    # into API, Worker, or Web container environments.
+    assert "HARNESS_NEW_API_KEY" not in services["api"]["environment"]
     assert "HARNESS_NEW_API_KEY" not in services["web"]["environment"]
     assert "HARNESS_DAYTONA_API_KEY" not in services["api"]["environment"]
     assert "HARNESS_MCP_SERVER_SECRETS_JSON" not in services["api"]["environment"]
@@ -160,7 +159,8 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
     assert "uvicorn harness.api.app:app" in api_entrypoint.read_text()
     assert "harness-worker" in worker_entrypoint.read_text()
     values = environment.read_text()
-    assert "HARNESS_NEW_API_BASE_URL=" in values
+    assert "HARNESS_NEW_API_BASE_URL=" not in values
+    assert "Settings → Model Management" in values
     assert "HARNESS_API_IMAGE_REPOSITORY=claude-agent-harness-api" in values
     assert "HARNESS_WEB_IMAGE_REPOSITORY=claude-agent-harness-web" in values
     assert "HARNESS_IMAGE_TAG=local" in values
