@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { writeTextToClipboard } from "../lib/clipboard";
 import { SecretInput } from "./secret-input";
 import styles from "./api-integration.module.css";
 
@@ -113,13 +114,34 @@ export function ApiIntegration() {
   }
 
   async function copy(value: string, label: string) {
-    await navigator.clipboard.writeText(value);
-    setMessage({ kind: "success", text: `${label}已复制。` });
+    const copied = await writeTextToClipboard(value);
+    setMessage(copied
+      ? { kind: "success", text: `${label}已复制。` }
+      : { kind: "error", text: `${label}复制失败，请选中文本手动复制。` });
   }
 
   const curlExample = `curl '${baseUrl}/agents' \\\n+  -H 'X-API-Key: $AXENO_API_KEY'`;
 
   const displayedCurlExample = curlExample.replace("\n+", "\n");
+  const createSessionExample = [
+    `curl -sS -X POST '${baseUrl}/sessions' \\`,
+    "  -H 'X-API-Key: $AXENO_API_KEY' \\",
+    "  -H 'Content-Type: application/json' \\",
+    `  -d '{"agent_name":"lead-agent","agent_version":"1.0.0"}'`,
+  ].join("\n");
+  const askExample = [
+    "SESSION_ID='填写创建会话返回的 session_id'",
+    `curl -sS -X POST "${baseUrl}/sessions/\${SESSION_ID}/runs" \\`,
+    "  -H 'X-API-Key: $AXENO_API_KEY' \\",
+    "  -H 'Idempotency-Key: question-001' \\",
+    "  -H 'Content-Type: application/json' \\",
+    `  -d '{"prompt":"你好，请介绍一下你能做什么"}'`,
+  ].join("\n");
+  const answerExample = [
+    "RUN_ID='填写提问返回的 run_id'",
+    `curl -sS "${baseUrl}/runs/\${RUN_ID}" -H 'X-API-Key: $AXENO_API_KEY'`,
+    `curl -sS "${baseUrl}/runs/\${RUN_ID}/events" -H 'X-API-Key: $AXENO_API_KEY'`,
+  ].join("\n");
 
   return (
     <div className={styles.integration}>
@@ -165,6 +187,23 @@ export function ApiIntegration() {
         <header><div><strong>调用示例</strong><small>通过 X-API-Key 请求头调用；不要把密钥写进代码仓库或浏览器前端。</small></div></header>
         <div className={styles.codeBlock}><pre>{displayedCurlExample}</pre><button type="button" onClick={() => void copy(displayedCurlExample, "cURL 示例")}>复制</button></div>
         <div className={styles.guide}><strong>推荐接入步骤</strong><ol><li>为集成创建独立密钥并选择最小权限。</li><li>将密钥保存到服务端环境变量 <code>AXENO_API_KEY</code>。</li><li>先读取 <code>/v1/agents</code>，再创建会话并发起运行。</li><li>集成下线后立即吊销对应密钥。</li></ol></div>
+      </section>
+
+      <section className={styles.block}>
+        <header><div><strong>问答请求预览</strong><small>Session 是一段连续对话；每次问题会在该 Session 下创建一个独立 Run。</small></div></header>
+        <div className={styles.conversationModel}>
+          <span><strong>Session</strong><small>绑定 Agent 与版本，并承载多轮上下文</small></span>
+          <i aria-hidden="true">→</i>
+          <span><strong>Run 1</strong><small>第一个问题</small></span>
+          <i aria-hidden="true">→</i>
+          <span><strong>Run 2</strong><small>复用 Session 继续追问</small></span>
+        </div>
+        <div className={styles.exampleList}>
+          <article><header><span>1</span><div><strong>创建 Session</strong><small>一次创建，后续追问复用返回的 <code>session_id</code>。</small></div></header><div className={styles.codeBlock}><pre>{createSessionExample}</pre><button type="button" onClick={() => void copy(createSessionExample, "创建 Session 示例")}>复制</button></div></article>
+          <article><header><span>2</span><div><strong>发送问题</strong><small>POST 返回 <code>run_id</code>；相同幂等键不会重复创建任务。</small></div></header><div className={styles.codeBlock}><pre>{askExample}</pre><button type="button" onClick={() => void copy(askExample, "提问示例")}>复制</button></div></article>
+          <article><header><span>3</span><div><strong>读取回答</strong><small>先查询 Run，完成后读取事件；拼接 <code>message.delta</code> 的 <code>payload.text</code> 即为回答。</small></div></header><div className={styles.codeBlock}><pre>{answerExample}</pre><button type="button" onClick={() => void copy(answerExample, "读取回答示例")}>复制</button></div></article>
+        </div>
+        <div className={styles.sessionNote}><strong>如何追问？</strong><span>继续向同一个 <code>/sessions/&#123;session_id&#125;/runs</code> 发送新 prompt；若要开始完全独立的新对话，再创建一个新的 Session。</span></div>
       </section>
 
       {created && (

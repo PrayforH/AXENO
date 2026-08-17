@@ -10,6 +10,10 @@ const settings = readFileSync(
   join(process.cwd(), "src/app/settings/page.tsx"),
   "utf8",
 );
+const clipboard = readFileSync(
+  join(process.cwd(), "src/lib/clipboard.ts"),
+  "utf8",
+);
 
 describe("API integration settings", () => {
   it("provides scoped key management and safe one-time secret display", () => {
@@ -28,5 +32,22 @@ describe("API integration settings", () => {
     expect(source).toContain("/v1/agents");
     expect(source).toContain('request<{ baseUrl: string }>("/api/auth/api-config")');
     expect(source).not.toContain("X-API-Key: ${created.secret}");
+  });
+
+  it("supports private-network HTTP copying with a visible failure state", () => {
+    expect(source).toContain("writeTextToClipboard");
+    expect(source).toContain("复制失败，请选中文本手动复制");
+    expect(source).not.toContain("await navigator.clipboard.writeText(value)");
+    expect(clipboard).toContain("navigator.clipboard?.writeText");
+    expect(clipboard).toContain('document.execCommand("copy")');
+  });
+
+  it("explains the complete session and run question flow", () => {
+    expect(source).toContain("问答请求预览");
+    expect(source).toContain("Session 是一段连续对话");
+    expect(source).toContain('/sessions/\\${SESSION_ID}/runs');
+    expect(source).toContain('/runs/\\${RUN_ID}/events');
+    expect(source).toContain("message.delta");
+    expect(source).toContain("如何追问？");
   });
 });
