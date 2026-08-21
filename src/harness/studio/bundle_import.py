@@ -692,6 +692,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             description=description,
             domain=labels.get("domain", "imported-agent"),
             template=template,
+            runtime=manifest_spec.runtime,
             model=DraftModelSelection(
                 routeId=model.route,
                 model=model.model,

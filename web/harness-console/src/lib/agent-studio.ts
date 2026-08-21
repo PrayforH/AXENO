@@ -11,6 +11,7 @@ export type StudioSection =
 export type StudioRisk = "low" | "medium" | "high";
 export type NetworkAccess = "none" | "internal" | "external";
 export type ToolExposureMode = "eager" | "on_demand";
+export type AgentRuntime = "claude-agent-sdk" | "codex-app-server";
 
 export interface ModelRouteOption {
   id: string;
@@ -18,6 +19,7 @@ export interface ModelRouteOption {
   provider: string;
   models: string[];
   capabilities: string[];
+  apiFormat?: "anthropic_compatible" | "openai_compatible" | "openai_images";
 }
 
 export interface BuiltinToolOption {
@@ -110,6 +112,7 @@ export interface StudioDraft {
   domain: string;
   version: string;
   template: "analyst" | "operator" | "orchestrator";
+  runtime: AgentRuntime;
   modelRoute: string;
   model: string;
   requiredCapabilities: string[];
@@ -183,6 +186,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "deepseek",
     models: ["deepseek-v4-flash"],
     capabilities: ["streaming", "tool_use"],
+    apiFormat: "anthropic_compatible",
   },
   {
     id: "deepseek-v4-pro",
@@ -190,6 +194,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "deepseek",
     models: ["deepseek-v4-pro"],
     capabilities: ["streaming", "tool_use"],
+    apiFormat: "anthropic_compatible",
   },
   {
     id: "minimax-m3",
@@ -197,6 +202,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "minimax",
     models: ["MiniMax-M3"],
     capabilities: ["streaming", "tool_use", "vision"],
+    apiFormat: "anthropic_compatible",
   },
 ];
 
@@ -339,6 +345,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   domain: "general-assistant",
   version: "1.0.0",
   template: "orchestrator",
+  runtime: "claude-agent-sdk",
   modelRoute: "deepseek-v4-pro",
   model: "deepseek-v4-pro",
   requiredCapabilities: ["streaming", "tool_use"],
@@ -494,6 +501,8 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
     evalCases,
     toolExposureMode:
       raw.toolExposureMode === "on_demand" ? "on_demand" : "eager",
+    runtime:
+      raw.runtime === "codex-app-server" ? "codex-app-server" : "claude-agent-sdk",
     restoreSession:
       typeof raw.restoreSession === "boolean"
         ? raw.restoreSession
@@ -535,6 +544,20 @@ export function evaluateStudioDraft(
     issues.push("System Prompt 缺少必需章节");
   }
   if (draft.skills.length === 0) issues.push("至少需要一个 Skill");
+  if (draft.runtime === "codex-app-server") {
+    if (route?.apiFormat && route.apiFormat !== "openai_compatible") {
+      issues.push("Codex App Server 仅支持 Responses 路由");
+    }
+    if (draft.mcpServers.length > 0) issues.push("当前 Codex 运行时尚未接通 Studio MCP");
+    if (draft.pythonTools.length > 0) issues.push("当前 Codex 运行时尚未接通自定义算子");
+    if (draft.knowledgeReferences.length > 0) issues.push("当前 Codex 运行时尚未接通 Knowledge");
+    if (draft.subagents.length > 0 || draft.builtinTools.includes("Task")) {
+      issues.push("当前 Codex 运行时尚未接通 Studio Sub Agent");
+    }
+    if (draft.toolExposureMode === "on_demand") {
+      issues.push("当前 Codex 运行时尚未接通按需工具加载");
+    }
+  }
   if (draft.toolExposureMode === "on_demand" && draft.pythonTools.length > 0) {
     issues.push("自定义算子仅支持启动时加载");
   }

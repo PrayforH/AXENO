@@ -2453,7 +2453,9 @@ export function AgentStudioWorkbench() {
                   </Field>
                 </div>
                 <InfoStrip tone="neutral">
-                  模型目录只展示已完成 Anthropic-compatible、流式输出和工具调用验证的组合。
+                  {draft.runtime === "codex-app-server"
+                    ? "Codex App Server 只接受 Responses 协议；发布检查会拒绝不兼容路由。"
+                    : "Claude Agent SDK 使用已完成 Anthropic-compatible、流式输出和工具调用验证的组合。"}
                 </InfoStrip>
               </section>
             )}
@@ -3215,6 +3217,40 @@ export function AgentStudioWorkbench() {
                   title="隔离是生产基线，不是 Agent 开关"
                   description="构建者声明能力，平台把执行档位绑定到 Daytona、gVisor 或其他安全后端。"
                 />
+                <div className={styles.formGridSingle}>
+                  <Field label="Agent Runtime" hint="发布后固定到版本 Bundle">
+                    <select
+                      value={draft.runtime}
+                      onChange={(event) => {
+                        const runtime = event.target.value as StudioDraft["runtime"];
+                        const compatibleRoute = options.routes.find((route) =>
+                          runtime === "codex-app-server"
+                            ? route.apiFormat === "openai_compatible"
+                            : route.apiFormat !== "openai_images",
+                        );
+                        updateDraft({
+                          runtime,
+                          ...(runtime === "codex-app-server"
+                            && selectedRoute?.apiFormat !== "openai_compatible"
+                            && compatibleRoute
+                            ? {
+                                modelRoute: compatibleRoute.id,
+                                model: compatibleRoute.models[0],
+                              }
+                            : {}),
+                        });
+                      }}
+                    >
+                      <option value="claude-agent-sdk">Claude Agent SDK · 完整 Studio 能力</option>
+                      <option value="codex-app-server">Codex App Server · Codex Loop</option>
+                    </select>
+                  </Field>
+                </div>
+                {draft.runtime === "codex-app-server" && (
+                  <InfoStrip tone="warning">
+                    Codex P0 已支持 Responses、线程续接、Shell/文件操作与审批事件；Studio MCP、自定义算子、Knowledge、按需工具和 Sub Agent 尚未接通，发布检查会明确阻止这些组合。
+                  </InfoStrip>
+                )}
                 <div className={styles.runtimeRecommendation}>
                   <span>当前场景推荐</span>
                   <div>
@@ -3273,7 +3309,7 @@ export function AgentStudioWorkbench() {
                         checked={draft.restoreSession}
                         onChange={(event) => updateDraft({ restoreSession: event.target.checked })}
                       />
-                      <span>恢复同一会话的 SDK 上下文</span>
+                      <span>恢复同一会话的运行时线程上下文</span>
                     </label>
                     <label>
                       <input

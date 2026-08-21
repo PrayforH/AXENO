@@ -77,6 +77,7 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         directory = ToolDirectorySnapshot.model_validate_json(bundle.read("tool-directory.json"))
         studio_metadata = StudioBundleMetadata.model_validate_json(bundle.read("studio.json"))
     assert "route: deepseek-v4-pro" in manifest
+    assert "runtime: claude-agent-sdk" in manifest
     assert "mode: isolated" in manifest
     assert directory.exposure_mode == "eager"
     assert directory.catalog_revision == 1
@@ -87,6 +88,120 @@ def test_default_draft_compiles_to_existing_reproducible_bundle_contract() -> No
         "Glob",
         "Grep",
     }
+
+
+def test_codex_runtime_compiles_and_round_trips_with_a_responses_route() -> None:
+    catalog = default_capability_catalog()
+    responses_route = ModelRouteCapability(
+        routeId="codex-deepseek-v4-flash",
+        label="Codex DeepSeek V4 Flash",
+        provider="new-api",
+        models=("deepseek-v4-flash",),
+        capabilities=("streaming", "tool_use"),
+        apiFormat="openai_compatible",
+        credentialReference="CODEX_GATEWAY_KEY",
+    )
+    compiler = AgentDraftCompiler(
+        catalog.model_copy(update={"model_routes": (*catalog.model_routes, responses_route)})
+    )
+    source = draft()
+    source = source.model_copy(
+        update={
+            "spec": source.spec.model_copy(
+                update={
+                    "runtime": "codex-app-server",
+                    "model": source.spec.model.model_copy(
+                        update={
+                            "route_id": responses_route.route_id,
+                            "model": "deepseek-v4-flash",
+                        }
+                    ),
+                }
+            )
+        }
+    )
+
+    compiled = compiler.compile(source)
+    imported = parse_agent_bundle(compiled.bundle)
+
+    assert "runtime: codex-app-server" in compiled.manifest_yaml
+    assert imported.spec.runtime == "codex-app-server"
+    assert imported.spec.model.route_id == responses_route.route_id
+
+
+def test_codex_runtime_rejects_unwired_studio_capabilities() -> None:
+    catalog = default_capability_catalog()
+    responses_route = ModelRouteCapability(
+        routeId="codex-deepseek-v4-flash",
+        label="Codex DeepSeek V4 Flash",
+        provider="new-api",
+        models=("deepseek-v4-flash",),
+        capabilities=("streaming", "tool_use", "tool_search"),
+        apiFormat="openai_compatible",
+        credentialReference="CODEX_GATEWAY_KEY",
+    )
+    compiler = AgentDraftCompiler(
+        catalog.model_copy(update={"model_routes": (*catalog.model_routes, responses_route)})
+    )
+    source = draft()
+    python_tool = DraftPythonTool(
+        name="normalize_score",
+        description="Normalize a score.",
+        inputSchema={"type": "object", "properties": {}},
+        code="def run(arguments):\n    return {'ok': True}\n",
+    )
+    source = source.model_copy(
+        update={
+            "spec": source.spec.model_copy(
+                update={
+                    "runtime": "codex-app-server",
+                    "model": source.spec.model.model_copy(
+                        update={
+                            "route_id": responses_route.route_id,
+                            "model": "deepseek-v4-flash",
+                        }
+                    ),
+                    "builtin_tools": (*source.spec.builtin_tools, "Task"),
+                    "python_tools": (python_tool,),
+                    "mcp_servers": ("tavily-readonly",),
+                    "knowledge_references": ("company-policy",),
+                    "subagents": (
+                        DraftSubagent(
+                            alias="fact-checker",
+                            ref="helper-agent@1.0.0",
+                            responsibility="核验事实。",
+                        ),
+                    ),
+                    "tool_exposure_mode": "on_demand",
+                }
+            )
+        }
+    )
+
+    validation = compiler.validate(source)
+    codes = {issue.code for issue in validation.issues}
+
+    assert validation.ready is False
+    assert {
+        "codex_mcp_unsupported",
+        "codex_python_tools_unsupported",
+        "codex_knowledge_unsupported",
+        "codex_subagents_unsupported",
+        "codex_tool_search_unsupported",
+    }.issubset(codes)
+
+
+def test_codex_runtime_rejects_anthropic_route() -> None:
+    compiler = AgentDraftCompiler(default_capability_catalog())
+    source = draft()
+    source = source.model_copy(
+        update={"spec": source.spec.model_copy(update={"runtime": "codex-app-server"})}
+    )
+
+    validation = compiler.validate(source)
+
+    assert validation.ready is False
+    assert any(issue.code == "codex_responses_route_required" for issue in validation.issues)
 
 
 def test_binary_skill_asset_survives_compile_and_studio_round_trip() -> None:

@@ -106,7 +106,7 @@ class AgentDraftCompiler:
                     },
                 },
                 "spec": {
-                    "runtime": "claude-agent-sdk",
+                    "runtime": spec.runtime,
                     "model": {
                         "route": spec.model.route_id,
                         "model": spec.model.model,
@@ -328,6 +328,18 @@ class AgentDraftCompiler:
                         path="model.model",
                     )
                 )
+            if spec.runtime == "codex-app-server" and route.api_format != "openai_compatible":
+                issues.append(
+                    ValidationIssue(
+                        code="codex_responses_route_required",
+                        message=(
+                            "Codex App Server 仅支持 Responses 协议，"
+                            "请选择已验证的 OpenAI-compatible 路由"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="model.routeId",
+                    )
+                )
             missing = set(spec.model.required_capabilities) - set(route.capabilities)
             if missing:
                 issues.append(
@@ -359,6 +371,49 @@ class AgentDraftCompiler:
                         path="builtinTools",
                     )
                 )
+        if spec.runtime == "codex-app-server":
+            unsupported: tuple[tuple[bool, str, str, str], ...] = (
+                (
+                    bool(spec.mcp_servers),
+                    "codex_mcp_unsupported",
+                    "当前 Codex 运行时尚未接通 Studio MCP，请移除 MCP 后发布",
+                    "mcpServers",
+                ),
+                (
+                    bool(spec.python_tools),
+                    "codex_python_tools_unsupported",
+                    "当前 Codex 运行时尚未接通 Studio 自定义算子，请移除后发布",
+                    "pythonTools",
+                ),
+                (
+                    bool(spec.knowledge_references),
+                    "codex_knowledge_unsupported",
+                    "当前 Codex 运行时尚未接通 Studio Knowledge，请移除后发布",
+                    "knowledgeReferences",
+                ),
+                (
+                    bool(spec.subagents) or "Task" in spec.builtin_tools,
+                    "codex_subagents_unsupported",
+                    "当前 Codex 运行时尚未接通 Studio Sub Agent，请移除 Task 和 Sub Agent 后发布",
+                    "subagents",
+                ),
+                (
+                    spec.tool_exposure_mode == "on_demand",
+                    "codex_tool_search_unsupported",
+                    "当前 Codex 运行时尚未接通 Studio 按需工具加载，请改为启动时加载",
+                    "toolExposureMode",
+                ),
+            )
+            issues.extend(
+                ValidationIssue(
+                    code=code,
+                    message=message,
+                    severity=ValidationSeverity.ERROR,
+                    path=path,
+                )
+                for enabled, code, message, path in unsupported
+                if enabled
+            )
         mcp_servers = {server.reference: server for server in self._catalog.mcp_servers}
         if spec.python_tools and spec.tool_exposure_mode == "on_demand":
             issues.append(

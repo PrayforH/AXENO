@@ -492,7 +492,7 @@ describe("Agent Studio management page", () => {
     expect(studioConfig).toContain("公网搜索（Tavily）");
     expect(workbench).toContain("这不会开放任意 Bash 网络访问");
     expect(workbench).toContain("独立工作负载身份");
-    expect(workbench).toContain("恢复同一会话的 SDK 上下文");
+    expect(workbench).toContain("恢复同一会话的运行时线程上下文");
     expect(workbench).toContain("不宣称支持任意工具步骤的持久化 checkpoint");
   });
 

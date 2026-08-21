@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from harness.core.manifest import ToolExposureMode
+from harness.core.models import AgentRuntimeType
 from harness.evals.suite import EvalCase
 
 
@@ -184,6 +185,7 @@ class AgentDraftSpec(StudioModel):
     description: str = Field(min_length=1, max_length=500)
     domain: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     template: AgentTemplate = AgentTemplate.ANALYST
+    runtime: AgentRuntimeType = "claude-agent-sdk"
     model: DraftModelSelection
     system_prompt: str = Field(alias="systemPrompt", min_length=1, max_length=512 * 1024)
     skills: tuple[DraftSkill, ...] = Field(min_length=1)

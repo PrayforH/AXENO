@@ -198,6 +198,7 @@ type ApiDraftSpec = {
   description: string;
   domain: string;
   template: StudioDraft["template"];
+  runtime?: StudioDraft["runtime"];
   model: {
     routeId: string;
     model: string;
@@ -828,6 +829,7 @@ export type StudioCapabilities = {
     models: string[];
     capabilities: string[];
     modelType?: "chat" | "vision" | "image_generation";
+    apiFormat: "anthropic_compatible" | "openai_compatible" | "openai_images";
     enabled: boolean;
   }>;
   builtinTools: Array<{
@@ -1131,6 +1133,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     domain: spec.domain,
     version: spec.version,
     template: spec.template,
+    runtime: spec.runtime ?? "claude-agent-sdk",
     modelRoute: spec.model.routeId,
     model: spec.model.model,
     requiredCapabilities: spec.model.requiredCapabilities,
@@ -1173,6 +1176,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     description: draft.description,
     domain: draft.domain,
     template: draft.template,
+    runtime: draft.runtime,
     model: {
       routeId: draft.modelRoute,
       model: draft.model,
@@ -1837,6 +1841,7 @@ export function capabilityOptions(catalog: StudioCapabilities): {
       provider: item.provider,
       models: item.models,
       capabilities: item.capabilities,
+      apiFormat: item.apiFormat,
     })),
     tools: catalog.builtinTools.map((item) => ({
       id: item.name,
