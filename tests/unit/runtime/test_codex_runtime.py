@@ -138,6 +138,7 @@ def _runtime(
             codex_path=tmp_path / "codex",
             model="gpt-test",
             developer_instructions="be precise",
+            config_overrides=('model_provider="test"',),
             turn_timeout_seconds=timeout,
         ),
         process_factory=factory,
@@ -188,6 +189,7 @@ async def test_starts_thread_turn_and_maps_stream(tmp_path: Path) -> None:
         "networkAccess": False,
     }
     assert options_seen[0].working_directory == tmp_path
+    assert options_seen[0].config_overrides == ('model_provider="test"',)
     assert process.started is True
     assert process.closed is True
 
