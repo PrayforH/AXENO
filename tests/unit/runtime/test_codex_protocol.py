@@ -140,6 +140,37 @@ def test_maps_file_changes_as_path_only_tool_metadata() -> None:
     assert "private" not in repr(events)
 
 
+def test_maps_mcp_tool_lifecycle_to_canonical_tool_name() -> None:
+    item = {
+        "id": "mcp-1",
+        "type": "mcpToolCall",
+        "server": "sentiment_query_mcp",
+        "tool": "search_risk_subjects",
+        "arguments": {"keyword": "示例"},
+        "status": "completed",
+        "result": {"private": "not-forwarded"},
+    }
+
+    started = map_codex_notification(
+        {"method": "item/started", "params": {"item": item}}
+    )
+    completed = map_codex_notification(
+        {"method": "item/completed", "params": {"item": item}}
+    )
+
+    assert started[0].payload == {
+        "tool_call_id": "mcp-1",
+        "name": "mcp__sentiment_query_mcp__search_risk_subjects",
+        "arguments": {"keyword": "示例"},
+    }
+    assert completed[0].payload == {
+        "tool_call_id": "mcp-1",
+        "name": "mcp__sentiment_query_mcp__search_risk_subjects",
+        "status": "completed",
+    }
+    assert "not-forwarded" not in repr(completed)
+
+
 def test_usage_and_errors_are_content_free() -> None:
     usage = map_codex_notification(
         {

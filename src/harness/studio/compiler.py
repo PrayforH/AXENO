@@ -374,12 +374,6 @@ class AgentDraftCompiler:
         if spec.runtime == "codex-app-server":
             unsupported: tuple[tuple[bool, str, str, str], ...] = (
                 (
-                    bool(spec.mcp_servers),
-                    "codex_mcp_unsupported",
-                    "当前 Codex 运行时尚未接通 Studio MCP，请移除 MCP 后发布",
-                    "mcpServers",
-                ),
-                (
                     bool(spec.python_tools),
                     "codex_python_tools_unsupported",
                     "当前 Codex 运行时尚未接通 Studio 自定义算子，请移除后发布",

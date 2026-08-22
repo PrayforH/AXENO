@@ -830,6 +830,7 @@ def build_memory_container(
                         registry=registry,
                         codex_path=Path(resolved_settings.codex_cli_path),
                         model_configurations=model_configurations,
+                        tool_resolver=tool_resolver,
                         model_by_route=resolved_settings.codex_model_by_route,
                         provider_by_route=resolved_settings.codex_provider_by_route,
                         approval_policy=resolved_settings.codex_approval_policy,

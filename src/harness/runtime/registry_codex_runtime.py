@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
+from typing import cast
+from urllib.parse import urlsplit
 
 from harness.core.errors import ConflictError
 from harness.core.manifest import AgentManifestSnapshot
@@ -22,16 +25,92 @@ from harness.runtime.codex_runtime import (
     CodexServerRequestHandler,
 )
 from harness.runtime.execution_contract import VISIBLE_EXECUTION_CONTRACT
+from harness.runtime.tools import (
+    ResolvedTools,
+    ToolResolutionError,
+    ToolResolver,
+    enforce_published_tool_directory,
+)
 from harness.studio.model_configuration import ModelConfigurationService
 
 _CONTROL_PLANE_PROVIDER_ID = "agent_studio"
 _CONTROL_PLANE_API_KEY_ENV = "HARNESS_CODEX_PROVIDER_API_KEY"
+_TOML_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _toml_string(value: str) -> str:
     """Encode an untrusted control-plane string as a TOML basic string."""
 
     return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_key(value: str) -> str:
+    return value if _TOML_BARE_KEY.fullmatch(value) else _toml_string(value)
+
+
+def _codex_mcp_configuration(
+    resolved: ResolvedTools,
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Translate reviewed HTTP MCP registrations into secret-safe Codex config."""
+
+    overrides: list[str] = []
+    environment: dict[str, str] = {}
+    for server_name, raw_config in resolved.mcp_servers.items():
+        config = dict(cast(dict[str, object], raw_config))
+        transport = config.get("type")
+        url = config.get("url")
+        if transport != "http" or not isinstance(url, str):
+            raise ToolResolutionError(
+                f"Codex MCP requires a streamable HTTP registration: {server_name}"
+            )
+        if any(secret and secret in url for secret in resolved.sensitive_values):
+            raise ToolResolutionError(
+                f"Codex MCP does not expose query-string credentials: {server_name}"
+            )
+        endpoint = urlsplit(url)
+        if endpoint.scheme not in {"http", "https"} or endpoint.hostname is None:
+            raise ToolResolutionError(f"Codex MCP endpoint is invalid: {server_name}")
+
+        prefix = f"mcp_servers.{_toml_key(server_name)}"
+        overrides.extend(
+            (
+                f"{prefix}.url={_toml_string(url)}",
+                f"{prefix}.enabled=true",
+                f"{prefix}.required=true",
+                f'{prefix}.default_tools_approval_mode="prompt"',
+            )
+        )
+
+        canonical_prefix = f"mcp__{server_name}__"
+        enabled_tools = tuple(
+            tool.removeprefix(canonical_prefix)
+            for tool in resolved.allowed_tools
+            if tool.startswith(canonical_prefix)
+        )
+        if enabled_tools:
+            overrides.append(
+                f"{prefix}.enabled_tools="
+                + json.dumps(enabled_tools, ensure_ascii=False, separators=(",", ":"))
+            )
+            overrides.extend(
+                f'{prefix}.tools.{_toml_key(tool)}.approval_mode="approve"'
+                for tool in enabled_tools
+            )
+
+        headers = config.get("headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise ToolResolutionError(f"Codex MCP headers are invalid: {server_name}")
+        for index, (header, raw_value) in enumerate(
+            cast(dict[object, object], headers or {}).items()
+        ):
+            if not isinstance(header, str) or not isinstance(raw_value, str):
+                raise ToolResolutionError(f"Codex MCP headers are invalid: {server_name}")
+            env_name = f"HARNESS_CODEX_MCP_{len(environment)}_HEADER_{index}"
+            environment[env_name] = raw_value
+            overrides.append(
+                f"{prefix}.env_http_headers.{_toml_key(header)}={_toml_string(env_name)}"
+            )
+    return tuple(overrides), environment
 
 
 class RegistryCodexRuntime:
@@ -51,6 +130,7 @@ class RegistryCodexRuntime:
         network_access: bool = False,
         process_factory: CodexProcessFactory | None = None,
         server_request_handler: CodexServerRequestHandler | None = None,
+        tool_resolver: ToolResolver | None = None,
     ) -> None:
         self._registry = registry
         self._codex_path = codex_path
@@ -63,6 +143,7 @@ class RegistryCodexRuntime:
         self._network_access = network_access
         self._process_factory = process_factory
         self._server_request_handler = server_request_handler
+        self._tool_resolver = tool_resolver or ToolResolver()
 
     async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         session = context.session
@@ -89,7 +170,11 @@ class RegistryCodexRuntime:
                 session.tenant_id,
                 session.agent_name,
                 route_id,
-                apply_agent_binding=route_override is None,
+                # Published Codex versions pin a Responses route. The legacy
+                # Agent-wide binding is shared with Claude versions, so applying
+                # it here makes one runtime's route silently break the other.
+                apply_agent_binding=False,
+                required_api_format="openai_compatible",
             )
             if selected_config is None or selected_config.route_id is None:
                 raise ConflictError(
@@ -120,6 +205,14 @@ class RegistryCodexRuntime:
             provider = self._provider_by_route.get(route_id)
             event_provider = provider or "codex"
         enforce_runtime_model_route(session, route_id)
+        assert context.identity is not None
+        resolved_tools = enforce_published_tool_directory(
+            snapshot,
+            await self._tool_resolver.resolve(snapshot.manifest, context.identity),
+        )
+        mcp_config_overrides, mcp_environment = _codex_mcp_configuration(resolved_tools)
+        if mcp_environment:
+            environment = {**dict(environment or {}), **mcp_environment}
         runtime = CodexAppServerRuntime(
             CodexRuntimeConfig(
                 codex_path=self._codex_path,
@@ -129,7 +222,7 @@ class RegistryCodexRuntime:
                     f"{snapshot.system_prompt.rstrip()}\n\n{VISIBLE_EXECUTION_CONTRACT}"
                 ),
                 environment=environment,
-                config_overrides=provider_config_overrides,
+                config_overrides=(*provider_config_overrides, *mcp_config_overrides),
                 approval_policy=self._approval_policy,
                 sandbox_mode=self._sandbox_mode,
                 network_access=self._network_access,

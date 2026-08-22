@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import cast
 
 import pytest
+from claude_agent_sdk import McpServerConfig
 from pydantic import SecretStr
 
 from harness.adapters.memory import InMemoryAgentRegistry
@@ -15,7 +17,11 @@ from harness.runtime.base import RuntimeContext
 from harness.runtime.codex_app_server import CodexAppServerOptions
 from harness.runtime.codex_protocol import CodexMessage, CodexMessageKind
 from harness.runtime.codex_runtime import CodexProcess, CodexRpcConnection
-from harness.runtime.registry_codex_runtime import RegistryCodexRuntime
+from harness.runtime.registry_codex_runtime import (
+    RegistryCodexRuntime,
+    _codex_mcp_configuration,
+)
+from harness.runtime.tools import ResolvedTools, ToolResolutionError
 from harness.studio.catalog_repository import InMemoryCapabilityCatalogRepository
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.mcp_credential_store import (
@@ -84,6 +90,70 @@ class _Process:
         return None
 
 
+def test_codex_mcp_configuration_uses_env_headers_and_exact_tool_allowlist() -> None:
+    resolved = ResolvedTools(
+        builtin_tools=("Read",),
+        mcp_servers=MappingProxyType(
+            {
+                "sentiment-query": cast(
+                    McpServerConfig,
+                    {
+                        "type": "http",
+                        "url": "https://mcp.example.test/mcp",
+                        "headers": {
+                            "Authorization": "Bearer private-token",
+                            "X-Tenant": "tenant-a",
+                        },
+                    },
+                )
+            }
+        ),
+        allowed_tools=(
+            "mcp__sentiment-query__search_risk_subjects",
+            "mcp__sentiment-query__query_legal_entity_directory",
+        ),
+        mcp_smokes=MappingProxyType({}),
+        sensitive_values=frozenset({"Bearer private-token"}),
+    )
+
+    overrides, environment = _codex_mcp_configuration(resolved)
+
+    assert 'mcp_servers.sentiment-query.url="https://mcp.example.test/mcp"' in overrides
+    assert (
+        'mcp_servers.sentiment-query.enabled_tools='
+        '["search_risk_subjects","query_legal_entity_directory"]'
+    ) in overrides
+    assert (
+        'mcp_servers.sentiment-query.tools.search_risk_subjects.approval_mode="approve"'
+    ) in overrides
+    assert set(environment.values()) == {"Bearer private-token", "tenant-a"}
+    assert all("private-token" not in override for override in overrides)
+    assert any("env_http_headers.Authorization" in override for override in overrides)
+
+
+def test_codex_mcp_configuration_rejects_query_string_credentials() -> None:
+    resolved = ResolvedTools(
+        builtin_tools=(),
+        mcp_servers=MappingProxyType(
+            {
+                "private": cast(
+                    McpServerConfig,
+                    {
+                        "type": "http",
+                        "url": "https://mcp.example.test/mcp?token=private-token",
+                    },
+                )
+            }
+        ),
+        allowed_tools=(),
+        mcp_smokes=MappingProxyType({}),
+        sensitive_values=frozenset({"private-token"}),
+    )
+
+    with pytest.raises(ToolResolutionError, match="query-string credentials"):
+        _codex_mcp_configuration(resolved)
+
+
 @pytest.mark.asyncio
 async def test_control_plane_model_becomes_secret_safe_codex_provider(
     tmp_path: Path,
@@ -92,7 +162,12 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
     manifest = snapshot.manifest.model_copy(
         update={
             "spec": snapshot.manifest.spec.model_copy(
-                update={"runtime": "codex-app-server"}
+                update={
+                    "runtime": "codex-app-server",
+                    "model": snapshot.manifest.spec.model.model_copy(
+                        update={"route": "codex-responses"}
+                    ),
+                }
             )
         }
     )
@@ -138,13 +213,30 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
             apiKey=SecretStr("control-plane-secret"),
         ),
     )
+    assert configured.revision == 2
+    configured = await model_configurations.configure(
+        "tenant-a",
+        "admin-a",
+        "claude-messages",
+        ConfigureModelRequest(
+            expectedRevision=configured.revision,
+            label="Claude Messages",
+            modelType="chat",
+            provider="Example Messages",
+            model="claude-control-plane",
+            baseUrl="https://messages.example.test/v1",
+            apiFormat="anthropic_compatible",
+            authScheme="bearer",
+            apiKey=SecretStr("claude-control-plane-secret"),
+        ),
+    )
     await model_configurations.bind_agent(
         "tenant-a",
         "admin-a",
         "helper-agent",
         BindAgentModelRequest(
             expectedRevision=configured.revision,
-            routeId="codex-responses",
+            routeId="claude-messages",
         ),
     )
     client = _Client()
@@ -204,6 +296,7 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
         for override in options.config_overrides
     )
     assert all("control-plane-secret" not in value for value in options.config_overrides)
+    assert all("claude-control-plane-secret" not in value for value in options.config_overrides)
     thread_start = client.requests[0][1]
     assert thread_start["model"] == "gpt-control-plane"
     assert thread_start["modelProvider"] == "agent_studio"

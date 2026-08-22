@@ -911,6 +911,7 @@ def build_production_container(
                         registry=registry,
                         codex_path=Path(settings.codex_cli_path),
                         model_configurations=model_configurations,
+                        tool_resolver=tool_resolver,
                         model_by_route=settings.codex_model_by_route,
                         provider_by_route=settings.codex_provider_by_route,
                         approval_policy=settings.codex_approval_policy,

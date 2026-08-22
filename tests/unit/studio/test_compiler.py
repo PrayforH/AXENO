@@ -116,6 +116,7 @@ def test_codex_runtime_compiles_and_round_trips_with_a_responses_route() -> None
                             "model": "deepseek-v4-flash",
                         }
                     ),
+                    "mcp_servers": ("tavily-readonly",),
                 }
             )
         }
@@ -127,9 +128,10 @@ def test_codex_runtime_compiles_and_round_trips_with_a_responses_route() -> None
     assert "runtime: codex-app-server" in compiled.manifest_yaml
     assert imported.spec.runtime == "codex-app-server"
     assert imported.spec.model.route_id == responses_route.route_id
+    assert imported.spec.mcp_servers == ("tavily-readonly",)
 
 
-def test_codex_runtime_rejects_unwired_studio_capabilities() -> None:
+def test_codex_runtime_rejects_capabilities_other_than_http_mcp() -> None:
     catalog = default_capability_catalog()
     responses_route = ModelRouteCapability(
         routeId="codex-deepseek-v4-flash",
@@ -183,12 +185,12 @@ def test_codex_runtime_rejects_unwired_studio_capabilities() -> None:
 
     assert validation.ready is False
     assert {
-        "codex_mcp_unsupported",
         "codex_python_tools_unsupported",
         "codex_knowledge_unsupported",
         "codex_subagents_unsupported",
         "codex_tool_search_unsupported",
     }.issubset(codes)
+    assert "codex_mcp_unsupported" not in codes
 
 
 def test_codex_runtime_rejects_anthropic_route() -> None:
