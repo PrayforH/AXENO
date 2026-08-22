@@ -1,6 +1,6 @@
 # public-opinion-agent
 
-`public-opinion-agent@0.3.8` is the Codex edition of the evidence-backed Chinese
+`public-opinion-agent@0.3.14` is the Codex edition of the evidence-backed Chinese
 public-opinion Agent. Its Studio display name is `涉非舆情分析（Codex）`.
 
 This package was not emitted unchanged by `harness agent init`. It is the worked
@@ -11,13 +11,10 @@ are outside the current Codex compiler contract.
 
 Version notes:
 
-- `0.3.5`: previous Claude Agent SDK release; keep as the rollback version.
-- `0.3.6`: first Codex migration; superseded after its canary exposed stale prompt and
-  model-binding issues.
-- `0.3.7`: Codex prompt and route correction; superseded so the packaged Skill could be
-  aligned with the same runtime boundary.
-- `0.3.8`: current Codex release with a Codex-native prompt, Skill, tool boundary and
-  model route.
+- `0.3.13`: previous Claude Agent SDK release and rollback version; it has no Knowledge
+  Base binding.
+- `0.3.14`: current Codex release with a Codex-native prompt, Skill, tool boundary and
+  model route; Knowledge Base references remain empty.
 
 Validate and package:
 
