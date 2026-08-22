@@ -174,6 +174,7 @@ def studio_spec_from_manifest(manifest_path: Path) -> dict[str, object]:
         "description": labels.get("description", manifest.metadata.name),
         "domain": labels.get("domain", manifest.metadata.name),
         "template": template,
+        "runtime": manifest.spec.runtime,
         "model": {
             "routeId": manifest.spec.model.route,
             "model": manifest.spec.model.model,

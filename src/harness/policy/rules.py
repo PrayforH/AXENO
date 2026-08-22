@@ -117,6 +117,28 @@ def knowledge_search_read_rules() -> list[PolicyRule]:
     ]
 
 
+def sentiment_query_read_rules() -> list[PolicyRule]:
+    """Allow only the reviewed read-only public-opinion MCP surface."""
+
+    return [
+        PolicyRule(
+            name=f"sentiment-query-{tool_name}",
+            tool=f"mcp__sentiment_query_mcp__{tool_name}",
+            decision=PolicyDecision.ALLOW,
+        )
+        for tool_name in (
+            "get_risk_dashboard",
+            "search_risk_subjects",
+            "get_risk_subject",
+            "query_legal_entity_directory",
+            "search_risk_opinions",
+            "get_risk_opinion",
+            "search_risk_events",
+            "get_risk_event",
+        )
+    ]
+
+
 def default_policy_rules() -> list[PolicyRule]:
     return [
         PolicyRule(
@@ -169,6 +191,7 @@ def default_policy_rules() -> list[PolicyRule]:
             decision=PolicyDecision.ALLOW,
         ),
         *knowledge_search_read_rules(),
+        *sentiment_query_read_rules(),
         PolicyRule(name="workspace-write", tool="Write", decision=PolicyDecision.ALLOW),
         PolicyRule(name="workspace-edit", tool="Edit", decision=PolicyDecision.ALLOW),
         PolicyRule(

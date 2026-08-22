@@ -2,12 +2,12 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: public-opinion-agent
-  version: 0.3.15
+  version: 0.3.16
   labels:
     domain: public-opinion
     template: orchestrator
     display-name: 涉非舆情分析（Codex）
-    description: Codex 0.3.15：接入涉非舆情 MCP，结合专用查询、用户材料与工作区证据完成可追溯研判；知识库保持为空。
+    description: Codex 0.3.16：接入涉非舆情 MCP，结合专用查询、用户材料与工作区证据完成可追溯研判；知识库保持为空。
     evaluation-enabled: "true"
 spec:
   runtime: codex-app-server
