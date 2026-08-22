@@ -17,6 +17,7 @@ from harness.runtime.base import (
 from harness.runtime.codex_app_server import (
     CodexAppServerOptions,
     CodexAppServerProcess,
+    CodexRpcRemoteError,
 )
 from harness.runtime.codex_protocol import (
     CodexMessage,
@@ -143,7 +144,17 @@ class CodexAppServerRuntime:
             client = process.client
             if client is None:
                 raise RuntimeError("Codex app-server client is unavailable")
-            thread_id = await self._open_thread(client, context, execution_workspace)
+            thread_id, recovered_thread_id = await self._open_thread(
+                client, context, execution_workspace
+            )
+            if recovered_thread_id is not None:
+                yield RuntimeEvent(
+                    type="runtime.session.recovered",
+                    payload={
+                        "previous_session_id": recovered_thread_id,
+                        "runtime": "codex-app-server",
+                    },
+                )
             yield RuntimeEvent(
                 type="runtime.thread.started",
                 payload={"thread_id": thread_id, "runtime": "codex-app-server"},
@@ -155,7 +166,13 @@ class CodexAppServerRuntime:
                     "input": [
                         {
                             "type": "text",
-                            "text": self._turn_prompt(context),
+                            "text": self._turn_prompt(
+                                context,
+                                include_context_projection=(
+                                    context.session.resolved_runtime_thread_id is None
+                                    or recovered_thread_id is not None
+                                ),
+                            ),
                         }
                     ],
                     "approvalPolicy": self._config.approval_policy,
@@ -201,7 +218,7 @@ class CodexAppServerRuntime:
         client: CodexRpcConnection,
         context: RuntimeContext,
         execution_workspace: Path,
-    ) -> str:
+    ) -> tuple[str, str | None]:
         existing_thread_id = context.session.resolved_runtime_thread_id
         common: dict[str, object] = {
             "cwd": str(execution_workspace),
@@ -215,16 +232,27 @@ class CodexAppServerRuntime:
         if self._config.developer_instructions:
             common["developerInstructions"] = self._config.developer_instructions
         if existing_thread_id:
-            response = await client.request(
-                "thread/resume",
-                {**common, "threadId": existing_thread_id},
-            )
+            try:
+                response = await client.request(
+                    "thread/resume",
+                    {**common, "threadId": existing_thread_id},
+                )
+            except CodexRpcRemoteError as error:
+                if error.method != "thread/resume":
+                    raise
+                # A restored Session may retain the Codex rollout while the
+                # app-server rejects its durable thread metadata (for example
+                # after the isolated Daytona workspace path changes). Start a
+                # fresh native thread and let the Worker atomically replace the
+                # stale binding before the turn begins.
+                response = await client.request("thread/start", common)
+                return self._thread_id(response), existing_thread_id
         else:
             response = await client.request("thread/start", common)
         thread_id = self._thread_id(response)
         if existing_thread_id and thread_id != existing_thread_id:
             raise RuntimeError("Codex resumed a different thread than requested")
-        return thread_id
+        return thread_id, None
 
     def _sandbox_policy(self, workspace: Path) -> dict[str, object]:
         if self._config.sandbox_mode == "danger-full-access":
@@ -241,11 +269,22 @@ class CodexAppServerRuntime:
         }
 
     @staticmethod
-    def _turn_prompt(context: RuntimeContext) -> str:
+    def _turn_prompt(
+        context: RuntimeContext,
+        *,
+        include_context_projection: bool = True,
+    ) -> str:
         prompt = str(context.run.input.get("prompt", ""))
         projections = tuple(
             value.strip()
-            for value in (context.memory_projection, context.context_projection)
+            for value in (
+                context.memory_projection,
+                (
+                    context.context_projection
+                    if include_context_projection
+                    else ""
+                ),
+            )
             if value.strip()
         )
         return "\n\n".join((*projections, prompt)) if projections else prompt

@@ -1200,7 +1200,10 @@ class RunOrchestrator:
                 )
                 if (
                     self._context_service is not None
-                    and session.resolved_runtime_thread_id is None
+                    and (
+                        session.resolved_runtime_thread_id is None
+                        or session.runtime_type == "codex-app-server"
+                    )
                 )
                 else ""
             )

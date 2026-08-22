@@ -14,7 +14,7 @@ from harness.runtime.base import (
     RuntimeExecutionTimeoutError,
     RuntimeResultError,
 )
-from harness.runtime.codex_app_server import CodexAppServerOptions
+from harness.runtime.codex_app_server import CodexAppServerOptions, CodexRpcRemoteError
 from harness.runtime.codex_protocol import CodexMessage, CodexMessageKind
 from harness.runtime.codex_runtime import (
     CodexAppServerRuntime,
@@ -27,9 +27,16 @@ NOW = datetime(2026, 8, 22, tzinfo=UTC)
 
 
 class FakeClient:
-    def __init__(self, messages: list[CodexMessage], *, hang_turn: bool = False) -> None:
+    def __init__(
+        self,
+        messages: list[CodexMessage],
+        *,
+        hang_turn: bool = False,
+        fail_resume: bool = False,
+    ) -> None:
         self.messages = messages
         self.hang_turn = hang_turn
+        self.fail_resume = fail_resume
         self.requests: list[tuple[str, dict[str, object]]] = []
         self.responses: list[tuple[int | str, object]] = []
         self.errors: list[tuple[int | str, int, str]] = []
@@ -44,6 +51,12 @@ class FakeClient:
         del timeout_seconds
         values = dict(params or {})
         self.requests.append((method, values))
+        if method == "thread/resume" and self.fail_resume:
+            raise CodexRpcRemoteError(
+                method=method,
+                code=-32602,
+                message="thread metadata is unavailable",
+            )
         if method == "turn/start" and self.hang_turn:
             await asyncio.Future[None]()
         thread_id = str(values.get("threadId", "thread-1"))
@@ -84,7 +97,12 @@ class FakeProcess:
         self.closed = True
 
 
-def _context(tmp_path: Path, *, thread_id: str | None = None) -> RuntimeContext:
+def _context(
+    tmp_path: Path,
+    *,
+    thread_id: str | None = None,
+    context_projection: str = "",
+) -> RuntimeContext:
     session = Session(
         session_id="session-1",
         tenant_id="tenant-a",
@@ -110,6 +128,7 @@ def _context(tmp_path: Path, *, thread_id: str | None = None) -> RuntimeContext:
         session=session,
         workspace=tmp_path,
         memory_projection="remember this",
+        context_projection=context_projection,
     )
 
 
@@ -243,6 +262,47 @@ async def test_resumes_existing_thread_and_declines_approval(tmp_path: Path) -> 
     assert client.requests[0][0] == "thread/resume"
     assert client.requests[0][1]["threadId"] == "thread-old"
     assert client.responses == [(9, {"decision": "decline"})]
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_stale_thread_recovers_with_fresh_thread_and_context(tmp_path: Path) -> None:
+    client = FakeClient(
+        [_notification("turn/completed", {"turn": {"status": "completed"}})],
+        fail_resume=True,
+    )
+    runtime, process, _options = _runtime(tmp_path, client)
+
+    events = [
+        event
+        async for event in runtime.execute(
+            _context(
+                tmp_path,
+                thread_id="thread-old",
+                context_projection="prior conversation digest",
+            )
+        )
+    ]
+
+    assert [event.type for event in events[:2]] == [
+        "runtime.session.recovered",
+        "runtime.thread.started",
+    ]
+    assert events[0].payload == {
+        "previous_session_id": "thread-old",
+        "runtime": "codex-app-server",
+    }
+    assert [method for method, _params in client.requests[:3]] == [
+        "thread/resume",
+        "thread/start",
+        "turn/start",
+    ]
+    assert client.requests[2][1]["input"] == [
+        {
+            "type": "text",
+            "text": "remember this\n\nprior conversation digest\n\nbuild it",
+        }
+    ]
     assert process.closed is True
 
 
