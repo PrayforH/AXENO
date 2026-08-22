@@ -16,6 +16,7 @@ from harness.runtime.codex_protocol import (
     CodexProtocolError,
     classify_codex_message,
 )
+from harness.runtime.daytona_transport import RemoteClaudeSession
 from harness.runtime.hooks import SdkDiagnosticTail, redact_sdk_stderr
 
 CODEX_JSONL_MAX_LINE_BYTES = 32 * 1024 * 1024
@@ -115,9 +116,7 @@ class CodexJsonlClient:
                 pending[1].cancel()
             raise
 
-    async def notify(
-        self, method: str, params: Mapping[str, object] | None = None
-    ) -> None:
+    async def notify(self, method: str, params: Mapping[str, object] | None = None) -> None:
         if not method:
             raise ValueError("Codex notification method must be non-empty")
         self._ensure_usable()
@@ -185,12 +184,15 @@ class CodexJsonlClient:
 
     async def _write(self, payload: Mapping[str, object]) -> None:
         try:
-            encoded = json.dumps(
-                payload,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                allow_nan=False,
-            ).encode("utf-8") + b"\n"
+            encoded = (
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+                + b"\n"
+            )
         except (TypeError, ValueError) as error:
             raise CodexProtocolError("Codex RPC payload is not valid JSON") from error
         if len(encoded) > self._max_line_bytes:
@@ -220,9 +222,7 @@ class CodexJsonlClient:
                 )
         except asyncio.CancelledError:
             if not self._closing:
-                terminal_error = CodexConnectionClosedError(
-                    "Codex app-server reader was cancelled"
-                )
+                terminal_error = CodexConnectionClosedError("Codex app-server reader was cancelled")
             raise
         except BaseException as error:
             terminal_error = error
@@ -373,3 +373,152 @@ class CodexAppServerProcess:
     async def _read_stderr(self, stderr: asyncio.StreamReader) -> None:
         while line := await stderr.readline():
             self.stderr_callback(line.decode("utf-8", errors="replace"))
+
+
+class _RemoteJsonlWriter:
+    """Adapt a remote interactive process session to CodexJsonlClient's writer."""
+
+    def __init__(self, session: RemoteClaudeSession) -> None:
+        self._session = session
+        self._buffer = bytearray()
+        self._closing = False
+
+    def write(self, data: bytes) -> None:
+        if self._closing:
+            raise ConnectionError("remote Codex stdin is closed")
+        self._buffer.extend(data)
+
+    async def drain(self) -> None:
+        if not self._buffer:
+            return
+        payload = bytes(self._buffer)
+        self._buffer.clear()
+        await self._session.write(payload.decode("utf-8"))
+
+    def close(self) -> None:
+        self._closing = True
+
+    async def wait_closed(self) -> None:
+        await self._session.end_input()
+
+    def is_closing(self) -> bool:
+        return self._closing
+
+
+class DaytonaCodexAppServerProcess:
+    """Run the Codex app-server inside an isolated Daytona workspace."""
+
+    def __init__(
+        self,
+        *,
+        session: RemoteClaudeSession,
+        options: CodexAppServerOptions,
+        remote_workspace: str,
+        cli_path: str,
+        cli_version: str,
+        cli_sha256: str,
+        stderr_callback: Callable[[str], None] | None = None,
+    ) -> None:
+        self._session = session
+        self.options = options
+        self._remote_workspace = remote_workspace
+        self._cli_path = cli_path
+        self._cli_version = cli_version
+        self._cli_sha256 = cli_sha256
+        self.stderr_callback = stderr_callback or SdkDiagnosticTail()
+        self.client: CodexJsonlClient | None = None
+        self._stdout_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
+
+    async def start(self) -> Mapping[str, object]:
+        if self.client is not None:
+            raise RuntimeError("Codex app-server process is already started")
+        install_script = (
+            'set -eu; path="$1"; version="$2"; expected="$3"; shift 3; '
+            'if ! [ -x "$path" ] || ! "$path" --version 2>/dev/null | '
+            'grep -Fxq "codex-cli $version"; then '
+            'tmp="$(mktemp -d)"; trap "rm -rf -- \'$tmp\'" EXIT; '
+            'archive="$tmp/codex.tar.gz"; '
+            'root="$(dirname "$path")/../lib/codex/$version"; '
+            "curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors "
+            '"https://github.com/openai/codex/releases/download/rust-v${version}/'
+            'codex-package-x86_64-unknown-linux-musl.tar.gz" -o "$archive"; '
+            'printf "%s  %s\\n" "$expected" "$archive" | sha256sum -c -; '
+            'rm -rf -- "$root"; mkdir -p -- "$root" "$(dirname "$path")"; '
+            'tar -xzf "$archive" -C "$root"; '
+            'ln -sfn "$root/bin/codex" "$path"; '
+            'fi; exec "$path" "$@"'
+        )
+        config_arguments = tuple(
+            argument
+            for override in self.options.config_overrides
+            for argument in ("--config", override)
+        )
+        environment = {
+            **dict(self.options.environment or {}),
+            "HOME": f"{self._remote_workspace}/.codex-home",
+        }
+        await self._session.start(
+            [
+                "bash",
+                "-lc",
+                install_script,
+                "harness-codex",
+                self._cli_path,
+                self._cli_version,
+                self._cli_sha256,
+                "app-server",
+                *config_arguments,
+            ],
+            self._remote_workspace,
+            environment,
+        )
+        reader = asyncio.StreamReader(limit=self.options.max_line_bytes + 1)
+        writer = _RemoteJsonlWriter(self._session)
+        self._stdout_task = asyncio.create_task(
+            self._pump_stdout(reader), name="daytona-codex-app-server-stdout"
+        )
+        self._stderr_task = asyncio.create_task(
+            self._read_stderr(), name="daytona-codex-app-server-stderr"
+        )
+        self.client = CodexJsonlClient(
+            reader,
+            writer,
+            request_timeout_seconds=self.options.request_timeout_seconds,
+            max_line_bytes=self.options.max_line_bytes,
+        )
+        self.client.start()
+        result = await self.client.request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": self.options.client_name,
+                    "title": self.options.client_title,
+                    "version": self.options.client_version,
+                }
+            },
+        )
+        await self.client.notify("initialized", {})
+        return cast(Mapping[str, object], result) if isinstance(result, dict) else {}
+
+    async def close(self) -> None:
+        if self.client is not None:
+            await self.client.close()
+        with suppress(Exception):
+            await self._session.terminate()
+        for task in (self._stdout_task, self._stderr_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    async def _pump_stdout(self, reader: asyncio.StreamReader) -> None:
+        try:
+            while (chunk := await self._session.read_stdout()) is not None:
+                reader.feed_data(chunk)
+        finally:
+            reader.feed_eof()
+
+    async def _read_stderr(self) -> None:
+        while (chunk := await self._session.read_stderr()) is not None:
+            self.stderr_callback(chunk.decode("utf-8", errors="replace"))

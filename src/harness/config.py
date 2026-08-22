@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     daytona_remote_workspace_root: str = "/home/daytona/harness"
     daytona_claude_cli_version: str = "2.1.206"
     daytona_claude_cli_path: str = "/home/daytona/.local/bin/claude"
+    daytona_codex_cli_version: str = "0.149.0"
+    daytona_codex_cli_path: str = "/home/daytona/.local/bin/codex"
+    daytona_codex_cli_sha256: str = (
+        "1c08ba262820b78d49ea7a93f326b6b430b72e5fe46830e433edef12e5123244"
+    )
     daytona_delete_on_destroy: bool = True
     daytona_auto_stop_interval_minutes: int = Field(default=15, ge=1)
     daytona_auto_delete_interval_minutes: int = Field(default=60, ge=1)

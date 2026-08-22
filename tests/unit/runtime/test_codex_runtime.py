@@ -180,9 +180,7 @@ async def test_starts_thread_turn_and_maps_stream(tmp_path: Path) -> None:
     )
     turn_params = client.requests[1][1]
     assert turn_params["threadId"] == "thread-1"
-    assert turn_params["input"] == [
-        {"type": "text", "text": "remember this\n\nbuild it"}
-    ]
+    assert turn_params["input"] == [{"type": "text", "text": "remember this\n\nbuild it"}]
     assert turn_params["sandboxPolicy"] == {
         "type": "workspaceWrite",
         "writableRoots": [str(tmp_path)],
@@ -192,6 +190,35 @@ async def test_starts_thread_turn_and_maps_stream(tmp_path: Path) -> None:
     assert options_seen[0].config_overrides == ('model_provider="test"',)
     assert process.started is True
     assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_remote_transport_uses_remote_workspace_for_codex(tmp_path: Path) -> None:
+    client = FakeClient([_notification("turn/completed", {"turn": {"status": "completed"}})])
+    runtime, remote_process, local_options = _runtime(tmp_path, client)
+    remote_options: list[CodexAppServerOptions] = []
+
+    def transport_factory(options: object) -> object:
+        remote_options.append(cast(CodexAppServerOptions, options))
+        return remote_process
+
+    context = _context(tmp_path).model_copy(
+        update={
+            "remote_workspace": "/home/daytona/harness/run-1",
+            "runtime_transport_factory": transport_factory,
+        }
+    )
+
+    _ = [event async for event in runtime.execute(context)]
+
+    assert local_options == []
+    assert remote_options[0].working_directory == Path("/home/daytona/harness/run-1")
+    assert client.requests[0][1]["cwd"] == "/home/daytona/harness/run-1"
+    assert client.requests[1][1]["sandboxPolicy"] == {
+        "type": "workspaceWrite",
+        "writableRoots": ["/home/daytona/harness/run-1"],
+        "networkAccess": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -211,10 +238,7 @@ async def test_resumes_existing_thread_and_declines_approval(tmp_path: Path) -> 
     )
     runtime, process, _options = _runtime(tmp_path, client)
 
-    _ = [
-        event
-        async for event in runtime.execute(_context(tmp_path, thread_id="thread-old"))
-    ]
+    _ = [event async for event in runtime.execute(_context(tmp_path, thread_id="thread-old"))]
 
     assert client.requests[0][0] == "thread/resume"
     assert client.requests[0][1]["threadId"] == "thread-old"
@@ -224,9 +248,7 @@ async def test_resumes_existing_thread_and_declines_approval(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_failed_turn_raises_runtime_result_error_and_closes(tmp_path: Path) -> None:
-    client = FakeClient(
-        [_notification("turn/completed", {"turn": {"status": "failed"}})]
-    )
+    client = FakeClient([_notification("turn/completed", {"turn": {"status": "failed"}})])
     runtime, process, _options = _runtime(tmp_path, client)
 
     with pytest.raises(RuntimeResultError, match="codex_turn_failed"):

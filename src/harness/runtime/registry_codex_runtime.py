@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 
@@ -103,27 +102,15 @@ class RegistryCodexRuntime:
                 )
             model = selected_config.model
             provider = _CONTROL_PLANE_PROVIDER_ID
-            inherited_environment = (
-                os.environ if self._environment is None else self._environment
-            )
             environment = {
-                **inherited_environment,
+                **dict(self._environment or {}),
                 _CONTROL_PLANE_API_KEY_ENV: selected_config.credential.get_secret_value(),
             }
             provider_config_overrides = (
                 f"model_provider={_toml_string(provider)}",
-                (
-                    f"model_providers.{provider}.name="
-                    f"{_toml_string('Agent Studio control plane')}"
-                ),
-                (
-                    f"model_providers.{provider}.base_url="
-                    f"{_toml_string(selected_config.base_url)}"
-                ),
-                (
-                    f"model_providers.{provider}.env_key="
-                    f"{_toml_string(_CONTROL_PLANE_API_KEY_ENV)}"
-                ),
+                (f"model_providers.{provider}.name={_toml_string('Agent Studio control plane')}"),
+                (f"model_providers.{provider}.base_url={_toml_string(selected_config.base_url)}"),
+                (f"model_providers.{provider}.env_key={_toml_string(_CONTROL_PLANE_API_KEY_ENV)}"),
                 f'model_providers.{provider}.wire_api="responses"',
                 f"model_providers.{provider}.requires_openai_auth=false",
             )

@@ -1,14 +1,17 @@
 import asyncio
 import json
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from harness.runtime.codex_app_server import (
     AsyncJsonlWriter,
+    CodexAppServerOptions,
     CodexConnectionClosedError,
     CodexJsonlClient,
     CodexRpcRemoteError,
+    DaytonaCodexAppServerProcess,
 )
 from harness.runtime.codex_protocol import CodexMessageKind, CodexProtocolError
 
@@ -165,3 +168,85 @@ async def test_enforces_outbound_line_limit() -> None:
     with pytest.raises(CodexProtocolError, match="line limit"):
         await client.notify("turn/start", {"content": "x" * 100})
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_daytona_process_bootstraps_pinned_package_and_bridges_jsonl() -> None:
+    class FakeRemoteSession:
+        def __init__(self) -> None:
+            self.argv: list[str] = []
+            self.cwd = ""
+            self.environment: dict[str, str] = {}
+            self.writes: list[str] = []
+            self.stdout: asyncio.Queue[bytes | None] = asyncio.Queue()
+            self.stderr: asyncio.Queue[bytes | None] = asyncio.Queue()
+            self.ended = False
+            self.terminated = False
+
+        async def stage_config(self, _remote: str, _files: dict[str, bytes]) -> None:
+            return None
+
+        async def start(self, argv: list[str], cwd: str, env: dict[str, str]) -> None:
+            self.argv = argv
+            self.cwd = cwd
+            self.environment = env
+
+        async def write(self, data: str) -> None:
+            self.writes.append(data)
+            payload = json.loads(data)
+            if payload.get("method") == "initialize":
+                await self.stdout.put(
+                    json.dumps({"id": payload["id"], "result": {"ok": True}}).encode() + b"\n"
+                )
+
+        async def end_input(self) -> None:
+            self.ended = True
+            await self.stdout.put(None)
+
+        async def read_stdout(self) -> bytes | None:
+            return await self.stdout.get()
+
+        async def read_stderr(self) -> bytes | None:
+            return await self.stderr.get()
+
+        async def wait(self) -> int:
+            return 0
+
+        async def terminate(self) -> None:
+            self.terminated = True
+
+    session = FakeRemoteSession()
+    process = DaytonaCodexAppServerProcess(
+        session=session,  # type: ignore[arg-type]
+        options=CodexAppServerOptions(
+            codex_path=Path("/local/codex"),
+            working_directory=Path("/remote/workspace"),
+            environment={"HARNESS_CODEX_PROVIDER_API_KEY": "private"},
+            config_overrides=('model_provider="agent_studio"',),
+        ),
+        remote_workspace="/remote/workspace",
+        cli_path="/home/daytona/.local/bin/codex",
+        cli_version="0.149.0",
+        cli_sha256="abc123",
+    )
+
+    result = await process.start()
+
+    assert result == {"ok": True}
+    assert session.cwd == "/remote/workspace"
+    assert session.environment == {
+        "HARNESS_CODEX_PROVIDER_API_KEY": "private",
+        "HOME": "/remote/workspace/.codex-home",
+    }
+    assert "codex-package-x86_64-unknown-linux-musl.tar.gz" in session.argv[2]
+    assert session.argv[-3:] == [
+        "app-server",
+        "--config",
+        'model_provider="agent_studio"',
+    ]
+    assert json.loads(session.writes[1]) == {"method": "initialized", "params": {}}
+
+    await process.close()
+
+    assert session.ended is True
+    assert session.terminated is True

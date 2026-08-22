@@ -57,9 +57,7 @@ class CodexProcess(Protocol):
 
 
 type CodexProcessFactory = Callable[[CodexAppServerOptions], CodexProcess]
-type CodexServerRequestHandler = Callable[
-    [RuntimeContext, CodexMessage], Awaitable[object]
-]
+type CodexServerRequestHandler = Callable[[RuntimeContext, CodexMessage], Awaitable[object]]
 
 
 def _default_process_factory(options: CodexAppServerOptions) -> CodexProcess:
@@ -117,20 +115,35 @@ class CodexAppServerRuntime:
             raise RuntimeExecutionTimeoutError("Codex turn timed out") from error
 
     async def _execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
-        process = self._process_factory(
-            CodexAppServerOptions(
-                codex_path=self._config.codex_path,
-                working_directory=context.workspace,
-                environment=self._config.environment,
-                config_overrides=self._config.config_overrides,
-            )
+        execution_workspace = (
+            Path(context.remote_workspace)
+            if context.runtime_transport_factory is not None and context.remote_workspace
+            else context.workspace
+        )
+        environment = dict(self._config.environment or {})
+        if self._config.environment is not None:
+            codex_home = execution_workspace / ".codex-home"
+            if context.runtime_transport_factory is None:
+                codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+            environment.setdefault("HOME", str(codex_home))
+            environment.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
+        options = CodexAppServerOptions(
+            codex_path=self._config.codex_path,
+            working_directory=execution_workspace,
+            environment=(environment if self._config.environment is not None else None),
+            config_overrides=self._config.config_overrides,
+        )
+        process = (
+            cast(CodexProcess, context.runtime_transport_factory(options))
+            if context.runtime_transport_factory is not None
+            else self._process_factory(options)
         )
         try:
             await process.start()
             client = process.client
             if client is None:
                 raise RuntimeError("Codex app-server client is unavailable")
-            thread_id = await self._open_thread(client, context)
+            thread_id = await self._open_thread(client, context, execution_workspace)
             yield RuntimeEvent(
                 type="runtime.thread.started",
                 payload={"thread_id": thread_id, "runtime": "codex-app-server"},
@@ -146,7 +159,7 @@ class CodexAppServerRuntime:
                         }
                     ],
                     "approvalPolicy": self._config.approval_policy,
-                    "sandboxPolicy": self._sandbox_policy(context.workspace),
+                    "sandboxPolicy": self._sandbox_policy(execution_workspace),
                 },
             )
             completed = False
@@ -187,10 +200,11 @@ class CodexAppServerRuntime:
         self,
         client: CodexRpcConnection,
         context: RuntimeContext,
+        execution_workspace: Path,
     ) -> str:
         existing_thread_id = context.session.resolved_runtime_thread_id
         common: dict[str, object] = {
-            "cwd": str(context.workspace),
+            "cwd": str(execution_workspace),
             "approvalPolicy": self._config.approval_policy,
             "sandbox": self._config.sandbox_mode,
         }
