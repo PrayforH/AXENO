@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import shutil
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +23,8 @@ from harness.runtime.codex_runtime import (
     CodexProcess,
     CodexRpcConnection,
     CodexRuntimeConfig,
+    _persist_local_codex_home,
+    _prepare_local_codex_home,
 )
 
 NOW = datetime(2026, 8, 22, tzinfo=UTC)
@@ -137,6 +141,65 @@ def _notification(method: str, params: dict[str, object] | None = None) -> Codex
         CodexMessageKind.NOTIFICATION,
         {"method": method, "params": params or {}},
     )
+
+
+def test_local_codex_home_is_stable_across_restored_run_workspaces(
+    tmp_path: Path,
+) -> None:
+    first_workspace = tmp_path / "run_first-random"
+    first_workspace.mkdir()
+    first = _prepare_local_codex_home(first_workspace, _context(first_workspace))
+    rollout = first.native / ".codex" / "sessions" / "rollout-thread-1.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text('{"type":"session_meta"}\n', encoding="utf-8")
+    stable_home = first.native
+    _persist_local_codex_home(first)
+
+    second_workspace = tmp_path / "run_second-random"
+    second_workspace.mkdir()
+    shutil.copytree(
+        first_workspace / ".codex-home",
+        second_workspace / ".codex-home",
+    )
+    second = _prepare_local_codex_home(
+        second_workspace,
+        _context(second_workspace, thread_id="thread-1"),
+    )
+
+    assert second.native == stable_home
+    assert (second.native / ".codex" / "sessions" / rollout.name).is_file()
+    _persist_local_codex_home(second)
+    assert (second_workspace / ".codex-home" / ".harness-native-home").read_text() == str(
+        stable_home
+    )
+
+
+def test_local_codex_home_recovers_legacy_absolute_rollout_path(tmp_path: Path) -> None:
+    old_workspace = tmp_path / "run_old-random"
+    current_workspace = tmp_path / "run_current-random"
+    current_workspace.mkdir()
+    archived = current_workspace / ".codex-home"
+    rollout = archived / ".codex" / "sessions" / "2026" / "08" / "23" / "rollout-thread-old.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "thread-old", "cwd": str(old_workspace)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    home = _prepare_local_codex_home(
+        current_workspace,
+        _context(current_workspace, thread_id="thread-old"),
+    )
+
+    assert home.native == old_workspace / ".codex-home"
+    assert rollout.name in {item.name for item in home.native.rglob("rollout-thread-old.jsonl")}
+    _persist_local_codex_home(home)
 
 
 def _runtime(

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +27,120 @@ from harness.runtime.codex_protocol import (
     CodexMessageKind,
     map_codex_notification,
 )
+
+_CODEX_ARCHIVED_HOME = ".codex-home"
+_CODEX_HOME_MARKER = ".harness-native-home"
+_CODEX_STABLE_HOME_ROOT = ".harness-codex-homes"
+
+
+@dataclass(frozen=True)
+class _LocalCodexHome:
+    native: Path
+    archived: Path
+
+
+def _stable_codex_home(execution_workspace: Path, context: RuntimeContext) -> Path:
+    digest = hashlib.sha256(
+        f"{context.session.tenant_id}\0{context.session.session_id}".encode()
+    ).hexdigest()[:32]
+    return execution_workspace.parent / _CODEX_STABLE_HOME_ROOT / digest
+
+
+def _valid_codex_home(
+    candidate: Path,
+    *,
+    execution_workspace: Path,
+    stable: Path,
+) -> bool:
+    if not candidate.is_absolute():
+        return False
+    if candidate == stable:
+        return True
+    # Releases before the stable-HOME fix persisted the first Run's absolute
+    # workspace path. Accept only that narrow local-sandbox shape so an
+    # existing Session can resume without trusting an arbitrary rollout path.
+    return (
+        candidate.name == _CODEX_ARCHIVED_HOME
+        and candidate.parent.name.startswith("run_")
+        and candidate.parent.parent == execution_workspace.parent
+    )
+
+
+def _legacy_codex_home(
+    archived: Path,
+    *,
+    thread_id: str,
+    execution_workspace: Path,
+    stable: Path,
+) -> Path | None:
+    sessions = archived / ".codex" / "sessions"
+    if not sessions.is_dir():
+        return None
+    for rollout in sessions.rglob(f"*{thread_id}.jsonl"):
+        try:
+            with rollout.open(encoding="utf-8") as stream:
+                record = json.loads(stream.readline())
+            payload = record.get("payload", {})
+            cwd = payload.get("cwd") if isinstance(payload, dict) else None
+            candidate = Path(cwd) / _CODEX_ARCHIVED_HOME if isinstance(cwd, str) else None
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if candidate is not None and _valid_codex_home(
+            candidate,
+            execution_workspace=execution_workspace,
+            stable=stable,
+        ):
+            return candidate
+    return None
+
+
+def _prepare_local_codex_home(
+    execution_workspace: Path,
+    context: RuntimeContext,
+) -> _LocalCodexHome:
+    archived = execution_workspace / _CODEX_ARCHIVED_HOME
+    stable = _stable_codex_home(execution_workspace, context)
+    native = stable
+    marker = archived / _CODEX_HOME_MARKER
+    if marker.is_file():
+        try:
+            candidate = Path(marker.read_text(encoding="utf-8").strip())
+        except OSError:
+            candidate = stable
+        if _valid_codex_home(
+            candidate,
+            execution_workspace=execution_workspace,
+            stable=stable,
+        ):
+            native = candidate
+    elif context.session.resolved_runtime_thread_id is not None:
+        native = (
+            _legacy_codex_home(
+                archived,
+                thread_id=context.session.resolved_runtime_thread_id,
+                execution_workspace=execution_workspace,
+                stable=stable,
+            )
+            or stable
+        )
+
+    native.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if native.exists():
+        shutil.rmtree(native)
+    if archived.is_dir():
+        shutil.copytree(archived, native)
+    else:
+        native.mkdir(mode=0o700)
+    (native / _CODEX_HOME_MARKER).write_text(str(native), encoding="utf-8")
+    return _LocalCodexHome(native=native, archived=archived)
+
+
+def _persist_local_codex_home(home: _LocalCodexHome) -> None:
+    if home.archived.exists():
+        shutil.rmtree(home.archived)
+    shutil.copytree(home.native, home.archived)
+    if home.native != home.archived:
+        shutil.rmtree(home.native)
 
 
 class CodexRpcConnection(Protocol):
@@ -122,11 +239,17 @@ class CodexAppServerRuntime:
             else context.workspace
         )
         environment = dict(self._config.environment or {})
+        local_home: _LocalCodexHome | None = None
         if self._config.environment is not None:
-            codex_home = execution_workspace / ".codex-home"
             if context.runtime_transport_factory is None:
-                codex_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-            environment.setdefault("HOME", str(codex_home))
+                local_home = await asyncio.to_thread(
+                    _prepare_local_codex_home,
+                    execution_workspace,
+                    context,
+                )
+                environment["HOME"] = str(local_home.native)
+            else:
+                environment.setdefault("HOME", str(execution_workspace / _CODEX_ARCHIVED_HOME))
             environment.setdefault("PATH", "/usr/local/bin:/usr/bin:/bin")
         options = CodexAppServerOptions(
             codex_path=self._config.codex_path,
@@ -211,7 +334,11 @@ class CodexAppServerRuntime:
                 user_message="Codex 连接意外中断，请重试。",
             )
         finally:
-            await process.close()
+            try:
+                await process.close()
+            finally:
+                if local_home is not None:
+                    await asyncio.to_thread(_persist_local_codex_home, local_home)
 
     async def _open_thread(
         self,
@@ -279,11 +406,7 @@ class CodexAppServerRuntime:
             value.strip()
             for value in (
                 context.memory_projection,
-                (
-                    context.context_projection
-                    if include_context_projection
-                    else ""
-                ),
+                (context.context_projection if include_context_projection else ""),
             )
             if value.strip()
         )
