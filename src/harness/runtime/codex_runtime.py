@@ -25,7 +25,7 @@ from harness.runtime.codex_app_server import (
 from harness.runtime.codex_protocol import (
     CodexMessage,
     CodexMessageKind,
-    map_codex_notification,
+    CodexNotificationMapper,
 )
 
 _CODEX_ARCHIVED_HOME = ".codex-home"
@@ -80,8 +80,10 @@ def _legacy_codex_home(
         try:
             with rollout.open(encoding="utf-8") as stream:
                 record = json.loads(stream.readline())
-            payload = record.get("payload", {})
-            cwd = payload.get("cwd") if isinstance(payload, dict) else None
+            typed_record = cast(dict[str, Any], record) if isinstance(record, dict) else {}
+            raw_payload = typed_record.get("payload", {})
+            payload = cast(dict[str, Any], raw_payload) if isinstance(raw_payload, dict) else {}
+            cwd = payload.get("cwd")
             candidate = Path(cwd) / _CODEX_ARCHIVED_HOME if isinstance(cwd, str) else None
         except (OSError, ValueError, json.JSONDecodeError):
             continue
@@ -282,6 +284,7 @@ class CodexAppServerRuntime:
                 type="runtime.thread.started",
                 payload={"thread_id": thread_id, "runtime": "codex-app-server"},
             )
+            notification_mapper = CodexNotificationMapper(thread_id)
             await client.request(
                 "turn/start",
                 {
@@ -309,7 +312,7 @@ class CodexAppServerRuntime:
                     continue
                 if message.kind is not CodexMessageKind.NOTIFICATION:
                     continue
-                events = map_codex_notification(message.payload)
+                events = notification_mapper.map(message.payload)
                 for event in events:
                     if (
                         event.type == "runtime.thread.started"

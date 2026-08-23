@@ -211,6 +211,11 @@ class RegistryCodexRuntime:
             await self._tool_resolver.resolve(snapshot.manifest, context.identity),
         )
         mcp_config_overrides, mcp_environment = _codex_mcp_configuration(resolved_tools)
+        limits = snapshot.manifest.spec.limits
+        subagent_config_overrides = (
+            "agents.enabled=true",
+            (f"agents.max_concurrent_threads_per_session={limits.max_concurrent_subagents}"),
+        )
         if mcp_environment:
             environment = {**dict(environment or {}), **mcp_environment}
         runtime = CodexAppServerRuntime(
@@ -222,7 +227,11 @@ class RegistryCodexRuntime:
                     f"{snapshot.system_prompt.rstrip()}\n\n{VISIBLE_EXECUTION_CONTRACT}"
                 ),
                 environment=environment,
-                config_overrides=(*provider_config_overrides, *mcp_config_overrides),
+                config_overrides=(
+                    *provider_config_overrides,
+                    *mcp_config_overrides,
+                    *subagent_config_overrides,
+                ),
                 approval_policy=self._approval_policy,
                 sandbox_mode=self._sandbox_mode,
                 network_access=self._network_access,

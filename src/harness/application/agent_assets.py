@@ -1,5 +1,6 @@
 """Stage immutable main and subagent runtime assets from the registry."""
 
+import json
 from pathlib import Path
 
 from harness.core.errors import ConflictError
@@ -11,6 +12,52 @@ from harness.core.manifest import (
 )
 from harness.core.models import AgentVersion, AgentVersionStatus
 from harness.core.ports import AgentRegistry
+from harness.runtime.execution_contract import VISIBLE_EXECUTION_CONTRACT
+
+
+def _codex_agent_file_name(alias: str) -> str:
+    safe = "".join(
+        character if character.isalnum() or character in "-_" else "-" for character in alias
+    )
+    return f"harness-{safe or 'agent'}.toml"
+
+
+def _materialize_codex_subagents(
+    root: AgentManifestSnapshot,
+    children: dict[str, AgentVersion],
+    workspace: Path,
+) -> None:
+    """Expose pinned Studio roles through Codex's project-scoped agent files."""
+
+    agent_root = workspace / ".codex" / "agents"
+    agent_root.mkdir(parents=True, exist_ok=True)
+    for stale in agent_root.glob("harness-*.toml"):
+        stale.unlink()
+    declarations = {
+        declaration.runtime_name: declaration for declaration in root.manifest.spec.subagents
+    }
+    for alias, child in children.items():
+        declaration = declarations[alias]
+        snapshot = AgentManifestSnapshot.model_validate(child.snapshot)
+        policy = snapshot.manifest.spec.permissions.policy
+        sandbox_mode = "read-only" if policy == "production-read-only" else "workspace-write"
+        developer_instructions = (
+            f"{snapshot.system_prompt.rstrip()}\n\n{VISIBLE_EXECUTION_CONTRACT}"
+        )
+        description = declaration.description or f"Studio pinned role {alias}"
+        content = "\n".join(
+            (
+                f"name = {json.dumps(alias, ensure_ascii=False)}",
+                f"description = {json.dumps(description, ensure_ascii=False)}",
+                f"sandbox_mode = {json.dumps(sandbox_mode)}",
+                (
+                    "developer_instructions = "
+                    f"{json.dumps(developer_instructions, ensure_ascii=False)}"
+                ),
+                "",
+            )
+        )
+        (agent_root / _codex_agent_file_name(alias)).write_text(content, encoding="utf-8")
 
 
 async def resolve_published_agent_versions(
@@ -69,4 +116,6 @@ async def stage_published_agent_assets(
     for child in children.values():
         snapshots.append(AgentManifestSnapshot.model_validate(child.snapshot))
     materialize_python_tool_snapshot_set(snapshots, workspace)
+    if snapshot.manifest.spec.runtime == "codex-app-server":
+        _materialize_codex_subagents(snapshot, children, workspace)
     return materialize_skill_snapshot_set(snapshots, workspace)

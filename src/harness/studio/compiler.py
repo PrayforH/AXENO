@@ -386,12 +386,6 @@ class AgentDraftCompiler:
                     "knowledgeReferences",
                 ),
                 (
-                    bool(spec.subagents) or "Task" in spec.builtin_tools,
-                    "codex_subagents_unsupported",
-                    "当前 Codex 运行时尚未接通 Studio Sub Agent，请移除 Task 和 Sub Agent 后发布",
-                    "subagents",
-                ),
-                (
                     spec.tool_exposure_mode == "on_demand",
                     "codex_tool_search_unsupported",
                     "当前 Codex 运行时尚未接通 Studio 按需工具加载，请改为启动时加载",

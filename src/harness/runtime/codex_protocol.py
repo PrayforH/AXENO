@@ -33,9 +33,7 @@ def classify_codex_message(value: object) -> CodexMessage:
     if not isinstance(value, dict):
         raise CodexProtocolError("app-server message must be a JSON object")
     message = cast(dict[str, Any], value)
-    has_id = isinstance(message.get("id"), (str, int)) and not isinstance(
-        message.get("id"), bool
-    )
+    has_id = isinstance(message.get("id"), (str, int)) and not isinstance(message.get("id"), bool)
     has_method = isinstance(message.get("method"), str) and bool(message["method"])
     if has_id and has_method:
         return CodexMessage(CodexMessageKind.SERVER_REQUEST, message)
@@ -160,21 +158,192 @@ def _item_result(item: Mapping[str, Any]) -> RuntimeEvent | None:
     if item.get("type") == "commandExecution":
         payload["exit_code"] = (
             value
-            if isinstance((value := item.get("exitCode")), int)
-            and not isinstance(value, bool)
+            if isinstance((value := item.get("exitCode")), int) and not isinstance(value, bool)
             else None
         )
-        payload["aggregated_output"] = _text(
-            item.get("aggregatedOutput"), max_chars=20_000
-        )
+        payload["aggregated_output"] = _text(item.get("aggregatedOutput"), max_chars=20_000)
     return RuntimeEvent(type="tool.result", payload=payload)
 
 
 def _turn_status(params: Mapping[str, Any]) -> str:
     turn = _mapping(params.get("turn"))
-    return _text(turn.get("status"), max_chars=100) or _text(
-        params.get("status"), max_chars=100
-    )
+    return _text(turn.get("status"), max_chars=100) or _text(params.get("status"), max_chars=100)
+
+
+_COLLAB_ITEM_TYPES = frozenset({"collabAgentToolCall", "collabToolCall"})
+_COLLAB_TERMINAL_SUCCESS = frozenset({"completed", "shutdown"})
+_COLLAB_TERMINAL_FAILURE = frozenset({"errored", "interrupted", "notFound"})
+
+
+def _notification_thread_id(params: Mapping[str, Any]) -> str:
+    return _identifier(params.get("threadId"))
+
+
+def _collab_receiver_ids(item: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_ids = item.get("receiverThreadIds")
+    values: list[object] = cast(list[object], raw_ids) if isinstance(raw_ids, list) else []
+    values.extend((item.get("receiverThreadId"), item.get("newThreadId")))
+    unique: list[str] = []
+    for value in values:
+        thread_id = _identifier(value)
+        if thread_id and thread_id not in unique:
+            unique.append(thread_id)
+    return tuple(unique)
+
+
+class CodexNotificationMapper:
+    """Project app-server notifications without mixing child threads into the lead."""
+
+    def __init__(self, root_thread_id: str) -> None:
+        self._root_thread_id = root_thread_id
+        self._started_children: set[str] = set()
+        self._terminal_children: set[str] = set()
+        self._child_summaries: dict[str, str] = {}
+        self._child_metadata: dict[str, dict[str, Any]] = {}
+
+    def _is_child(self, params: Mapping[str, Any]) -> bool:
+        thread_id = _notification_thread_id(params)
+        return bool(thread_id and thread_id != self._root_thread_id)
+
+    def _start_child(
+        self,
+        thread_id: str,
+        *,
+        item: Mapping[str, Any] | None = None,
+    ) -> list[RuntimeEvent]:
+        if not thread_id or thread_id in self._started_children:
+            return []
+        self._started_children.add(thread_id)
+        collab = item or {}
+        prompt = _text(collab.get("prompt"), max_chars=2_000)
+        alias = (
+            _text(collab.get("agentType"), max_chars=200)
+            or _text(collab.get("agent"), max_chars=200)
+            or "codex-native"
+        )
+        metadata = {
+            "event_schema": "harness.subagent.v1",
+            "task_id": thread_id,
+            "parent_tool_use_id": _identifier(collab.get("id")),
+            "alias": alias,
+            "agent_name": "codex-native",
+            "depth": 1,
+            "status": "running",
+        }
+        if prompt:
+            metadata["description"] = prompt
+        model = _text(collab.get("model"), max_chars=200)
+        if model:
+            metadata["model"] = model
+        self._child_metadata[thread_id] = metadata
+        return [RuntimeEvent(type="subagent.started", payload=metadata)]
+
+    def _finish_child(self, thread_id: str, status: str) -> list[RuntimeEvent]:
+        if not thread_id or thread_id in self._terminal_children:
+            return []
+        events = self._start_child(thread_id)
+        self._terminal_children.add(thread_id)
+        failed = status in _COLLAB_TERMINAL_FAILURE or status == "failed"
+        payload = {
+            **self._child_metadata.get(
+                thread_id,
+                {
+                    "event_schema": "harness.subagent.v1",
+                    "task_id": thread_id,
+                    "alias": "codex-native",
+                    "agent_name": "codex-native",
+                    "depth": 1,
+                },
+            ),
+            "status": status or ("failed" if failed else "completed"),
+        }
+        summary = self._child_summaries.get(thread_id, "").strip()
+        if summary:
+            payload["summary"] = summary[-2_000:]
+        if failed:
+            payload["error_code"] = f"codex_subagent_{status or 'failed'}"
+        events.append(
+            RuntimeEvent(
+                type="subagent.failed" if failed else "subagent.completed",
+                payload=payload,
+            )
+        )
+        return events
+
+    def _collab_events(self, item: Mapping[str, Any]) -> list[RuntimeEvent]:
+        if item.get("type") not in _COLLAB_ITEM_TYPES:
+            return []
+        tool = _text(item.get("tool"), max_chars=100)
+        states = _mapping(item.get("agentsStates"))
+        receiver_ids = list(_collab_receiver_ids(item))
+        receiver_ids.extend(thread_id for thread_id in states if thread_id not in receiver_ids)
+        events: list[RuntimeEvent] = []
+        for thread_id in receiver_ids:
+            if tool == "spawnAgent":
+                events.extend(self._start_child(thread_id, item=item))
+            state = _mapping(states.get(thread_id))
+            status = _text(state.get("status"), max_chars=100)
+            message = _text(state.get("message"), max_chars=2_000)
+            if message:
+                self._child_summaries[thread_id] = message
+            if status in _COLLAB_TERMINAL_SUCCESS | _COLLAB_TERMINAL_FAILURE:
+                events.extend(self._finish_child(thread_id, status))
+        return events
+
+    def map(self, message: Mapping[str, Any]) -> list[RuntimeEvent]:
+        method = message.get("method")
+        if not isinstance(method, str):
+            return []
+        params = _mapping(message.get("params"))
+        item = _mapping(params.get("item"))
+
+        if method == "thread/started":
+            thread = _mapping(params.get("thread"))
+            started_thread_id = _identifier(thread.get("id") or params.get("threadId"))
+            if started_thread_id and started_thread_id != self._root_thread_id:
+                return self._start_child(started_thread_id)
+
+        if item.get("type") in _COLLAB_ITEM_TYPES:
+            return self._collab_events(item)
+
+        if self._is_child(params):
+            thread_id = _notification_thread_id(params)
+            if method == "turn/started":
+                return self._start_child(thread_id)
+            if method == "item/agentMessage/delta":
+                delta = _text(params.get("delta"))
+                if not delta:
+                    return []
+                self._child_summaries[thread_id] = (
+                    self._child_summaries.get(thread_id, "") + delta
+                )[-2_000:]
+                return [
+                    *self._start_child(thread_id),
+                    RuntimeEvent(
+                        type="subagent.delta",
+                        payload={"task_id": thread_id, "text": delta},
+                    ),
+                ]
+            if method in {"item/started", "item/completed"}:
+                requested = _item_request(item)
+                if requested is None:
+                    return []
+                return [
+                    *self._start_child(thread_id),
+                    RuntimeEvent(
+                        type="subagent.updated",
+                        payload={
+                            "task_id": thread_id,
+                            "status": ("running" if method == "item/started" else "completed"),
+                            "last_tool_name": requested.payload["name"],
+                        },
+                    ),
+                ]
+            if method == "turn/completed":
+                return self._finish_child(thread_id, _turn_status(params) or "completed")
+            return []
+
+        return map_codex_notification(message)
 
 
 def map_codex_notification(message: Mapping[str, Any]) -> list[RuntimeEvent]:

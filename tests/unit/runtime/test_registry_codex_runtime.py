@@ -120,7 +120,7 @@ def test_codex_mcp_configuration_uses_env_headers_and_exact_tool_allowlist() -> 
 
     assert 'mcp_servers.sentiment-query.url="https://mcp.example.test/mcp"' in overrides
     assert (
-        'mcp_servers.sentiment-query.enabled_tools='
+        "mcp_servers.sentiment-query.enabled_tools="
         '["search_risk_subjects","query_legal_entity_directory"]'
     ) in overrides
     assert (
@@ -282,21 +282,17 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
 
     options = options_seen[0]
     assert options.environment is not None
-    assert options.environment["HARNESS_CODEX_PROVIDER_API_KEY"] == (
-        "control-plane-secret"
-    )
+    assert options.environment["HARNESS_CODEX_PROVIDER_API_KEY"] == ("control-plane-secret")
     assert options.environment["PATH"] == "/usr/bin"
+    assert any(override == 'model_provider="agent_studio"' for override in options.config_overrides)
     assert any(
-        override == 'model_provider="agent_studio"'
-        for override in options.config_overrides
-    )
-    assert any(
-        override
-        == 'model_providers.agent_studio.base_url="https://models.example.test/v1"'
+        override == 'model_providers.agent_studio.base_url="https://models.example.test/v1"'
         for override in options.config_overrides
     )
     assert all("control-plane-secret" not in value for value in options.config_overrides)
     assert all("claude-control-plane-secret" not in value for value in options.config_overrides)
+    assert "agents.enabled=true" in options.config_overrides
+    assert "agents.max_concurrent_threads_per_session=4" in options.config_overrides
     thread_start = client.requests[0][1]
     assert thread_start["model"] == "gpt-control-plane"
     assert thread_start["modelProvider"] == "agent_studio"

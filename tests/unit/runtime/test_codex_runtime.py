@@ -275,6 +275,45 @@ async def test_starts_thread_turn_and_maps_stream(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_child_thread_completion_does_not_finish_parent_turn(tmp_path: Path) -> None:
+    client = FakeClient(
+        [
+            _notification("turn/started", {"threadId": "child-1"}),
+            _notification(
+                "item/agentMessage/delta",
+                {"threadId": "child-1", "delta": "child result"},
+            ),
+            _notification(
+                "turn/completed",
+                {"threadId": "child-1", "turn": {"status": "completed"}},
+            ),
+            _notification(
+                "item/agentMessage/delta",
+                {"threadId": "thread-1", "delta": "lead result"},
+            ),
+            _notification(
+                "turn/completed",
+                {"threadId": "thread-1", "turn": {"status": "completed"}},
+            ),
+        ]
+    )
+    runtime, _process, _options = _runtime(tmp_path, client)
+
+    events = [event async for event in runtime.execute(_context(tmp_path))]
+
+    assert [event.type for event in events] == [
+        "runtime.thread.started",
+        "subagent.started",
+        "subagent.delta",
+        "subagent.completed",
+        "message.delta",
+        "message.completed",
+        "runtime.turn.completed",
+    ]
+    assert events[4].payload["text"] == "lead result"
+
+
+@pytest.mark.asyncio
 async def test_remote_transport_uses_remote_workspace_for_codex(tmp_path: Path) -> None:
     client = FakeClient([_notification("turn/completed", {"turn": {"status": "completed"}})])
     runtime, remote_process, local_options = _runtime(tmp_path, client)

@@ -187,9 +187,9 @@ def test_codex_runtime_rejects_capabilities_other_than_http_mcp() -> None:
     assert {
         "codex_python_tools_unsupported",
         "codex_knowledge_unsupported",
-        "codex_subagents_unsupported",
         "codex_tool_search_unsupported",
     }.issubset(codes)
+    assert "codex_subagents_unsupported" not in codes
     assert "codex_mcp_unsupported" not in codes
 
 
@@ -939,9 +939,7 @@ def test_image_generation_route_cannot_be_used_as_agent_chat_model() -> None:
             "capabilities": ("image_generation",),
         }
     )
-    with_image = catalog.model_copy(
-        update={"model_routes": (*catalog.model_routes, image_route)}
-    )
+    with_image = catalog.model_copy(update={"model_routes": (*catalog.model_routes, image_route)})
     current = draft()
     image_draft = current.model_copy(
         update={
@@ -960,9 +958,7 @@ def test_image_generation_route_cannot_be_used_as_agent_chat_model() -> None:
 
     validation = AgentDraftCompiler(with_image).validate(image_draft)
 
-    assert "model_route_not_conversational" in {
-        issue.code for issue in validation.issues
-    }
+    assert "model_route_not_conversational" in {issue.code for issue in validation.issues}
 
 
 def test_execution_profile_egress_allows_only_registered_mcp_associations() -> None:

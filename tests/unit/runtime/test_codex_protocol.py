@@ -2,6 +2,7 @@ import pytest
 
 from harness.runtime.codex_protocol import (
     CodexMessageKind,
+    CodexNotificationMapper,
     CodexProtocolError,
     classify_codex_message,
     map_codex_notification,
@@ -90,9 +91,7 @@ def test_maps_command_execution_without_forwarding_unknown_metadata() -> None:
     }
 
     started = map_codex_notification({"method": "item/started", "params": {"item": item}})
-    completed = map_codex_notification(
-        {"method": "item/completed", "params": {"item": item}}
-    )
+    completed = map_codex_notification({"method": "item/completed", "params": {"item": item}})
 
     assert started[0].type == "tool.request"
     assert started[0].payload == {
@@ -151,12 +150,8 @@ def test_maps_mcp_tool_lifecycle_to_canonical_tool_name() -> None:
         "result": {"private": "not-forwarded"},
     }
 
-    started = map_codex_notification(
-        {"method": "item/started", "params": {"item": item}}
-    )
-    completed = map_codex_notification(
-        {"method": "item/completed", "params": {"item": item}}
-    )
+    started = map_codex_notification({"method": "item/started", "params": {"item": item}})
+    completed = map_codex_notification({"method": "item/completed", "params": {"item": item}})
 
     assert started[0].payload == {
         "tool_call_id": "mcp-1",
@@ -217,6 +212,104 @@ def test_unknown_or_reasoning_notifications_are_ignored() -> None:
         "item/reasoning/summaryTextDelta",
         "future/notification",
     ):
-        assert map_codex_notification(
-            {"method": method, "params": {"delta": "never-show"}}
-        ) == []
+        assert map_codex_notification({"method": method, "params": {"delta": "never-show"}}) == []
+
+
+def test_native_subagent_events_are_isolated_from_the_lead_message() -> None:
+    mapper = CodexNotificationMapper("lead-thread")
+    spawn = {
+        "id": "collab-1",
+        "type": "collabAgentToolCall",
+        "tool": "spawnAgent",
+        "status": "completed",
+        "senderThreadId": "lead-thread",
+        "receiverThreadIds": ["child-thread"],
+        "prompt": "collect pages 1-10",
+        "agentsStates": {"child-thread": {"status": "running"}},
+    }
+
+    started = mapper.map(
+        {"method": "item/completed", "params": {"threadId": "lead-thread", "item": spawn}}
+    )
+    child_delta = mapper.map(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "child-thread", "delta": "five rows collected"},
+        }
+    )
+    child_tool = mapper.map(
+        {
+            "method": "item/started",
+            "params": {
+                "threadId": "child-thread",
+                "item": {
+                    "id": "mcp-child",
+                    "type": "mcpToolCall",
+                    "server": "sentiment",
+                    "tool": "search",
+                },
+            },
+        }
+    )
+    child_completed = mapper.map(
+        {
+            "method": "turn/completed",
+            "params": {
+                "threadId": "child-thread",
+                "turn": {"status": "completed"},
+            },
+        }
+    )
+    lead_completed = mapper.map(
+        {
+            "method": "turn/completed",
+            "params": {
+                "threadId": "lead-thread",
+                "turn": {"status": "completed"},
+            },
+        }
+    )
+
+    assert [event.type for event in started] == ["subagent.started"]
+    assert started[0].payload["task_id"] == "child-thread"
+    assert started[0].payload["description"] == "collect pages 1-10"
+    assert [event.type for event in child_delta] == ["subagent.delta"]
+    assert [event.type for event in child_tool] == ["subagent.updated"]
+    assert child_tool[0].payload["last_tool_name"] == "mcp__sentiment__search"
+    assert [event.type for event in child_completed] == ["subagent.completed"]
+    assert child_completed[0].payload["summary"] == "five rows collected"
+    assert [event.type for event in lead_completed] == [
+        "message.completed",
+        "runtime.turn.completed",
+    ]
+    assert not any(
+        event.type.startswith("message.") or event.type.startswith("runtime.turn")
+        for event in (*child_delta, *child_tool, *child_completed)
+    )
+
+
+def test_current_collab_item_name_and_failed_state_are_supported() -> None:
+    mapper = CodexNotificationMapper("lead-thread")
+    events = mapper.map(
+        {
+            "method": "item/completed",
+            "params": {
+                "threadId": "lead-thread",
+                "item": {
+                    "id": "collab-2",
+                    "type": "collabToolCall",
+                    "tool": "spawnAgent",
+                    "status": "failed",
+                    "senderThreadId": "lead-thread",
+                    "receiverThreadId": "child-failed",
+                    "agentsStates": {
+                        "child-failed": {"status": "errored", "message": "upstream failed"}
+                    },
+                },
+            },
+        }
+    )
+
+    assert [event.type for event in events] == ["subagent.started", "subagent.failed"]
+    assert events[-1].payload["task_id"] == "child-failed"
+    assert events[-1].payload["summary"] == "upstream failed"
