@@ -80,3 +80,41 @@ def test_codex_loop_does_not_invent_correction_for_first_pass_success() -> None:
     assert loop[1].status == "skipped"
     assert loop[2].status == "skipped"
     assert loop[2].evidence == ()
+
+
+def test_codex_loop_detects_a_captured_inner_command_failure() -> None:
+    run = Run(
+        run_id="run-1",
+        session_id="session-1",
+        tenant_id="tenant-1",
+        status=RunStatus.SUCCEEDED,
+        idempotency_key="key-1",
+        created_at=NOW,
+        updated_at=NOW,
+        input={"prompt": "缺失后改用另一条路径"},
+    )
+    loop = build_codex_loop(
+        run,
+        [
+            event(
+                1,
+                "tool.result",
+                {
+                    "name": "Bash",
+                    "status": "completed",
+                    "exit_code": 0,
+                    "aggregated_output": "cat: missing: No such file\nexit=1\n",
+                },
+            ),
+            event(
+                2,
+                "tool.result",
+                {"name": "Bash", "status": "completed", "exit_code": 0},
+            ),
+            event(3, "run.succeeded", {}),
+        ],
+    )
+
+    assert loop[1].status == "completed"
+    assert loop[2].status == "completed"
+    assert loop[2].evidence[0].summary == "Bash 返回失败"

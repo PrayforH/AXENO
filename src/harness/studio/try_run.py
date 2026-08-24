@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import Field
@@ -73,7 +74,7 @@ def _event_summary(event: RunEvent) -> str:
         if event.type == "tool.request":
             return f"请求调用 {name}"
         if event.type == "tool.result":
-            failed = payload.get("success") is False or bool(payload.get("error"))
+            failed = _tool_failed(event)
             return f"{name} 返回{'失败' if failed else '成功'}"
         if event.type == "tool.denied":
             return f"{name} 被策略拒绝"
@@ -116,10 +117,22 @@ def _evidence(events: list[RunEvent], types: set[str]) -> tuple[CodexLoopEvidenc
 
 
 def _tool_failed(event: RunEvent) -> bool:
-    return event.type in {"tool.denied", "runtime.error"} or (
-        event.type == "tool.result"
-        and (event.payload.get("success") is False or bool(event.payload.get("error")))
-    )
+    if event.type in {"tool.denied", "runtime.error"}:
+        return True
+    if event.type != "tool.result":
+        return False
+    payload = event.payload
+    exit_code = payload.get("exit_code")
+    if isinstance(exit_code, int) and exit_code != 0:
+        return True
+    if payload.get("status") in {"failed", "error"}:
+        return True
+    if payload.get("success") is False or bool(payload.get("error")):
+        return True
+    output = payload.get("aggregated_output")
+    return isinstance(output, str) and re.search(
+        r"(?mi)^\s*exit(?:_code)?\s*=\s*[1-9]\d*\s*$", output
+    ) is not None
 
 
 def build_codex_loop(run: Run, events: list[RunEvent]) -> tuple[CodexLoopStage, ...]:
