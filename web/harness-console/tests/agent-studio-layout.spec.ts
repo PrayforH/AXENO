@@ -13,6 +13,20 @@ const workbench = readFileSync(
   ),
   "utf8",
 );
+const operationsWorkspace = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-operations-workspace.tsx",
+  ),
+  "utf8",
+);
+const builderOverlays = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-builder-overlays.tsx",
+  ),
+  "utf8",
+);
 const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
@@ -262,7 +276,7 @@ describe("Agent Studio management page", () => {
   });
 
   it("uses one action-button contract and structured overflow menu states", () => {
-    expect(workbench.match(/styles\.headerActionButton/g)).toHaveLength(5);
+    expect(workbench.match(/styles\.headerActionButton/g)).toHaveLength(7);
     expect(workbench.match(/className=\{styles\.actionMenuItem\}/g)).toHaveLength(3);
     expect(workbench).toContain("<HeaderActionIcon name=\"task\"");
     expect(workbench).toContain("<HeaderActionIcon name=\"save\"");
@@ -293,7 +307,11 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain('cancelLabel: "继续编辑"');
     expect(workbench).toContain("const saved = await saveDraft()");
     expect(workbench).toContain("if (!saved) return");
-    expect(workbench).toContain("beginNewDraft([saved.name])");
+    expect(workbench).toContain("setNewAgentOpen(true)");
+    expect(workbench).toContain("<NewAgentDialog");
+    expect(builderOverlays).toContain("SERVER TEMPLATE");
+    expect(builderOverlays).toContain("studioClient.createDraft");
+    expect(workbench).not.toContain("createPersonalStudioDraft");
     expect(workbench).toContain("disabled={!canEdit || saving}");
     expect(workbench).toContain("onClick={() => void startNewDraft()}");
     expect(workbench).toContain(': "尚未保存"');
@@ -588,9 +606,10 @@ describe("Agent Studio management page", () => {
       expect(workbench).toContain(label);
     }
     expect(workbench).toContain("固定版本轨迹评测");
-    expect(workbench).toContain("耐久 Eval 控制面");
-    expect(workbench).toContain("每个 Case 使用独立 Session");
-    expect(workbench).toContain("downloadEvalArtifact");
+    expect(workbench).toContain("打开 Evaluate &amp; Operate");
+    expect(workbench).not.toContain("耐久 Eval 控制面");
+    expect(operationsWorkspace).toContain("耐久 Dataset 与固定版本评测");
+    expect(operationsWorkspace).toContain("studioClient.createEvalRun");
     expect(workbench).toContain("运行质量门禁");
     expect(workbench).toContain("发布版本后生效");
     expect(workbench).not.toContain("规则 Score、人工反馈与 Alert");
@@ -599,24 +618,16 @@ describe("Agent Studio management page", () => {
     expect(workbench).not.toContain("studioClient.listQualityRules");
     expect(workbench).toContain("studioClient.getQualityGate");
     expect(workbench).not.toContain("查看 Dashboard");
-    expect(workbench).toContain("环境指针、灰度与可验证回滚");
-    expect(workbench).toContain("新 Session 解析当前路由");
-    expect(workbench).toContain("studioClient.promoteDeployment");
-    expect(workbench).toContain("studioClient.rollbackDeployment");
-    expect(workbench).toContain("版本差异");
-    expect(workbench).toContain("必须调用");
-    expect(workbench).toContain("禁止");
+    expect(workbench).toContain("运行配置已从 Builder 分离");
+    expect(operationsWorkspace).toContain("环境指针与部署历史");
+    expect(operationsWorkspace).toContain("studioClient.promoteDeployment");
     expect(workbench).toContain("评测集缺少");
     expect(workbench).toContain("一键补齐");
     expect(workbench).toContain("evaluationCoverageCase");
     expect(workbench).toContain("Agent Eval");
     expect(workbench).toContain("evaluationEnabled");
-    expect(workbench).toContain("评测集管理器");
-    expect(workbench).toContain("导入 JSON / CSV / Excel");
-    expect(workbench).toContain("正常 happy");
-    expect(workbench).toContain("歧义 ambiguous");
-    expect(workbench).toContain("安全 safety");
-    expect(workbench).toContain("updateEvalCase");
+    expect(workbench).not.toContain("评测集管理器");
+    expect(workbench).toContain("happy / ambiguous / safety 基线");
     expect(errorBoundary).toContain("{PRODUCT_NAME}没有正常加载");
     expect(errorBoundary).toContain("重新加载");
     expect(loadingBoundary).toContain("正在恢复{PRODUCT_NAME}");
@@ -627,7 +638,8 @@ describe("Agent Studio management page", () => {
   });
 
   it("turns a deployed Agent into a governed external service", () => {
-    expect(workbench).toContain("<AgentTriggerControlPlane");
+    expect(workbench).not.toContain("<AgentTriggerControlPlane");
+    expect(operationsWorkspace).toContain("<AgentTriggerControlPlane");
     expect(triggerControlPlane).toContain("外部触发器");
     expect(triggerControlPlane).toContain("studioClient.createTrigger");
     expect(triggerControlPlane).toContain("studioClient.updateTrigger");
@@ -640,8 +652,8 @@ describe("Agent Studio management page", () => {
   });
 
   it("makes Environment a versioned runtime boundary instead of a route label", () => {
-    expect(workbench).toContain("<EnvironmentPolicyControlPlane");
-    expect(workbench).toContain("environment.resourcePolicy.executionProfileId");
+    expect(workbench).not.toContain("<EnvironmentPolicyControlPlane");
+    expect(operationsWorkspace).toContain("<EnvironmentPolicyControlPlane");
     expect(environmentPolicyControlPlane).toContain("每个新会话固定一份不可变策略快照");
     expect(environmentPolicyControlPlane).toContain("studioClient.replaceEnvironmentPolicy");
     expect(environmentPolicyControlPlane).toContain("allowedModelRoutes");

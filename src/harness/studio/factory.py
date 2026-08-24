@@ -10,6 +10,7 @@ from harness.studio.models import (
     DraftModelSelection,
     DraftSkill,
     DraftSubagent,
+    DraftTaskContract,
 )
 
 
@@ -157,6 +158,12 @@ def create_draft_spec(
         description=description,
         domain=domain,
         template=template,
+        taskContract=DraftTaskContract(
+            goal=description,
+            inputs=(f"用户提供的 {domain} 任务说明与材料",),
+            outputs=("可核验的完成结果与必要交付物",),
+            constraints=("不得绕过平台权限、审批、Sandbox 或网络边界",),
+        ),
         model=DraftModelSelection(
             routeId="deepseek-v4-pro",
             model="deepseek-v4-pro",

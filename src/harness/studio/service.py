@@ -19,6 +19,11 @@ from harness.sharing.models import (
     AgentPermission,
     WorkspaceAgent,
 )
+from harness.studio.agent_builder import (
+    AgentBuilderPatch,
+    AgentBuilderPatchRequest,
+    build_agent_patch,
+)
 from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import (
@@ -557,6 +562,22 @@ class AgentStudioService:
                 "issues": (*validation.issues, *dependency_issues),
             }
         )
+
+    async def build_agent_patch(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        draft_id: str,
+        request: AgentBuilderPatchRequest,
+    ) -> AgentBuilderPatch:
+        draft = await self.get(tenant_id, owner_user_id, draft_id)
+        if draft.revision != request.expected_revision:
+            raise ConflictError(
+                f"draft revision changed: expected {request.expected_revision}, "
+                f"actual {draft.revision}"
+            )
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
+        return build_agent_patch(draft, request, compiler)
 
     async def bundle(self, tenant_id: str, owner_user_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id, owner_user_id)

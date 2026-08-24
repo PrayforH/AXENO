@@ -161,6 +161,117 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_capabilities_are_the_runtime_compatibility_source_of_truth() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-runtime-contract",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        response = await client.get("/v1/studio/capabilities", headers=headers)
+
+    assert response.status_code == 200
+    runtimes = {item["runtime"]: item for item in response.json()["runtimeCapabilities"]}
+    assert {"claude-agent-sdk", "codex-app-server"} == set(runtimes)
+    assert {"mcp_http", "subagents"} <= set(runtimes["codex-app-server"]["capabilities"])
+    assert "openai_compatible" in runtimes["codex-app-server"]["modelApiFormats"]
+
+
+@pytest.mark.asyncio
+async def test_server_templates_create_distinct_complete_scaffolds() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-template-contract",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        created = []
+        for template in ("analyst", "operator", "orchestrator"):
+            body = draft_request(f"{template}-agent")
+            body["template"] = template
+            response = await client.post("/v1/studio/drafts", headers=headers, json=body)
+            assert response.status_code == 201, response.text
+            created.append(response.json())
+
+    specs = {item["spec"]["template"]: item["spec"] for item in created}
+    assert specs["analyst"]["taskContract"]["goal"]
+    assert "Bash" in specs["operator"]["builtinTools"]
+    assert "Task" in specs["orchestrator"]["builtinTools"]
+    assert specs["orchestrator"]["subagents"]
+
+
+@pytest.mark.asyncio
+async def test_agent_builder_patch_is_review_only_and_contains_three_eval_classes() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-builder-contract",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        created = await client.post("/v1/studio/drafts", headers=headers, json=draft_request())
+        draft_id = created.json()["draftId"]
+        patch = await client.post(
+            f"/v1/studio/drafts/{draft_id}/builder-patch",
+            headers=headers,
+            json={
+                "expectedRevision": 1,
+                "goal": "分析政策材料并输出可验证结论",
+                "audience": "政策研究员",
+                "inputs": ["政策材料", "分析范围"],
+                "outputs": ["结论", "证据索引"],
+                "constraints": ["缺少证据时不得编造"],
+                "examples": [],
+            },
+        )
+        unchanged = await client.get(f"/v1/studio/drafts/{draft_id}", headers=headers)
+
+    assert patch.status_code == 200, patch.text
+    assert patch.json()["baseRevision"] == 1
+    assert {case["tags"][0] for case in patch.json()["evaluationCases"]} == {
+        "happy", "ambiguous", "safety"
+    }
+    assert unchanged.json()["revision"] == 1
+    assert unchanged.json()["spec"]["systemPrompt"] != patch.json()["systemPrompt"]
+
+
+@pytest.mark.asyncio
+async def test_studio_try_run_executes_validated_snapshot_without_publishing() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-try-run",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request("try-run-agent")
+        )
+        draft_id = created.json()["draftId"]
+        started = await client.post(
+            f"/v1/studio/drafts/{draft_id}/try-runs",
+            headers=headers,
+            json={
+                "expectedRevision": 1,
+                "prompt": "请回显试跑结果",
+                "idempotencyKey": "try-run-r1",
+            },
+        )
+        view = await client.get(
+            f"/v1/studio/drafts/{draft_id}/try-runs/{started.json()['run']['run_id']}",
+            headers=headers,
+            params={"draftRevision": 1},
+        )
+
+    assert started.status_code == 202, started.text
+    assert view.status_code == 200, view.text
+    assert view.json()["run"]["status"] == "succeeded"
+    assert "Echo: 请回显试跑结果" in view.json()["finalText"]
+    assert await container.agents.list_published("tenant-try-run", "builder-a") == []
+
+
+@pytest.mark.asyncio
 async def test_studio_manages_mcp_credentials_without_returning_secret_values() -> None:
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
@@ -2166,6 +2277,9 @@ def test_studio_routes_are_exposed_once_in_openapi() -> None:
         "/v1/studio/drafts/import",
         "/v1/studio/drafts/{draft_id}",
         "/v1/studio/drafts/{draft_id}/validate",
+        "/v1/studio/drafts/{draft_id}/builder-patch",
+        "/v1/studio/drafts/{draft_id}/try-runs",
+        "/v1/studio/drafts/{draft_id}/try-runs/{run_id}",
         "/v1/studio/drafts/{draft_id}/bundle",
         "/v1/studio/drafts/{draft_id}/publish",
         "/v1/studio/previews",

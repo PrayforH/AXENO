@@ -112,6 +112,14 @@ export interface StudioDraft {
   domain: string;
   version: string;
   template: "analyst" | "operator" | "orchestrator";
+  taskContract: {
+    goal: string;
+    audience: string;
+    inputs: string[];
+    outputs: string[];
+    constraints: string[];
+    examples: string[];
+  } | null;
   runtime: AgentRuntime;
   modelRoute: string;
   model: string;
@@ -345,6 +353,14 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   domain: "general-assistant",
   version: "1.0.0",
   template: "orchestrator",
+  taskContract: {
+    goal: "理解用户目标，利用当前实际可用的工具完成工作，并交付可核验的结果。",
+    audience: "需要完成通用知识工作与文件任务的用户",
+    inputs: ["用户目标、约束、附件与工作区材料"],
+    outputs: ["可核验的回答、变更或 outputs/ 下的交付文件"],
+    constraints: ["不得伪造工具结果，不得绕过平台权限、审批或沙箱边界"],
+    examples: [],
+  },
   runtime: "claude-agent-sdk",
   modelRoute: "deepseek-v4-pro",
   model: "deepseek-v4-pro",
@@ -544,20 +560,9 @@ export function evaluateStudioDraft(
     issues.push("System Prompt 缺少必需章节");
   }
   if (draft.skills.length === 0) issues.push("至少需要一个 Skill");
-  if (draft.runtime === "codex-app-server") {
-    if (route?.apiFormat && route.apiFormat !== "openai_compatible") {
-      issues.push("Codex App Server 仅支持 Responses 路由");
-    }
-    if (draft.mcpServers.length > 0) issues.push("当前 Codex 运行时尚未接通 Studio MCP");
-    if (draft.pythonTools.length > 0) issues.push("当前 Codex 运行时尚未接通自定义算子");
-    if (draft.knowledgeReferences.length > 0) issues.push("当前 Codex 运行时尚未接通 Knowledge");
-    if (draft.subagents.length > 0 || draft.builtinTools.includes("Task")) {
-      issues.push("当前 Codex 运行时尚未接通 Studio Sub Agent");
-    }
-    if (draft.toolExposureMode === "on_demand") {
-      issues.push("当前 Codex 运行时尚未接通按需工具加载");
-    }
-  }
+  // Runtime compatibility is intentionally not duplicated here. The server
+  // Compiler returns the authoritative RuntimeCompatibility and issues after
+  // resolving the tenant capability catalog.
   if (draft.toolExposureMode === "on_demand" && draft.pythonTools.length > 0) {
     issues.push("自定义算子仅支持启动时加载");
   }

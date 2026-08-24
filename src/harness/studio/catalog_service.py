@@ -188,12 +188,17 @@ def _upgrade_system_managed_catalog(
         defaults.templates,
         lambda item: item.template.value,
     )
+    runtime_capabilities = catalog.runtime_capabilities
+    runtime_capabilities_changed = not runtime_capabilities
+    if runtime_capabilities_changed:
+        runtime_capabilities = defaults.runtime_capabilities
     changed = changed or any(
         (
             mcp_changed,
             policies_changed,
             profiles_changed,
             templates_changed,
+            runtime_capabilities_changed,
         )
     )
 
@@ -204,6 +209,7 @@ def _upgrade_system_managed_catalog(
             "policies": policies,
             "execution_profiles": execution_profiles,
             "templates": templates,
+            "runtime_capabilities": runtime_capabilities,
         }
     )
     permission_copy_upgrade = _upgrade_known_legacy_permission_copy(upgraded)

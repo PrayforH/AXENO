@@ -59,6 +59,7 @@ from harness.quota.models import (
 )
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
+from harness.studio.agent_builder import AgentBuilderPatch, AgentBuilderPatchRequest
 from harness.studio.bundle_import import AgentBundleImportError
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
@@ -119,6 +120,11 @@ from harness.studio.skill_import import (
     MAX_SKILL_UPLOAD_BYTES,
     SkillImportError,
     import_skill,
+)
+from harness.studio.try_run import (
+    CreateStudioTryRunRequest,
+    StudioTryRunView,
+    final_text,
 )
 
 
@@ -1484,6 +1490,152 @@ async def validate_draft(
 ) -> DraftValidationResult:
     try:
         return await service.validate(actor.tenant_id, actor.user_id, draft_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post("/drafts/{draft_id}/builder-patch", response_model=AgentBuilderPatch)
+async def create_agent_builder_patch(
+    draft_id: str,
+    body: AgentBuilderPatchRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> AgentBuilderPatch:
+    """Generate a reviewable whole-Agent patch without mutating the draft."""
+
+    try:
+        return await service.build_agent_patch(
+            actor.tenant_id, actor.user_id, draft_id, body
+        )
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+async def _studio_try_run_view(
+    container: ApiContainer,
+    actor: StudioActor,
+    draft_id: str,
+    draft_revision: int,
+    run_id: str,
+) -> StudioTryRunView:
+    run = await container.runs.get(actor.tenant_id, run_id)
+    session = await container.sessions.get(actor.tenant_id, run.session_id)
+    prefix = f"preview-{draft_id}-{draft_revision}-"
+    if (
+        session.user_id != actor.user_id
+        or session.environment != "preview"
+        or not session.agent_version.startswith(prefix)
+    ):
+        raise NotFoundError(f"Studio Try Run not found: {run_id}")
+    events = await container.observed_events.list_after(actor.tenant_id, run_id, 0)
+    approvals = await container.approvals.list_for_runs(actor.tenant_id, [run_id])
+    artifacts = await container.artifacts.list_for_run(actor.tenant_id, run_id)
+    return StudioTryRunView(
+        draftId=draft_id,
+        draftRevision=draft_revision,
+        run=run,
+        events=tuple(events),
+        approvals=tuple(approvals),
+        artifacts=tuple(artifacts),
+        finalText=final_text(events),
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/try-runs",
+    response_model=StudioTryRunView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_studio_try_run(
+    draft_id: str,
+    body: CreateStudioTryRunRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> StudioTryRunView:
+    """Compile and execute the current draft without publishing it."""
+
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        draft = await service.get(actor.tenant_id, actor.user_id, draft_id)
+        if draft.revision != body.expected_revision:
+            raise ConflictError(
+                f"draft revision changed: expected {body.expected_revision}, "
+                f"actual {draft.revision}"
+            )
+        compiled = await service.bundle(actor.tenant_id, actor.user_id, draft_id)
+        preview_version = (
+            f"preview-{draft_id}-{draft.revision}-"
+            f"{compiled.report.snapshot.content_hash[:12]}"
+        )
+        await container.agents.register_preview_snapshot(
+            actor.tenant_id,
+            actor.user_id,
+            compiled.report.snapshot,
+            version=preview_version,
+            package_hash=compiled.report.package_hash,
+        )
+        session_key = hashlib.sha256(
+            f"{actor.tenant_id}:{actor.user_id}:{draft_id}:{body.idempotency_key}".encode()
+        ).hexdigest()[:32]
+        session = await container.sessions.create(
+            actor.tenant_id,
+            actor.user_id,
+            draft.spec.name,
+            preview_version,
+            session_id=f"studio_try_{session_key}",
+            preview=True,
+        )
+        creation = await container.runs.create_with_result(
+            actor.tenant_id,
+            session.session_id,
+            body.idempotency_key,
+            input={"prompt": body.prompt},
+        )
+        if container.auto_execute and creation.created:
+            background_tasks.add_task(
+                container.worker.execute, actor.tenant_id, creation.run.run_id
+            )
+        return await _studio_try_run_view(
+            container, actor, draft_id, draft.revision, creation.run.run_id
+        )
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [
+                    issue.model_dump(mode="json", by_alias=True)
+                    for issue in error.issues
+                ],
+            },
+        ) from error
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.get(
+    "/drafts/{draft_id}/try-runs/{run_id}",
+    response_model=StudioTryRunView,
+)
+async def get_studio_try_run(
+    draft_id: str,
+    run_id: str,
+    draft_revision: Annotated[int, Query(alias="draftRevision", ge=1)],
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+) -> StudioTryRunView:
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        return await _studio_try_run_view(
+            container, actor, draft_id, draft_revision, run_id
+        )
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
