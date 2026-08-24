@@ -20,7 +20,10 @@ from harness.runtime.daytona_transport import RemoteClaudeSession
 from harness.runtime.hooks import SdkDiagnosticTail, redact_sdk_stderr
 
 CODEX_JSONL_MAX_LINE_BYTES = 32 * 1024 * 1024
-CODEX_REQUEST_TIMEOUT_SECONDS = 30.0
+# Control-plane RPCs normally return quickly, but cold remote runtimes and MCP
+# discovery can legitimately exceed 30 seconds. This budget is separate from
+# the Agent's end-to-end turn timeout.
+CODEX_REQUEST_TIMEOUT_SECONDS = 120.0
 CODEX_SHUTDOWN_TIMEOUT_SECONDS = 3.0
 
 
@@ -36,6 +39,18 @@ class CodexRpcRemoteError(RuntimeError):
         self.code = code
         self.remote_message = redact_sdk_stderr(message)[:2_000]
         super().__init__(f"Codex app-server request failed: method={method} code={code}")
+
+
+class CodexRpcRequestTimeoutError(RuntimeError):
+    """A control-plane JSON-RPC request exceeded its handshake budget."""
+
+    def __init__(self, *, method: str, timeout_seconds: float) -> None:
+        self.method = method
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            f"Codex app-server request timed out: method={method} "
+            f"timeout_seconds={timeout_seconds:g}"
+        )
 
 
 class AsyncJsonlWriter(Protocol):
@@ -96,6 +111,9 @@ class CodexJsonlClient:
     ) -> object:
         if not method:
             raise ValueError("Codex RPC method must be non-empty")
+        budget = timeout_seconds or self._request_timeout_seconds
+        if budget <= 0:
+            raise ValueError("Codex RPC timeout must be positive")
         self._ensure_usable()
         self._next_request_id += 1
         request_id = self._next_request_id
@@ -106,10 +124,15 @@ class CodexJsonlClient:
             payload["params"] = dict(params)
         try:
             await self._write(payload)
-            budget = timeout_seconds or self._request_timeout_seconds
-            if budget <= 0:
-                raise ValueError("Codex RPC timeout must be positive")
             return await asyncio.wait_for(asyncio.shield(future), timeout=budget)
+        except TimeoutError as error:
+            pending = self._pending.pop(request_id, None)
+            if pending is not None and not pending[1].done():
+                pending[1].cancel()
+            raise CodexRpcRequestTimeoutError(
+                method=method,
+                timeout_seconds=budget,
+            ) from error
         except BaseException:
             pending = self._pending.pop(request_id, None)
             if pending is not None and not pending[1].done():

@@ -149,6 +149,10 @@ class WorkspaceSpec(ManifestModel):
 
 class LimitSpec(ManifestModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
+    # Codex can issue several tool calls inside one model turn. Keep this
+    # independent from ``maxTurns`` so long agentic loops are not terminated
+    # merely because a single turn performs substantial workspace work.
+    max_tool_calls: int | None = Field(default=256, alias="maxToolCalls", ge=1, le=4096)
     timeout_seconds: int | None = Field(default=None, alias="timeoutSeconds", ge=1)
     max_budget_usd: float | None = Field(default=None, alias="maxBudgetUsd", gt=0)
     max_model_tokens: int | None = Field(default=None, alias="maxModelTokens", ge=1)

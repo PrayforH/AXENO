@@ -137,6 +137,7 @@ export interface StudioDraft {
   restoreSession: boolean;
   archiveOnComplete: boolean;
   maxTurns: number | null;
+  maxToolCalls: number | null;
   timeoutSeconds: number | null;
   maxBudgetUsd: number | null;
   maxModelTokens: number | null;
@@ -385,6 +386,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   restoreSession: true,
   archiveOnComplete: true,
   maxTurns: 80,
+  maxToolCalls: 256,
   timeoutSeconds: null,
   maxBudgetUsd: null,
   maxModelTokens: null,

@@ -235,6 +235,7 @@ type ApiDraftSpec = {
   workspace: { restoreSession: boolean; archiveOnComplete: boolean };
   limits: {
     maxTurns: number | null;
+    maxToolCalls: number | null;
     timeoutSeconds: number | null;
     maxBudgetUsd: number | null;
     maxModelTokens: number | null;
@@ -1260,6 +1261,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     restoreSession: spec.workspace.restoreSession,
     archiveOnComplete: spec.workspace.archiveOnComplete,
     maxTurns: spec.limits.maxTurns,
+    maxToolCalls: spec.limits.maxToolCalls ?? 256,
     timeoutSeconds: spec.limits.timeoutSeconds,
     maxBudgetUsd: spec.limits.maxBudgetUsd,
     maxModelTokens: spec.limits.maxModelTokens,
@@ -1311,6 +1313,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     },
     limits: {
       maxTurns: draft.maxTurns,
+      maxToolCalls: draft.maxToolCalls,
       timeoutSeconds: draft.timeoutSeconds,
       maxBudgetUsd: draft.maxBudgetUsd,
       maxModelTokens: draft.maxModelTokens,

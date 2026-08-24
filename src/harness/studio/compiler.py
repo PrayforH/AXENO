@@ -138,6 +138,7 @@ class AgentDraftCompiler:
                     },
                     "limits": {
                         "maxTurns": spec.limits.max_turns,
+                        "maxToolCalls": spec.limits.max_tool_calls,
                         "timeoutSeconds": spec.limits.timeout_seconds,
                         "maxBudgetUsd": spec.limits.max_budget_usd,
                         "maxModelTokens": spec.limits.max_model_tokens,

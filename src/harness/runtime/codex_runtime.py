@@ -21,6 +21,7 @@ from harness.runtime.codex_app_server import (
     CodexAppServerOptions,
     CodexAppServerProcess,
     CodexRpcRemoteError,
+    CodexRpcRequestTimeoutError,
 )
 from harness.runtime.codex_protocol import (
     CodexMessage,
@@ -236,6 +237,15 @@ class CodexAppServerRuntime:
                     yield event
         except TimeoutError as error:
             raise RuntimeExecutionTimeoutError("Codex turn timed out") from error
+        except CodexRpcRequestTimeoutError as error:
+            raise RuntimeResultError(
+                "codex_control_request_timeout",
+                error_code="codex_control_timeout",
+                user_message=(
+                    "Codex 运行环境启动超时，请重试。"
+                    f"尚未进入模型执行阶段（{error.method}）。"
+                ),
+            ) from error
 
     async def _execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
         execution_workspace = (

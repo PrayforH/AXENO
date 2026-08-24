@@ -2,12 +2,12 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: public-opinion-agent
-  version: 0.3.16
+  version: 0.3.18
   labels:
     domain: public-opinion
     template: orchestrator
     display-name: 涉非舆情分析（Codex）
-    description: Codex 0.3.16：接入涉非舆情 MCP，结合专用查询、用户材料与工作区证据完成可追溯研判；知识库保持为空。
+    description: Codex 0.3.18：支持长程 Codex Loop、受控并行分析、涉非舆情 MCP、工作区证据与可追溯输出；不使用知识库。
     evaluation-enabled: "true"
 spec:
   runtime: codex-app-server
@@ -26,20 +26,34 @@ spec:
     - builtin: Write
     - builtin: Edit
     - builtin: Bash
+    - builtin: Task
     - mcp: sentiment_query_mcp
   toolExposureMode: eager
   knowledgeReferences: []
-  subagents: []
+  subagents:
+    - ref: helper-agent@1.0.0
+      alias: fact-researcher
+      description: 只读核验工作区材料中的关键事实，整理原始来源、时间线、转载关系和证据缺口。
+      background: true
+    - ref: helper-agent@1.0.0
+      alias: audience-analyst
+      description: 只读分析工作区材料中的公众观点、争议焦点和情绪表达，不推断总体比例。
+      background: true
+    - ref: helper-agent@1.0.0
+      alias: industry-analyst
+      description: 只读分析工作区材料中的行业背景、利益相关者与传播节点。
+      background: true
   hooks: []
   permissions:
-    policy: production-standard
+    policy: production-orchestrator
   workspace:
     mode: isolated
     restoreSession: true
     archiveOnComplete: true
   limits:
-    maxTurns: 36
-    timeoutSeconds: 2400
+    maxTurns: 128
+    maxToolCalls: 512
+    timeoutSeconds: 7200
     maxBudgetUsd: 4
     maxModelTokens: 400000
     maxSubagents: 8

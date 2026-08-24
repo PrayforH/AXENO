@@ -155,6 +155,12 @@ class DraftWorkspace(StudioModel):
 
 class DraftLimits(StudioModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
+    max_tool_calls: int | None = Field(
+        default=256,
+        alias="maxToolCalls",
+        ge=1,
+        le=4096,
+    )
     timeout_seconds: int | None = Field(
         default=None,
         alias="timeoutSeconds",

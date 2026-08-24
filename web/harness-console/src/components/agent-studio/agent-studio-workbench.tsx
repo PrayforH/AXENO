@@ -111,6 +111,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       description: "允许委派并为较长的协同链路预留运行时间。",
       policy: "production-orchestrator",
       maxTurns: 64,
+      maxToolCalls: 512,
     };
   }
   if (writes) {
@@ -119,6 +120,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       description: "常规文件与命令在沙箱自动执行，敏感边界才需要确认。",
       policy: "production-standard",
       maxTurns: 64,
+      maxToolCalls: 256,
     };
   }
   return {
@@ -129,6 +131,7 @@ function runtimeRecommendation(draft: StudioDraft) {
         : "仅允许工作区读取和检索，不产生写入副作用。",
     policy: "production-read-only",
     maxTurns: 64,
+    maxToolCalls: 128,
   };
 }
 
@@ -433,6 +436,7 @@ export function AgentStudioWorkbench() {
   const recommendationApplied =
     draft.policy === recommendedRuntime.policy
     && draft.maxTurns === recommendedRuntime.maxTurns
+    && draft.maxToolCalls === recommendedRuntime.maxToolCalls
     && draft.timeoutSeconds === null
     && draft.maxBudgetUsd === null
     && draft.maxModelTokens === null;
@@ -3086,7 +3090,9 @@ export function AgentStudioWorkbench() {
                     <strong>{recommendedRuntime.label}</strong>
                     <p>{recommendedRuntime.description}</p>
                     <small>
-                      {recommendedRuntime.policy} · 最多 {recommendedRuntime.maxTurns} 轮 · 无硬超时、预算或 Token 中止
+                      {recommendedRuntime.policy} · 最多 {recommendedRuntime.maxTurns} 轮
+                      {draft.runtime === "codex-app-server" ? ` · ${recommendedRuntime.maxToolCalls} 次工具调用` : ""}
+                      {" · 无硬超时、预算或 Token 中止"}
                     </small>
                   </div>
                   <button
@@ -3096,6 +3102,7 @@ export function AgentStudioWorkbench() {
                       updateDraft({
                         policy: recommendedRuntime.policy,
                         maxTurns: recommendedRuntime.maxTurns,
+                        maxToolCalls: recommendedRuntime.maxToolCalls,
                         timeoutSeconds: null,
                         maxBudgetUsd: null,
                         maxModelTokens: null,
@@ -3269,6 +3276,23 @@ export function AgentStudioWorkbench() {
                       })}
                     />
                   </Field>
+                  {draft.runtime === "codex-app-server" && (
+                    <Field
+                      label="Codex 工具调用上限"
+                      hint="与模型轮次独立；长程编排建议 256–512"
+                    >
+                      <input
+                        type="number"
+                        min={1}
+                        max={4096}
+                        value={draft.maxToolCalls ?? ""}
+                        placeholder="不限制"
+                        onChange={(event) => updateDraft({
+                          maxToolCalls: event.target.value ? Number(event.target.value) : null,
+                        })}
+                      />
+                    </Field>
+                  )}
                   <Field label="硬超时（秒）" hint="留空表示不以时长中止">
                     <input
                       type="number"

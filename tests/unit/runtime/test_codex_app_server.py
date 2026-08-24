@@ -11,6 +11,7 @@ from harness.runtime.codex_app_server import (
     CodexConnectionClosedError,
     CodexJsonlClient,
     CodexRpcRemoteError,
+    CodexRpcRequestTimeoutError,
     DaytonaCodexAppServerProcess,
 )
 from harness.runtime.codex_protocol import CodexMessageKind, CodexProtocolError
@@ -64,6 +65,19 @@ async def test_correlates_request_response_and_writes_compact_jsonl() -> None:
     _feed(reader, {"id": 1, "result": {"thread": {"id": "thr-1"}}})
 
     assert await request == {"thread": {"id": "thr-1"}}
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_reports_control_plane_method() -> None:
+    reader, _writer, client = _client()
+
+    with pytest.raises(CodexRpcRequestTimeoutError) as raised:
+        await client.request("thread/start", {}, timeout_seconds=0.01)
+
+    assert raised.value.method == "thread/start"
+    assert raised.value.timeout_seconds == 0.01
+    reader.feed_eof()
     await client.close()
 
 

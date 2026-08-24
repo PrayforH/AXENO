@@ -717,6 +717,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             ),
             limits=DraftLimits(
                 maxTurns=limits.max_turns,
+                maxToolCalls=limits.max_tool_calls,
                 timeoutSeconds=limits.timeout_seconds,
                 maxBudgetUsd=limits.max_budget_usd,
                 maxModelTokens=limits.max_model_tokens,
