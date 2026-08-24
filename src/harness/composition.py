@@ -839,7 +839,7 @@ def build_production_container(
         agent_name: str,
         agent_version: str,
         workspace: Path,
-        allow_validated_root: bool,
+        allow_validated_graph: bool,
     ) -> tuple[str, ...]:
         return await stage_published_agent_assets(
             registry,
@@ -848,7 +848,7 @@ def build_production_container(
             agent_name=agent_name,
             agent_version=agent_version,
             workspace=workspace,
-            allow_validated_root=allow_validated_root,
+            allow_validated_graph=allow_validated_graph,
         )
 
     async def resolve_policy(
@@ -968,7 +968,7 @@ def build_production_container(
                 owner_user_id=session.resolved_agent_owner_user_id,
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
-                allow_validated_root=session.environment == "preview",
+                allow_validated_graph=session.environment == "preview",
             )
             manifests = tuple(
                 AgentManifestSnapshot.model_validate(version.snapshot).manifest

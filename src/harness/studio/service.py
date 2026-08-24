@@ -6,6 +6,7 @@ import base64
 import hashlib
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
@@ -44,6 +45,7 @@ from harness.studio.models import (
     CreateAgentDraftRequest,
     DraftSkill,
     DraftSkillFile,
+    DraftSubagent,
     DraftValidationResult,
     ImportedAgentBundle,
     ImportedSkill,
@@ -61,6 +63,20 @@ _SEMVER = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewGraphNode:
+    draft: AgentDraft
+    compiled: CompiledAgentDraft
+    preview_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPreviewGraph:
+    root_draft: AgentDraft
+    root: CompiledAgentDraft
+    dependencies: tuple[PreviewGraphNode, ...]
 
 
 def _next_patch_version(version: str) -> str:
@@ -599,6 +615,125 @@ class AgentStudioService:
     async def bundle(self, tenant_id: str, owner_user_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id, owner_user_id)
         return compiler.compile(await self.get(tenant_id, owner_user_id, draft_id))
+
+    async def preview_graph(
+        self, tenant_id: str, owner_user_id: str, draft_id: str
+    ) -> CompiledPreviewGraph:
+        """Compile one immutable root-and-subagent graph for a Studio Try Run."""
+
+        root = await self.get(tenant_id, owner_user_id, draft_id)
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
+        drafts = await self._repository.list_for_user(tenant_id, owner_user_id)
+        dependencies: list[PreviewGraphNode] = []
+        dependency_by_draft: dict[str, PreviewGraphNode] = {}
+        rewritten: list[DraftSubagent] = []
+        for binding in root.spec.subagents:
+            name, version = binding.ref.rsplit("@", 1)
+            published = None
+            if self._registry is not None:
+                try:
+                    candidate = await self._registry.get(
+                        tenant_id, owner_user_id, name, version
+                    )
+                    if candidate.status is AgentVersionStatus.PUBLISHED:
+                        published = candidate
+                except NotFoundError:
+                    pass
+            if published is not None:
+                rewritten.append(binding)
+                continue
+            source = next(
+                (
+                    item
+                    for item in drafts
+                    if item.draft_id != root.draft_id
+                    and item.spec.name == name
+                    and item.spec.version == version
+                ),
+                None,
+            )
+            if source is None:
+                raise DraftCompilationError(
+                    (
+                        ValidationIssue(
+                            code="subagent_preview_unavailable",
+                            message=f"找不到可试跑的 Sub Agent 草稿或发布版本：{binding.ref}",
+                            severity=ValidationSeverity.ERROR,
+                            path="subagents",
+                        ),
+                    )
+                )
+            if source.spec.subagents:
+                raise DraftCompilationError(
+                    (
+                        ValidationIssue(
+                            code="nested_subagent_preview_unsupported",
+                            message=f"Sub Agent 不能继续嵌套委派：{binding.ref}",
+                            severity=ValidationSeverity.ERROR,
+                            path="subagents",
+                        ),
+                    )
+                )
+            node = dependency_by_draft.get(source.draft_id)
+            if node is None:
+                compiled = compiler.compile(source)
+                preview_version = (
+                    f"preview-{source.draft_id}-{source.revision}-"
+                    f"{compiled.report.snapshot.content_hash[:12]}"
+                )
+                node = PreviewGraphNode(
+                    draft=source,
+                    compiled=compiled,
+                    preview_version=preview_version,
+                )
+                dependency_by_draft[source.draft_id] = node
+                dependencies.append(node)
+            rewritten.append(
+                binding.model_copy(update={"ref": f"{name}@{node.preview_version}"})
+            )
+        preview_spec = root.spec.model_copy(update={"subagents": tuple(rewritten)})
+        preview_root = root.model_copy(update={"spec": preview_spec})
+        return CompiledPreviewGraph(
+            root_draft=root,
+            root=compiler.compile(preview_root),
+            dependencies=tuple(dependencies),
+        )
+
+    async def publish_preview_dependencies(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        preview_version: str,
+    ) -> tuple[AgentVersion, ...]:
+        """Publish the exact dependency graph proven by a successful Try Run."""
+
+        graph = await self.preview_graph(tenant_id, user_id, draft_id)
+        if self._registry is None:
+            raise ConflictError("Agent Registry is unavailable for Preview verification")
+        preview = await self._registry.get(
+            tenant_id,
+            user_id,
+            graph.root_draft.spec.name,
+            preview_version,
+        )
+        if graph.root.report.snapshot.content_hash != preview.manifest_hash:
+            raise ConflictError(
+                "Sub Agent graph changed after the verified Try Run; "
+                "run it again before solidifying"
+            )
+        published: list[AgentVersion] = []
+        for node in graph.dependencies:
+            published.append(
+                await self.publish(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    draft_id=node.draft.draft_id,
+                    expected_revision=node.draft.revision,
+                )
+            )
+        return tuple(published)
 
     async def nexau_bundle(
         self, tenant_id: str, owner_user_id: str, draft_id: str

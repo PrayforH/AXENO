@@ -662,7 +662,7 @@ def build_memory_container(
         agent_name: str,
         agent_version: str,
         workspace: Path,
-        allow_validated_root: bool,
+        allow_validated_graph: bool,
     ) -> tuple[str, ...]:
         return await stage_published_agent_assets(
             registry,
@@ -671,7 +671,7 @@ def build_memory_container(
             agent_name=agent_name,
             agent_version=agent_version,
             workspace=workspace,
-            allow_validated_root=allow_validated_root,
+            allow_validated_graph=allow_validated_graph,
         )
 
     async def resolve_policy(

@@ -192,7 +192,7 @@ async def test_preview_session_allows_validated_root_with_published_dependencies
     child = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     for snapshot, status in (
         (root, AgentVersionStatus.VALIDATED),
-        (child, AgentVersionStatus.PUBLISHED),
+        (child, AgentVersionStatus.VALIDATED),
     ):
         metadata = snapshot.manifest.metadata
         await registry.add(
@@ -230,12 +230,12 @@ async def test_preview_session_allows_validated_root_with_published_dependencies
 async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()
-    parent = load_manifest("agents/public-opinion-agent/agent.yaml")
+    parent = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
     await registry.add(
         AgentVersion(
             tenant_id="tenant-a",
             owner_user_id="user-1",
-            name="public-opinion-agent",
+            name="echo-agent",
             version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
             manifest_hash=parent.content_hash,
@@ -251,12 +251,9 @@ async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
         require_published_dependencies=True,
     )
 
-    with pytest.raises(NotFoundError, match="helper-agent@1.0.0"):
+    with pytest.raises(NotFoundError, match="helper@1.0.0"):
         await service.create(
-            "tenant-a",
-            "user-1",
-            "public-opinion-agent",
-            parent.manifest.metadata.version,
+            "tenant-a", "user-1", "echo-agent", parent.manifest.metadata.version
         )
 
 
@@ -264,13 +261,13 @@ async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
 async def test_session_fails_early_when_pinned_subagent_is_not_published() -> None:
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()
-    parent = load_manifest("agents/public-opinion-agent/agent.yaml")
-    child = load_manifest("agents/helper-agent/agent.yaml")
+    parent = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    child = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
     for version in (
         AgentVersion(
             tenant_id="tenant-a",
             owner_user_id="user-1",
-            name="public-opinion-agent",
+            name="echo-agent",
             version=parent.manifest.metadata.version,
             status=AgentVersionStatus.PUBLISHED,
             manifest_hash=parent.content_hash,
@@ -280,7 +277,7 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
         AgentVersion(
             tenant_id="tenant-a",
             owner_user_id="user-1",
-            name="helper-agent",
+            name="helper",
             version="1.0.0",
             status=AgentVersionStatus.VALIDATED,
             manifest_hash=child.content_hash,
@@ -299,8 +296,5 @@ async def test_session_fails_early_when_pinned_subagent_is_not_published() -> No
 
     with pytest.raises(ConflictError, match="subagent must be published"):
         await service.create(
-            "tenant-a",
-            "user-1",
-            "public-opinion-agent",
-            parent.manifest.metadata.version,
+            "tenant-a", "user-1", "echo-agent", parent.manifest.metadata.version
         )

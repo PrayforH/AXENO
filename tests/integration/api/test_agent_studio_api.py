@@ -326,6 +326,75 @@ async def test_studio_try_run_executes_validated_snapshot_without_publishing() -
 
 
 @pytest.mark.asyncio
+async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-preview-graph",
+        "X-User-ID": "builder-a",
+    }
+    child_request = draft_request("helper-agent")
+    parent_request = {
+        **draft_request("preview-lead"),
+        "template": "orchestrator",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        child = await client.post(
+            "/v1/studio/drafts", headers=headers, json=child_request
+        )
+        child_spec = child.json()["spec"]
+        child_spec["version"] = "1.0.0"
+        child = await client.put(
+            f"/v1/studio/drafts/{child.json()['draftId']}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": child_spec},
+        )
+        parent = await client.post(
+            "/v1/studio/drafts", headers=headers, json=parent_request
+        )
+        parent_id = parent.json()["draftId"]
+        started = await client.post(
+            f"/v1/studio/drafts/{parent_id}/try-runs",
+            headers=headers,
+            json={
+                "expectedRevision": 1,
+                "prompt": "委派专家后汇总结果",
+                "idempotencyKey": "preview-graph-r1",
+            },
+        )
+        assert started.status_code == 202, started.text
+        run_id = started.json()["run"]["run_id"]
+        view = started
+        for _ in range(20):
+            view = await client.get(
+                f"/v1/studio/drafts/{parent_id}/try-runs/{run_id}",
+                headers=headers,
+                params={"draftRevision": 1},
+            )
+            if view.json()["run"]["status"] in {"succeeded", "failed"}:
+                break
+            await asyncio.sleep(0)
+        solidified = await client.post(
+            f"/v1/studio/drafts/{parent_id}/solidify",
+            headers=headers,
+            json={"expectedRevision": 1, "draftRevision": 1, "runId": run_id},
+        )
+
+    assert child.status_code == 200, child.text
+    assert parent.status_code == 201, parent.text
+    assert started.status_code == 202, started.text
+    assert view.json()["run"]["status"] == "succeeded"
+    assert solidified.status_code == 200, solidified.text
+    versions = await container.agents.list_published("tenant-preview-graph", "builder-a")
+    assert {(item.name, item.version) for item in versions} == {
+        ("helper-agent", "1.0.0"),
+        ("preview-lead", "0.1.0"),
+    }
+
+
+@pytest.mark.asyncio
 async def test_successful_try_run_solidifies_release_and_required_eval_baseline() -> None:
     application, container = app_and_container(auto_execute=True)
     headers = {

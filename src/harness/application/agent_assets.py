@@ -67,17 +67,16 @@ async def resolve_published_agent_versions(
     owner_user_id: str,
     agent_name: str,
     agent_version: str,
-    allow_validated_root: bool = False,
+    allow_validated_graph: bool = False,
 ) -> tuple[AgentVersion, dict[str, AgentVersion]]:
     """Resolve a fixed one-level SDK delegation graph and enforce release state.
 
-    Studio Try Runs may execute one immutable validated root snapshot. Pinned
-    subagents remain publication-gated so Preview cannot expand the dependency
-    boundary beyond reviewed releases.
+    Studio Try Runs may execute an immutable validated graph. Normal sessions
+    keep the default publication-only boundary.
     """
     root = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
     if root.status is not AgentVersionStatus.PUBLISHED and not (
-        allow_validated_root and root.status is AgentVersionStatus.VALIDATED
+        allow_validated_graph and root.status is AgentVersionStatus.VALIDATED
     ):
         raise ConflictError("sessions can only use a published Agent version")
     snapshot = AgentManifestSnapshot.model_validate(root.snapshot)
@@ -92,7 +91,9 @@ async def resolve_published_agent_versions(
         if runtime_name in children:
             raise ManifestValidationError(f"duplicate subagent runtime name: {runtime_name}")
         child = await registry.get(tenant_id, owner_user_id, name, version_id)
-        if child.status is not AgentVersionStatus.PUBLISHED:
+        if child.status is not AgentVersionStatus.PUBLISHED and not (
+            allow_validated_graph and child.status is AgentVersionStatus.VALIDATED
+        ):
             raise ConflictError(f"subagent must be published before use: {name}@{version_id}")
         child_snapshot = AgentManifestSnapshot.model_validate(child.snapshot)
         if child_snapshot.manifest.spec.subagents:
@@ -111,7 +112,7 @@ async def stage_published_agent_assets(
     agent_name: str,
     agent_version: str,
     workspace: Path,
-    allow_validated_root: bool = False,
+    allow_validated_graph: bool = False,
 ) -> tuple[str, ...]:
     version, children = await resolve_published_agent_versions(
         registry,
@@ -119,7 +120,7 @@ async def stage_published_agent_assets(
         owner_user_id=owner_user_id,
         agent_name=agent_name,
         agent_version=agent_version,
-        allow_validated_root=allow_validated_root,
+        allow_validated_graph=allow_validated_graph,
     )
     snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
     snapshots = [snapshot]

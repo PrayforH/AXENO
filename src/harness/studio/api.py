@@ -1574,10 +1574,20 @@ async def create_studio_try_run(
                 f"draft revision changed: expected {body.expected_revision}, "
                 f"actual {draft.revision}"
             )
-        compiled = await service.bundle(actor.tenant_id, actor.user_id, draft_id)
+        graph = await service.preview_graph(actor.tenant_id, actor.user_id, draft_id)
+        compiled = graph.root
         preview_version = (
             f"preview-{draft_id}-{draft.revision}-{compiled.report.snapshot.content_hash[:12]}"
         )
+        for dependency in graph.dependencies:
+            await container.agents.register_preview_snapshot(
+                actor.tenant_id,
+                actor.user_id,
+                dependency.compiled.report.snapshot,
+                version=dependency.preview_version,
+                package_hash=dependency.compiled.report.package_hash,
+                agent_id=dependency.draft.agent_id,
+            )
         await container.agents.register_preview_snapshot(
             actor.tenant_id,
             actor.user_id,
@@ -1680,6 +1690,14 @@ async def solidify_studio_try_run(
         if not first_publish and not idempotent_retry:
             raise ConflictError(
                 "draft changed after the verified Try Run; run it again before solidifying"
+            )
+        if first_publish:
+            session = await container.sessions.get(actor.tenant_id, view.run.session_id)
+            await service.publish_preview_dependencies(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                draft_id=draft_id,
+                preview_version=session.agent_version,
             )
         datasets = await eval_service.list_datasets(actor.tenant_id, actor.user_id)
         matching = [
