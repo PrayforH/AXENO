@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     codex_provider_by_route: dict[str, str] = Field(default_factory=dict)
     codex_approval_policy: Literal["untrusted", "on-request", "never"] = "untrusted"
     codex_network_access: bool = False
+    codex_tool_output_token_limit: int = Field(default=32_000, ge=1_000, le=200_000)
     otel_enabled: bool = False
     otel_content_capture: Literal["off", "redacted"] = "off"
     otel_content_max_chars: int = Field(default=12_000, ge=256, le=100_000)

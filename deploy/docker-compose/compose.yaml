@@ -19,6 +19,9 @@ x-harness-environment: &harness-environment
   HARNESS_CODEX_PROVIDER_BY_ROUTE: ${HARNESS_CODEX_PROVIDER_BY_ROUTE:-{}}
   HARNESS_CODEX_APPROVAL_POLICY: ${HARNESS_CODEX_APPROVAL_POLICY:-untrusted}
   HARNESS_CODEX_NETWORK_ACCESS: ${HARNESS_CODEX_NETWORK_ACCESS:-false}
+  # Token budget for one model-visible tool result. Keep large MCP queries
+  # useful without allowing one unbounded response to consume the whole turn.
+  HARNESS_CODEX_TOOL_OUTPUT_TOKEN_LIMIT: ${HARNESS_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-32000}
   # Workers decrypt tenant-scoped MCP credentials issued by the API, so both
   # control and execution planes must derive their cipher from the same secret.
   HARNESS_AUTH_JWT_SECRET: ${HARNESS_AUTH_JWT_SECRET:?set HARNESS_AUTH_JWT_SECRET}

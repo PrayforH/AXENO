@@ -293,6 +293,7 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
     assert all("claude-control-plane-secret" not in value for value in options.config_overrides)
     assert "agents.enabled=true" in options.config_overrides
     assert "agents.max_concurrent_threads_per_session=4" in options.config_overrides
+    assert "tool_output_token_limit=32000" in options.config_overrides
     thread_start = client.requests[0][1]
     assert thread_start["model"] == "gpt-control-plane"
     assert thread_start["modelProvider"] == "agent_studio"

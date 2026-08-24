@@ -128,6 +128,7 @@ class RegistryCodexRuntime:
         approval_policy: str = "untrusted",
         sandbox_mode: str = "workspace-write",
         network_access: bool = False,
+        tool_output_token_limit: int = 32_000,
         process_factory: CodexProcessFactory | None = None,
         server_request_handler: CodexServerRequestHandler | None = None,
         tool_resolver: ToolResolver | None = None,
@@ -141,6 +142,9 @@ class RegistryCodexRuntime:
         self._approval_policy = approval_policy
         self._sandbox_mode = sandbox_mode
         self._network_access = network_access
+        if tool_output_token_limit < 1_000:
+            raise ValueError("Codex tool-output token limit must be at least 1000")
+        self._tool_output_token_limit = tool_output_token_limit
         self._process_factory = process_factory
         self._server_request_handler = server_request_handler
         self._tool_resolver = tool_resolver or ToolResolver()
@@ -231,6 +235,7 @@ class RegistryCodexRuntime:
                     *provider_config_overrides,
                     *mcp_config_overrides,
                     *subagent_config_overrides,
+                    f"tool_output_token_limit={self._tool_output_token_limit}",
                 ),
                 approval_policy=self._approval_policy,
                 sandbox_mode=self._sandbox_mode,

@@ -339,6 +339,10 @@ describe("Agent Studio management page", () => {
     expect(appStyles).toContain("padding: 0 12px");
     expect(appStyles).toContain("grid-template-columns: 20px minmax(0, 1fr)");
     expect(appStyles).toContain("gap: 9px");
+    expect(appStyles).toContain("font-family: inherit");
+    expect(appStyles).toContain("font-size: 12.5px");
+    expect(appStyles).toContain("font-weight: 590");
+    expect(appStyles).toContain("text-align: left");
   });
 
   it("allows discarding unsaved edits when leaving Studio", () => {

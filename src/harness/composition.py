@@ -918,6 +918,7 @@ def build_production_container(
                         provider_by_route=settings.codex_provider_by_route,
                         approval_policy=settings.codex_approval_policy,
                         network_access=settings.codex_network_access,
+                        tool_output_token_limit=settings.codex_tool_output_token_limit,
                         server_request_handler=CodexToolGate(
                             approvals=approval_service,
                             events=events,
