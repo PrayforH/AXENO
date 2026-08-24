@@ -196,10 +196,13 @@ class CodexRuntimeConfig:
     sandbox_mode: str = "workspace-write"
     network_access: bool = False
     turn_timeout_seconds: float | None = None
+    max_tool_calls: int | None = None
 
     def __post_init__(self) -> None:
         if self.turn_timeout_seconds is not None and self.turn_timeout_seconds <= 0:
             raise ValueError("Codex turn timeout must be positive")
+        if self.max_tool_calls is not None and self.max_tool_calls <= 0:
+            raise ValueError("Codex tool-call limit must be positive")
         if self.approval_policy not in {"untrusted", "on-request", "never"}:
             raise ValueError("unsupported Codex approval policy")
         if self.sandbox_mode not in {"read-only", "workspace-write", "danger-full-access"}:
@@ -285,7 +288,7 @@ class CodexAppServerRuntime:
                 payload={"thread_id": thread_id, "runtime": "codex-app-server"},
             )
             notification_mapper = CodexNotificationMapper(thread_id)
-            await client.request(
+            turn_response = await client.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
@@ -305,7 +308,10 @@ class CodexAppServerRuntime:
                     "sandboxPolicy": self._sandbox_policy(execution_workspace),
                 },
             )
+            turn_id = self._turn_id(turn_response)
             completed = False
+            tool_call_count = 0
+            last_runtime_error = "Other"
             async for message in client.inbound():
                 if message.kind is CodexMessageKind.SERVER_REQUEST:
                     await self._handle_server_request(client, context, message)
@@ -319,15 +325,48 @@ class CodexAppServerRuntime:
                         and event.payload.get("thread_id") == thread_id
                     ):
                         continue
+                    if event.type == "runtime.error":
+                        last_runtime_error = str(event.payload.get("code") or "Other")
+                    if event.type == "tool.request":
+                        tool_call_count += 1
+                        if (
+                            self._config.max_tool_calls is not None
+                            and tool_call_count > self._config.max_tool_calls
+                        ):
+                            await client.request(
+                                "turn/interrupt",
+                                {"threadId": thread_id, "turnId": turn_id},
+                            )
+                            yield RuntimeEvent(
+                                type="runtime.error",
+                                payload={
+                                    "code": "ToolCallLimitExceeded",
+                                    "runtime": "codex-app-server",
+                                    "limit": self._config.max_tool_calls,
+                                },
+                            )
+                            yield self._thread_invalidated(
+                                thread_id,
+                                "ToolCallLimitExceeded",
+                            )
+                            raise RuntimeResultError(
+                                "codex_tool_call_limit",
+                                error_code="codex_tool_call_limit",
+                                user_message=(
+                                    "本轮工具调用超过控制面上限，已停止重复执行。"
+                                    "请缩小范围或补充更精确的筛选条件。"
+                                ),
+                            )
                     yield event
                     if event.type == "runtime.turn.completed":
                         completed = True
                         status = str(event.payload.get("status", "completed"))
                         if status != "completed":
+                            yield self._thread_invalidated(thread_id, last_runtime_error)
                             raise RuntimeResultError(
                                 f"codex_turn_{status}",
-                                error_code="codex_turn_failed",
-                                user_message="Codex 未能完成本轮任务，请重试。",
+                                error_code=self._turn_error_code(last_runtime_error),
+                                user_message=self._turn_error_message(last_runtime_error),
                             )
                 if completed:
                     return
@@ -368,7 +407,7 @@ class CodexAppServerRuntime:
                     {**common, "threadId": existing_thread_id},
                 )
             except CodexRpcRemoteError as error:
-                if error.method != "thread/resume":
+                if not self._recoverable_resume_error(error):
                     raise
                 # A restored Session may retain the Codex rollout while the
                 # app-server rejects its durable thread metadata (for example
@@ -405,15 +444,89 @@ class CodexAppServerRuntime:
         include_context_projection: bool = True,
     ) -> str:
         prompt = str(context.run.input.get("prompt", ""))
+        history_projection = ""
+        raw_history = context.run.input.get("conversation_prompts")
+        if include_context_projection and isinstance(raw_history, list):
+            prompts = [
+                value.strip()
+                for value in cast(list[object], raw_history)
+                if isinstance(value, str) and value.strip()
+            ]
+            if prompts and prompts[-1] == prompt.strip():
+                prompts = prompts[:-1]
+            if prompts:
+                bounded_prompts: list[str] = []
+                remaining_chars = 18_000
+                for value in reversed(prompts[-20:]):
+                    clipped = value[: min(2_000, remaining_chars)]
+                    if not clipped:
+                        break
+                    bounded_prompts.insert(0, clipped)
+                    remaining_chars -= len(clipped)
+                history_projection = (
+                    '<conversation_recovery source="durable-user-turns">\n'
+                    + json.dumps(bounded_prompts, ensure_ascii=False)
+                    + "\n</conversation_recovery>"
+                )
         projections = tuple(
             value.strip()
             for value in (
                 context.memory_projection,
                 (context.context_projection if include_context_projection else ""),
+                history_projection,
             )
             if value.strip()
         )
         return "\n\n".join((*projections, prompt)) if projections else prompt
+
+    @staticmethod
+    def _recoverable_resume_error(error: CodexRpcRemoteError) -> bool:
+        if error.method != "thread/resume":
+            return False
+        message = error.remote_message.lower()
+        return (
+            error.code in {-32602, -32001}
+            and "thread" in message
+            and any(
+                hint in message
+                for hint in ("not found", "unavailable", "missing", "unknown", "stale")
+            )
+        )
+
+    @staticmethod
+    def _thread_invalidated(thread_id: str, reason_code: str) -> RuntimeEvent:
+        return RuntimeEvent(
+            type="runtime.thread.invalidated",
+            payload={
+                "thread_id": thread_id,
+                "runtime": "codex-app-server",
+                "reason_code": reason_code,
+            },
+        )
+
+    @staticmethod
+    def _turn_error_code(reason_code: str) -> str:
+        return {
+            "ContextWindowExceeded": "codex_context_window_exceeded",
+            "RateLimited": "codex_rate_limited",
+            "AuthenticationFailed": "codex_authentication_failed",
+            "ToolCallLimitExceeded": "codex_tool_call_limit",
+        }.get(reason_code, "codex_turn_failed")
+
+    @staticmethod
+    def _turn_error_message(reason_code: str) -> str:
+        return {
+            "ContextWindowExceeded": (
+                "Codex 上下文已达到模型窗口上限，平台已重置运行线程，"
+                "请重试本条任务。"
+            ),
+            "RateLimited": "模型渠道正在限流，请稍后重试。",
+            "AuthenticationFailed": "模型渠道认证失败，请检查控制面的模型渠道配置。",
+            "ToolCallLimitExceeded": "本轮工具调用达到上限，请缩小范围后重试。",
+        }.get(
+            reason_code,
+            "Codex 运行线程异常，平台已保留工作区并重置会话，请重试本条任务。",
+        )
 
     @staticmethod
     def _thread_id(response: object) -> str:
@@ -424,6 +537,16 @@ class CodexAppServerRuntime:
         if not isinstance(thread_id, str) or not thread_id:
             raise RuntimeError("Codex thread response is missing thread.id")
         return thread_id
+
+    @staticmethod
+    def _turn_id(response: object) -> str:
+        result = cast(dict[str, Any], response) if isinstance(response, dict) else {}
+        turn = result.get("turn")
+        typed_turn = cast(dict[str, Any], turn) if isinstance(turn, dict) else {}
+        turn_id = typed_turn.get("id")
+        if not isinstance(turn_id, str) or not turn_id:
+            raise RuntimeError("Codex turn response is missing turn.id")
+        return turn_id
 
     async def _handle_server_request(
         self,

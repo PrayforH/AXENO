@@ -37,10 +37,12 @@ class FakeClient:
         *,
         hang_turn: bool = False,
         fail_resume: bool = False,
+        resume_error_message: str = "thread metadata is unavailable",
     ) -> None:
         self.messages = messages
         self.hang_turn = hang_turn
         self.fail_resume = fail_resume
+        self.resume_error_message = resume_error_message
         self.requests: list[tuple[str, dict[str, object]]] = []
         self.responses: list[tuple[int | str, object]] = []
         self.errors: list[tuple[int | str, int, str]] = []
@@ -59,7 +61,7 @@ class FakeClient:
             raise CodexRpcRemoteError(
                 method=method,
                 code=-32602,
-                message="thread metadata is unavailable",
+                message=self.resume_error_message,
             )
         if method == "turn/start" and self.hang_turn:
             await asyncio.Future[None]()
@@ -68,6 +70,8 @@ class FakeClient:
             return {"thread": {"id": thread_id}}
         if method == "turn/start":
             return {"turn": {"id": "turn-1", "status": "inProgress"}}
+        if method == "turn/interrupt":
+            return {}
         raise AssertionError(f"unexpected method: {method}")
 
     async def respond(self, request_id: int | str, result: object) -> None:
@@ -106,6 +110,7 @@ def _context(
     *,
     thread_id: str | None = None,
     context_projection: str = "",
+    conversation_prompts: list[str] | None = None,
 ) -> RuntimeContext:
     session = Session(
         session_id="session-1",
@@ -123,7 +128,14 @@ def _context(
         tenant_id=session.tenant_id,
         status=RunStatus.RUNNING,
         idempotency_key="idem-1",
-        input={"prompt": "build it"},
+        input={
+            "prompt": "build it",
+            **(
+                {"conversation_prompts": conversation_prompts}
+                if conversation_prompts is not None
+                else {}
+            ),
+        },
         created_at=NOW,
         updated_at=NOW,
     )
@@ -207,6 +219,7 @@ def _runtime(
     client: FakeClient,
     *,
     timeout: float | None = None,
+    max_tool_calls: int | None = None,
 ) -> tuple[CodexAppServerRuntime, FakeProcess, list[CodexAppServerOptions]]:
     process = FakeProcess(client)
     options_seen: list[CodexAppServerOptions] = []
@@ -222,6 +235,7 @@ def _runtime(
             developer_instructions="be precise",
             config_overrides=('model_provider="test"',),
             turn_timeout_seconds=timeout,
+            max_tool_calls=max_tool_calls,
         ),
         process_factory=factory,
     )
@@ -409,13 +423,104 @@ async def test_stale_thread_recovers_with_fresh_thread_and_context(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_failed_turn_raises_runtime_result_error_and_closes(tmp_path: Path) -> None:
-    client = FakeClient([_notification("turn/completed", {"turn": {"status": "failed"}})])
+async def test_stale_thread_recovery_includes_durable_user_turns(tmp_path: Path) -> None:
+    client = FakeClient(
+        [_notification("turn/completed", {"turn": {"status": "completed"}})],
+        fail_resume=True,
+    )
+    runtime, _process, _options = _runtime(tmp_path, client)
+
+    _ = [
+        event
+        async for event in runtime.execute(
+            _context(
+                tmp_path,
+                thread_id="thread-old",
+                conversation_prompts=["collect all pages", "build it"],
+            )
+        )
+    ]
+
+    prompt = client.requests[2][1]["input"]
+    assert isinstance(prompt, list)
+    assert "collect all pages" in str(prompt[0])
+    assert str(prompt[0]).count("build it") == 1
+
+
+@pytest.mark.asyncio
+async def test_non_stale_resume_error_does_not_silently_start_new_thread(tmp_path: Path) -> None:
+    client = FakeClient(
+        [],
+        fail_resume=True,
+        resume_error_message="model provider rate limit",
+    )
     runtime, process, _options = _runtime(tmp_path, client)
 
-    with pytest.raises(RuntimeResultError, match="codex_turn_failed"):
-        _ = [event async for event in runtime.execute(_context(tmp_path))]
+    with pytest.raises(CodexRpcRemoteError):
+        _ = [event async for event in runtime.execute(_context(tmp_path, thread_id="thread-old"))]
 
+    assert [method for method, _params in client.requests] == ["thread/resume"]
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_raises_runtime_result_error_and_closes(tmp_path: Path) -> None:
+    client = FakeClient(
+        [
+            _notification(
+                "error",
+                {
+                    "error": {
+                        "message": "context window exceeded",
+                        "codexErrorInfo": {"Other": "too many tokens"},
+                    }
+                },
+            ),
+            _notification("turn/completed", {"turn": {"status": "failed"}}),
+        ]
+    )
+    runtime, process, _options = _runtime(tmp_path, client)
+    events = []
+
+    with pytest.raises(RuntimeResultError, match="codex_turn_failed") as raised:
+        async for event in runtime.execute(_context(tmp_path)):
+            events.append(event)
+
+    assert raised.value.error_code == "codex_context_window_exceeded"
+    assert events[-1].type == "runtime.thread.invalidated"
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_tool_call_budget_interrupts_repetitive_codex_loop(tmp_path: Path) -> None:
+    messages = [
+        _notification(
+            "item/started",
+            {
+                "item": {
+                    "id": f"call-{index}",
+                    "type": "mcpToolCall",
+                    "server": "search",
+                    "tool": "page",
+                    "arguments": {"page": index},
+                }
+            },
+        )
+        for index in range(1, 4)
+    ]
+    client = FakeClient(messages)
+    runtime, process, _options = _runtime(tmp_path, client, max_tool_calls=2)
+    events = []
+
+    with pytest.raises(RuntimeResultError, match="codex_tool_call_limit"):
+        async for event in runtime.execute(_context(tmp_path)):
+            events.append(event)
+
+    assert [method for method, _params in client.requests][-1] == "turn/interrupt"
+    assert [event.type for event in events[-2:]] == [
+        "runtime.error",
+        "runtime.thread.invalidated",
+    ]
     assert process.closed is True
 
 

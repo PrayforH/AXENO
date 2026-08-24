@@ -316,6 +316,32 @@ class SessionRecoveryRuntime(SessionAwareRuntime):
         )
 
 
+class ThreadInvalidatingRuntime(FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[RuntimeContext] = []
+
+    async def execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            yield RuntimeEvent(
+                type="runtime.thread.started",
+                payload={"thread_id": "sdk-poisoned", "runtime": "claude-agent-sdk"},
+            )
+            yield RuntimeEvent(
+                type="runtime.thread.invalidated",
+                payload={
+                    "thread_id": "sdk-poisoned",
+                    "runtime": "claude-agent-sdk",
+                    "reason_code": "turn_failed",
+                },
+            )
+            raise RuntimeResultError("turn_failed")
+        yield RuntimeEvent(type="message.start")
+        yield RuntimeEvent(type="message.delta", payload={"text": "fresh thread"})
+        yield RuntimeEvent(type="message.completed")
+
+
 class FencingRefreshRuntime(FakeRuntime):
     def __init__(self) -> None:
         super().__init__()
@@ -667,7 +693,7 @@ async def test_fresh_rebased_session_loads_digest_projection_before_runtime(
     assert "The release target is P1" in runtime.contexts[0].context_projection
     emitted = await events.list_after("tenant-a", "run-1", 0)
     loaded = next(event for event in emitted if event.type == "context.recovery.loaded")
-    assert loaded.payload == {"mode": "digest_rebase"}
+    assert loaded.payload == {"mode": "durable_digest"}
 
 
 @pytest.mark.asyncio
@@ -1305,6 +1331,32 @@ async def test_stale_sdk_session_is_atomically_rebound_after_recovery(
     assert runtime.contexts[2].session.claude_session_id == "sdk-session-2"
     recovered_events = await events.list_after("tenant-a", "run-2", 0)
     assert any(event.type == "runtime.session.recovered" for event in recovered_events)
+
+
+@pytest.mark.asyncio
+async def test_failed_runtime_can_invalidate_thread_before_next_run(tmp_path: Path) -> None:
+    runtime = ThreadInvalidatingRuntime()
+    orchestrator, _, runs, events = await arrange(tmp_path, runtime_override=runtime)
+
+    first = await orchestrator.execute("tenant-a", "run-1")
+    second_run = Run(
+        run_id="run-2",
+        session_id="session-1",
+        tenant_id="tenant-a",
+        status=RunStatus.QUEUED,
+        idempotency_key="idem-2",
+        created_at=NOW,
+        updated_at=NOW,
+        input={"prompt": "retry"},
+    )
+    await runs.add(second_run)
+    second = await orchestrator.execute("tenant-a", "run-2")
+
+    assert first.status is RunStatus.FAILED
+    assert second.status is RunStatus.SUCCEEDED
+    assert runtime.contexts[1].session.resolved_runtime_thread_id is None
+    first_events = await events.list_after("tenant-a", "run-1", 0)
+    assert any(event.type == "runtime.thread.invalidated" for event in first_events)
 
 
 @pytest.mark.asyncio

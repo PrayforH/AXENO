@@ -1214,7 +1214,7 @@ class RunOrchestrator:
                     run_id=run_id,
                     session_id=run.session_id,
                     event_type="context.recovery.loaded",
-                    payload={"mode": "digest_rebase"},
+                    payload={"mode": "durable_digest"},
                 )
             context = RuntimeContext(
                 run=run,
@@ -1329,6 +1329,19 @@ class RunOrchestrator:
                         session.session_id,
                         runtime_type,
                         previous_session_id,
+                    )
+                if runtime_event.type == "runtime.thread.invalidated":
+                    invalid_thread_id = payload.get("thread_id")
+                    if not isinstance(invalid_thread_id, str) or not invalid_thread_id:
+                        raise ValueError("thread invalidation event is missing thread_id")
+                    raw_runtime_type = payload.get("runtime", session.runtime_type)
+                    if raw_runtime_type not in {"claude-agent-sdk", "codex-app-server"}:
+                        raise ValueError("thread invalidation event has an invalid runtime")
+                    session = await self._sessions.clear_runtime_thread(
+                        tenant_id,
+                        session.session_id,
+                        cast(AgentRuntimeType, raw_runtime_type),
+                        invalid_thread_id,
                     )
                 if runtime_event.type == "runtime.result":
                     # The SDK can emit more than one cumulative ResultMessage

@@ -201,9 +201,30 @@ def test_usage_and_errors_are_content_free() -> None:
     assert error[0].payload == {
         "code": "HttpConnectionFailed",
         "runtime": "codex-app-server",
+        "http_status": 503,
     }
     assert "private-token" not in repr(error)
     assert "never-show" not in repr([*usage, *error])
+
+
+def test_classifies_other_context_error_without_persisting_remote_message() -> None:
+    events = map_codex_notification(
+        {
+            "method": "error",
+            "params": {
+                "error": {
+                    "message": "context window exceeded with private-token",
+                    "codexErrorInfo": {"Other": "too many tokens"},
+                }
+            },
+        }
+    )
+
+    assert events[0].payload == {
+        "code": "ContextWindowExceeded",
+        "runtime": "codex-app-server",
+    }
+    assert "private-token" not in repr(events)
 
 
 def test_unknown_or_reasoning_notifications_are_ignored() -> None:

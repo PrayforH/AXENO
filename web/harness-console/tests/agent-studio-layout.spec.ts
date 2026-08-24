@@ -280,7 +280,7 @@ describe("Agent Studio management page", () => {
   });
 
   it("uses one action-button contract and structured overflow menu states", () => {
-    expect(workbench.match(/styles\.headerActionButton/g)).toHaveLength(7);
+    expect(workbench.match(/styles\.headerActionButton/g)).toHaveLength(6);
     expect(workbench.match(/className=\{styles\.actionMenuItem\}/g)).toHaveLength(3);
     expect(workbench).toContain("<HeaderActionIcon name=\"task\"");
     expect(workbench).toContain("<HeaderActionIcon name=\"save\"");
@@ -313,18 +313,19 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("if (!saved) return");
     expect(workbench).toContain("setNewAgentOpen(true)");
     expect(workbench).toContain("<NewAgentDialog");
-    expect(builderOverlays).toContain("TASK → AGENT");
-    expect(builderOverlays).toContain("其他创建方式：从服务端模板开始");
+    expect(builderOverlays).toContain("NEW AGENT");
+    expect(builderOverlays).toContain("描述任务，直接开始试跑");
     expect(builderOverlays).toContain("studioClient.createDraftFromTask");
-    expect(builderOverlays).toContain("studioClient.createDraft");
+    expect(builderOverlays).not.toContain("从服务端模板开始");
+    expect(builderOverlays).not.toContain("AgentBuilderCopilot");
     expect(workbench).not.toContain("createPersonalStudioDraft");
     expect(workbench).toContain("disabled={!canEdit || saving}");
     expect(workbench).toContain("onClick={() => void startNewDraft()}");
     expect(workbench).toContain(': "尚未保存"');
   });
 
-  it("shows the observable five-stage Codex Loop and success-only solidification", () => {
-    expect(builderOverlays).toContain("CODEX LOOP");
+  it("shows the observable five-stage execution trace and success-only solidification", () => {
+    expect(builderOverlays).toContain("EXECUTION TRACE");
     expect(builderOverlays).toContain("result.loop.map");
     expect(builderOverlays).toContain("计划、工具、修正、验证都来自真实运行事件");
     expect(builderOverlays).toContain('result.run.status === "succeeded"');

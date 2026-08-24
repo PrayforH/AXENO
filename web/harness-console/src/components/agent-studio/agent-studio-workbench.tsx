@@ -54,7 +54,6 @@ import { GovernanceControlPlane } from "./governance-control-plane";
 import { SkillConversationBuilder } from "./skill-conversation-builder";
 import { StudioCodeEditor } from "./studio-code-editor";
 import {
-  AgentBuilderCopilot,
   NewAgentDialog,
   TryRunPanel,
 } from "./agent-builder-overlays";
@@ -331,7 +330,6 @@ export function AgentStudioWorkbench() {
   } | null>(null);
   const [contractOpen, setContractOpen] = useState(false);
   const [newAgentOpen, setNewAgentOpen] = useState(false);
-  const [agentCopilotOpen, setAgentCopilotOpen] = useState(false);
   const [tryRunOpen, setTryRunOpen] = useState(false);
   const [tryRunSeed, setTryRunSeed] = useState<{
     prompt: string;
@@ -1804,15 +1802,6 @@ export function AgentStudioWorkbench() {
             )}
           </div>
           <div className={styles.headerActions}>
-            <button
-              type="button"
-              className={`${styles.headerActionButton} ${styles.secondaryButton}`}
-              disabled={!canEdit || !draft.id || saving}
-              onClick={() => setAgentCopilotOpen(true)}
-            >
-              <HeaderActionIcon name="contract" />
-              <span>Agent Copilot</span>
-            </button>
             <button
               type="button"
               className={`${styles.headerActionButton} ${styles.startTaskButton}`}
@@ -3765,8 +3754,6 @@ export function AgentStudioWorkbench() {
       </aside>
       <NewAgentDialog
         open={newAgentOpen}
-        templates={options.templates}
-        reservedNames={drafts.map((item) => item.name)}
         onClose={() => setNewAgentOpen(false)}
         onCreated={(flow) => {
           const created = flow.draft;
@@ -3799,16 +3786,10 @@ export function AgentStudioWorkbench() {
           setTryRunOpen(true);
           setNotice(
             flow.recommendation
-              ? `已按任务生成 ${flow.recommendation.runtime} 草稿，正在启动 Codex Loop`
-              : `已从 ${created.template} 服务端模板创建`,
+              ? `已按任务生成 ${flow.recommendation.runtime} 草稿，正在启动真实试跑`
+              : `已创建 ${created.displayName}`,
           );
         }}
-      />
-      <AgentBuilderCopilot
-        open={agentCopilotOpen}
-        draft={draft}
-        onClose={() => setAgentCopilotOpen(false)}
-        onApply={updateDraft}
       />
       <TryRunPanel
         open={tryRunOpen}

@@ -577,15 +577,6 @@ export type StudioPreview = {
   staleReason: string | null;
 };
 
-export type StudioAgentBuilderPatch = {
-  baseRevision: number;
-  taskContract: NonNullable<StudioDraft["taskContract"]>;
-  systemPrompt: string;
-  evaluationCases: ApiEvalCase[];
-  explanation: string[];
-  validation: StudioValidation;
-};
-
 export type StudioTaskDrivenRecommendation = {
   runtime: StudioDraft["runtime"];
   modelRouteId: string;
@@ -1614,9 +1605,6 @@ export const studioClient = {
       }),
     }).then(rememberStudioDraft),
   createDraftFromTask: (body: {
-    name: string;
-    domain: string;
-    displayName: string;
     task: string;
     audience?: string;
     sampleInput?: string;
@@ -1628,21 +1616,6 @@ export const studioClient = {
     rememberStudioDraft(result.draft);
     return result;
   }),
-  createAgentBuilderPatch: (
-    draftId: string,
-    body: {
-      expectedRevision: number;
-      goal: string;
-      audience: string;
-      inputs: string[];
-      outputs: string[];
-      constraints: string[];
-      examples: string[];
-    },
-  ) => request<StudioAgentBuilderPatch>(
-    `drafts/${encodeURIComponent(draftId)}/builder-patch`,
-    { method: "POST", body: JSON.stringify(body) },
-  ),
   async importBundle(file: Blob): Promise<StudioImportedAgentBundle> {
     const response = requireAuthenticatedResponse(
       await fetch("/api/studio/drafts/import", {

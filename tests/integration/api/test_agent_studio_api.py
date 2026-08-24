@@ -220,9 +220,6 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
             "/v1/studio/drafts/from-task",
             headers=headers,
             json={
-                "name": "public-opinion-brief",
-                "domain": "public-opinion",
-                "displayName": "涉非舆情分析智能体",
                 "task": "搜索最新互联网舆情，分析风险并生成可下载报告。",
                 "sampleInput": "分析今日样本并生成报告",
                 "runtimePreference": "auto",
@@ -237,7 +234,9 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
     assert spec["model"]["routeId"] == "deepseek-v4-flash"
     assert spec["template"] == "operator"
     assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
-    assert spec["mcpServers"] == ["tavily-readonly"]
+    assert spec["mcpServers"] == []
+    assert spec["name"].startswith("agent-")
+    assert spec["displayName"] == "搜索最新互联网舆情，分析风险并生成可下载报告。"
     assert len(spec["evaluationCases"]) == 3
     assert recommendation["validation"]["ready"] is True
     assert recommendation["runtime"] == "codex-app-server"

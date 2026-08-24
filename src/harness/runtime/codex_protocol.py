@@ -84,6 +84,67 @@ def _safe_usage(value: object) -> dict[str, int]:
     }
 
 
+def _diagnostic_fragments(value: object, *, limit: int = 40) -> tuple[str, ...]:
+    """Flatten error metadata for classification without returning its content."""
+
+    values: list[str] = []
+
+    def visit(item: object) -> None:
+        if len(values) >= limit:
+            return
+        if isinstance(item, str):
+            values.append(item[:500].lower())
+        elif isinstance(item, dict):
+            for key, nested in cast(dict[object, object], item).items():
+                if isinstance(key, str):
+                    values.append(key[:200].lower())
+                visit(nested)
+        elif isinstance(item, (list, tuple)):
+            for nested in cast(list[object] | tuple[object, ...], item)[:20]:
+                visit(nested)
+
+    visit(value)
+    return tuple(values)
+
+
+def _nested_http_status(value: object) -> int | None:
+    if isinstance(value, dict):
+        mapping = cast(dict[object, object], value)
+        status = mapping.get("httpStatusCode")
+        if isinstance(status, int) and not isinstance(status, bool):
+            return status
+        for nested in mapping.values():
+            if (found := _nested_http_status(nested)) is not None:
+                return found
+    if isinstance(value, (list, tuple)):
+        for nested in cast(list[object] | tuple[object, ...], value):
+            if (found := _nested_http_status(nested)) is not None:
+                return found
+    return None
+
+
+def _classified_error_code(error: Mapping[str, Any]) -> tuple[str, int | None]:
+    info = error.get("codexErrorInfo")
+    if isinstance(info, dict):
+        typed_info = cast(dict[str, Any], info)
+        wire_code = _text(next(iter(typed_info), "Other"), max_chars=200) or "Other"
+    else:
+        wire_code = _text(info, max_chars=200) or "Other"
+    diagnostic = " ".join(_diagnostic_fragments((error.get("message"), info)))
+    classifications = (
+        (("context window", "context_length", "too many tokens"), "ContextWindowExceeded"),
+        (("rate limit", "too many requests", "429"), "RateLimited"),
+        (("unauthorized", "authentication", "invalid api key", "401"), "AuthenticationFailed"),
+        (("tool call limit", "maximum tool", "max turns"), "ToolCallLimitExceeded"),
+        (("connection", "connect", "unavailable", "timeout"), "HttpConnectionFailed"),
+    )
+    if wire_code.lower() == "other":
+        for hints, classified in classifications:
+            if any(hint in diagnostic for hint in hints):
+                return classified, _nested_http_status(info)
+    return wire_code, _nested_http_status(info)
+
+
 def _safe_command_item(item: Mapping[str, Any]) -> dict[str, Any]:
     command = item.get("command")
     if isinstance(command, list):
@@ -385,14 +446,7 @@ def map_codex_notification(message: Mapping[str, Any]) -> list[RuntimeEvent]:
         ]
     if method == "error":
         error = _mapping(params.get("error"))
-        info = error.get("codexErrorInfo")
-        if isinstance(info, dict):
-            typed_info = cast(dict[str, Any], info)
-            code = next(iter(typed_info), "Other")
-            status = typed_info.get("httpStatusCode")
-        else:
-            code = _text(info, max_chars=200) or "Other"
-            status = None
+        code, status = _classified_error_code(error)
         payload: dict[str, Any] = {"code": code, "runtime": "codex-app-server"}
         if isinstance(status, int) and not isinstance(status, bool):
             payload["http_status"] = status

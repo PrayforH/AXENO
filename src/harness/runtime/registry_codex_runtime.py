@@ -236,6 +236,7 @@ class RegistryCodexRuntime:
                 sandbox_mode=self._sandbox_mode,
                 network_access=self._network_access,
                 turn_timeout_seconds=snapshot.manifest.spec.limits.timeout_seconds,
+                max_tool_calls=limits.max_turns or 64,
             ),
             **(
                 {"process_factory": self._process_factory}

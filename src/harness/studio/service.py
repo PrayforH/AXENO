@@ -325,14 +325,21 @@ class AgentStudioService:
         """Create a valid draft by compiling business intent against tenant capabilities."""
 
         now = self._clock()
+        draft_id = self._id_generator()
+        first_line = request.task.strip().splitlines()[0].strip()
+        display_name = request.display_name or first_line[:36]
+        generated_suffix = hashlib.sha256(
+            f"{request.task.strip()}\0{draft_id}".encode()
+        ).hexdigest()[:10]
+        name = request.name or f"agent-{generated_suffix}"
         draft = AgentDraft(
-            draftId=self._id_generator(),
+            draftId=draft_id,
             tenantId=tenant_id,
             revision=1,
             spec=create_draft_spec(
-                name=request.name,
+                name=name,
                 domain=request.domain,
-                display_name=request.display_name,
+                display_name=display_name,
                 description=request.task.strip()[:500],
                 template=AgentTemplate.ANALYST,
             ),
@@ -340,7 +347,7 @@ class AgentStudioService:
             updatedBy=user_id,
             createdAt=now,
             updatedAt=now,
-            agentId=await self._resolve_agent_id(tenant_id, user_id, request.name),
+            agentId=await self._resolve_agent_id(tenant_id, user_id, name),
         )
         catalog = await self.capabilities(tenant_id, user_id)
         compiler = await self._compiler_for(tenant_id, user_id)

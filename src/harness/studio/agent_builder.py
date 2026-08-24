@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -28,10 +27,15 @@ TaskRuntimePreference = Literal["auto", "codex-app-server", "claude-agent-sdk"]
 class CreateTaskDrivenDraftRequest(StudioModel):
     """Minimal business input compiled into a complete, reviewable Agent draft."""
 
-    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
+    name: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]*$")
     domain: str = Field(default="general", pattern=r"^[a-z][a-z0-9-]*$")
-    display_name: str = Field(alias="displayName", min_length=1, max_length=100)
-    task: str = Field(min_length=8, max_length=2_000)
+    display_name: str | None = Field(
+        default=None,
+        alias="displayName",
+        min_length=1,
+        max_length=100,
+    )
+    task: str = Field(min_length=2, max_length=2_000)
     audience: str = Field(default="当前用户", min_length=1, max_length=500)
     sample_input: str | None = Field(
         default=None,
@@ -197,20 +201,6 @@ _WRITE_HINTS = (
     "edit",
     "export",
 )
-_WEB_HINTS = (
-    "互联网",
-    "公网",
-    "网页",
-    "网站",
-    "新闻",
-    "舆情",
-    "搜索",
-    "检索",
-    "最新",
-    "web",
-    "news",
-    "search",
-)
 _VISION_HINTS = ("图片", "图像", "截图", "视觉", "照片", "image", "vision", "photo")
 _ARTIFACT_HINTS = (
     "报告",
@@ -297,37 +287,6 @@ def _runtime_and_route(
     raise ValueError("当前能力目录没有可用于 Agent Builder 的兼容模型渠道")
 
 
-def _mcp_match_score(task: str, capability: McpCapability) -> int:
-    haystack = " ".join(
-        (
-            capability.reference,
-            capability.server_name or "",
-            capability.label,
-            capability.description,
-            *capability.tools,
-        )
-    ).lower()
-    lowered = task.lower()
-    score = 0
-    if _contains_any(lowered, _WEB_HINTS) and any(
-        hint in haystack
-        for hint in ("search", "web", "news", "tavily", "网页", "搜索", "舆情", "新闻")
-    ):
-        score += 4
-    words = {
-        token
-        for token in re.findall(r"[a-z0-9_-]{3,}", lowered)
-        if token not in {"agent", "task", "with", "from", "this"}
-    }
-    score += sum(1 for token in words if token in haystack)
-    # Chinese bigrams make tenant-specific MCP labels match without maintaining
-    # a platform-wide business taxonomy.
-    chinese = "".join(re.findall(r"[\u4e00-\u9fff]", lowered))
-    bigrams = {chinese[index : index + 2] for index in range(max(0, len(chinese) - 1))}
-    score += min(3, sum(1 for token in bigrams if token in haystack))
-    return score
-
-
 def _execution_profile(
     catalog: CapabilityCatalog,
     selected_mcp: tuple[McpCapability, ...],
@@ -376,17 +335,10 @@ def configure_task_driven_draft(
     if policy not in enabled_policies and enabled_policies:
         policy = sorted(enabled_policies)[0]
 
-    matching_mcp = sorted(
-        (
-            item
-            for item in catalog.mcp_servers
-            if item.enabled and item.read_only and _mcp_match_score(request.task, item) >= 3
-        ),
-        key=lambda item: (-_mcp_match_score(request.task, item), item.reference),
-    )
-    # A generated draft starts with the smallest useful external surface. More
-    # MCPs remain available in the workbench for explicit user review.
-    selected_mcp = tuple(matching_mcp[:1])
+    # Business MCPs can carry tenant-specific semantics and data boundaries.
+    # A task phrase is not sufficient authorization to bind one automatically;
+    # every external connection remains review-before-apply.
+    selected_mcp: tuple[McpCapability, ...] = ()
     execution_profile = _execution_profile(catalog, selected_mcp)
 
     sample = request.sample_input.strip() if request.sample_input else ""
@@ -438,10 +390,7 @@ def configure_task_driven_draft(
         if writes
         else "任务以分析和回答为主，保持最小只读工具权限"
     )
-    if selected_mcp:
-        reasons.append(f"只自动接入最匹配的只读 MCP：{selected_mcp[0].label}；其他连接保留人工确认")
-    else:
-        reasons.append("未发现高置信度只读 MCP 匹配，不扩大外部数据边界")
+    reasons.append("外部 MCP 默认不自动接入；需在能力配置中明确选择后才扩大数据边界")
     reasons.extend(
         (
             "生成 TaskContract、五段式 System Prompt 和三类发布基础评测",
