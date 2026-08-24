@@ -219,6 +219,39 @@ async def test_get_preserves_a_tenant_managed_catalog() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_adds_platform_runtime_capabilities_to_tenant_legacy_catalog() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = default_capability_catalog().model_copy(
+        update={"runtime_capabilities": ()}
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=9,
+            catalog=catalog,
+            updatedBy="tenant-admin",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+    repeated = await service.get("tenant-a")
+
+    assert upgraded.revision == 10
+    assert upgraded.updated_by == "tenant-admin"
+    assert {item.runtime for item in upgraded.catalog.runtime_capabilities} == {
+        "claude-agent-sdk",
+        "codex-app-server",
+    }
+    assert repeated == upgraded
+
+
+@pytest.mark.asyncio
 async def test_get_refreshes_exact_legacy_copy_in_tenant_managed_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
     catalog = previous_system_catalog()
