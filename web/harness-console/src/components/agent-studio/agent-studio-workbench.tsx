@@ -37,6 +37,7 @@ import {
   type StudioPreflightCheck,
   type StudioPreview,
   type StudioQualityGate,
+  type StudioTaskDrivenRecommendation,
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
@@ -332,6 +333,11 @@ export function AgentStudioWorkbench() {
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [agentCopilotOpen, setAgentCopilotOpen] = useState(false);
   const [tryRunOpen, setTryRunOpen] = useState(false);
+  const [tryRunSeed, setTryRunSeed] = useState<{
+    prompt: string;
+    autoStart: boolean;
+    recommendation: StudioTaskDrivenRecommendation | null;
+  }>({ prompt: "", autoStart: false, recommendation: null });
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [personalVersions, setPersonalVersions] = useState<PersonalAgentVersion[]>([]);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
@@ -1067,6 +1073,11 @@ export function AgentStudioWorkbench() {
   async function openTryRun() {
     const current = dirty ? await saveDraft() : draft;
     if (!current?.id) return;
+    setTryRunSeed({
+      prompt: current.taskContract?.examples[0] ?? "",
+      autoStart: false,
+      recommendation: null,
+    });
     setTryRunOpen(true);
   }
 
@@ -3757,7 +3768,8 @@ export function AgentStudioWorkbench() {
         templates={options.templates}
         reservedNames={drafts.map((item) => item.name)}
         onClose={() => setNewAgentOpen(false)}
-        onCreated={(created) => {
+        onCreated={(flow) => {
+          const created = flow.draft;
           setDraft(created);
           setDrafts((current) => [
             {
@@ -3779,7 +3791,17 @@ export function AgentStudioWorkbench() {
           setServerValidation(null);
           setNewAgentOpen(false);
           setActiveSection("identity");
-          setNotice(`已从 ${created.template} 服务端模板创建`);
+          setTryRunSeed({
+            prompt: flow.prompt,
+            autoStart: flow.autoRun,
+            recommendation: flow.recommendation,
+          });
+          setTryRunOpen(true);
+          setNotice(
+            flow.recommendation
+              ? `已按任务生成 ${flow.recommendation.runtime} 草稿，正在启动 Codex Loop`
+              : `已从 ${created.template} 服务端模板创建`,
+          );
         }}
       />
       <AgentBuilderCopilot
@@ -3791,7 +3813,37 @@ export function AgentStudioWorkbench() {
       <TryRunPanel
         open={tryRunOpen}
         draft={draft}
+        initialPrompt={tryRunSeed.prompt}
+        autoStart={tryRunSeed.autoStart}
+        recommendation={tryRunSeed.recommendation}
+        canSolidify={canPublish}
         onClose={() => setTryRunOpen(false)}
+        onSolidified={(result) => {
+          const next = apiDraftToStudioDraft(result.draft);
+          setDraft(next);
+          setDrafts((current) => current.map((item) => item.draftId === next.id
+            ? {
+                ...item,
+                version: next.version,
+                revision: next.revision,
+                publishedVersion: next.publishedVersion,
+                updatedAt: new Date().toISOString(),
+              }
+            : item));
+          setEvalDatasets((current) => [
+            result.dataset,
+            ...current.filter((item) => !(
+              item.datasetId === result.dataset.datasetId
+              && item.version === result.dataset.version
+            )),
+          ]);
+          setDirty(false);
+          setServerValidation(null);
+          setNotice(
+            `已固化 ${result.version.name}@${result.version.version} · `
+            + `评测基线 ${result.dataset.datasetId}@${result.dataset.version}`,
+          );
+        }}
       />
       {confirmationDialog}
     </main>

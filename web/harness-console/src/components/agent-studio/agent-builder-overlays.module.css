@@ -47,6 +47,10 @@
   width: min(1120px, 100%);
 }
 
+.dialog.builderDialog {
+  width: min(940px, 100%);
+}
+
 .dialog > header,
 .tryPanel > header {
   display: flex;
@@ -146,6 +150,13 @@
   font-size: 14px;
 }
 
+.templateGrid button em {
+  margin-top: auto;
+  color: var(--overlay-accent);
+  font: 700 11px var(--codex-font-mono, ui-monospace, monospace);
+  font-style: normal;
+}
+
 .templateGrid small,
 .evalCard small,
 .approval small {
@@ -176,6 +187,7 @@
 
 .formGrid input,
 .formGrid textarea,
+.formGrid select,
 .tryPanel textarea {
   width: 100%;
   border: 1px solid var(--overlay-line);
@@ -190,12 +202,14 @@
 
 .formGrid input:hover,
 .formGrid textarea:hover,
+.formGrid select:hover,
 .tryPanel textarea:hover {
   border-color: var(--overlay-line-strong);
 }
 
 .formGrid input:focus-visible,
 .formGrid textarea:focus-visible,
+.formGrid select:focus-visible,
 .tryPanel textarea:focus-visible {
   border-color: var(--overlay-accent);
   box-shadow: 0 0 0 3px var(--overlay-accent-soft);
@@ -207,6 +221,115 @@
   min-height: 80px;
   resize: vertical;
   line-height: 1.55;
+}
+
+.builderLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(230px, .65fr);
+  gap: 14px;
+  margin: 20px 0 16px;
+}
+
+.taskBrief {
+  display: grid;
+  gap: 12px;
+}
+
+.taskBrief label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: var(--overlay-ink-soft);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.taskBrief label small {
+  color: var(--overlay-faint);
+  font-weight: 500;
+}
+
+.taskBrief textarea {
+  min-height: 132px;
+  resize: vertical;
+  padding: 14px;
+  border: 1px solid var(--overlay-line);
+  border-radius: 12px;
+  color: var(--overlay-ink);
+  background: var(--overlay-field);
+  caret-color: var(--overlay-accent);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.taskBrief label + label textarea {
+  min-height: 84px;
+}
+
+.taskBrief textarea:focus-visible {
+  border-color: var(--overlay-accent);
+  box-shadow: 0 0 0 3px var(--overlay-accent-soft);
+  outline: none;
+}
+
+.builderPromise {
+  padding: 16px;
+  border: 1px solid var(--overlay-line);
+  border-radius: 13px;
+  color: var(--overlay-muted);
+  background: var(--overlay-panel-subtle);
+}
+
+.builderPromise > span {
+  color: var(--overlay-accent);
+  font: 700 10px var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: .12em;
+}
+
+.builderPromise ol {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+  padding-left: 22px;
+  color: var(--overlay-ink-soft);
+  font-size: 13px;
+}
+
+.builderPromise li::marker {
+  color: var(--overlay-accent);
+  font: 700 11px var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.builderPromise p,
+.templateFallback > p {
+  margin: 0;
+  color: var(--overlay-faint);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.templateFallback {
+  margin-top: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--overlay-line);
+  border-radius: 11px;
+  background: var(--overlay-panel-subtle);
+}
+
+.templateFallback > summary {
+  color: var(--overlay-ink-soft);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.templateFallback > p {
+  margin-top: 9px;
+}
+
+.templateFallback .templateGrid {
+  margin-bottom: 0;
 }
 
 .dialog footer {
@@ -345,7 +468,7 @@
   z-index: 75;
   top: 0;
   right: 0;
-  width: min(620px, 100vw);
+  width: min(720px, 100vw);
   height: 100dvh;
   overflow: auto;
   padding: 24px;
@@ -355,6 +478,50 @@
     linear-gradient(180deg, var(--codex-glint, rgb(255 255 255 / 3%)), transparent 96px),
     var(--overlay-panel);
   box-shadow: -18px 0 60px rgb(0 0 0 / 28%);
+}
+
+.recommendationStrip {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 1px;
+  overflow: hidden;
+  margin-top: 18px;
+  border: 1px solid var(--overlay-line);
+  border-radius: 12px;
+  background: var(--overlay-line);
+}
+
+.recommendationStrip > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: var(--overlay-panel-subtle);
+}
+
+.recommendationStrip span,
+.sectionTitle span,
+.solidified span {
+  color: var(--overlay-accent);
+  font: 700 9px var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: .11em;
+}
+
+.recommendationStrip strong {
+  overflow: hidden;
+  color: var(--overlay-ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recommendationStrip small {
+  overflow: hidden;
+  color: var(--overlay-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tryPanel > label {
@@ -378,6 +545,16 @@
   font: 700 12px var(--codex-font-mono, ui-monospace, monospace);
 }
 
+.runActions strong[data-status="succeeded"] {
+  color: var(--codex-success, #40c977);
+}
+
+.runActions strong[data-status="failed"],
+.runActions strong[data-status="rejected"],
+.runActions strong[data-status="timed_out"] {
+  color: var(--overlay-danger);
+}
+
 .runResult {
   display: grid;
   gap: 13px;
@@ -389,6 +566,215 @@
   border-radius: 13px;
   color: var(--overlay-ink-soft);
   background: var(--overlay-panel-subtle);
+}
+
+.runResult > section.loopSection {
+  padding: 16px 16px 8px;
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sectionTitle h3 {
+  margin-top: 4px;
+  font-size: 17px;
+}
+
+.sectionTitle > small {
+  color: var(--overlay-faint);
+  font: 10px var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.loopRail {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loopRail > li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 76px;
+}
+
+.loopRail > li:not(:last-child)::before {
+  position: absolute;
+  top: 27px;
+  bottom: -4px;
+  left: 14px;
+  width: 1px;
+  background: var(--overlay-line-strong);
+  content: "";
+}
+
+.loopMarker {
+  position: relative;
+  z-index: 1;
+  width: 29px;
+  height: 29px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--overlay-line-strong);
+  border-radius: 50%;
+  color: var(--overlay-muted);
+  background: var(--overlay-panel);
+  font: 700 10px var(--codex-font-mono, ui-monospace, monospace);
+}
+
+.loopRail > li[data-status="completed"] .loopMarker {
+  border-color: var(--codex-success, #40c977);
+  color: var(--codex-success, #40c977);
+  background: var(--codex-success-soft, rgb(64 201 119 / 13%));
+}
+
+.loopRail > li[data-status="active"] .loopMarker {
+  border-color: var(--overlay-accent);
+  color: var(--overlay-accent);
+  box-shadow: 0 0 0 4px var(--overlay-accent-soft);
+}
+
+.loopRail > li[data-status="failed"] .loopMarker {
+  border-color: var(--overlay-danger);
+  color: var(--overlay-danger);
+  background: var(--overlay-danger-soft);
+}
+
+.loopRail > li[data-status="skipped"] .loopMarker {
+  border-style: dashed;
+}
+
+.loopContent {
+  min-width: 0;
+  padding: 3px 0 16px;
+}
+
+.loopContent > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loopContent strong {
+  color: var(--overlay-ink);
+  font-size: 13px;
+}
+
+.loopContent em {
+  color: var(--overlay-faint);
+  font: 700 9px var(--codex-font-mono, ui-monospace, monospace);
+  font-style: normal;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.loopContent p {
+  margin: 5px 0 0;
+  color: var(--overlay-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.loopContent details {
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+}
+
+.loopContent details summary,
+.evidenceGroup > summary {
+  color: var(--overlay-accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.loopContent ul {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.loopContent ul li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 7px;
+  color: var(--overlay-muted);
+  font-size: 11px;
+}
+
+.loopContent ul code {
+  color: var(--overlay-faint);
+}
+
+.solidifyCallout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--codex-success, #40c977) 35%, var(--overlay-line));
+  border-radius: 10px;
+  background: var(--codex-success-soft, rgb(64 201 119 / 10%));
+}
+
+.solidifyCallout strong {
+  color: var(--overlay-ink);
+  font-size: 13px;
+}
+
+.solidifyCallout p {
+  margin: 4px 0 0;
+  color: var(--overlay-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.solidifyCallout button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 9px 13px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.solidified {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--codex-success, #40c977);
+  border-radius: 10px;
+  background: var(--codex-success-soft, rgb(64 201 119 / 10%));
+}
+
+.solidified strong {
+  color: var(--overlay-ink);
+  font-size: 15px;
+}
+
+.solidified small {
+  color: var(--overlay-muted);
+}
+
+.evidenceGroup {
+  padding: 13px 14px;
+  border: 1px solid var(--overlay-line);
+  border-radius: 12px;
+  background: var(--overlay-panel-subtle);
+}
+
+.evidenceGroup > summary small {
+  color: var(--overlay-faint);
 }
 
 .runResult details {
@@ -451,7 +837,9 @@
 
   .templateGrid,
   .formGrid,
-  .copilotColumns {
+  .copilotColumns,
+  .builderLayout,
+  .recommendationStrip {
     grid-template-columns: 1fr;
   }
 
@@ -474,5 +862,10 @@
 
   .tryPanel {
     padding: 20px;
+  }
+
+  .solidifyCallout {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

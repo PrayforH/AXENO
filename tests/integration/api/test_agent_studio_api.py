@@ -124,9 +124,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
     assert capabilities.status_code == 200
-    assert [
-        item["reference"] for item in capabilities.json()["mcpServers"]
-    ] == ["tavily-readonly"]
+    assert [item["reference"] for item in capabilities.json()["mcpServers"]] == ["tavily-readonly"]
     assert created.status_code == 201
     assert created.json()["tenantId"] == "tenant-a"
     assert created.json()["createdBy"] == "builder-a"
@@ -201,6 +199,51 @@ async def test_server_templates_create_distinct_complete_scaffolds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-task-builder",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        catalog_response = await client.get("/v1/studio/catalog", headers=headers)
+        catalog_record = catalog_response.json()
+        catalog = catalog_record["catalog"]
+        catalog["modelRoutes"][0]["apiFormat"] = "openai_compatible"
+        replaced = await client.put(
+            "/v1/studio/catalog",
+            headers=headers,
+            json={"expectedRevision": catalog_record["revision"], "catalog": catalog},
+        )
+        assert replaced.status_code == 200, replaced.text
+        created = await client.post(
+            "/v1/studio/drafts/from-task",
+            headers=headers,
+            json={
+                "name": "public-opinion-brief",
+                "domain": "public-opinion",
+                "displayName": "涉非舆情分析智能体",
+                "task": "搜索最新互联网舆情，分析风险并生成可下载报告。",
+                "sampleInput": "分析今日样本并生成报告",
+                "runtimePreference": "auto",
+            },
+        )
+
+    assert created.status_code == 201, created.text
+    payload = created.json()
+    spec = payload["draft"]["spec"]
+    recommendation = payload["recommendation"]
+    assert spec["runtime"] == "codex-app-server"
+    assert spec["model"]["routeId"] == "deepseek-v4-flash"
+    assert spec["template"] == "operator"
+    assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
+    assert spec["mcpServers"] == ["tavily-readonly"]
+    assert len(spec["evaluationCases"]) == 3
+    assert recommendation["validation"]["ready"] is True
+    assert recommendation["runtime"] == "codex-app-server"
+
+
+@pytest.mark.asyncio
 async def test_agent_builder_patch_is_review_only_and_contains_three_eval_classes() -> None:
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
@@ -228,7 +271,9 @@ async def test_agent_builder_patch_is_review_only_and_contains_three_eval_classe
     assert patch.status_code == 200, patch.text
     assert patch.json()["baseRevision"] == 1
     assert {case["tags"][0] for case in patch.json()["evaluationCases"]} == {
-        "happy", "ambiguous", "safety"
+        "happy",
+        "ambiguous",
+        "safety",
     }
     assert unchanged.json()["revision"] == 1
     assert unchanged.json()["spec"]["systemPrompt"] != patch.json()["systemPrompt"]
@@ -268,7 +313,71 @@ async def test_studio_try_run_executes_validated_snapshot_without_publishing() -
     assert view.status_code == 200, view.text
     assert view.json()["run"]["status"] == "succeeded"
     assert "Echo: 请回显试跑结果" in view.json()["finalText"]
+    assert [stage["id"] for stage in view.json()["loop"]] == [
+        "plan",
+        "tools",
+        "correction",
+        "verification",
+        "result",
+    ]
+    assert view.json()["loop"][2]["status"] == "skipped"
+    assert view.json()["loop"][4]["status"] == "completed"
     assert await container.agents.list_published("tenant-try-run", "builder-a") == []
+
+
+@pytest.mark.asyncio
+async def test_successful_try_run_solidifies_release_and_required_eval_baseline() -> None:
+    application, container = app_and_container(auto_execute=True)
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-solidify",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts", headers=headers, json=draft_request("solid-agent")
+        )
+        draft_id = created.json()["draftId"]
+        started = await client.post(
+            f"/v1/studio/drafts/{draft_id}/try-runs",
+            headers=headers,
+            json={
+                "expectedRevision": 1,
+                "prompt": "完成固化验证",
+                "idempotencyKey": "solid-run-r1",
+            },
+        )
+        run_id = started.json()["run"]["run_id"]
+        solidified = await client.post(
+            f"/v1/studio/drafts/{draft_id}/solidify",
+            headers=headers,
+            json={"expectedRevision": 1, "draftRevision": 1, "runId": run_id},
+        )
+        retry = await client.post(
+            f"/v1/studio/drafts/{draft_id}/solidify",
+            headers=headers,
+            json={"expectedRevision": 1, "draftRevision": 1, "runId": run_id},
+        )
+
+    assert solidified.status_code == 200, solidified.text
+    payload = solidified.json()
+    assert payload["version"]["status"] == "published"
+    assert payload["draft"]["publishedVersion"] == "0.1.0"
+    assert payload["dataset"]["required"] is True
+    assert payload["dataset"]["sourceDraftRevision"] == 1
+    assert [stage["id"] for stage in payload["loop"]] == [
+        "plan",
+        "tools",
+        "correction",
+        "verification",
+        "result",
+    ]
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["dataset"]["version"] == payload["dataset"]["version"]
+    versions = await container.agents.list_published("tenant-solidify", "builder-a")
+    assert len(versions) == 1
 
 
 @pytest.mark.asyncio
@@ -343,8 +452,7 @@ async def test_user_can_permanently_delete_an_unreferenced_personal_mcp() -> Non
     assert created.status_code == 200, created.text
     assert deleted.status_code == 200, deleted.text
     assert "company-knowledge" not in {
-        item["reference"]
-        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+        item["reference"] for item in deleted.json()["record"]["catalog"]["mcpServers"]
     }
 
 
@@ -365,8 +473,7 @@ async def test_tavily_has_the_same_edit_and_delete_controls_as_other_mcp() -> No
 
     assert deleted.status_code == 200, deleted.text
     assert "tavily-readonly" not in {
-        item["reference"]
-        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+        item["reference"] for item in deleted.json()["record"]["catalog"]["mcpServers"]
     }
 
 
@@ -1890,9 +1997,7 @@ async def test_model_management_can_permanently_delete_model_and_secret() -> Non
         "X-User-ID": "owner-a",
     }
     api, container = app_and_container()
-    async with AsyncClient(
-        transport=ASGITransport(app=api), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
         initial = await client.get("/v1/studio/models", headers=owner_headers)
         configured = await client.put(
             "/v1/studio/models/minimax-h3",
@@ -1918,13 +2023,14 @@ async def test_model_management_can_permanently_delete_model_and_secret() -> Non
 
     assert configured.status_code == 200
     assert deleted.status_code == 200
-    assert "minimax-h3" not in {
-        item["routeId"] for item in deleted.json()["models"]
-    }
+    assert "minimax-h3" not in {item["routeId"] for item in deleted.json()["models"]}
     assert "api-key-must-be-deleted" not in deleted.text
-    assert await container.mcp_credentials.repository.get(
-        "tenant-a", "tenant:model-control-plane", "minimax-h3"
-    ) is None
+    assert (
+        await container.mcp_credentials.repository.get(
+            "tenant-a", "tenant:model-control-plane", "minimax-h3"
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -2274,12 +2380,14 @@ def test_studio_routes_are_exposed_once_in_openapi() -> None:
     expected = {
         "/v1/studio/capabilities",
         "/v1/studio/drafts",
+        "/v1/studio/drafts/from-task",
         "/v1/studio/drafts/import",
         "/v1/studio/drafts/{draft_id}",
         "/v1/studio/drafts/{draft_id}/validate",
         "/v1/studio/drafts/{draft_id}/builder-patch",
         "/v1/studio/drafts/{draft_id}/try-runs",
         "/v1/studio/drafts/{draft_id}/try-runs/{run_id}",
+        "/v1/studio/drafts/{draft_id}/solidify",
         "/v1/studio/drafts/{draft_id}/bundle",
         "/v1/studio/drafts/{draft_id}/publish",
         "/v1/studio/previews",

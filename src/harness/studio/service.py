@@ -22,7 +22,10 @@ from harness.sharing.models import (
 from harness.studio.agent_builder import (
     AgentBuilderPatch,
     AgentBuilderPatchRequest,
+    CreateTaskDrivenDraftRequest,
+    TaskDrivenDraftResult,
     build_agent_patch,
+    configure_task_driven_draft,
 )
 from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
@@ -36,6 +39,7 @@ from harness.studio.models import (
     AgentDraft,
     AgentDraftSpec,
     AgentDraftSummary,
+    AgentTemplate,
     CapabilityCatalog,
     CreateAgentDraftRequest,
     DraftSkill,
@@ -75,9 +79,7 @@ def _auto_version_modified_release(
         and candidate.version == current.published_version
         and candidate != current.spec
     ):
-        return candidate.model_copy(
-            update={"version": _next_patch_version(candidate.version)}
-        )
+        return candidate.model_copy(update={"version": _next_patch_version(candidate.version)})
     return candidate
 
 
@@ -263,15 +265,11 @@ class AgentStudioService:
             raise RuntimeError("Agent Studio compiler is not configured")
         return self._compiler
 
-    async def _resolve_agent_id(
-        self, tenant_id: str, user_id: str, name: str
-    ) -> str | None:
+    async def _resolve_agent_id(self, tenant_id: str, user_id: str, name: str) -> str | None:
         """Stable Agent identity for a new personal draft, when configured."""
         if self._agent_ids is None:
             return None
-        return await self._agent_ids.get_or_create_personal_agent_id(
-            tenant_id, user_id, name
-        )
+        return await self._agent_ids.get_or_create_personal_agent_id(tenant_id, user_id, name)
 
     async def create(
         self,
@@ -301,9 +299,45 @@ class AgentStudioService:
         await self._repository.add(draft)
         return draft
 
-    async def _load_draft(
-        self, tenant_id: str, user_id: str, draft_id: str
-    ) -> AgentDraft:
+    async def create_from_task(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        request: CreateTaskDrivenDraftRequest,
+    ) -> TaskDrivenDraftResult:
+        """Create a valid draft by compiling business intent against tenant capabilities."""
+
+        now = self._clock()
+        draft = AgentDraft(
+            draftId=self._id_generator(),
+            tenantId=tenant_id,
+            revision=1,
+            spec=create_draft_spec(
+                name=request.name,
+                domain=request.domain,
+                display_name=request.display_name,
+                description=request.task.strip()[:500],
+                template=AgentTemplate.ANALYST,
+            ),
+            createdBy=user_id,
+            updatedBy=user_id,
+            createdAt=now,
+            updatedAt=now,
+            agentId=await self._resolve_agent_id(tenant_id, user_id, request.name),
+        )
+        catalog = await self.capabilities(tenant_id, user_id)
+        compiler = await self._compiler_for(tenant_id, user_id)
+        draft, recommendation = configure_task_driven_draft(
+            draft,
+            request,
+            catalog,
+            compiler,
+        )
+        await self._repository.add(draft)
+        return TaskDrivenDraftResult(draft=draft, recommendation=recommendation)
+
+    async def _load_draft(self, tenant_id: str, user_id: str, draft_id: str) -> AgentDraft:
         """Owner-scoped draft, or a shared draft the user may view."""
         try:
             return await self._repository.get(tenant_id, user_id, draft_id)
@@ -312,9 +346,7 @@ class AgentStudioService:
         shared = await self._repository.get_shared(tenant_id, draft_id)
         if shared is None:
             raise NotFoundError(f"Agent draft not found: {draft_id}")
-        await self._require_shared_permission(
-            tenant_id, user_id, shared, AgentPermission.VIEW
-        )
+        await self._require_shared_permission(tenant_id, user_id, shared, AgentPermission.VIEW)
         return shared
 
     async def _require_shared_permission(
@@ -346,9 +378,7 @@ class AgentStudioService:
         """Drafts of every workspace Agent the member may view."""
         if self._draft_permissions is None:
             raise RuntimeError("shared draft permission checker is not configured")
-        agents = await self._draft_permissions.list_agents(
-            tenant_id, user_id, space_id
-        )
+        agents = await self._draft_permissions.list_agents(tenant_id, user_id, space_id)
         result: list[AgentDraftSummary] = []
         for agent in agents:
             draft = await self._repository.get_by_agent(tenant_id, agent.agent_id)
@@ -383,8 +413,7 @@ class AgentStudioService:
         )
         if request.name != agent.name:
             raise ConflictError(
-                "shared draft name must match the workspace Agent identity: "
-                f"expected {agent.name}"
+                f"shared draft name must match the workspace Agent identity: expected {agent.name}"
             )
         now = self._clock()
         draft = AgentDraft(
@@ -436,17 +465,11 @@ class AgentStudioService:
 
         candidates = [
             draft
-            for draft in await self._repository.list_for_user(
-                tenant_id, source_owner_user_id
-            )
+            for draft in await self._repository.list_for_user(tenant_id, source_owner_user_id)
             if draft.space_id is None and draft.spec.name == source_name
         ]
         source = next(
-            (
-                draft
-                for draft in candidates
-                if draft.published_version == source_version
-            ),
+            (draft for draft in candidates if draft.published_version == source_version),
             candidates[0] if candidates else None,
         )
         if source is None:
@@ -467,9 +490,7 @@ class AgentStudioService:
             spaceId=space_id,
             publishedVersion=source_version,
             publishedHash=source.published_hash if source_is_release else None,
-            publishedPackageHash=(
-                source.published_package_hash if source_is_release else None
-            ),
+            publishedPackageHash=(source.published_package_hash if source_is_release else None),
         )
         await self._repository.add(shared)
         return shared
@@ -486,9 +507,7 @@ class AgentStudioService:
         request: ReplaceAgentDraftRequest,
     ) -> AgentDraft:
         current = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, current, AgentPermission.EDIT
-        )
+        await self._require_shared_permission(tenant_id, user_id, current, AgentPermission.EDIT)
         if current.space_id is not None and request.spec.name != current.spec.name:
             raise ConflictError(
                 "shared draft name cannot change; it is the workspace Agent identity"
@@ -523,9 +542,7 @@ class AgentStudioService:
         imported: ImportedSkill,
     ) -> AgentDraft:
         current = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, current, AgentPermission.EDIT
-        )
+        await self._require_shared_permission(tenant_id, user_id, current, AgentPermission.EDIT)
         skills = tuple(
             imported.skill if skill.name == imported.skill.name else skill
             for skill in current.spec.skills
@@ -662,9 +679,7 @@ class AgentStudioService:
         if self._publisher is None:
             raise StudioPublisherNotConfiguredError("Agent Studio publisher is not configured")
         draft = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, draft, AgentPermission.PUBLISH
-        )
+        await self._require_shared_permission(tenant_id, user_id, draft, AgentPermission.PUBLISH)
         compiler = await self._compiler_for(tenant_id, user_id)
         try:
             if expected_revision is not None and draft.revision != expected_revision:

@@ -586,6 +586,36 @@ export type StudioAgentBuilderPatch = {
   validation: StudioValidation;
 };
 
+export type StudioTaskDrivenRecommendation = {
+  runtime: StudioDraft["runtime"];
+  modelRouteId: string;
+  model: string;
+  template: StudioDraft["template"];
+  builtinTools: string[];
+  mcpServers: string[];
+  permissionPolicy: string;
+  executionProfile: string;
+  reasons: string[];
+  validation: StudioValidation;
+};
+
+export type StudioTaskDrivenDraftResult = {
+  draft: ApiAgentDraft;
+  recommendation: StudioTaskDrivenRecommendation;
+};
+
+export type CodexLoopStage = {
+  id: "plan" | "tools" | "correction" | "verification" | "result";
+  label: string;
+  status: "pending" | "active" | "completed" | "skipped" | "failed";
+  summary: string;
+  evidence: Array<{
+    eventType: string;
+    sequence: number;
+    summary: string;
+  }>;
+};
+
 export type StudioTryRun = {
   draftId: string;
   draftRevision: number;
@@ -618,6 +648,7 @@ export type StudioTryRun = {
     size_bytes: number | null;
   }>;
   finalText: string;
+  loop: CodexLoopStage[];
 };
 
 export type StudioEvalDataset = {
@@ -641,6 +672,13 @@ export type StudioEvalDataset = {
   }>;
   createdBy: string;
   createdAt: string;
+};
+
+export type StudioSolidifiedAgentResult = {
+  draft: ApiAgentDraft;
+  version: ApiAgentVersion;
+  dataset: StudioEvalDataset;
+  loop: CodexLoopStage[];
 };
 
 export type StudioEvalCaseResult = {
@@ -1575,6 +1613,21 @@ export const studioClient = {
         template: draft.template,
       }),
     }).then(rememberStudioDraft),
+  createDraftFromTask: (body: {
+    name: string;
+    domain: string;
+    displayName: string;
+    task: string;
+    audience?: string;
+    sampleInput?: string;
+    runtimePreference: "auto" | StudioDraft["runtime"];
+  }) => request<StudioTaskDrivenDraftResult>("drafts/from-task", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }).then((result) => {
+    rememberStudioDraft(result.draft);
+    return result;
+  }),
   createAgentBuilderPatch: (
     draftId: string,
     body: {
@@ -1674,6 +1727,21 @@ export const studioClient = {
       `drafts/${encodeURIComponent(draftId)}/try-runs/${encodeURIComponent(runId)}`
         + `?draftRevision=${draftRevision}`,
     ),
+  solidifyTryRun: (
+    draftId: string,
+    expectedRevision: number,
+    draftRevision: number,
+    runId: string,
+  ) => request<StudioSolidifiedAgentResult>(
+    `drafts/${encodeURIComponent(draftId)}/solidify`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, draftRevision, runId }),
+    },
+  ).then((result) => {
+    rememberStudioDraft(result.draft);
+    return result;
+  }),
   decideTryRunApproval: (approvalId: string, decision: "approved" | "rejected") =>
     harnessRequest(`approvals/${encodeURIComponent(approvalId)}`, {
       method: "PUT",

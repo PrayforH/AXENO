@@ -309,12 +309,24 @@ describe("Agent Studio management page", () => {
     expect(workbench).toContain("if (!saved) return");
     expect(workbench).toContain("setNewAgentOpen(true)");
     expect(workbench).toContain("<NewAgentDialog");
-    expect(builderOverlays).toContain("SERVER TEMPLATE");
+    expect(builderOverlays).toContain("TASK → AGENT");
+    expect(builderOverlays).toContain("其他创建方式：从服务端模板开始");
+    expect(builderOverlays).toContain("studioClient.createDraftFromTask");
     expect(builderOverlays).toContain("studioClient.createDraft");
     expect(workbench).not.toContain("createPersonalStudioDraft");
     expect(workbench).toContain("disabled={!canEdit || saving}");
     expect(workbench).toContain("onClick={() => void startNewDraft()}");
     expect(workbench).toContain(': "尚未保存"');
+  });
+
+  it("shows the observable five-stage Codex Loop and success-only solidification", () => {
+    expect(builderOverlays).toContain("CODEX LOOP");
+    expect(builderOverlays).toContain("result.loop.map");
+    expect(builderOverlays).toContain("计划、工具、修正、验证都来自真实运行事件");
+    expect(builderOverlays).toContain('result.run.status === "succeeded"');
+    expect(builderOverlays).toContain("studioClient.solidifyTryRun");
+    expect(builderOverlays).toContain("required Eval Dataset");
+    expect(workbench).toContain("onSolidified={(result) =>");
   });
 
   it("allows discarding unsaved edits when leaving Studio", () => {

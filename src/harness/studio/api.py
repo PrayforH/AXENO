@@ -22,6 +22,7 @@ from harness.api.dependencies import (
     require_identity,
 )
 from harness.core.errors import ConflictError, NotFoundError, PermissionDeniedError
+from harness.core.models import RunStatus
 from harness.deployments.controller import DeploymentController
 from harness.deployments.models import (
     DeploymentSnapshot,
@@ -59,7 +60,12 @@ from harness.quota.models import (
 )
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
-from harness.studio.agent_builder import AgentBuilderPatch, AgentBuilderPatchRequest
+from harness.studio.agent_builder import (
+    AgentBuilderPatch,
+    AgentBuilderPatchRequest,
+    CreateTaskDrivenDraftRequest,
+    TaskDrivenDraftResult,
+)
 from harness.studio.bundle_import import AgentBundleImportError
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
@@ -123,7 +129,10 @@ from harness.studio.skill_import import (
 )
 from harness.studio.try_run import (
     CreateStudioTryRunRequest,
+    SolidifiedAgentResult,
+    SolidifyStudioTryRunRequest,
     StudioTryRunView,
+    build_codex_loop,
     final_text,
 )
 
@@ -799,9 +808,7 @@ async def get_catalog(
 @router.get("/models", response_model=ModelConfigurationList)
 async def list_model_configurations(
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     """List administrator-only connection metadata; credentials are status-only."""
 
@@ -813,9 +820,7 @@ async def configure_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: ConfigureModelRequest,
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     return await service.configure(actor.tenant_id, actor.user_id, route_id, body)
 
@@ -825,41 +830,27 @@ async def disable_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
-    return await service.disable(
-        actor.tenant_id, actor.user_id, route_id, expected_revision
-    )
+    return await service.disable(actor.tenant_id, actor.user_id, route_id, expected_revision)
 
 
-@router.delete(
-    "/models/{route_id}/permanent", response_model=ModelConfigurationList
-)
+@router.delete("/models/{route_id}/permanent", response_model=ModelConfigurationList)
 async def delete_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
-    return await service.delete(
-        actor.tenant_id, actor.user_id, route_id, expected_revision
-    )
+    return await service.delete(actor.tenant_id, actor.user_id, route_id, expected_revision)
 
 
-@router.put(
-    "/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList
-)
+@router.put("/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList)
 async def bind_agent_model(
     agent_name: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: BindAgentModelRequest,
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     return await service.bind_agent(actor.tenant_id, actor.user_id, agent_name, body)
 
@@ -868,9 +859,7 @@ async def bind_agent_model(
 async def test_model_connection(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConnectionTestResult:
     return await service.test(actor.tenant_id, route_id)
 
@@ -880,9 +869,7 @@ async def generate_image(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: GenerateImageRequest,
     identity: Annotated[Identity, Depends(require_identity)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> GenerateImageResult:
     ensure_permission(identity, "tasks:write")
     return await service.generate_image(identity.tenant_id, route_id, body)
@@ -1038,9 +1025,7 @@ async def upsert_catalog_resource(
             resource_id,
         )
     ):
-        raise ConflictError(
-            "Authenticated MCP registration requires the current user's credential"
-        )
+        raise ConflictError("Authenticated MCP registration requires the current user's credential")
     return await service.upsert(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,
@@ -1085,9 +1070,7 @@ async def list_drafts(
 ) -> list[AgentDraftSummary]:
     if space_id is not None:
         try:
-            return await service.list_workspace_drafts(
-                actor.tenant_id, actor.user_id, space_id
-            )
+            return await service.list_workspace_drafts(actor.tenant_id, actor.user_id, space_id)
         except (ConflictError, NotFoundError, PermissionDeniedError) as error:
             raise _translate_domain_error(error) from error
     return await service.list(actor.tenant_id, actor.user_id)
@@ -1338,6 +1321,34 @@ async def create_draft(
 
 
 @router.post(
+    "/drafts/from-task",
+    response_model=TaskDrivenDraftResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task_driven_draft(
+    body: CreateTaskDrivenDraftRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> TaskDrivenDraftResult:
+    """Compile one business task into a complete, explainable Agent draft."""
+
+    try:
+        result = await service.create_from_task(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            request=body,
+        )
+        return result.model_copy(update={"draft": compact_draft_for_editor(result.draft)})
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "task_builder_unavailable", "message": str(error)},
+        ) from error
+    except (ConflictError, NotFoundError, PermissionDeniedError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
     "/drafts/import",
     response_model=ImportedAgentBundle,
     status_code=status.HTTP_201_CREATED,
@@ -1391,9 +1402,7 @@ async def import_draft_bundle(
             user_id=actor.user_id,
             content=bytes(content),
         )
-        return imported.model_copy(
-            update={"draft": compact_draft_for_editor(imported.draft)}
-        )
+        return imported.model_copy(update={"draft": compact_draft_for_editor(imported.draft)})
     except (AgentBundleValidationError, AgentBundleImportError) as error:
         raise HTTPException(
             status_code=422,
@@ -1504,9 +1513,7 @@ async def create_agent_builder_patch(
     """Generate a reviewable whole-Agent patch without mutating the draft."""
 
     try:
-        return await service.build_agent_patch(
-            actor.tenant_id, actor.user_id, draft_id, body
-        )
+        return await service.build_agent_patch(actor.tenant_id, actor.user_id, draft_id, body)
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
@@ -1538,6 +1545,7 @@ async def _studio_try_run_view(
         approvals=tuple(approvals),
         artifacts=tuple(artifacts),
         finalText=final_text(events),
+        loop=build_codex_loop(run, events),
     )
 
 
@@ -1568,8 +1576,7 @@ async def create_studio_try_run(
             )
         compiled = await service.bundle(actor.tenant_id, actor.user_id, draft_id)
         preview_version = (
-            f"preview-{draft_id}-{draft.revision}-"
-            f"{compiled.report.snapshot.content_hash[:12]}"
+            f"preview-{draft_id}-{draft.revision}-{compiled.report.snapshot.content_hash[:12]}"
         )
         await container.agents.register_preview_snapshot(
             actor.tenant_id,
@@ -1608,10 +1615,7 @@ async def create_studio_try_run(
             detail={
                 "code": "draft_not_ready",
                 "message": str(error),
-                "issues": [
-                    issue.model_dump(mode="json", by_alias=True)
-                    for issue in error.issues
-                ],
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
             },
         ) from error
     except (ConflictError, NotFoundError) as error:
@@ -1633,9 +1637,108 @@ async def get_studio_try_run(
     if not isinstance(container, ApiContainer):
         raise HTTPException(status_code=503, detail="Harness container is unavailable")
     try:
-        return await _studio_try_run_view(
-            container, actor, draft_id, draft_revision, run_id
+        return await _studio_try_run_view(container, actor, draft_id, draft_revision, run_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
+    "/drafts/{draft_id}/solidify",
+    response_model=SolidifiedAgentResult,
+)
+async def solidify_studio_try_run(
+    draft_id: str,
+    body: SolidifyStudioTryRunRequest,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_publisher)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    eval_service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> SolidifiedAgentResult:
+    """Freeze one successful Try Run into a release plus required eval baseline."""
+
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        view = await _studio_try_run_view(
+            container,
+            actor,
+            draft_id,
+            body.draft_revision,
+            body.run_id,
         )
+        if view.run.status is not RunStatus.SUCCEEDED:
+            raise ConflictError("only a succeeded Studio Try Run can be solidified")
+        current = await service.get(actor.tenant_id, actor.user_id, draft_id)
+        first_publish = current.revision == body.expected_revision == body.draft_revision
+        idempotent_retry = (
+            current.revision == body.expected_revision + 1
+            and body.expected_revision == body.draft_revision
+            and current.published_version == current.spec.version
+        )
+        if not first_publish and not idempotent_retry:
+            raise ConflictError(
+                "draft changed after the verified Try Run; run it again before solidifying"
+            )
+        datasets = await eval_service.list_datasets(actor.tenant_id, actor.user_id)
+        matching = [
+            item
+            for item in datasets
+            if item.source_draft_id == draft_id
+            and item.source_draft_revision == body.draft_revision
+            and item.required
+        ]
+        if matching:
+            dataset = max(matching, key=lambda item: item.version)
+        else:
+            dataset = await eval_service.create_dataset_version(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                request=CreateEvalDatasetVersionRequest(
+                    draftId=draft_id,
+                    expectedRevision=body.draft_revision,
+                    name=f"{current.spec.display_name} · 发布基线",
+                    datasetId=f"release-{current.spec.name}",
+                    required=True,
+                ),
+            )
+        version = await service.publish(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            draft_id=draft_id,
+            expected_revision=current.revision,
+        )
+        updated = compact_draft_for_editor(
+            await service.get(actor.tenant_id, actor.user_id, draft_id)
+        )
+        published = PublishedAgentVersion.model_validate(
+            version.model_dump(exclude={"snapshot", "owner_user_id"})
+        )
+        return SolidifiedAgentResult(
+            draft=updated,
+            version=published,
+            dataset=dataset,
+            loop=view.loop,
+        )
+    except StudioPublicationConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "version_conflict", "message": str(error)},
+        ) from error
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
+            },
+        ) from error
+    except StudioPublisherNotConfiguredError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "studio_publisher_unavailable", "message": str(error)},
+        ) from error
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 
