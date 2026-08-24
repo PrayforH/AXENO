@@ -210,6 +210,7 @@ class AgentService:
         *,
         version: str,
         package_hash: str | None = None,
+        agent_id: str | None = None,
     ) -> AgentVersion:
         """Register an immutable Studio-only snapshot without publishing it."""
 
@@ -224,6 +225,7 @@ class AgentService:
             package_hash=package_hash,
             snapshot=snapshot.model_dump(mode="json"),
             created_at=self._clock(),
+            agent_id=agent_id,
         )
         try:
             await self._registry.add(candidate)

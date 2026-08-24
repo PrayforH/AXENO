@@ -29,6 +29,27 @@ async def test_publishes_an_immutable_manifest_snapshot() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_snapshot_preserves_stable_agent_identity() -> None:
+    registry = InMemoryAgentRegistry()
+    service = AgentService(registry, clock=lambda: NOW)
+    snapshot = load_manifest(FIXTURE)
+
+    version = await service.register_preview_snapshot(
+        "tenant-a",
+        "user-1",
+        snapshot,
+        version="preview-draft-1",
+        agent_id="agent-1",
+    )
+
+    assert version.status is AgentVersionStatus.VALIDATED
+    assert version.agent_id == "agent-1"
+    assert (
+        await registry.get("tenant-a", "user-1", "echo-agent", "preview-draft-1")
+    ).agent_id == "agent-1"
+
+
+@pytest.mark.asyncio
 async def test_production_service_enforces_full_package_gate() -> None:
     registry = InMemoryAgentRegistry()
     service = AgentService(registry, clock=lambda: NOW, environment="production")

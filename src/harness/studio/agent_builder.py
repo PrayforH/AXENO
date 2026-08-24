@@ -212,11 +212,38 @@ _WEB_HINTS = (
     "search",
 )
 _VISION_HINTS = ("图片", "图像", "截图", "视觉", "照片", "image", "vision", "photo")
+_ARTIFACT_HINTS = (
+    "报告",
+    "文件",
+    "交付物",
+    "文档",
+    "表格",
+    "下载",
+    "outputs/",
+    ".txt",
+    ".md",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".csv",
+    ".tsv",
+    "artifact",
+    "document",
+    "report",
+)
 
 
 def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(hint in lowered for hint in hints)
+
+
+def _requires_workspace_write(task: str) -> bool:
+    lowered = task.lower()
+    return _contains_any(lowered, _WRITE_HINTS) or (
+        _contains_any(lowered, ("生成", "创建", "产出", "create", "produce"))
+        and _contains_any(lowered, _ARTIFACT_HINTS)
+    )
 
 
 def _runtime_and_route(
@@ -338,7 +365,7 @@ def configure_task_driven_draft(
 
     runtime, route, runtime_reasons = _runtime_and_route(catalog, request)
     available_tools = {item.name for item in catalog.builtin_tools}
-    writes = _contains_any(request.task, _WRITE_HINTS)
+    writes = _requires_workspace_write(request.task)
     template = AgentTemplate.OPERATOR if writes else AgentTemplate.ANALYST
     desired_tools = ["Read", "Glob", "Grep"]
     if writes:

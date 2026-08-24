@@ -31,6 +31,10 @@ const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
 );
+const appStyles = readFileSync(
+  join(process.cwd(), "src/app/styles.css"),
+  "utf8",
+);
 const codeEditor = readFileSync(
   join(
     process.cwd(),
@@ -327,6 +331,12 @@ describe("Agent Studio management page", () => {
     expect(builderOverlays).toContain("studioClient.solidifyTryRun");
     expect(builderOverlays).toContain("required Eval Dataset");
     expect(workbench).toContain("onSolidified={(result) =>");
+  });
+
+  it("aligns the new-task action with workspace navigation columns", () => {
+    expect(appStyles).toContain(".task-sidebar-primary button");
+    expect(appStyles).toContain("grid-template-columns: 20px minmax(0, 1fr)");
+    expect(appStyles).toContain("gap: 9px");
   });
 
   it("allows discarding unsaved edits when leaving Studio", () => {

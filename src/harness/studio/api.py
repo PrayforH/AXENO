@@ -1584,6 +1584,7 @@ async def create_studio_try_run(
             compiled.report.snapshot,
             version=preview_version,
             package_hash=compiled.report.package_hash,
+            agent_id=draft.agent_id,
         )
         session_key = hashlib.sha256(
             f"{actor.tenant_id}:{actor.user_id}:{draft_id}:{body.idempotency_key}".encode()
