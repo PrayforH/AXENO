@@ -996,6 +996,7 @@ async def test_runtime_assets_are_staged_before_sandbox_prepare(tmp_path: Path) 
         _agent_name: str,
         _agent_version: str,
         workspace: Path,
+        _allow_validated_root: bool,
     ) -> tuple[str, ...]:
         target = workspace / ".claude/skills/domain-core"
         target.mkdir(parents=True)

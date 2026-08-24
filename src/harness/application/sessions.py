@@ -110,6 +110,7 @@ class SessionService:
                 owner_user_id=resolved_agent_owner,
                 agent_name=agent_name,
                 agent_version=agent_version,
+                allow_validated_root=preview,
             )
         snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
         knowledge_bindings: tuple[dict[str, object], ...] = ()

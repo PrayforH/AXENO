@@ -185,6 +185,48 @@ async def test_session_requires_a_published_agent_version() -> None:
 
 
 @pytest.mark.asyncio
+async def test_preview_session_allows_validated_root_with_published_dependencies() -> None:
+    registry = InMemoryAgentRegistry()
+    sessions = InMemorySessionRepository()
+    root = load_manifest("tests/fixtures/agents/echo-agent/agent.yaml")
+    child = load_manifest("tests/fixtures/agents/helper-agent/agent.yaml")
+    for snapshot, status in (
+        (root, AgentVersionStatus.VALIDATED),
+        (child, AgentVersionStatus.PUBLISHED),
+    ):
+        metadata = snapshot.manifest.metadata
+        await registry.add(
+            AgentVersion(
+                tenant_id="tenant-a",
+                owner_user_id="user-1",
+                name=metadata.name,
+                version=metadata.version,
+                status=status,
+                manifest_hash=snapshot.content_hash,
+                snapshot=snapshot.model_dump(mode="json"),
+                created_at=NOW,
+            )
+        )
+    service = SessionService(
+        registry,
+        sessions,
+        clock=lambda: NOW,
+        id_generator=lambda prefix: f"{prefix}-1",
+        require_published_dependencies=True,
+    )
+
+    session = await service.create(
+        "tenant-a",
+        "user-1",
+        "echo-agent",
+        "0.1.0",
+        preview=True,
+    )
+
+    assert session.environment == "preview"
+
+
+@pytest.mark.asyncio
 async def test_session_fails_early_when_pinned_subagent_is_missing() -> None:
     registry = InMemoryAgentRegistry()
     sessions = InMemorySessionRepository()

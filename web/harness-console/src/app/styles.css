@@ -1741,7 +1741,7 @@ textarea:not(.aui-composer-input):focus-visible {
 .task-sidebar-primary button {
   width: 100%;
   min-height: 36px;
-  padding: 0 10px;
+  padding: 0 12px;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;

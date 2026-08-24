@@ -335,6 +335,7 @@ describe("Agent Studio management page", () => {
 
   it("aligns the new-task action with workspace navigation columns", () => {
     expect(appStyles).toContain(".task-sidebar-primary button");
+    expect(appStyles).toContain("padding: 0 12px");
     expect(appStyles).toContain("grid-template-columns: 20px minmax(0, 1fr)");
     expect(appStyles).toContain("gap: 9px");
   });

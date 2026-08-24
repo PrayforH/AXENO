@@ -85,7 +85,7 @@ from harness.sandbox.base import (
     SandboxProvider,
 )
 
-RuntimeAssetStager = Callable[[str, str, str, str, Path], Awaitable[tuple[str, ...]]]
+RuntimeAssetStager = Callable[[str, str, str, str, Path, bool], Awaitable[tuple[str, ...]]]
 PolicyResolver = Callable[
     [str, str, str, str],
     Awaitable[PolicyEngine | ResolvedPolicy],
@@ -1141,6 +1141,7 @@ class RunOrchestrator:
                         session.agent_name,
                         session.agent_version,
                         handle.path,
+                        session.environment == "preview",
                     )
                 await self._events.append(
                     tenant_id=tenant_id,

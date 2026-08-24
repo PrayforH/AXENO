@@ -67,10 +67,18 @@ async def resolve_published_agent_versions(
     owner_user_id: str,
     agent_name: str,
     agent_version: str,
+    allow_validated_root: bool = False,
 ) -> tuple[AgentVersion, dict[str, AgentVersion]]:
-    """Resolve a fixed one-level SDK delegation graph and enforce publication state."""
+    """Resolve a fixed one-level SDK delegation graph and enforce release state.
+
+    Studio Try Runs may execute one immutable validated root snapshot. Pinned
+    subagents remain publication-gated so Preview cannot expand the dependency
+    boundary beyond reviewed releases.
+    """
     root = await registry.get(tenant_id, owner_user_id, agent_name, agent_version)
-    if root.status is not AgentVersionStatus.PUBLISHED:
+    if root.status is not AgentVersionStatus.PUBLISHED and not (
+        allow_validated_root and root.status is AgentVersionStatus.VALIDATED
+    ):
         raise ConflictError("sessions can only use a published Agent version")
     snapshot = AgentManifestSnapshot.model_validate(root.snapshot)
     children: dict[str, AgentVersion] = {}
@@ -103,6 +111,7 @@ async def stage_published_agent_assets(
     agent_name: str,
     agent_version: str,
     workspace: Path,
+    allow_validated_root: bool = False,
 ) -> tuple[str, ...]:
     version, children = await resolve_published_agent_versions(
         registry,
@@ -110,6 +119,7 @@ async def stage_published_agent_assets(
         owner_user_id=owner_user_id,
         agent_name=agent_name,
         agent_version=agent_version,
+        allow_validated_root=allow_validated_root,
     )
     snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
     snapshots = [snapshot]

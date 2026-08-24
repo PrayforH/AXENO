@@ -124,6 +124,7 @@ class RegistryClaudeRuntime:
             owner_user_id=session.resolved_agent_owner_user_id,
             agent_name=session.agent_name,
             agent_version=session.agent_version,
+            allow_validated_root=session.environment == "preview",
         )
         snapshot = AgentManifestSnapshot.model_validate(agent_version.snapshot)
         enforce_runtime_environment(session, snapshot)
