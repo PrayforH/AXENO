@@ -80,7 +80,6 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert "public-opinion-agent/agent.yaml" not in seed_manifests
     studio_manifests = services["seed"]["environment"]["HARNESS_SEED_STUDIO_MANIFESTS"]
     for manifest in (
-        "public-opinion-agent/agent.yaml",
         "similar-case-analysis-agent/agent.yaml",
         "govdoc-writer-agent/agent.yaml",
         "archive-assistant-agent/agent.yaml",
@@ -90,6 +89,7 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     optional_studio_manifests = services["seed"]["environment"][
         "HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS"
     ]
+    assert "public-opinion-agent/agent.yaml" in optional_studio_manifests
     assert "networked-knowledge-research-agent/agent.yaml" in optional_studio_manifests
     assert services["otel-collector"]["profiles"] == ["observability"]
     assert services["postgres"]["image"] == "postgres:18.4-bookworm"
