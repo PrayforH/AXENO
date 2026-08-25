@@ -853,16 +853,16 @@ def test_local_development_profile_is_explicitly_preview_only() -> None:
     assert profile.allowed_mcp_references == ("tavily-readonly",)
 
 
-def test_orchestrator_compiles_role_descriptions_and_background_mode() -> None:
+def test_orchestrator_starts_without_implicit_subagents() -> None:
     compiler = AgentDraftCompiler(default_capability_catalog())
+    current = draft(AgentTemplate.ORCHESTRATOR)
 
-    validation = compiler.validate(draft(AgentTemplate.ORCHESTRATOR))
+    validation = compiler.validate(current)
 
     assert validation.ready is True
-    assert "alias: evidence-researcher" in validation.manifest_yaml
-    assert "description: 并行收集证据" in validation.manifest_yaml
-    assert "background: true" in validation.manifest_yaml
-    assert "alias: quality-reviewer" in validation.manifest_yaml
+    assert current.spec.subagents == ()
+    assert "subagents: []" in validation.manifest_yaml
+    assert "builtin: Task" not in validation.manifest_yaml
 
 
 def test_disabled_catalog_resources_fail_closed() -> None:
