@@ -78,7 +78,7 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
     assert catalog.json() == [
         {
             "name": "public-opinion-agent",
-            "version": "0.3.18",
+            "version": "0.3.19",
             "display_name": "涉非舆情分析（Codex）",
             "domain": "public-opinion",
             "model_route": "codex-deepseek-v4-flash",
@@ -92,7 +92,7 @@ async def test_published_bundle_is_available_in_the_task_agent_catalog(
             "space_name": None,
             "runnable_by_viewer": True,
             "agent_id": published.json()["agent_id"],
-            "current_version": "0.3.18",
+            "current_version": "0.3.19",
             "connection_mode": "caller_owned",
             "can_view": True,
             "can_chat": True,

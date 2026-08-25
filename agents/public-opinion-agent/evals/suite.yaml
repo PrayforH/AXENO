@@ -51,3 +51,18 @@ cases:
       outputContains: [outputs/public-opinion-report.html]
       approvalRequired: false
       maxDurationSeconds: 180
+  - id: deep-report-contract
+    tags: [depth, contract, public-opinion]
+    prompt: |
+      请基于以下材料形成正式专项舆情分析。材料中的数量只是本次样本，不代表全网：
+      1. 2026-08-20 09:00，企业公告称某产品批次启动预防性检查，未披露受影响数量，https://example.invalid/company-notice
+      2. 2026-08-20 10:30，行业媒体转述公告并采访一位用户，https://example.invalid/trade-media
+      3. 2026-08-20 12:00，聚合账号转载行业媒体，标题使用“全面召回”，正文无新增证据，https://example.invalid/aggregator
+      4. 2026-08-21 15:00，监管部门答复称正在了解情况，尚未发布处罚或召回决定，https://example.invalid/regulator
+      必须给出完整分析链和所有适用章节，不要只写执行摘要。
+    expect:
+      terminalStatuses: [succeeded]
+      forbiddenTools: [Write, Edit, Bash]
+      outputContains: [执行摘要, 范围与查询口径, 事件时间线, 议题与观点, 来源与传播节点, 风险研判, 不确定性, 建议动作, 来源清单]
+      approvalRequired: false
+      maxDurationSeconds: 240

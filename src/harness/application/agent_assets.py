@@ -1,6 +1,7 @@
 """Stage immutable main and subagent runtime assets from the registry."""
 
 import json
+import shutil
 from pathlib import Path
 
 from harness.core.errors import ConflictError
@@ -58,6 +59,29 @@ def _materialize_codex_subagents(
             )
         )
         (agent_root / _codex_agent_file_name(alias)).write_text(content, encoding="utf-8")
+
+
+def _materialize_codex_skills(workspace: Path, names: tuple[str, ...]) -> None:
+    """Mirror immutable bundle Skills into Codex's repository discovery root.
+
+    ``.claude/skills`` remains the compatibility and tool-gate source of truth.
+    Codex discovers repository Skills from ``.agents/skills``; harness-owned
+    mirrors use a prefix so existing user-authored repository Skills are left
+    untouched.
+    """
+
+    source_root = workspace / ".claude" / "skills"
+    codex_root = workspace / ".agents" / "skills"
+    codex_root.mkdir(parents=True, exist_ok=True)
+    for stale in codex_root.glob("harness-*"):
+        if stale.is_symlink() or stale.is_file():
+            stale.unlink()
+        else:
+            shutil.rmtree(stale)
+    for name in names:
+        source = source_root / name
+        target = codex_root / f"harness-{name}"
+        shutil.copytree(source, target)
 
 
 async def resolve_published_agent_versions(
@@ -127,6 +151,8 @@ async def stage_published_agent_assets(
     for child in children.values():
         snapshots.append(AgentManifestSnapshot.model_validate(child.snapshot))
     materialize_python_tool_snapshot_set(snapshots, workspace)
+    staged_skills = materialize_skill_snapshot_set(snapshots, workspace)
     if snapshot.manifest.spec.runtime == "codex-app-server":
         _materialize_codex_subagents(snapshot, children, workspace)
-    return materialize_skill_snapshot_set(snapshots, workspace)
+        _materialize_codex_skills(workspace, staged_skills)
+    return staged_skills

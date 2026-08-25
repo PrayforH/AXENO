@@ -1,13 +1,13 @@
 # public-opinion-agent
 
-`public-opinion-agent@0.3.18` is the Codex edition of the evidence-backed Chinese
+`public-opinion-agent@0.3.19` is the Codex edition of the evidence-backed Chinese
 public-opinion Agent. Its Studio display name is `涉非舆情分析（Codex）`.
 
 This package was not emitted unchanged by `harness agent init`. It is the worked
 reference produced by adapting the earlier `public-opinion` behavior to the Codex loop.
 The current version restores the reviewed `sentiment_query_mcp` toolset through Codex
 native MCP while retaining workspace builtins. Knowledge Base references remain empty.
-Three governed helper roles use Codex native collaboration for bounded parallel work.
+Three governed helper roles remain available for explicitly requested bounded parallel work.
 
 Version notes:
 
@@ -20,6 +20,10 @@ Version notes:
   Base references remain empty.
 - `0.3.18`: long-running Codex release with independent model-turn and tool-call
   budgets, a two-hour runtime envelope, and three governed helper roles.
+- `0.3.19`: depth-restoration release. Published Skills are mirrored into Codex's
+  repository-native `.agents/skills` discovery root, while `.claude/skills` remains
+  the compatibility source. Query, risk, report, pagination and final completeness
+  checks are mandatory; Knowledge Base and public web search remain disabled.
 
 Validate and package:
 
@@ -30,5 +34,5 @@ uv run harness agent pack agents/public-opinion-agent/agent.yaml
 
 The published Codex Manifest pins `codex-deepseek-v4-flash`; the legacy Agent-wide
 Studio binding remains on the Claude-compatible `deepseek-v4-flash` route so 0.3.13 and
-0.3.18 can coexist. Existing Sessions stay pinned to their version and route snapshot;
+0.3.19 can coexist. Existing Sessions stay pinned to their version and route snapshot;
 create a new Session after a version change.
