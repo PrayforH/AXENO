@@ -114,11 +114,14 @@ class GenerateImageResult(StudioModel):
 
 class GenerateVideoRequest(StudioModel):
     prompt: str = Field(min_length=1, max_length=8_000)
-    aspect_ratio: Literal["16:9", "9:16", "1:1"] = Field(default="16:9", alias="aspectRatio")
-    seconds: int = Field(default=5, ge=1, le=10)
+    aspect_ratio: Literal["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"] = Field(
+        default="16:9", alias="aspectRatio"
+    )
+    seconds: int = Field(default=5, ge=4, le=15)
     seed: int | None = Field(default=None, ge=0)
+    negative_prompt: str | None = Field(default=None, alias="negativePrompt", max_length=4_000)
     input_artifact_ids: tuple[str, ...] = Field(
-        default=(), alias="inputArtifactIds", max_length=10
+        default=(), alias="inputArtifactIds", max_length=2
     )
 
     @model_validator(mode="after")
@@ -149,7 +152,10 @@ class GeneratedVideoReference:
 
 
 _MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
-_MAX_VIDEO_REFERENCE_BYTES = 100 * 1024 * 1024
+_MAX_VIDEO_REFERENCE_BYTES = 60 * 1024 * 1024
+_MAX_VIDEO_REFERENCE_IMAGE_BYTES = 30 * 1024 * 1024
+_MIN_VIDEO_REFERENCE_DIMENSION = 256
+_MAX_VIDEO_REFERENCE_DIMENSION = 5_760
 _MIN_VIDEO_REFERENCE_ASPECT_RATIO = 1 / 4
 _MAX_VIDEO_REFERENCE_ASPECT_RATIO = 4
 
@@ -521,8 +527,12 @@ class ModelConfigurationService:
         if any(not item.media_type.lower().startswith("image/") for item in references):
             raise ConflictError("video references must be image files")
         if sum(len(item.content) for item in references) > _MAX_VIDEO_REFERENCE_BYTES:
-            raise ConflictError("video reference images exceed the 100 MiB limit")
+            raise ConflictError("video reference images exceed the 60 MiB total limit")
         for index, item in enumerate(references, start=1):
+            if len(item.content) > _MAX_VIDEO_REFERENCE_IMAGE_BYTES:
+                raise ConflictError(
+                    f"video reference image {index} exceeds the 30 MiB limit"
+                )
             try:
                 with Image.open(BytesIO(item.content)) as image:
                     width, height = image.size
@@ -531,6 +541,12 @@ class ModelConfigurationService:
                 raise ConflictError(
                     f"video reference image {index} is invalid or unsupported"
                 ) from None
+            if min(width, height) < _MIN_VIDEO_REFERENCE_DIMENSION or max(
+                width, height
+            ) > _MAX_VIDEO_REFERENCE_DIMENSION:
+                raise ConflictError(
+                    f"video reference image {index} dimensions must be between 256 and 5760 pixels"
+                )
             aspect_ratio = width / height
             if not (
                 _MIN_VIDEO_REFERENCE_ASPECT_RATIO
@@ -548,6 +564,8 @@ class ModelConfigurationService:
         }
         if request.seed is not None:
             form["seed"] = str(request.seed)
+        if request.negative_prompt:
+            form["negative_prompt"] = request.negative_prompt
         reference_files = tuple(
             (
                 "input_reference" if len(references) == 1 else "input_references",

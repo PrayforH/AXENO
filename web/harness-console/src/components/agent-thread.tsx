@@ -11,6 +11,7 @@ import {
   useAui,
   useAuiState,
   useThreadRuntime,
+  type CompleteAttachment,
   type ReasoningMessagePartComponent,
   type TextMessagePartProps,
   type ToolCallMessagePartProps,
@@ -68,6 +69,13 @@ import {
 } from "../lib/run-stream-store";
 import { normalizeMessageText } from "../lib/message-text";
 import { inputArtifactIdFromAttachment } from "../lib/input-attachment-adapter";
+import {
+  VIDEO_GENERATION_PART_NAME,
+  VideoGenerationControls,
+  VideoGenerationMessagePart,
+  VideoGenerationProvider,
+  useVideoGeneration,
+} from "./video-generation";
 
 export { normalizeMessageText } from "../lib/message-text";
 import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
@@ -246,18 +254,8 @@ function HarnessComposer() {
   const videoRoute = routes.find(
     (route) => route.id === overrideRouteId && route.modelType === "video_generation",
   );
-  const [videoGeneration, setVideoGeneration] = useState<{
-    status: "idle" | "generating" | "succeeded" | "failed";
-    prompt?: string;
-    url?: string;
-    error?: string;
-  }>({ status: "idle" });
-  const videoAbortRef = useRef<AbortController | null>(null);
-  const videoUrlRef = useRef<string | null>(null);
-  useEffect(() => () => {
-    videoAbortRef.current?.abort();
-    if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
-  }, []);
+  const videoGeneration = useVideoGeneration();
+  const [videoValidationError, setVideoValidationError] = useState<string | null>(null);
   useEffect(() => {
     const visibleApprovalId = pendingApproval.details?.approval_id;
     if (
@@ -275,81 +273,56 @@ function HarnessComposer() {
     stream.status,
     runView?.phase,
   );
-  const videoGenerating = videoGeneration.status === "generating";
+  const videoGenerating = videoGeneration.generating;
   async function generateVideo() {
     const prompt = composerText.trim();
     if (!videoRoute || !prompt || videoGenerating) return;
+    setVideoValidationError(null);
     if (composerAttachments.some((attachment) => attachment.type !== "image")) {
-      setVideoGeneration({
-        status: "failed",
-        error: "H3 参考素材只支持图片，请移除文档或其他文件。",
-      });
+      setVideoValidationError("H3 参考素材只支持图片，请移除文档或其他文件。");
       return;
     }
-    if (composerAttachments.length > 10) {
-      setVideoGeneration({ status: "failed", error: "一次最多使用 10 张参考图片。" });
+    if (composerAttachments.length > 2) {
+      setVideoValidationError("H3 最多使用两张参考图片，分别作为首帧和尾帧。");
       return;
     }
-    const inputArtifactIds = composerAttachments.map(inputArtifactIdFromAttachment);
-    if (inputArtifactIds.some((item) => !item)) {
-      setVideoGeneration({ status: "failed", error: "参考图片仍在上传，请稍后再试。" });
+    const maybeArtifactIds = composerAttachments.map(inputArtifactIdFromAttachment);
+    if (maybeArtifactIds.some((item) => !item)) {
+      setVideoValidationError("参考图片仍在上传，请稍后再试。");
       return;
     }
-    const controller = new AbortController();
-    videoAbortRef.current = controller;
-    setVideoGeneration({ status: "generating", prompt });
-    try {
-      const response = requireAuthenticatedResponse(
-        await fetch(
-          `/api/studio/models/${encodeURIComponent(videoRoute.id)}/videos`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              prompt,
-              aspectRatio: "16:9",
-              seconds: 5,
-              inputArtifactIds,
-            }),
-            signal: controller.signal,
-          },
-        ),
-      );
-      if (!response.ok) {
-        const raw = await response.text();
-        let message = raw || `视频生成失败（HTTP ${response.status}）`;
-        try {
-          const parsed = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
-          message = parsed.error?.message ?? parsed.detail ?? message;
-        } catch {
-          // Keep the provider response as the actionable fallback.
-        }
-        throw new Error(message);
-      }
-      const blob = await response.blob();
-      if (!blob.type.startsWith("video/")) throw new Error("服务返回的不是有效视频。");
-      if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
-      const url = URL.createObjectURL(blob);
-      videoUrlRef.current = url;
-      setVideoGeneration({ status: "succeeded", prompt, url });
-      aui.composer().setText("");
-    } catch (error) {
-      if (controller.signal.aborted) {
-        setVideoGeneration({ status: "idle" });
-      } else {
-        setVideoGeneration({
-          status: "failed",
-          prompt,
-          error: error instanceof Error ? error.message : "视频生成失败，请稍后重试。",
-        });
-      }
-    } finally {
-      if (videoAbortRef.current === controller) videoAbortRef.current = null;
+    const inputArtifactIds = maybeArtifactIds.filter(
+      (item): item is string => Boolean(item),
+    );
+    const seed = videoGeneration.settings.seed.trim();
+    if (seed && (!/^\d+$/.test(seed) || !Number.isSafeInteger(Number(seed)))) {
+      setVideoValidationError("随机种子必须是非负整数。");
+      return;
     }
-  }
-
-  function cancelVideoGeneration() {
-    videoAbortRef.current?.abort();
+    const attachments: CompleteAttachment[] = composerAttachments.map((attachment, index) => {
+      const artifactId = inputArtifactIds[index]!;
+      const mimeType = attachment.contentType ?? "image/*";
+      return {
+        id: artifactId,
+        type: "image",
+        name: attachment.name,
+        contentType: mimeType,
+        status: { type: "complete" },
+        content: [{
+          type: "file",
+          data: artifactId,
+          mimeType,
+          filename: attachment.name,
+        }],
+      };
+    });
+    videoGeneration.start({
+      routeId: videoRoute.id,
+      routeLabel: videoRoute.label,
+      prompt,
+      inputArtifactIds,
+      attachments,
+    });
   }
   return (
     <div
@@ -417,22 +390,19 @@ function HarnessComposer() {
         disabled={runLocked || showStop || videoGenerating}
         requiresVision={composerAttachments.some((attachment) => attachment.type === "image")}
       />
-      {videoRoute || videoGeneration.status !== "idle" ? (
-        <section className="composer-video-generation" data-status={videoGeneration.status}>
-          <header>
-            <span><strong>{videoRoute?.label ?? "H3 视频生成"}</strong><small>{composerAttachments.length ? `${composerAttachments.length} 张参考图 · ` : ""}5 秒 · 16:9 · MP4</small></span>
-            {videoGeneration.status === "generating" ? <em>生成中，通常约 2 分钟</em> : null}
-          </header>
-          {videoGeneration.status === "failed" ? (
-            <p role="alert">{videoGeneration.error}</p>
+      {videoRoute ? (
+        <>
+          <VideoGenerationControls
+            label={videoRoute.label}
+            referenceCount={composerAttachments.length}
+            disabled={videoGenerating}
+          />
+          {videoValidationError ? (
+            <p className="composer-video-validation" role="alert">
+              {videoValidationError}
+            </p>
           ) : null}
-          {videoGeneration.status === "succeeded" && videoGeneration.url ? (
-            <div className="composer-video-result">
-              <video src={videoGeneration.url} controls preload="metadata" aria-label={videoGeneration.prompt ?? "生成视频"} />
-              <div><span title={videoGeneration.prompt}>{videoGeneration.prompt}</span><a href={videoGeneration.url} download={`${videoRoute?.id ?? "minimax-h3"}.mp4`}>下载 MP4</a></div>
-            </div>
-          ) : null}
-        </section>
+        </>
       ) : null}
       <Composer.Root>
         <Composer.Attachments />
@@ -469,11 +439,11 @@ function HarnessComposer() {
           <button
             type="button"
             className="aui-button aui-composer-video-send"
-            disabled={!composerText.trim() && !videoGenerating}
-            aria-label={videoGenerating ? "取消视频生成" : "生成视频"}
-            onClick={videoGenerating ? cancelVideoGeneration : () => void generateVideo()}
+            disabled={videoGenerating || !composerText.trim()}
+            aria-label={videoGenerating ? "视频生成中" : "生成视频"}
+            onClick={() => void generateVideo()}
           >
-            {videoGenerating ? "取消" : "生成视频"}
+            {videoGenerating ? "生成中" : "生成视频"}
           </button>
         ) : (
           <Composer.Send />
@@ -981,6 +951,9 @@ function HarnessAssistantMessage() {
   const messageStatus = useAuiState((state) => state.message.status);
   const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus);
   const content = useAuiState((state) => state.message.content);
+  const hasVideoGeneration = content.some(
+    (part) => part.type === "data" && part.name === VIDEO_GENERATION_PART_NAME,
+  );
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
   // this only on visible text lets assistant-ui paint the same preface once.
@@ -1011,6 +984,11 @@ function HarnessAssistantMessage() {
         components={{
           Text: HarnessAssistantText,
           Reasoning: ReasoningPart,
+          data: {
+            by_name: {
+              [VIDEO_GENERATION_PART_NAME]: VideoGenerationMessagePart,
+            },
+          },
         }}
       />
       {showIncompleteRecovery ? (
@@ -1025,21 +1003,23 @@ function HarnessAssistantMessage() {
           </ActionBarPrimitive.Reload>
         </div>
       ) : null}
-      <div className="assistant-message-controls">
-        <HarnessBranchPicker />
-        <AssistantActionBar.Root
-          hideWhenRunning
-          autohide="not-last"
-          autohideFloat="single-branch"
-        >
-          <AssistantActionBar.SpeechControl />
-          <MessageCopyButton
-            className="assistant-message-copy"
-            label="复制回答"
-            text={copyText}
-          />
-        </AssistantActionBar.Root>
-      </div>
+      {!hasVideoGeneration ? (
+        <div className="assistant-message-controls">
+          <HarnessBranchPicker />
+          <AssistantActionBar.Root
+            hideWhenRunning
+            autohide="not-last"
+            autohideFloat="single-branch"
+          >
+            <AssistantActionBar.SpeechControl />
+            <MessageCopyButton
+              className="assistant-message-copy"
+              label="复制回答"
+              text={copyText}
+            />
+          </AssistantActionBar.Root>
+        </div>
+      ) : null}
     </AssistantMessage.Root>
   );
 }
@@ -1409,46 +1389,48 @@ export function AgentThread({
   return (
     <ComposerDraftContext.Provider value={composerDraftScope}>
       <MessageEditorContext.Provider value={{ editor, setEditor }}>
-        <Thread
-      assistantMessage={{
-        allowCopy: false,
-        allowReload: false,
-        allowSpeak: true,
-        allowFeedbackPositive: false,
-        allowFeedbackNegative: false,
-        components: { ToolFallback: HarnessToolPart },
-      }}
-      userMessage={{ allowEdit: true }}
-      branchPicker={{ allowBranchPicker: true }}
-      composer={{ allowAttachments: true }}
-      components={{
-        AssistantMessage: HarnessAssistantMessage,
-        UserMessage: HarnessUserMessage,
-        Composer: HarnessComposer,
-        ThreadWelcome: UserTaskWelcome,
-      }}
-      strings={{
-        thread: { scrollToBottom: { tooltip: "滚动到底部" } },
-        userMessage: { edit: { tooltip: "编辑消息" } },
-        assistantMessage: {
-          reload: { tooltip: "重新运行" },
-          copy: { tooltip: "复制回答" },
-          speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
-        },
-        branchPicker: {
-          previous: { tooltip: "上一个分支" },
-          next: { tooltip: "下一个分支" },
-        },
-        composer: {
-          send: { tooltip: "发送任务" },
-          cancel: { tooltip: "停止运行" },
-          addAttachment: { tooltip: "添加本地文件" },
-          removeAttachment: { tooltip: "移除附件" },
-          input: { placeholder: "描述任务，或附加文件…" },
-        },
-        editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
-      }}
-        />
+        <VideoGenerationProvider>
+          <Thread
+            assistantMessage={{
+              allowCopy: false,
+              allowReload: false,
+              allowSpeak: true,
+              allowFeedbackPositive: false,
+              allowFeedbackNegative: false,
+              components: { ToolFallback: HarnessToolPart },
+            }}
+            userMessage={{ allowEdit: true }}
+            branchPicker={{ allowBranchPicker: true }}
+            composer={{ allowAttachments: true }}
+            components={{
+              AssistantMessage: HarnessAssistantMessage,
+              UserMessage: HarnessUserMessage,
+              Composer: HarnessComposer,
+              ThreadWelcome: UserTaskWelcome,
+            }}
+            strings={{
+              thread: { scrollToBottom: { tooltip: "滚动到底部" } },
+              userMessage: { edit: { tooltip: "编辑消息" } },
+              assistantMessage: {
+                reload: { tooltip: "重新运行" },
+                copy: { tooltip: "复制回答" },
+                speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
+              },
+              branchPicker: {
+                previous: { tooltip: "上一个分支" },
+                next: { tooltip: "下一个分支" },
+              },
+              composer: {
+                send: { tooltip: "发送任务" },
+                cancel: { tooltip: "停止运行" },
+                addAttachment: { tooltip: "添加本地文件" },
+                removeAttachment: { tooltip: "移除附件" },
+                input: { placeholder: "描述任务，或附加文件…" },
+              },
+              editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
+            }}
+          />
+        </VideoGenerationProvider>
       </MessageEditorContext.Provider>
     </ComposerDraftContext.Provider>
   );

@@ -1,0 +1,424 @@
+"use client";
+
+import {
+  useAui,
+  type CompleteAttachment,
+  type DataMessagePartProps,
+} from "@assistant-ui/react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { requireAuthenticatedResponse } from "../lib/client-auth";
+
+export const VIDEO_GENERATION_PART_NAME = "harness.video-generation";
+
+export type VideoAspectRatio = "21:9" | "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
+export type VideoDuration = number;
+
+export interface VideoGenerationSettings {
+  seconds: VideoDuration;
+  aspectRatio: VideoAspectRatio;
+  seed: string;
+  negativePrompt: string;
+}
+
+interface VideoGenerationRequest {
+  routeId: string;
+  routeLabel: string;
+  prompt: string;
+  inputArtifactIds: string[];
+  attachments: CompleteAttachment[];
+  settings: VideoGenerationSettings;
+}
+
+interface VideoGenerationEntry extends VideoGenerationRequest {
+  id: string;
+  status: "generating" | "succeeded" | "failed" | "cancelled";
+  url?: string;
+  error?: string;
+  elapsedSeconds?: number;
+}
+
+interface VideoGenerationController {
+  settings: VideoGenerationSettings;
+  setSettings: (next: VideoGenerationSettings) => void;
+  entries: Readonly<Record<string, VideoGenerationEntry>>;
+  generating: boolean;
+  start: (request: Omit<VideoGenerationRequest, "settings">) => string;
+  retry: (generationId: string) => void;
+  cancel: (generationId: string) => void;
+  reuse: (generationId: string) => Promise<void>;
+}
+
+const DEFAULT_SETTINGS: VideoGenerationSettings = {
+  seconds: 5,
+  aspectRatio: "16:9",
+  seed: "",
+  negativePrompt: "",
+};
+
+const VideoGenerationContext = createContext<VideoGenerationController | null>(null);
+
+function generationId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `video-${crypto.randomUUID()}`;
+  }
+  return `video-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function responseError(raw: string, status: number) {
+  let message = raw || `视频生成失败（HTTP ${status}）`;
+  try {
+    const parsed = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
+    message = parsed.error?.message ?? parsed.detail ?? message;
+  } catch {
+    // Preserve the provider response when it is not JSON.
+  }
+  return message;
+}
+
+export function VideoGenerationProvider({ children }: { children: ReactNode }) {
+  const aui = useAui();
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [entries, setEntries] = useState<Record<string, VideoGenerationEntry>>({});
+  const aborts = useRef(new Map<string, AbortController>());
+  const urls = useRef(new Map<string, string>());
+
+  useEffect(() => () => {
+    for (const controller of aborts.current.values()) controller.abort();
+    for (const url of urls.current.values()) URL.revokeObjectURL(url);
+  }, []);
+
+  const execute = useCallback(async (id: string, request: VideoGenerationRequest) => {
+    const previous = urls.current.get(id);
+    if (previous) {
+      URL.revokeObjectURL(previous);
+      urls.current.delete(id);
+    }
+    const controller = new AbortController();
+    aborts.current.set(id, controller);
+    const startedAt = performance.now();
+    setEntries((current) => ({
+      ...current,
+      [id]: { ...request, id, status: "generating" },
+    }));
+    try {
+      const seed = request.settings.seed.trim();
+      const negativePrompt = request.settings.negativePrompt.trim();
+      const response = requireAuthenticatedResponse(
+        await fetch(
+          `/api/studio/models/${encodeURIComponent(request.routeId)}/videos`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              prompt: request.prompt,
+              aspectRatio: request.settings.aspectRatio,
+              seconds: request.settings.seconds,
+              inputArtifactIds: request.inputArtifactIds,
+              ...(seed ? { seed: Number(seed) } : {}),
+              ...(negativePrompt ? { negativePrompt } : {}),
+            }),
+            signal: controller.signal,
+          },
+        ),
+      );
+      if (!response.ok) {
+        throw new Error(responseError(await response.text(), response.status));
+      }
+      const blob = await response.blob();
+      if (!blob.type.startsWith("video/")) throw new Error("服务返回的不是有效视频。");
+      const url = URL.createObjectURL(blob);
+      urls.current.set(id, url);
+      const providerElapsed = Number(response.headers.get("x-inference-time-s"));
+      setEntries((current) => ({
+        ...current,
+        [id]: {
+          ...request,
+          id,
+          status: "succeeded",
+          url,
+          elapsedSeconds: Number.isFinite(providerElapsed)
+            ? providerElapsed
+            : (performance.now() - startedAt) / 1_000,
+        },
+      }));
+    } catch (error) {
+      setEntries((current) => ({
+        ...current,
+        [id]: {
+          ...request,
+          id,
+          status: controller.signal.aborted ? "cancelled" : "failed",
+          error: controller.signal.aborted
+            ? "已取消本次视频生成。"
+            : error instanceof Error
+              ? error.message
+              : "视频生成失败，请稍后重试。",
+        },
+      }));
+    } finally {
+      if (aborts.current.get(id) === controller) aborts.current.delete(id);
+    }
+  }, []);
+
+  const start = useCallback((request: Omit<VideoGenerationRequest, "settings">) => {
+    const id = generationId();
+    const snapshot: VideoGenerationRequest = { ...request, settings: { ...settings } };
+    const thread = aui.thread();
+    const parentId = thread.getState().messages.at(-1)?.id ?? null;
+    thread.append({
+      parentId,
+      sourceId: null,
+      role: "user",
+      content: [{ type: "text", text: request.prompt }],
+      attachments: request.attachments,
+      startRun: false,
+    });
+    const userMessageId = thread.getState().messages.at(-1)?.id ?? parentId;
+    thread.append({
+      parentId: userMessageId,
+      sourceId: null,
+      role: "assistant",
+      content: [
+        {
+          type: "data",
+          name: VIDEO_GENERATION_PART_NAME,
+          data: { generationId: id },
+        },
+      ],
+      startRun: false,
+    });
+    void aui.composer().reset();
+    void execute(id, snapshot);
+    return id;
+  }, [aui, execute, settings]);
+
+  const retry = useCallback((id: string) => {
+    const entry = entries[id];
+    if (!entry || entry.status === "generating") return;
+    void execute(id, entry);
+  }, [entries, execute]);
+
+  const cancel = useCallback((id: string) => {
+    aborts.current.get(id)?.abort();
+  }, []);
+
+  const reuse = useCallback(async (id: string) => {
+    const entry = entries[id];
+    if (!entry) return;
+    const composer = aui.composer();
+    await composer.reset();
+    setSettings({ ...entry.settings });
+    composer.setText(entry.prompt);
+    for (const attachment of entry.attachments) {
+      await composer.addAttachment({
+        id: attachment.id,
+        type: attachment.type,
+        name: attachment.name,
+        contentType: attachment.contentType,
+        content: attachment.content,
+      });
+    }
+  }, [aui, entries]);
+
+  const value = useMemo<VideoGenerationController>(() => ({
+    settings,
+    setSettings,
+    entries,
+    generating: Object.values(entries).some((entry) => entry.status === "generating"),
+    start,
+    retry,
+    cancel,
+    reuse,
+  }), [cancel, entries, retry, reuse, settings, start]);
+
+  return (
+    <VideoGenerationContext.Provider value={value}>
+      {children}
+    </VideoGenerationContext.Provider>
+  );
+}
+
+export function useVideoGeneration() {
+  const controller = useContext(VideoGenerationContext);
+  if (!controller) throw new Error("Video generation must be used inside its provider");
+  return controller;
+}
+
+export function VideoGenerationControls({
+  label,
+  referenceCount,
+  disabled,
+}: {
+  label: string;
+  referenceCount: number;
+  disabled: boolean;
+}) {
+  const { settings, setSettings } = useVideoGeneration();
+  const followsReference = referenceCount > 0;
+  return (
+    <section className="composer-video-settings" aria-label="视频生成设置">
+      <div className="composer-video-settings-primary">
+        <span className="composer-video-model">
+          <strong>{label}</strong>
+          <small>{referenceCount ? `${referenceCount} 张参考图` : "文本生成视频"}</small>
+        </span>
+        <fieldset className="video-duration-control" disabled={disabled}>
+          <legend>时长</legend>
+          {[5, 10, 15].map((seconds) => (
+            <button
+              key={seconds}
+              type="button"
+              aria-pressed={settings.seconds === seconds}
+              onClick={() => setSettings({ ...settings, seconds })}
+            >
+              {seconds}s
+            </button>
+          ))}
+        </fieldset>
+        <label className="video-ratio-control">
+          <span>画面比例</span>
+          {followsReference ? (
+            <strong title="有参考图时，H3 根据第一张图片确定输出比例">跟随首图</strong>
+          ) : (
+            <select
+              value={settings.aspectRatio}
+              disabled={disabled}
+              onChange={(event) => setSettings({
+                ...settings,
+                aspectRatio: event.target.value as VideoAspectRatio,
+              })}
+            >
+              {(["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"] as const).map(
+                (ratio) => <option key={ratio} value={ratio}>{ratio}</option>,
+              )}
+            </select>
+          )}
+        </label>
+      </div>
+      <details className="composer-video-advanced">
+        <summary>高级设置</summary>
+        <div>
+          <label>
+            <span>自定义时长（4–15 秒）</span>
+            <select
+              value={settings.seconds}
+              disabled={disabled}
+              onChange={(event) => setSettings({
+                ...settings,
+                seconds: Number(event.target.value),
+              })}
+            >
+              {Array.from({ length: 12 }, (_, index) => index + 4).map((seconds) => (
+                <option key={seconds} value={seconds}>{seconds} 秒</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>随机种子</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={settings.seed}
+              disabled={disabled}
+              placeholder="自动"
+              onChange={(event) => setSettings({ ...settings, seed: event.target.value })}
+            />
+          </label>
+          <label className="video-negative-prompt">
+            <span>负向提示词</span>
+            <input
+              type="text"
+              maxLength={4_000}
+              value={settings.negativePrompt}
+              disabled={disabled}
+              placeholder="例如：画面抖动、变形、文字水印"
+              onChange={(event) => setSettings({
+                ...settings,
+                negativePrompt: event.target.value,
+              })}
+            />
+          </label>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+export function VideoGenerationMessagePart({
+  data,
+}: DataMessagePartProps<{ generationId?: string }>) {
+  const { entries, retry, cancel, reuse } = useVideoGeneration();
+  const entry = data.generationId ? entries[data.generationId] : undefined;
+  if (!entry) return null;
+  const ratio = entry.inputArtifactIds.length ? "跟随首图" : entry.settings.aspectRatio;
+  return (
+    <article className="video-answer-card" data-status={entry.status}>
+      <header>
+        <span>
+          <strong>{entry.routeLabel}</strong>
+          <small>
+            {entry.settings.seconds} 秒 · {ratio} · MP4
+            {entry.inputArtifactIds.length
+              ? ` · ${entry.inputArtifactIds.length} 张参考图`
+              : ""}
+          </small>
+        </span>
+        <em>
+          {entry.status === "generating"
+            ? "生成中"
+            : entry.status === "succeeded"
+              ? "已完成"
+              : entry.status === "cancelled"
+                ? "已取消"
+                : "生成失败"}
+        </em>
+      </header>
+      {entry.status === "generating" ? (
+        <div className="video-answer-progress" role="status" aria-live="polite">
+          <span aria-hidden="true" />
+          <strong>正在生成视频</strong>
+          <small>可能需要数分钟，完成后可直接播放</small>
+        </div>
+      ) : null}
+      {entry.status === "succeeded" && entry.url ? (
+        <div className="video-answer-player">
+          <video
+            src={entry.url}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={entry.prompt}
+          />
+        </div>
+      ) : null}
+      {entry.error ? <p role="alert">{entry.error}</p> : null}
+      <footer>
+        <span title={entry.prompt}>
+          {entry.elapsedSeconds ? `生成用时 ${entry.elapsedSeconds.toFixed(1)} 秒` : entry.prompt}
+        </span>
+        <nav aria-label="视频操作">
+          {entry.status === "generating" ? (
+            <button type="button" onClick={() => cancel(entry.id)}>取消</button>
+          ) : (
+            <button type="button" onClick={() => retry(entry.id)}>重新生成</button>
+          )}
+          <button type="button" onClick={() => void reuse(entry.id)}>沿用参数</button>
+          {entry.status === "succeeded" && entry.url ? (
+            <a href={entry.url} download={`${entry.routeId}.mp4`}>下载 MP4</a>
+          ) : null}
+        </nav>
+      </footer>
+    </article>
+  );
+}

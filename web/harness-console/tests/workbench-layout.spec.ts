@@ -38,6 +38,10 @@ const agentThread = readFileSync(
   join(process.cwd(), "src/components/agent-thread.tsx"),
   "utf8",
 );
+const videoGeneration = readFileSync(
+  join(process.cwd(), "src/components/video-generation.tsx"),
+  "utf8",
+);
 const activitySummary = readFileSync(
   join(process.cwd(), "src/components/activity-summary.tsx"),
   "utf8",
@@ -414,10 +418,15 @@ describe("full-page agent workbench", () => {
 
   it("runs managed video models through a dedicated conversation composer path", () => {
     expect(agentThread).toContain('route.modelType === "video_generation"');
-    expect(agentThread).toContain("/videos`");
-    expect(agentThread).toContain("inputArtifactIds");
-    expect(agentThread).toContain("下载 MP4");
-    expect(styles).toContain(".composer-video-generation");
+    expect(videoGeneration).toContain("/videos`");
+    expect(videoGeneration).toContain("inputArtifactIds");
+    expect(videoGeneration).toContain("自定义时长（4–15 秒）");
+    expect(videoGeneration).toContain("下载 MP4");
+    expect(videoGeneration).toContain("重新生成");
+    expect(videoGeneration).toContain("沿用参数");
+    expect(videoGeneration).toContain("<video");
+    expect(styles).toContain(".composer-video-settings");
+    expect(styles).toContain(".video-answer-card");
     expect(styles).toContain(".aui-composer-video-send");
   });
 

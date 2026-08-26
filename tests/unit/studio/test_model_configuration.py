@@ -27,7 +27,7 @@ from harness.studio.model_configuration import (
 from harness.studio.repositories import InMemoryAgentDraftRepository
 
 
-def image_bytes(*, size: tuple[int, int] = (64, 64), format: str = "PNG") -> bytes:
+def image_bytes(*, size: tuple[int, int] = (256, 256), format: str = "PNG") -> bytes:
     output = BytesIO()
     Image.new("RGB", size, color="white").save(output, format=format)
     return output.getvalue()
@@ -207,7 +207,8 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
                 aspectRatio="16:9",
                 seconds=5,
                 seed=7,
-                inputArtifactIds=["input_artifact_a", "input_artifact_b"],
+                negativePrompt="画面抖动、文字水印",
+                inputArtifactIds=("input_artifact_a", "input_artifact_b"),
             ),
             references=(
                 GeneratedVideoReference(
@@ -234,6 +235,8 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
     assert b'name="aspect_ratio"' in captured[1].content
     assert b'name="seconds"' in captured[1].content
     assert b'name="seed"' in captured[1].content
+    assert b'name="negative_prompt"' in captured[1].content
+    assert "画面抖动、文字水印".encode() in captured[1].content
     assert captured[1].content.count(b'name="input_references"') == 2
     assert b'filename="first.png"' in captured[1].content
     assert b'filename="second.jpg"' in captured[1].content
@@ -277,7 +280,7 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="让图片动起来",
-                inputArtifactIds=["input_artifact_a"],
+                inputArtifactIds=("input_artifact_a",),
             ),
             references=(
                 GeneratedVideoReference(
@@ -315,13 +318,13 @@ async def test_video_generation_rejects_extreme_reference_aspect_ratio() -> None
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="让长图动起来",
-                inputArtifactIds=["input_artifact_a"],
+                inputArtifactIds=("input_artifact_a",),
             ),
             references=(
                 GeneratedVideoReference(
                     name="extreme.png",
                     media_type="image/png",
-                    content=image_bytes(size=(500, 100)),
+                    content=image_bytes(size=(1280, 256)),
                 ),
             ),
         )

@@ -37,7 +37,7 @@ SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
 def image_bytes(*, format: str = "PNG") -> bytes:
     output = BytesIO()
-    Image.new("RGB", (64, 64), color="white").save(output, format=format)
+    Image.new("RGB", (256, 256), color="white").save(output, format=format)
     return output.getvalue()
 
 
@@ -2178,7 +2178,12 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
             generated = await client.post(
                 "/v1/studio/models/minimax-h3-video/videos",
                 headers=owner_headers,
-                json={"prompt": "组合两张参考图", "inputArtifactIds": artifact_ids},
+                json={
+                    "prompt": "组合两张参考图",
+                    "seconds": 11,
+                    "negativePrompt": "画面抖动、文字水印",
+                    "inputArtifactIds": artifact_ids,
+                },
             )
 
     assert configured.status_code == 200
@@ -2188,6 +2193,8 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
     assert generated.headers["content-type"] == "video/mp4"
     assert len(captured) == 1
     assert captured[0].content.count(b'name="input_references"') == 2
+    assert b'\r\n11\r\n' in captured[0].content
+    assert b'name="negative_prompt"' in captured[0].content
     assert image_bytes() in captured[0].content
     assert image_bytes(format="JPEG") in captured[0].content
 
