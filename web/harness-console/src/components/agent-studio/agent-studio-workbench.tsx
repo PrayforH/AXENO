@@ -42,7 +42,6 @@ import {
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
 import { createRandomId } from "../../lib/random-id";
-import { downloadOnlineSkillInBrowser } from "../../lib/github-skill-client";
 import {
   createUnsavedHistoryGuard,
   guardedNavigationDestination,
@@ -1274,22 +1273,11 @@ export function AgentStudioWorkbench() {
     try {
       const current = dirty || !draft.id ? await saveDraft() : draft;
       if (!current?.id) return;
-      let installed: Awaited<ReturnType<typeof studioClient.installOnlineSkill>>;
-      let browserFallback = false;
-      try {
-        installed = await studioClient.installOnlineSkill(
-          current.id,
-          current.revision,
-          sourceUrl,
-        );
-      } catch (error) {
-        if (!(error instanceof StudioApiError) || error.code !== "online_skill_invalid") {
-          throw error;
-        }
-        const file = await downloadOnlineSkillInBrowser(sourceUrl);
-        installed = await studioClient.installSkill(current.id, current.revision, file);
-        browserFallback = true;
-      }
+      const installed = await studioClient.installOnlineSkill(
+        current.id,
+        current.revision,
+        sourceUrl,
+      );
       const saved = apiDraftToStudioDraft(installed.draft);
       const duplicate = current.skills.some(
         (candidate) => candidate.name === installed.skillName,
@@ -1310,8 +1298,7 @@ export function AgentStudioWorkbench() {
       setNotice(
         `${duplicate ? "已更新" : "已安装"}在线 Skill：${installed.skillName}`
         + ` · ${installed.fileCount.toLocaleString("zh-CN")} 个文件`
-        + (installed.findings.length ? " · 需审阅" : " · 已快照化")
-        + (browserFallback ? " · 已通过浏览器联网下载" : ""),
+        + (installed.findings.length ? " · 需审阅" : " · 已快照化"),
       );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "在线 Skill 安装失败");
