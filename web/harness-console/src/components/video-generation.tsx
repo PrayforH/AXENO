@@ -158,7 +158,7 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
           id,
           status: controller.signal.aborted ? "cancelled" : "failed",
           error: controller.signal.aborted
-            ? "已取消本次视频生成。"
+            ? "已停止等待。当前同步服务可能仍会在后台完成本次推理。"
             : error instanceof Error
               ? error.message
               : "视频生成失败，请稍后重试。",
@@ -304,6 +304,11 @@ export function VideoGenerationControls({
           )}
         </label>
       </div>
+      {settings.seconds > 5 ? (
+        <p className="composer-video-duration-note" role="status">
+          当前 229 服务生成较慢，10–15 秒任务可能需要较长时间或超时。
+        </p>
+      ) : null}
       <details className="composer-video-advanced">
         <summary>高级设置</summary>
         <div>
@@ -380,7 +385,7 @@ export function VideoGenerationMessagePart({
             : entry.status === "succeeded"
               ? "已完成"
               : entry.status === "cancelled"
-                ? "已取消"
+                ? "已停止等待"
                 : "生成失败"}
         </em>
       </header>
@@ -409,7 +414,7 @@ export function VideoGenerationMessagePart({
         </span>
         <nav aria-label="视频操作">
           {entry.status === "generating" ? (
-            <button type="button" onClick={() => cancel(entry.id)}>取消</button>
+            <button type="button" onClick={() => cancel(entry.id)}>停止等待</button>
           ) : (
             <button type="button" onClick={() => retry(entry.id)}>重新生成</button>
           )}

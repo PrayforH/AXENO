@@ -4179,6 +4179,12 @@ textarea:not(.aui-composer-input):focus-visible,
   font-size: 12px;
 }
 
+.composer-video-duration-note {
+  margin: 7px 0 0;
+  color: #8a6727;
+  font-size: 11px;
+}
+
 .video-answer-card {
   width: min(100%, 760px);
   overflow: hidden;
