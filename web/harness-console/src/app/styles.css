@@ -4039,6 +4039,113 @@ textarea:not(.aui-composer-input):focus-visible,
   display: block;
 }
 
+.harness-composer-shell .aui-composer-video-send {
+  min-width: 86px;
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  color: #fff;
+  background: #675184;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.harness-composer-shell .aui-composer-video-send:hover:not(:disabled) {
+  background: #564371;
+}
+
+.harness-composer-shell .aui-composer-video-send:disabled {
+  cursor: default;
+  opacity: 0.48;
+}
+
+.composer-video-generation {
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid #d8d0e5;
+  border-radius: 14px;
+  background: #f8f5fc;
+  box-shadow: 0 5px 18px rgb(56 39 79 / 6%);
+}
+
+.composer-video-generation > header,
+.composer-video-result > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.composer-video-generation > header span {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.composer-video-generation > header strong {
+  color: #342943;
+  font-size: 13px;
+}
+
+.composer-video-generation > header small,
+.composer-video-generation > header em,
+.composer-video-result > div span {
+  color: #786d83;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.composer-video-generation > header em {
+  animation: composer-video-pulse 1.6s ease-in-out infinite;
+}
+
+.composer-video-generation > p {
+  margin: 9px 0 0;
+  color: #a33e37;
+  font-size: 12px;
+}
+
+.composer-video-result {
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 11px;
+  background: #17141b;
+}
+
+.composer-video-result video {
+  width: 100%;
+  max-height: 360px;
+  display: block;
+  background: #17141b;
+}
+
+.composer-video-result > div {
+  padding: 9px 11px;
+  background: #fff;
+}
+
+.composer-video-result > div span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-video-result a {
+  flex: 0 0 auto;
+  color: #675184;
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+@keyframes composer-video-pulse {
+  50% { opacity: 0.5; }
+}
+
 .aui-assistant-message-root {
   display: flex;
   flex-direction: column;

@@ -412,6 +412,15 @@ describe("full-page agent workbench", () => {
     expect(agentThread).toContain("auiRef.current.composer().setText(saved)");
   });
 
+  it("runs managed video models through a dedicated conversation composer path", () => {
+    expect(agentThread).toContain('route.modelType === "video_generation"');
+    expect(agentThread).toContain("/videos`");
+    expect(agentThread).toContain("当前不会启动 Agent 对话");
+    expect(agentThread).toContain("下载 MP4");
+    expect(styles).toContain(".composer-video-generation");
+    expect(styles).toContain(".aui-composer-video-send");
+  });
+
   it("removes obsolete custom thread layout rules superseded by assistant-ui", () => {
     for (const selector of [
       ".aui-welcome {",

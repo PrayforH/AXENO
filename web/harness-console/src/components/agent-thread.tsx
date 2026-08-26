@@ -18,6 +18,7 @@ import {
 import {
   createContext,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useContext,
   useEffect,
   useMemo,
@@ -45,6 +46,7 @@ import { selectComposerDisabled, type RunPhase } from "../lib/run-view-model";
 import {
   TaskModelControl,
   TaskModelVisionNotice,
+  useTaskModel,
 } from "./task-model-context";
 import {
   hasRunActivityToolCall,
@@ -230,6 +232,7 @@ function MessageCopyButton({
 
 function HarnessComposer() {
   const aui = useAui();
+  const { routes, overrideRouteId } = useTaskModel();
   const threadRunning = useAuiState((state) => state.thread.isRunning);
   const composerText = useAuiState((state) => state.composer.text);
   const composerAttachments = useAuiState((state) => state.composer.attachments);
@@ -239,6 +242,21 @@ function HarnessComposer() {
   const reuseNotice = useRunReuseNotice();
   const runLocked = selectComposerDisabled(runView);
   const draftRestored = useTaskComposerDraft(composerText);
+  const videoRoute = routes.find(
+    (route) => route.id === overrideRouteId && route.modelType === "video_generation",
+  );
+  const [videoGeneration, setVideoGeneration] = useState<{
+    status: "idle" | "generating" | "succeeded" | "failed";
+    prompt?: string;
+    url?: string;
+    error?: string;
+  }>({ status: "idle" });
+  const videoAbortRef = useRef<AbortController | null>(null);
+  const videoUrlRef = useRef<string | null>(null);
+  useEffect(() => () => {
+    videoAbortRef.current?.abort();
+    if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
+  }, []);
   useEffect(() => {
     const visibleApprovalId = pendingApproval.details?.approval_id;
     if (
@@ -256,11 +274,78 @@ function HarnessComposer() {
     stream.status,
     runView?.phase,
   );
-  const composerHint = runLocked
+  const videoGenerating = videoGeneration.status === "generating";
+  const composerHint = videoRoute
+    ? videoGenerating
+      ? "MiniMax H3 正在生成视频，可取消本次生成"
+      : "输入视频描述后发送 · 当前不会启动 Agent 对话"
+    : runLocked
     ? runView?.phase === "waiting_approval"
       ? "处理审批后，Agent 会从当前步骤继续"
       : "Agent 正在执行，可随时停止"
     : "Enter 发送 · Shift + Enter 换行";
+
+  async function generateVideo() {
+    const prompt = composerText.trim();
+    if (!videoRoute || !prompt || videoGenerating) return;
+    if (composerAttachments.length > 0) {
+      setVideoGeneration({
+        status: "failed",
+        error: "当前 H3 接口只接收文本描述，请先移除附件。",
+      });
+      return;
+    }
+    const controller = new AbortController();
+    videoAbortRef.current = controller;
+    setVideoGeneration({ status: "generating", prompt });
+    try {
+      const response = requireAuthenticatedResponse(
+        await fetch(
+          `/api/studio/models/${encodeURIComponent(videoRoute.id)}/videos`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt, aspectRatio: "16:9", seconds: 5 }),
+            signal: controller.signal,
+          },
+        ),
+      );
+      if (!response.ok) {
+        const raw = await response.text();
+        let message = raw || `视频生成失败（HTTP ${response.status}）`;
+        try {
+          const parsed = JSON.parse(raw) as { error?: { message?: string }; detail?: string };
+          message = parsed.error?.message ?? parsed.detail ?? message;
+        } catch {
+          // Keep the provider response as the actionable fallback.
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      if (!blob.type.startsWith("video/")) throw new Error("服务返回的不是有效视频。");
+      if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
+      const url = URL.createObjectURL(blob);
+      videoUrlRef.current = url;
+      setVideoGeneration({ status: "succeeded", prompt, url });
+      aui.composer().setText("");
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setVideoGeneration({ status: "idle" });
+      } else {
+        setVideoGeneration({
+          status: "failed",
+          prompt,
+          error: error instanceof Error ? error.message : "视频生成失败，请稍后重试。",
+        });
+      }
+    } finally {
+      if (videoAbortRef.current === controller) videoAbortRef.current = null;
+    }
+  }
+
+  function cancelVideoGeneration() {
+    videoAbortRef.current?.abort();
+  }
   return (
     <div
       className="harness-composer-shell"
@@ -324,15 +409,45 @@ function HarnessComposer() {
       ) : null}
       <UploadFeedbackNotice />
       <TaskModelVisionNotice
-        disabled={runLocked || showStop}
+        disabled={runLocked || showStop || videoGenerating}
         requiresVision={composerAttachments.some((attachment) => attachment.type === "image")}
       />
+      {videoRoute || videoGeneration.status !== "idle" ? (
+        <section className="composer-video-generation" data-status={videoGeneration.status}>
+          <header>
+            <span><strong>{videoRoute?.label ?? "H3 视频生成"}</strong><small>5 秒 · 16:9 · MP4</small></span>
+            {videoGeneration.status === "generating" ? <em>生成中，通常约 2 分钟</em> : null}
+          </header>
+          {videoGeneration.status === "failed" ? (
+            <p role="alert">{videoGeneration.error}</p>
+          ) : null}
+          {videoGeneration.status === "succeeded" && videoGeneration.url ? (
+            <div className="composer-video-result">
+              <video src={videoGeneration.url} controls preload="metadata" aria-label={videoGeneration.prompt ?? "生成视频"} />
+              <div><span title={videoGeneration.prompt}>{videoGeneration.prompt}</span><a href={videoGeneration.url} download={`${videoRoute?.id ?? "minimax-h3"}.mp4`}>下载 MP4</a></div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       <Composer.Root>
         <Composer.Attachments />
-        <Composer.Input autoFocus />
+        <Composer.Input
+          autoFocus
+          onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+            if (
+              videoRoute &&
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              void generateVideo();
+            }
+          }}
+        />
         <div className="composer-toolbar">
           <Composer.AddAttachment />
-          <TaskModelControl disabled={runLocked || showStop} />
+          <TaskModelControl disabled={runLocked || showStop || videoGenerating} />
         </div>
         {showStop ? (
           <button
@@ -344,6 +459,16 @@ function HarnessComposer() {
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
             </svg>
+          </button>
+        ) : videoRoute ? (
+          <button
+            type="button"
+            className="aui-button aui-composer-video-send"
+            disabled={!composerText.trim() && !videoGenerating}
+            aria-label={videoGenerating ? "取消视频生成" : "生成视频"}
+            onClick={videoGenerating ? cancelVideoGeneration : () => void generateVideo()}
+          >
+            {videoGenerating ? "取消" : "生成视频"}
           </button>
         ) : (
           <Composer.Send />

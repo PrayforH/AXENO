@@ -70,7 +70,7 @@ describe("task model selection", () => {
     expect(loadTaskModelOverride(storage, "thread-2")).toBeNull();
   });
 
-  it("keeps image and video generation routes out of the conversation selector", async () => {
+  it("exposes video generation in the task composer while keeping image routes out", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       modelRoutes: [
         {
@@ -104,7 +104,8 @@ describe("task model selection", () => {
     }), { status: 200 })));
 
     await expect(loadTaskModelRoutes()).resolves.toEqual([
-      expect.objectContaining({ id: "vision-primary" }),
+      expect.objectContaining({ id: "vision-primary", modelType: "vision" }),
+      expect.objectContaining({ id: "video-primary", modelType: "video_generation" }),
     ]);
   });
 

@@ -88,14 +88,14 @@ export function TaskModelControl({
           </option>
           {overrideRoutes.map((route) => (
             <option key={route.id} value={route.id}>
-              {route.label}{route.capabilities.includes("vision") ? " · Vision" : ""}
+              {route.label}{route.modelType === "video_generation" ? " · 视频" : route.capabilities.includes("vision") ? " · Vision" : ""}
             </option>
           ))}
         </select>
         <span className="task-model-control-chevron" aria-hidden="true" />
       </label>
       <span className="task-model-control-status">
-        {selected ? "仅本次任务" : "跟随 Agent"}
+        {selected?.modelType === "video_generation" ? "视频生成" : selected ? "仅本次任务" : "跟随 Agent"}
       </span>
     </div>
   );
