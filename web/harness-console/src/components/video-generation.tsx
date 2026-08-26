@@ -391,7 +391,11 @@ export function VideoGenerationMessagePart({
       </header>
       {entry.status === "generating" ? (
         <div className="video-answer-progress" role="status" aria-live="polite">
-          <span aria-hidden="true" />
+          <span className="video-generation-motion" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
           <strong>正在生成视频</strong>
           <small>可能需要数分钟，完成后可直接播放</small>
         </div>
