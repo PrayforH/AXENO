@@ -4309,6 +4309,28 @@ textarea:not(.aui-composer-input):focus-visible,
   font-size: 11px;
 }
 
+.video-generation-progress-track {
+  width: min(220px, 72%);
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #d8dfd9;
+}
+
+.video-generation-progress-track > i {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #39a863;
+  transition: width 400ms ease;
+}
+
+.video-generation-progress-track > i[data-indeterminate="true"] {
+  width: 38%;
+  animation: video-progress-search 1.6s ease-in-out infinite;
+}
+
 .video-answer-player {
   background: #171a18;
 }
@@ -4395,8 +4417,24 @@ textarea:not(.aui-composer-input):focus-visible,
   }
 }
 
+@keyframes video-progress-search {
+  0% {
+    transform: translateX(-105%);
+  }
+
+  100% {
+    transform: translateX(275%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .video-generation-motion > i {
+    animation: none;
+  }
+
+  .video-generation-progress-track > i[data-indeterminate="true"] {
+    width: 38%;
+    transform: none;
     animation: none;
   }
 

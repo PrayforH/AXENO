@@ -86,6 +86,7 @@ from harness.studio.model_configuration import (
     ModelConfigurationList,
     ModelConfigurationService,
     ModelConnectionTestResult,
+    VideoGenerationJob,
 )
 from harness.studio.models import (
     AgentDraft,
@@ -878,14 +879,14 @@ async def generate_image(
     return await service.generate_image(identity.tenant_id, route_id, body)
 
 
-@router.post("/models/{route_id}/videos")
+@router.post("/models/{route_id}/videos", response_model=VideoGenerationJob)
 async def generate_video(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: GenerateVideoRequest,
     identity: Annotated[Identity, Depends(require_identity)],
     container: Annotated[ApiContainer, Depends(get_container)],
     service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
-) -> Response:
+) -> VideoGenerationJob:
     ensure_permission(identity, "tasks:write")
     references: list[GeneratedVideoReference] = []
     if body.input_artifact_ids:
@@ -909,12 +910,46 @@ async def generate_video(
                     content=content,
                 )
             )
-    result = await service.generate_video(
+    return await service.create_video_job(
         identity.tenant_id,
+        identity.user_id,
         route_id,
         body,
         references=tuple(references),
     )
+
+
+@router.get("/models/{route_id}/videos/{job_id}", response_model=VideoGenerationJob)
+async def get_video_generation_job(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> VideoGenerationJob:
+    ensure_permission(identity, "tasks:write")
+    return await service.get_video_job(identity.tenant_id, identity.user_id, route_id, job_id)
+
+
+@router.delete("/models/{route_id}/videos/{job_id}", response_model=VideoGenerationJob)
+async def cancel_video_generation_job(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> VideoGenerationJob:
+    ensure_permission(identity, "tasks:write")
+    return await service.cancel_video_job(identity.tenant_id, identity.user_id, route_id, job_id)
+
+
+@router.get("/models/{route_id}/videos/{job_id}/content")
+async def download_generated_video(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> Response:
+    ensure_permission(identity, "tasks:write")
+    result = await service.download_video(identity.tenant_id, identity.user_id, route_id, job_id)
     headers = {
         "Content-Disposition": f'inline; filename="{route_id}.mp4"',
         "Cache-Control": "no-store",

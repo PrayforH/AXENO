@@ -13,7 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import BytesIO
 from typing import Literal, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
+from uuid import uuid4
 
 import httpx
 from PIL import Image, UnidentifiedImageError
@@ -120,9 +121,7 @@ class GenerateVideoRequest(StudioModel):
     seconds: int = Field(default=5, ge=4, le=15)
     seed: int | None = Field(default=None, ge=0)
     negative_prompt: str | None = Field(default=None, alias="negativePrompt", max_length=4_000)
-    input_artifact_ids: tuple[str, ...] = Field(
-        default=(), alias="inputArtifactIds", max_length=2
-    )
+    input_artifact_ids: tuple[str, ...] = Field(default=(), alias="inputArtifactIds", max_length=2)
 
     @model_validator(mode="after")
     def validate_input_artifacts(self) -> GenerateVideoRequest:
@@ -134,6 +133,14 @@ class GenerateVideoRequest(StudioModel):
         ):
             raise ValueError("invalid input artifact ID")
         return self
+
+
+class VideoGenerationJob(StudioModel):
+    job_id: str = Field(alias="jobId")
+    status: Literal["queued", "in_progress", "completed", "failed", "cancelled"]
+    progress: int = Field(default=0, ge=0, le=100)
+    error: str | None = None
+    inference_time_seconds: float | None = Field(default=None, alias="inferenceTimeSeconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +156,15 @@ class GeneratedVideoReference:
     name: str
     media_type: str
     content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagedVideoJob:
+    tenant_id: str
+    user_id: str
+    route_id: str
+    provider_job_id: str
+    created_at: datetime
 
 
 _MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
@@ -177,6 +193,7 @@ class ModelConfigurationService:
             route.route_id: route for route in server_routes if route.route_id is not None
         }
         self._http_client = http_client
+        self._video_jobs: dict[str, _ManagedVideoJob] = {}
 
     async def list(self, tenant_id: str) -> ModelConfigurationList:
         record = await self._import_server_models(tenant_id)
@@ -344,9 +361,7 @@ class ModelConfigurationService:
         requested_route_id: str,
         *,
         apply_agent_binding: bool = True,
-        required_api_format: Literal[
-            "anthropic_compatible", "openai_compatible", "openai_images"
-        ]
+        required_api_format: Literal["anthropic_compatible", "openai_compatible", "openai_images"]
         | None = None,
     ) -> CcSwitchClaudeConfig | None:
         record = await self._import_server_models(tenant_id)
@@ -354,21 +369,14 @@ class ModelConfigurationService:
             record.catalog.agent_model_bindings.get(agent_name) if apply_agent_binding else None
         )
         bound_route = next(
-            (
-                item
-                for item in record.catalog.model_routes
-                if item.route_id == bound_route_id
-            ),
+            (item for item in record.catalog.model_routes if item.route_id == bound_route_id),
             None,
         )
         route_id = (
             bound_route_id
             if bound_route_id is not None
             and bound_route is not None
-            and (
-                required_api_format is None
-                or bound_route.api_format == required_api_format
-            )
+            and (required_api_format is None or bound_route.api_format == required_api_format)
             else requested_route_id
         )
         route = next(
@@ -510,18 +518,153 @@ class ModelConfigurationService:
             raise ConflictError("image provider returned no images")
         return GenerateImageResult(model=route.models[0], images=tuple(images))
 
-    async def generate_video(
+    async def create_video_job(
         self,
         tenant_id: str,
+        user_id: str,
         route_id: str,
         request: GenerateVideoRequest,
         *,
         references: tuple[GeneratedVideoReference, ...] = (),
-    ) -> GeneratedVideo:
+    ) -> VideoGenerationJob:
         route = await self._route(tenant_id, route_id)
         if route.model_type != "video_generation" or not route.enabled:
             raise ConflictError("the selected route is not an enabled video generation model")
         secret = await self._credential_for_route(tenant_id, route)
+        form, reference_files = self._video_request_form(route, request, references)
+        try:
+            response = await self._post_multipart(
+                route,
+                secret,
+                "videos",
+                form,
+                reference_files,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"video provider rejected the request (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        raw = self._video_provider_response(response)
+        provider_job_id = raw.get("id")
+        if (
+            not isinstance(provider_job_id, str)
+            or not provider_job_id
+            or len(provider_job_id) > 256
+        ):
+            raise ConflictError("video provider returned an invalid job identifier")
+        job_id = f"video_job_{uuid4().hex}"
+        self._video_jobs[job_id] = _ManagedVideoJob(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            route_id=route_id,
+            provider_job_id=provider_job_id,
+            created_at=datetime.now(UTC),
+        )
+        self._prune_video_jobs()
+        return self._video_job_view(job_id, raw)
+
+    async def get_video_job(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> VideoGenerationJob:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._get(
+                route, secret, f"videos/{quote(job.provider_job_id, safe='')}"
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                self._video_jobs.pop(job_id, None)
+                raise NotFoundError(f"video generation job not found: {job_id}") from None
+            raise ConflictError(
+                f"video provider rejected the status request (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        return self._video_job_view(job_id, self._video_provider_response(response))
+
+    async def cancel_video_job(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> VideoGenerationJob:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._delete(
+                route, secret, f"videos/{quote(job.provider_job_id, safe='')}"
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                self._video_jobs.pop(job_id, None)
+                raise NotFoundError(f"video generation job not found: {job_id}") from None
+            raise ConflictError(
+                f"video provider rejected cancellation (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        self._video_jobs.pop(job_id, None)
+        return VideoGenerationJob(jobId=job_id, status="cancelled", progress=0)
+
+    async def download_video(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> GeneratedVideo:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._get(
+                route,
+                secret,
+                f"videos/{quote(job.provider_job_id, safe='')}/content",
+                timeout=60.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"video provider rejected the download (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        media_type = response.headers.get("content-type", "").partition(";")[0].strip()
+        if (
+            media_type != "video/mp4"
+            or len(response.content) < 12
+            or response.content[4:8] != b"ftyp"
+        ):
+            raise ConflictError("video provider returned an invalid MP4 response")
+        if len(response.content) > _MAX_GENERATED_VIDEO_BYTES:
+            raise ConflictError("video provider response exceeds the 128 MiB limit")
+        return GeneratedVideo(
+            content=response.content,
+            media_type=media_type,
+            request_id=response.headers.get("x-request-id"),
+            inference_time_seconds=response.headers.get("x-inference-time-s"),
+        )
+
+    def _video_request_form(
+        self,
+        route: ModelRouteCapability,
+        request: GenerateVideoRequest,
+        references: tuple[GeneratedVideoReference, ...],
+    ) -> tuple[dict[str, str], tuple[tuple[str, GeneratedVideoReference], ...]]:
         if len(references) != len(request.input_artifact_ids):
             raise ConflictError("video reference images could not be resolved")
         if any(not item.media_type.lower().startswith("image/") for item in references):
@@ -530,9 +673,7 @@ class ModelConfigurationService:
             raise ConflictError("video reference images exceed the 60 MiB total limit")
         for index, item in enumerate(references, start=1):
             if len(item.content) > _MAX_VIDEO_REFERENCE_IMAGE_BYTES:
-                raise ConflictError(
-                    f"video reference image {index} exceeds the 30 MiB limit"
-                )
+                raise ConflictError(f"video reference image {index} exceeds the 30 MiB limit")
             try:
                 with Image.open(BytesIO(item.content)) as image:
                     width, height = image.size
@@ -541,9 +682,10 @@ class ModelConfigurationService:
                 raise ConflictError(
                     f"video reference image {index} is invalid or unsupported"
                 ) from None
-            if min(width, height) < _MIN_VIDEO_REFERENCE_DIMENSION or max(
-                width, height
-            ) > _MAX_VIDEO_REFERENCE_DIMENSION:
+            if (
+                min(width, height) < _MIN_VIDEO_REFERENCE_DIMENSION
+                or max(width, height) > _MAX_VIDEO_REFERENCE_DIMENSION
+            ):
                 raise ConflictError(
                     f"video reference image {index} dimensions must be between 256 and 5760 pixels"
                 )
@@ -573,36 +715,62 @@ class ModelConfigurationService:
             )
             for item in references
         )
-        try:
-            response = await self._post_multipart(
-                route,
-                secret,
-                "videos/sync",
-                form,
-                reference_files,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as error:
-            raise ConflictError(
-                f"video provider rejected the request (HTTP {error.response.status_code})"
-            ) from None
-        except httpx.HTTPError:
-            raise ConflictError("video provider connection failed") from None
-        media_type = response.headers.get("content-type", "").partition(";")[0].strip()
+        return form, reference_files
+
+    def _video_job(
+        self, tenant_id: str, user_id: str, route_id: str, job_id: str
+    ) -> _ManagedVideoJob:
+        job = self._video_jobs.get(job_id)
         if (
-            media_type != "video/mp4"
-            or len(response.content) < 12
-            or response.content[4:8] != b"ftyp"
+            job is None
+            or job.tenant_id != tenant_id
+            or job.user_id != user_id
+            or job.route_id != route_id
         ):
-            raise ConflictError("video provider returned an invalid MP4 response")
-        if len(response.content) > _MAX_GENERATED_VIDEO_BYTES:
-            raise ConflictError("video provider response exceeds the 128 MiB limit")
-        return GeneratedVideo(
-            content=response.content,
-            media_type=media_type,
-            request_id=response.headers.get("x-request-id"),
-            inference_time_seconds=response.headers.get("x-inference-time-s"),
+            raise NotFoundError(f"video generation job not found: {job_id}")
+        return job
+
+    @staticmethod
+    def _video_provider_response(response: httpx.Response) -> dict[str, object]:
+        try:
+            raw = cast(object, response.json())
+        except ValueError:
+            raise ConflictError("video provider returned an invalid response") from None
+        if not isinstance(raw, dict):
+            raise ConflictError("video provider returned an invalid response")
+        return cast(dict[str, object], raw)
+
+    @staticmethod
+    def _video_job_view(job_id: str, raw: dict[str, object]) -> VideoGenerationJob:
+        raw_status = raw.get("status")
+        if raw_status not in {"queued", "in_progress", "completed", "failed"}:
+            raise ConflictError("video provider returned an invalid job status")
+        status = cast(Literal["queued", "in_progress", "completed", "failed"], raw_status)
+        raw_progress = raw.get("progress", 0)
+        progress = raw_progress if isinstance(raw_progress, int) else 0
+        raw_error = raw.get("error")
+        error_message: str | None = None
+        if isinstance(raw_error, dict):
+            message = cast(dict[object, object], raw_error).get("message")
+            if isinstance(message, str):
+                error_message = message
+        raw_inference_time = raw.get("inference_time_s")
+        inference_time = (
+            float(raw_inference_time) if isinstance(raw_inference_time, int | float) else None
         )
+        return VideoGenerationJob(
+            jobId=job_id,
+            status=status,
+            progress=max(0, min(100, progress)),
+            error=error_message,
+            inferenceTimeSeconds=inference_time,
+        )
+
+    def _prune_video_jobs(self) -> None:
+        if len(self._video_jobs) <= 512:
+            return
+        oldest = min(self._video_jobs, key=lambda key: self._video_jobs[key].created_at)
+        self._video_jobs.pop(oldest, None)
 
     async def _route(self, tenant_id: str, route_id: str) -> ModelRouteCapability:
         record = await self._import_server_models(tenant_id)
@@ -796,11 +964,30 @@ class ModelConfigurationService:
         route: ModelRouteCapability,
         secret: SecretStr | None,
         path: str,
+        *,
+        timeout: float = 15.0,
     ) -> httpx.Response:
         assert route.base_url is not None
-        client = self._http_client or httpx.AsyncClient(timeout=15.0, follow_redirects=False)
+        client = self._http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=False)
         try:
             return await client.get(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
+    async def _delete(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+        try:
+            return await client.delete(
                 f"{route.base_url.rstrip('/')}/{path}",
                 headers=self._headers(route, secret),
             )
@@ -822,9 +1009,7 @@ class ModelConfigurationService:
             follow_redirects=False,
         )
         try:
-            files: list[
-                tuple[str, tuple[str | None, str | bytes, str | None]]
-            ] = [
+            files: list[tuple[str, tuple[str | None, str | bytes, str | None]]] = [
                 (name, (None, value, None)) for name, value in form.items()
             ]
             files.extend(

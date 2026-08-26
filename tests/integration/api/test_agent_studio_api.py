@@ -373,9 +373,7 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
     async with AsyncClient(
         transport=ASGITransport(app=application), base_url="http://test"
     ) as client:
-        child = await client.post(
-            "/v1/studio/drafts", headers=headers, json=child_request
-        )
+        child = await client.post("/v1/studio/drafts", headers=headers, json=child_request)
         child_spec = child.json()["spec"]
         child_spec["version"] = "1.0.0"
         child = await client.put(
@@ -383,9 +381,7 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
             headers=headers,
             json={"expectedRevision": 1, "spec": child_spec},
         )
-        parent = await client.post(
-            "/v1/studio/drafts", headers=headers, json=parent_request
-        )
+        parent = await client.post("/v1/studio/drafts", headers=headers, json=parent_request)
         parent_id = parent.json()["draftId"]
         started = await client.post(
             f"/v1/studio/drafts/{parent_id}/try-runs",
@@ -2121,10 +2117,25 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
 
     def provider(incoming: httpx.Request) -> httpx.Response:
         captured.append(incoming)
+        if incoming.method == "POST":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "status": "queued", "progress": 0},
+            )
+        if incoming.url.path.endswith("/content"):
+            return httpx.Response(
+                200,
+                content=b"\x00\x00\x00\x18ftypmp42video-bytes",
+                headers={"content-type": "video/mp4"},
+            )
+        if incoming.method == "DELETE":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "deleted": True},
+            )
         return httpx.Response(
             200,
-            content=b"\x00\x00\x00\x18ftypmp42video-bytes",
-            headers={"content-type": "video/mp4"},
+            json={"id": "provider-video-1", "status": "completed", "progress": 100},
         )
 
     owner_headers = {
@@ -2185,18 +2196,42 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
                     "inputArtifactIds": artifact_ids,
                 },
             )
+            job_id = generated.json()["jobId"]
+            hidden = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=other_headers,
+            )
+            completed = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=owner_headers,
+            )
+            content = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}/content",
+                headers=owner_headers,
+            )
+            cancelled = await client.delete(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=owner_headers,
+            )
 
     assert configured.status_code == 200
     assert all(upload.status_code == 201 for upload in uploads)
     assert denied.status_code == 404
     assert generated.status_code == 200
-    assert generated.headers["content-type"] == "video/mp4"
-    assert len(captured) == 1
+    assert generated.json()["status"] == "queued"
+    assert hidden.status_code == 404
+    assert completed.json()["status"] == "completed"
+    assert content.headers["content-type"] == "video/mp4"
+    assert cancelled.json()["status"] == "cancelled"
+    assert len(captured) == 4
     assert captured[0].content.count(b'name="input_references"') == 2
-    assert b'\r\n11\r\n' in captured[0].content
+    assert b"\r\n11\r\n" in captured[0].content
     assert b'name="negative_prompt"' in captured[0].content
     assert image_bytes() in captured[0].content
     assert image_bytes(format="JPEG") in captured[0].content
+    assert captured[1].url.path == "/v1/videos/provider-video-1"
+    assert captured[2].url.path == "/v1/videos/provider-video-1/content"
+    assert captured[3].method == "DELETE"
 
 
 @pytest.mark.asyncio

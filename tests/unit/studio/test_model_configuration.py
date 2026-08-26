@@ -162,7 +162,7 @@ async def test_image_generation_uses_dedicated_endpoint_and_never_chat_route() -
 
 
 @pytest.mark.asyncio
-async def test_video_generation_supports_private_unauthenticated_sync_endpoint() -> None:
+async def test_video_generation_supports_private_unauthenticated_async_lifecycle() -> None:
     captured: list[httpx.Request] = []
     mp4 = b"\x00\x00\x00\x18ftypmp42" + b"video-bytes"
     first_image = image_bytes()
@@ -170,15 +170,31 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
 
     def handler(incoming: httpx.Request) -> httpx.Response:
         captured.append(incoming)
-        if incoming.method == "GET":
+        if incoming.url.path == "/v1/models":
             return httpx.Response(200, json={"object": "list", "data": []})
+        if incoming.method == "POST":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "status": "queued", "progress": 0},
+            )
+        if incoming.url.path.endswith("/content"):
+            return httpx.Response(
+                200,
+                content=mp4,
+                headers={"content-type": "video/mp4", "x-request-id": "video-request-1"},
+            )
+        if incoming.method == "DELETE":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "deleted": True},
+            )
         return httpx.Response(
             200,
-            content=mp4,
-            headers={
-                "content-type": "video/mp4",
-                "x-request-id": "video-request-1",
-                "x-inference-time-s": "128.4",
+            json={
+                "id": "provider-video-1",
+                "status": "completed",
+                "progress": 100,
+                "inference_time_s": 128.4,
             },
         )
 
@@ -199,8 +215,9 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
             ),
         )
         connection = await models.test("tenant-a", "minimax-h3-video")
-        result = await models.generate_video(
+        created = await models.create_video_job(
             "tenant-a",
+            "user-a",
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="一只猫在草地上奔跑",
@@ -219,6 +236,15 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
                 ),
             ),
         )
+        status_result = await models.get_video_job(
+            "tenant-a", "user-a", "minimax-h3-video", created.job_id
+        )
+        result = await models.download_video(
+            "tenant-a", "user-a", "minimax-h3-video", created.job_id
+        )
+        cancelled = await models.cancel_video_job(
+            "tenant-a", "user-a", "minimax-h3-video", created.job_id
+        )
 
     video = next(item for item in configured.models if item.route_id == "minimax-h3-video")
     assert video.capabilities == ("video_generation",)
@@ -230,7 +256,7 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
     assert captured[0].method == "GET"
     assert captured[0].url == "http://172.20.109.229:18000/v1/models"
     assert "authorization" not in captured[0].headers
-    assert captured[1].url == "http://172.20.109.229:18000/v1/videos/sync"
+    assert captured[1].url == "http://172.20.109.229:18000/v1/videos"
     assert b'name="prompt"' in captured[1].content
     assert b'name="aspect_ratio"' in captured[1].content
     assert b'name="seconds"' in captured[1].content
@@ -242,9 +268,16 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
     assert b'filename="second.jpg"' in captured[1].content
     assert first_image in captured[1].content
     assert second_image in captured[1].content
+    assert created.status == "queued"
+    assert status_result.status == "completed"
+    assert status_result.progress == 100
+    assert status_result.inference_time_seconds == 128.4
     assert result.content == mp4
     assert result.request_id == "video-request-1"
-    assert result.inference_time_seconds == "128.4"
+    assert cancelled.status == "cancelled"
+    assert captured[2].url.path == "/v1/videos/provider-video-1"
+    assert captured[3].url.path == "/v1/videos/provider-video-1/content"
+    assert captured[4].method == "DELETE"
     assert await models.resolve_runtime("tenant-a", "helper-agent", "minimax-h3-video") is None
 
 
@@ -256,8 +289,7 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
         captured.append(incoming)
         return httpx.Response(
             200,
-            content=b"\x00\x00\x00\x18ftypmp42video-bytes",
-            headers={"content-type": "video/mp4"},
+            json={"id": "provider-video-1", "status": "queued", "progress": 0},
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -275,8 +307,9 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
                 apiKey=None,
             ),
         )
-        await models.generate_video(
+        await models.create_video_job(
             "tenant-a",
+            "user-a",
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="让图片动起来",
@@ -313,8 +346,9 @@ async def test_video_generation_rejects_extreme_reference_aspect_ratio() -> None
     )
 
     with pytest.raises(ConflictError, match="aspect ratio must be between 1:4 and 4:1"):
-        await models.generate_video(
+        await models.create_video_job(
             "tenant-a",
+            "user-a",
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="让长图动起来",

@@ -41,9 +41,19 @@ interface VideoGenerationRequest {
 interface VideoGenerationEntry extends VideoGenerationRequest {
   id: string;
   status: "generating" | "succeeded" | "failed" | "cancelled";
+  phase?: "queued" | "in_progress";
+  progress?: number;
   url?: string;
   error?: string;
   elapsedSeconds?: number;
+}
+
+interface ServerVideoJob {
+  jobId: string;
+  status: "queued" | "in_progress" | "completed" | "failed" | "cancelled";
+  progress: number;
+  error?: string | null;
+  inferenceTimeSeconds?: number | null;
 }
 
 interface VideoGenerationController {
@@ -84,16 +94,38 @@ function responseError(raw: string, status: number) {
   return message;
 }
 
+function waitForNextPoll(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, 2_000);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
 export function VideoGenerationProvider({ children }: { children: ReactNode }) {
   const aui = useAui();
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [entries, setEntries] = useState<Record<string, VideoGenerationEntry>>({});
   const aborts = useRef(new Map<string, AbortController>());
+  const jobs = useRef(new Map<string, { routeId: string; jobId: string }>());
+  const cancellationRequests = useRef(new Set<string>());
   const urls = useRef(new Map<string, string>());
 
   useEffect(() => () => {
     for (const controller of aborts.current.values()) controller.abort();
     for (const url of urls.current.values()) URL.revokeObjectURL(url);
+  }, []);
+
+  const cancelRemoteJob = useCallback(async (routeId: string, jobId: string) => {
+    const response = requireAuthenticatedResponse(await fetch(
+      `/api/studio/models/${encodeURIComponent(routeId)}/videos/${encodeURIComponent(jobId)}`,
+      { method: "DELETE" },
+    ));
+    if (!response.ok) {
+      throw new Error(responseError(await response.text(), response.status));
+    }
   }, []);
 
   const execute = useCallback(async (id: string, request: VideoGenerationRequest) => {
@@ -104,6 +136,8 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
     }
     const controller = new AbortController();
     aborts.current.set(id, controller);
+    cancellationRequests.current.delete(id);
+    jobs.current.delete(id);
     const startedAt = performance.now();
     setEntries((current) => ({
       ...current,
@@ -126,18 +160,63 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
               ...(seed ? { seed: Number(seed) } : {}),
               ...(negativePrompt ? { negativePrompt } : {}),
             }),
-            signal: controller.signal,
           },
         ),
       );
       if (!response.ok) {
         throw new Error(responseError(await response.text(), response.status));
       }
-      const blob = await response.blob();
+      let job = await response.json() as ServerVideoJob;
+      if (!job.jobId) throw new Error("服务没有返回有效的视频任务。");
+      jobs.current.set(id, { routeId: request.routeId, jobId: job.jobId });
+      if (cancellationRequests.current.has(id)) {
+        await cancelRemoteJob(request.routeId, job.jobId);
+        jobs.current.delete(id);
+        setEntries((current) => ({
+          ...current,
+          [id]: { ...request, id, status: "cancelled", error: "视频生成任务已取消。" },
+        }));
+        return;
+      }
+      while (job.status === "queued" || job.status === "in_progress") {
+        const phase = job.status;
+        const progress = job.progress;
+        setEntries((current) => ({
+          ...current,
+          [id]: {
+            ...request,
+            id,
+            status: "generating",
+            phase,
+            progress,
+          },
+        }));
+        await waitForNextPoll(controller.signal);
+        const statusResponse = requireAuthenticatedResponse(await fetch(
+          `/api/studio/models/${encodeURIComponent(request.routeId)}/videos/${encodeURIComponent(job.jobId)}`,
+          { signal: controller.signal },
+        ));
+        if (!statusResponse.ok) {
+          throw new Error(responseError(await statusResponse.text(), statusResponse.status));
+        }
+        job = await statusResponse.json() as ServerVideoJob;
+      }
+      if (job.status === "cancelled") return;
+      if (job.status === "failed") {
+        throw new Error(job.error || "视频模型未能完成本次生成。");
+      }
+      const contentResponse = requireAuthenticatedResponse(await fetch(
+        `/api/studio/models/${encodeURIComponent(request.routeId)}/videos/${encodeURIComponent(job.jobId)}/content`,
+        { signal: controller.signal },
+      ));
+      if (!contentResponse.ok) {
+        throw new Error(responseError(await contentResponse.text(), contentResponse.status));
+      }
+      const blob = await contentResponse.blob();
       if (!blob.type.startsWith("video/")) throw new Error("服务返回的不是有效视频。");
       const url = URL.createObjectURL(blob);
       urls.current.set(id, url);
-      const providerElapsed = Number(response.headers.get("x-inference-time-s"));
+      const providerElapsed = job.inferenceTimeSeconds;
       setEntries((current) => ({
         ...current,
         [id]: {
@@ -145,7 +224,8 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
           id,
           status: "succeeded",
           url,
-          elapsedSeconds: Number.isFinite(providerElapsed)
+          progress: 100,
+          elapsedSeconds: typeof providerElapsed === "number" && Number.isFinite(providerElapsed)
             ? providerElapsed
             : (performance.now() - startedAt) / 1_000,
         },
@@ -157,8 +237,8 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
           ...request,
           id,
           status: controller.signal.aborted ? "cancelled" : "failed",
-          error: controller.signal.aborted
-            ? "已停止等待。当前同步服务可能仍会在后台完成本次推理。"
+          error: controller.signal.aborted || cancellationRequests.current.has(id)
+            ? "视频生成任务已取消。"
             : error instanceof Error
               ? error.message
               : "视频生成失败，请稍后重试。",
@@ -166,8 +246,9 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
       }));
     } finally {
       if (aborts.current.get(id) === controller) aborts.current.delete(id);
+      cancellationRequests.current.delete(id);
     }
-  }, []);
+  }, [cancelRemoteJob]);
 
   const start = useCallback((request: Omit<VideoGenerationRequest, "settings">) => {
     const id = generationId();
@@ -208,8 +289,43 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
   }, [entries, execute]);
 
   const cancel = useCallback((id: string) => {
+    cancellationRequests.current.add(id);
     aborts.current.get(id)?.abort();
-  }, []);
+    setEntries((current) => {
+      const entry = current[id];
+      if (!entry || entry.status !== "generating") return current;
+      return {
+        ...current,
+        [id]: { ...entry, status: "cancelled", error: "正在取消视频生成任务…" },
+      };
+    });
+    const job = jobs.current.get(id);
+    if (!job) return;
+    void cancelRemoteJob(job.routeId, job.jobId).then(() => {
+      jobs.current.delete(id);
+      setEntries((current) => {
+        const entry = current[id];
+        if (!entry) return current;
+        return {
+          ...current,
+          [id]: { ...entry, status: "cancelled", error: "视频生成任务已取消。" },
+        };
+      });
+    }).catch((error: unknown) => {
+      setEntries((current) => {
+        const entry = current[id];
+        if (!entry) return current;
+        return {
+          ...current,
+          [id]: {
+            ...entry,
+            status: "failed",
+            error: error instanceof Error ? `停止任务失败：${error.message}` : "停止任务失败。",
+          },
+        };
+      });
+    });
+  }, [cancelRemoteJob]);
 
   const reuse = useCallback(async (id: string) => {
     const entry = entries[id];
@@ -306,7 +422,7 @@ export function VideoGenerationControls({
       </div>
       {settings.seconds > 5 ? (
         <p className="composer-video-duration-note" role="status">
-          当前 229 服务生成较慢，10–15 秒任务可能需要较长时间或超时。
+          10–15 秒视频生成耗时较长，提交后可查看实时状态或取消任务。
         </p>
       ) : null}
       <details className="composer-video-advanced">
@@ -385,7 +501,7 @@ export function VideoGenerationMessagePart({
             : entry.status === "succeeded"
               ? "已完成"
               : entry.status === "cancelled"
-                ? "已停止等待"
+                ? "已取消"
                 : "生成失败"}
         </em>
       </header>
@@ -396,8 +512,21 @@ export function VideoGenerationMessagePart({
             <i />
             <i />
           </span>
-          <strong>正在生成视频</strong>
-          <small>可能需要数分钟，完成后可直接播放</small>
+          <strong>{entry.phase === "queued" ? "任务排队中" : "正在生成视频"}</strong>
+          <small>
+            {typeof entry.progress === "number" && entry.progress > 0
+              ? `模型进度 ${entry.progress}% · 完成后可直接播放`
+              : "可能需要数分钟，完成后可直接播放"}
+          </small>
+          <span
+            className="video-generation-progress-track"
+            aria-label={typeof entry.progress === "number" ? `生成进度 ${entry.progress}%` : undefined}
+          >
+            <i
+              data-indeterminate={!entry.progress || undefined}
+              style={entry.progress ? { width: `${entry.progress}%` } : undefined}
+            />
+          </span>
         </div>
       ) : null}
       {entry.status === "succeeded" && entry.url ? (
@@ -418,7 +547,7 @@ export function VideoGenerationMessagePart({
         </span>
         <nav aria-label="视频操作">
           {entry.status === "generating" ? (
-            <button type="button" onClick={() => cancel(entry.id)}>停止等待</button>
+            <button type="button" onClick={() => cancel(entry.id)}>取消任务</button>
           ) : (
             <button type="button" onClick={() => retry(entry.id)}>重新生成</button>
           )}
