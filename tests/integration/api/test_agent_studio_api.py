@@ -8,6 +8,7 @@ from io import BytesIO
 from typing import Any, cast
 from zipfile import ZipFile
 
+import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
@@ -2104,6 +2105,84 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
         if item["routeId"] == "vision-primary"
     )
     assert public_route["baseUrl"] is None
+
+
+@pytest.mark.asyncio
+async def test_video_generation_forwards_user_owned_single_and_multiple_images() -> None:
+    application, container = app_and_container()
+    captured: list[httpx.Request] = []
+
+    def provider(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        return httpx.Response(
+            200,
+            content=b"\x00\x00\x00\x18ftypmp42video-bytes",
+            headers={"content-type": "video/mp4"},
+        )
+
+    owner_headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-video",
+        "X-User-ID": "video-owner",
+    }
+    other_headers = {
+        **owner_headers,
+        "X-User-ID": "other-user",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as provider_client:
+        container.model_configurations._http_client = provider_client
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://test"
+        ) as client:
+            initial = await client.get("/v1/studio/models", headers=owner_headers)
+            configured = await client.put(
+                "/v1/studio/models/minimax-h3-video",
+                headers=owner_headers,
+                json={
+                    "expectedRevision": initial.json()["revision"],
+                    "label": "MiniMax H3 视频",
+                    "modelType": "video_generation",
+                    "provider": "MiniMax",
+                    "model": "/model",
+                    "baseUrl": "http://172.20.109.229:18000/v1",
+                    "apiFormat": "openai_videos",
+                    "authScheme": "none",
+                    "apiKey": None,
+                    "enabled": True,
+                },
+            )
+            uploads = [
+                await client.post(
+                    "/v1/input-artifacts",
+                    headers=owner_headers,
+                    files={"file": (name, content, media_type)},
+                )
+                for name, content, media_type in (
+                    ("first.png", b"first-image", "image/png"),
+                    ("second.jpg", b"second-image", "image/jpeg"),
+                )
+            ]
+            artifact_ids = [upload.json()["input_artifact_id"] for upload in uploads]
+            denied = await client.post(
+                "/v1/studio/models/minimax-h3-video/videos",
+                headers=other_headers,
+                json={"prompt": "无权读取", "inputArtifactIds": artifact_ids[:1]},
+            )
+            generated = await client.post(
+                "/v1/studio/models/minimax-h3-video/videos",
+                headers=owner_headers,
+                json={"prompt": "组合两张参考图", "inputArtifactIds": artifact_ids},
+            )
+
+    assert configured.status_code == 200
+    assert all(upload.status_code == 201 for upload in uploads)
+    assert denied.status_code == 404
+    assert generated.status_code == 200
+    assert generated.headers["content-type"] == "video/mp4"
+    assert len(captured) == 1
+    assert captured[0].content.count(b'name="input_references"') == 2
+    assert b"first-image" in captured[0].content
+    assert b"second-image" in captured[0].content
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,7 @@ from harness.api.dependencies import (
     ApiContainer,
     Identity,
     ensure_permission,
+    get_container,
     require_identity,
 )
 from harness.core.errors import ConflictError, NotFoundError, PermissionDeniedError
@@ -78,6 +79,7 @@ from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
 from harness.studio.model_configuration import (
     BindAgentModelRequest,
     ConfigureModelRequest,
+    GeneratedVideoReference,
     GenerateImageRequest,
     GenerateImageResult,
     GenerateVideoRequest,
@@ -881,10 +883,38 @@ async def generate_video(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: GenerateVideoRequest,
     identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
     service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> Response:
     ensure_permission(identity, "tasks:write")
-    result = await service.generate_video(identity.tenant_id, route_id, body)
+    references: list[GeneratedVideoReference] = []
+    if body.input_artifact_ids:
+        artifacts = await container.input_artifacts.resolve_for_run(
+            tenant_id=identity.tenant_id,
+            user_id=identity.user_id,
+            input_artifact_ids=body.input_artifact_ids,
+        )
+        for artifact in artifacts:
+            if not artifact.media_type.lower().startswith("image/"):
+                raise ConflictError("video references must be image files")
+            _metadata, content = await container.input_artifacts.download(
+                tenant_id=identity.tenant_id,
+                user_id=identity.user_id,
+                input_artifact_id=artifact.input_artifact_id,
+            )
+            references.append(
+                GeneratedVideoReference(
+                    name=artifact.name,
+                    media_type=artifact.media_type,
+                    content=content,
+                )
+            )
+    result = await service.generate_video(
+        identity.tenant_id,
+        route_id,
+        body,
+        references=tuple(references),
+    )
     headers = {
         "Content-Disposition": f'inline; filename="{route_id}.mp4"',
         "Cache-Control": "no-store",

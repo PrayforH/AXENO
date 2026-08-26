@@ -120,6 +120,7 @@ export function TaskModelVisionNotice({
   const visionRoute = routes.find((route) => route.capabilities.includes("vision"));
   const needsVisionSwitch =
     requiresVision &&
+    effectiveRoute?.modelType !== "video_generation" &&
     !effectiveRoute?.capabilities.includes("vision") &&
     Boolean(visionRoute);
   if (!needsVisionSwitch || !visionRoute) return null;

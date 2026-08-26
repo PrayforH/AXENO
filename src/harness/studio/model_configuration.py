@@ -15,7 +15,7 @@ from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import ModelCompatibility
@@ -115,6 +115,20 @@ class GenerateVideoRequest(StudioModel):
     aspect_ratio: Literal["16:9", "9:16", "1:1"] = Field(default="16:9", alias="aspectRatio")
     seconds: int = Field(default=5, ge=1, le=10)
     seed: int | None = Field(default=None, ge=0)
+    input_artifact_ids: tuple[str, ...] = Field(
+        default=(), alias="inputArtifactIds", max_length=10
+    )
+
+    @model_validator(mode="after")
+    def validate_input_artifacts(self) -> GenerateVideoRequest:
+        if len(self.input_artifact_ids) != len(set(self.input_artifact_ids)):
+            raise ValueError("duplicate video reference image")
+        if any(
+            len(item) > 128 or not item.startswith("input_artifact_")
+            for item in self.input_artifact_ids
+        ):
+            raise ValueError("invalid input artifact ID")
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +139,15 @@ class GeneratedVideo:
     inference_time_seconds: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedVideoReference:
+    name: str
+    media_type: str
+    content: bytes
+
+
 _MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
+_MAX_VIDEO_REFERENCE_BYTES = 100 * 1024 * 1024
 
 
 class ModelConfigurationService:
@@ -479,12 +501,23 @@ class ModelConfigurationService:
         return GenerateImageResult(model=route.models[0], images=tuple(images))
 
     async def generate_video(
-        self, tenant_id: str, route_id: str, request: GenerateVideoRequest
+        self,
+        tenant_id: str,
+        route_id: str,
+        request: GenerateVideoRequest,
+        *,
+        references: tuple[GeneratedVideoReference, ...] = (),
     ) -> GeneratedVideo:
         route = await self._route(tenant_id, route_id)
         if route.model_type != "video_generation" or not route.enabled:
             raise ConflictError("the selected route is not an enabled video generation model")
         secret = await self._credential_for_route(tenant_id, route)
+        if len(references) != len(request.input_artifact_ids):
+            raise ConflictError("video reference images could not be resolved")
+        if any(not item.media_type.lower().startswith("image/") for item in references):
+            raise ConflictError("video references must be image files")
+        if sum(len(item.content) for item in references) > _MAX_VIDEO_REFERENCE_BYTES:
+            raise ConflictError("video reference images exceed the 100 MiB limit")
         form: dict[str, str] = {
             "model": route.models[0],
             "prompt": request.prompt,
@@ -493,8 +526,21 @@ class ModelConfigurationService:
         }
         if request.seed is not None:
             form["seed"] = str(request.seed)
+        reference_files = tuple(
+            (
+                "input_reference" if len(references) == 1 else "input_references",
+                item,
+            )
+            for item in references
+        )
         try:
-            response = await self._post_multipart(route, secret, "videos/sync", form)
+            response = await self._post_multipart(
+                route,
+                secret,
+                "videos/sync",
+                form,
+                reference_files,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as error:
             raise ConflictError(
@@ -728,6 +774,7 @@ class ModelConfigurationService:
         secret: SecretStr | None,
         path: str,
         form: dict[str, str],
+        reference_files: tuple[tuple[str, GeneratedVideoReference], ...] = (),
     ) -> httpx.Response:
         assert route.base_url is not None
         client = self._http_client or httpx.AsyncClient(
@@ -735,10 +782,27 @@ class ModelConfigurationService:
             follow_redirects=False,
         )
         try:
+            files: list[
+                tuple[str, tuple[str | None, str | bytes, str | None]]
+            ] = [
+                (name, (None, value, None)) for name, value in form.items()
+            ]
+            files.extend(
+                (
+                    field,
+                    (
+                        reference.name.replace("\r", "_").replace("\n", "_")[:120]
+                        or "reference-image",
+                        reference.content,
+                        reference.media_type,
+                    ),
+                )
+                for field, reference in reference_files
+            )
             return await client.post(
                 f"{route.base_url.rstrip('/')}/{path}",
                 headers=self._headers(route, secret),
-                files={name: (None, value) for name, value in form.items()},
+                files=files,
             )
         finally:
             if self._http_client is None:

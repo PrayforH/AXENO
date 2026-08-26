@@ -67,6 +67,7 @@ import {
   useRunStream,
 } from "../lib/run-stream-store";
 import { normalizeMessageText } from "../lib/message-text";
+import { inputArtifactIdFromAttachment } from "../lib/input-attachment-adapter";
 
 export { normalizeMessageText } from "../lib/message-text";
 import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
@@ -288,11 +289,20 @@ function HarnessComposer() {
   async function generateVideo() {
     const prompt = composerText.trim();
     if (!videoRoute || !prompt || videoGenerating) return;
-    if (composerAttachments.length > 0) {
+    if (composerAttachments.some((attachment) => attachment.type !== "image")) {
       setVideoGeneration({
         status: "failed",
-        error: "当前 H3 接口只接收文本描述，请先移除附件。",
+        error: "H3 参考素材只支持图片，请移除文档或其他文件。",
       });
+      return;
+    }
+    if (composerAttachments.length > 10) {
+      setVideoGeneration({ status: "failed", error: "一次最多使用 10 张参考图片。" });
+      return;
+    }
+    const inputArtifactIds = composerAttachments.map(inputArtifactIdFromAttachment);
+    if (inputArtifactIds.some((item) => !item)) {
+      setVideoGeneration({ status: "failed", error: "参考图片仍在上传，请稍后再试。" });
       return;
     }
     const controller = new AbortController();
@@ -305,7 +315,12 @@ function HarnessComposer() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt, aspectRatio: "16:9", seconds: 5 }),
+            body: JSON.stringify({
+              prompt,
+              aspectRatio: "16:9",
+              seconds: 5,
+              inputArtifactIds,
+            }),
             signal: controller.signal,
           },
         ),
@@ -415,7 +430,7 @@ function HarnessComposer() {
       {videoRoute || videoGeneration.status !== "idle" ? (
         <section className="composer-video-generation" data-status={videoGeneration.status}>
           <header>
-            <span><strong>{videoRoute?.label ?? "H3 视频生成"}</strong><small>5 秒 · 16:9 · MP4</small></span>
+            <span><strong>{videoRoute?.label ?? "H3 视频生成"}</strong><small>{composerAttachments.length ? `${composerAttachments.length} 张参考图 · ` : ""}5 秒 · 16:9 · MP4</small></span>
             {videoGeneration.status === "generating" ? <em>生成中，通常约 2 分钟</em> : null}
           </header>
           {videoGeneration.status === "failed" ? (

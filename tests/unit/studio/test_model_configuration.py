@@ -17,6 +17,7 @@ from harness.studio.mcp_credential_store import (
 from harness.studio.model_configuration import (
     BindAgentModelRequest,
     ConfigureModelRequest,
+    GeneratedVideoReference,
     GenerateImageRequest,
     GenerateVideoRequest,
     ModelConfigurationService,
@@ -196,6 +197,15 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
                 aspectRatio="16:9",
                 seconds=5,
                 seed=7,
+                inputArtifactIds=["input_artifact_a", "input_artifact_b"],
+            ),
+            references=(
+                GeneratedVideoReference(
+                    name="first.png", media_type="image/png", content=b"first-image"
+                ),
+                GeneratedVideoReference(
+                    name="second.jpg", media_type="image/jpeg", content=b"second-image"
+                ),
             ),
         )
 
@@ -214,10 +224,62 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
     assert b'name="aspect_ratio"' in captured[1].content
     assert b'name="seconds"' in captured[1].content
     assert b'name="seed"' in captured[1].content
+    assert captured[1].content.count(b'name="input_references"') == 2
+    assert b'filename="first.png"' in captured[1].content
+    assert b'filename="second.jpg"' in captured[1].content
+    assert b"first-image" in captured[1].content
+    assert b"second-image" in captured[1].content
     assert result.content == mp4
     assert result.request_id == "video-request-1"
     assert result.inference_time_seconds == "128.4"
     assert await models.resolve_runtime("tenant-a", "helper-agent", "minimax-h3-video") is None
+
+
+@pytest.mark.asyncio
+async def test_video_generation_uses_single_reference_field_for_one_image() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        return httpx.Response(
+            200,
+            content=b"\x00\x00\x00\x18ftypmp42video-bytes",
+            headers={"content-type": "video/mp4"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models, _catalogs, _credentials = service(environment="production", client=client)
+        await models.configure(
+            "tenant-a",
+            "admin-a",
+            "minimax-h3-video",
+            request(
+                modelType="video_generation",
+                model="/model",
+                baseUrl="http://172.20.109.229:18000/v1",
+                apiFormat="openai_videos",
+                authScheme="none",
+                apiKey=None,
+            ),
+        )
+        await models.generate_video(
+            "tenant-a",
+            "minimax-h3-video",
+            GenerateVideoRequest(
+                prompt="让图片动起来",
+                inputArtifactIds=["input_artifact_a"],
+            ),
+            references=(
+                GeneratedVideoReference(
+                    name="reference.webp",
+                    media_type="image/webp",
+                    content=b"reference-image",
+                ),
+            ),
+        )
+
+    assert b'name="input_reference"' in captured[0].content
+    assert b'name="input_references"' not in captured[0].content
 
 
 @pytest.mark.asyncio
