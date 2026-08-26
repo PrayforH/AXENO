@@ -124,9 +124,7 @@ async def test_service_identity_can_build_and_publish_existing_bundle() -> None:
         drafts = await client.get("/v1/studio/drafts", headers=headers)
 
     assert capabilities.status_code == 200
-    assert [
-        item["reference"] for item in capabilities.json()["mcpServers"]
-    ] == ["tavily-readonly"]
+    assert [item["reference"] for item in capabilities.json()["mcpServers"]] == ["tavily-readonly"]
     assert created.status_code == 201
     assert created.json()["tenantId"] == "tenant-a"
     assert created.json()["createdBy"] == "builder-a"
@@ -232,8 +230,7 @@ async def test_user_can_permanently_delete_an_unreferenced_personal_mcp() -> Non
     assert created.status_code == 200, created.text
     assert deleted.status_code == 200, deleted.text
     assert "company-knowledge" not in {
-        item["reference"]
-        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+        item["reference"] for item in deleted.json()["record"]["catalog"]["mcpServers"]
     }
 
 
@@ -254,8 +251,7 @@ async def test_tavily_has_the_same_edit_and_delete_controls_as_other_mcp() -> No
 
     assert deleted.status_code == 200, deleted.text
     assert "tavily-readonly" not in {
-        item["reference"]
-        for item in deleted.json()["record"]["catalog"]["mcpServers"]
+        item["reference"] for item in deleted.json()["record"]["catalog"]["mcpServers"]
     }
 
 
@@ -1752,6 +1748,22 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
                 "enabled": True,
             },
         )
+        video = await client.put(
+            "/v1/studio/models/minimax-h3-video",
+            headers=owner_headers,
+            json={
+                "expectedRevision": configured.json()["revision"],
+                "label": "MiniMax H3 视频",
+                "modelType": "video_generation",
+                "provider": "MiniMax",
+                "model": "/model",
+                "baseUrl": "http://172.20.109.229:18000/v1",
+                "apiFormat": "openai_videos",
+                "authScheme": "none",
+                "apiKey": None,
+                "enabled": True,
+            },
+        )
         denied = await client.get("/v1/studio/models", headers=member_headers)
         runtime_catalog = await client.get("/v1/studio/catalog", headers=owner_headers)
 
@@ -1762,6 +1774,14 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
         item for item in configured.json()["models"] if item["routeId"] == "vision-primary"
     )
     assert model["credentialConfigured"] is True
+    assert video.status_code == 200
+    video_model = next(
+        item for item in video.json()["models"] if item["routeId"] == "minimax-h3-video"
+    )
+    assert video_model["modelType"] == "video_generation"
+    assert video_model["apiFormat"] == "openai_videos"
+    assert video_model["authScheme"] == "none"
+    assert video_model["credentialConfigured"] is True
     assert denied.status_code == 403
     public_route = next(
         item
@@ -1779,9 +1799,7 @@ async def test_model_management_can_permanently_delete_model_and_secret() -> Non
         "X-User-ID": "owner-a",
     }
     api, container = app_and_container()
-    async with AsyncClient(
-        transport=ASGITransport(app=api), base_url="http://test"
-    ) as client:
+    async with AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
         initial = await client.get("/v1/studio/models", headers=owner_headers)
         configured = await client.put(
             "/v1/studio/models/minimax-h3",
@@ -1807,13 +1825,14 @@ async def test_model_management_can_permanently_delete_model_and_secret() -> Non
 
     assert configured.status_code == 200
     assert deleted.status_code == 200
-    assert "minimax-h3" not in {
-        item["routeId"] for item in deleted.json()["models"]
-    }
+    assert "minimax-h3" not in {item["routeId"] for item in deleted.json()["models"]}
     assert "api-key-must-be-deleted" not in deleted.text
-    assert await container.mcp_credentials.repository.get(
-        "tenant-a", "tenant:model-control-plane", "minimax-h3"
-    ) is None
+    assert (
+        await container.mcp_credentials.repository.get(
+            "tenant-a", "tenant:model-control-plane", "minimax-h3"
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

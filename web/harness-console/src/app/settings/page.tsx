@@ -68,7 +68,7 @@ const SETTINGS_NAV: ReadonlyArray<{
     id: "models",
     href: "#models",
     label: "模型管理",
-    description: "配置对话、视觉和图像生成模型，并指定内置 Agent 的默认模型。",
+    description: "配置对话、视觉、图像和视频生成模型，并指定内置 Agent 的默认模型。",
     icon: "agent",
   },
   {

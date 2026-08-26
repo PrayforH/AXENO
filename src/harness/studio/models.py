@@ -165,9 +165,7 @@ class DraftLimits(StudioModel):
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
     max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
     max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
-    max_subagent_usage_units: int | None = Field(
-        default=None, alias="maxSubagentUsageUnits", gt=0
-    )
+    max_subagent_usage_units: int | None = Field(default=None, alias="maxSubagentUsageUnits", gt=0)
 
 
 class DraftSubagent(StudioModel):
@@ -231,9 +229,7 @@ class AgentDraftSpec(StudioModel):
             {name for name in python_tool_names if python_tool_names.count(name) > 1}
         )
         if duplicate_python_tools:
-            raise ValueError(
-                f"duplicate Python tool: {', '.join(duplicate_python_tools)}"
-            )
+            raise ValueError(f"duplicate Python tool: {', '.join(duplicate_python_tools)}")
         return self
 
 
@@ -359,14 +355,14 @@ class ModelRouteCapability(StudioModel):
     provider: str = Field(min_length=1, max_length=80)
     models: tuple[str, ...] = Field(min_length=1)
     capabilities: tuple[str, ...]
-    model_type: Literal["chat", "vision", "image_generation"] = Field(
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
         default="chat", alias="modelType"
     )
     base_url: str | None = Field(default=None, alias="baseUrl", max_length=2048)
     api_format: Literal[
-        "anthropic_compatible", "openai_compatible", "openai_images"
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
     ] = Field(default="anthropic_compatible", alias="apiFormat")
-    auth_scheme: Literal["bearer", "x-api-key"] = Field(
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(
         default="bearer", alias="authScheme"
     )
     credential_managed: bool = Field(default=True, alias="credentialManaged")
@@ -386,6 +382,7 @@ class ModelRouteCapability(StudioModel):
             "chat": {"streaming", "tool_use"},
             "vision": {"streaming", "tool_use", "vision"},
             "image_generation": {"image_generation"},
+            "video_generation": {"video_generation"},
         }[self.model_type]
         if not required.issubset(self.capabilities):
             raise ValueError(
@@ -396,6 +393,14 @@ class ModelRouteCapability(StudioModel):
             raise ValueError("image generation models must use the openai_images API format")
         if self.model_type != "image_generation" and self.api_format == "openai_images":
             raise ValueError("openai_images is only valid for image generation models")
+        if self.model_type == "video_generation" and self.api_format != "openai_videos":
+            raise ValueError("video generation models must use the openai_videos API format")
+        if self.model_type != "video_generation" and self.api_format == "openai_videos":
+            raise ValueError("openai_videos is only valid for video generation models")
+        if self.auth_scheme == "none" and self.model_type != "video_generation":
+            raise ValueError(
+                "unauthenticated model connections are only valid for video generation"
+            )
         if self.base_url is not None:
             parsed = urlsplit(self.base_url)
             if (
@@ -525,9 +530,7 @@ class McpCapability(StudioModel):
             raise ValueError("authenticated MCP requires credentialReference")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("duplicate MCP tool")
-        if len(self.allowed_execution_profile_ids) != len(
-            set(self.allowed_execution_profile_ids)
-        ):
+        if len(self.allowed_execution_profile_ids) != len(set(self.allowed_execution_profile_ids)):
             raise ValueError("duplicate MCP Execution Profile")
         return self
 
@@ -635,9 +638,7 @@ class CapabilityCatalog(StudioModel):
         default=(), alias="executionProfiles"
     )
     templates: tuple[TemplateCapability, ...]
-    agent_model_bindings: dict[str, str] = Field(
-        default_factory=dict, alias="agentModelBindings"
-    )
+    agent_model_bindings: dict[str, str] = Field(default_factory=dict, alias="agentModelBindings")
 
     @model_validator(mode="after")
     def unique_managed_ids(self) -> CapabilityCatalog:
@@ -669,14 +670,10 @@ class CapabilityCatalog(StudioModel):
         invalid_agents = sorted(
             name
             for name, route_id in self.agent_model_bindings.items()
-            if not name
-            or not re.fullmatch(r"[a-z][a-z0-9-]*", name)
-            or route_id not in route_ids
+            if not name or not re.fullmatch(r"[a-z][a-z0-9-]*", name) or route_id not in route_ids
         )
         if invalid_agents:
-            raise ValueError(
-                "invalid Agent model bindings: " + ", ".join(invalid_agents)
-            )
+            raise ValueError("invalid Agent model bindings: " + ", ".join(invalid_agents))
         return self
 
 
@@ -733,12 +730,8 @@ class ValidationIssue(StudioModel):
     severity: ValidationSeverity
     path: str | None = None
     stage: ValidationStage = ValidationStage.PUBLISH
-    related_references: tuple[str, ...] = Field(
-        default=(), alias="relatedReferences"
-    )
-    suggested_profile_ids: tuple[str, ...] = Field(
-        default=(), alias="suggestedProfileIds"
-    )
+    related_references: tuple[str, ...] = Field(default=(), alias="relatedReferences")
+    suggested_profile_ids: tuple[str, ...] = Field(default=(), alias="suggestedProfileIds")
 
 
 class EffectiveAgentContract(StudioModel):

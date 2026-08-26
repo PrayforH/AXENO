@@ -70,7 +70,7 @@ describe("task model selection", () => {
     expect(loadTaskModelOverride(storage, "thread-2")).toBeNull();
   });
 
-  it("keeps image generation routes out of the conversation selector", async () => {
+  it("keeps image and video generation routes out of the conversation selector", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       modelRoutes: [
         {
@@ -89,6 +89,15 @@ describe("task model selection", () => {
           models: ["image-1"],
           modelType: "image_generation",
           capabilities: ["image_generation"],
+          enabled: true,
+        },
+        {
+          routeId: "video-primary",
+          label: "视频生成",
+          provider: "MiniMax",
+          models: ["/model"],
+          modelType: "video_generation",
+          capabilities: ["video_generation"],
           enabled: true,
         },
       ],

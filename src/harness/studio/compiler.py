@@ -301,11 +301,15 @@ class AgentDraftCompiler:
                 )
             )
         else:
-            if route.model_type == "image_generation":
+            if route.model_type in {"image_generation", "video_generation"}:
+                generation_kind = "图像" if route.model_type == "image_generation" else "视频"
                 issues.append(
                     ValidationIssue(
                         code="model_route_not_conversational",
-                        message=f"图像生成模型不能作为 Agent 对话路由：{spec.model.route_id}",
+                        message=(
+                            f"{generation_kind}生成模型不能作为 Agent 对话路由："
+                            f"{spec.model.route_id}"
+                        ),
                         severity=ValidationSeverity.ERROR,
                         path="model.routeId",
                     )

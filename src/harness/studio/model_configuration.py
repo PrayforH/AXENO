@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 from urllib.parse import urlsplit
@@ -40,31 +41,33 @@ _API_KEY = "api_key"
 class ConfigureModelRequest(StudioModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     label: str = Field(min_length=1, max_length=160)
-    model_type: Literal["chat", "vision", "image_generation"] = Field(alias="modelType")
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
+        alias="modelType"
+    )
     provider: str = Field(min_length=1, max_length=80)
     model: str = Field(min_length=1, max_length=300)
     base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
     api_format: Literal[
-        "anthropic_compatible", "openai_compatible", "openai_images"
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
     ] = Field(alias="apiFormat")
-    auth_scheme: Literal["bearer", "x-api-key"] = Field(alias="authScheme")
-    api_key: SecretStr | None = Field(
-        default=None, alias="apiKey", min_length=1, max_length=16_384
-    )
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(alias="authScheme")
+    api_key: SecretStr | None = Field(default=None, alias="apiKey", min_length=1, max_length=16_384)
     enabled: bool = True
 
 
 class ModelConfiguration(StudioModel):
     route_id: str = Field(alias="routeId")
     label: str
-    model_type: Literal["chat", "vision", "image_generation"] = Field(alias="modelType")
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
+        alias="modelType"
+    )
     provider: str
     model: str
     base_url: str | None = Field(alias="baseUrl")
     api_format: Literal[
-        "anthropic_compatible", "openai_compatible", "openai_images"
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
     ] = Field(alias="apiFormat")
-    auth_scheme: Literal["bearer", "x-api-key"] = Field(alias="authScheme")
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(alias="authScheme")
     capabilities: tuple[str, ...]
     enabled: bool
     credential_configured: bool = Field(alias="credentialConfigured")
@@ -107,6 +110,24 @@ class GenerateImageResult(StudioModel):
     images: tuple[GeneratedImage, ...]
 
 
+class GenerateVideoRequest(StudioModel):
+    prompt: str = Field(min_length=1, max_length=8_000)
+    aspect_ratio: Literal["16:9", "9:16", "1:1"] = Field(default="16:9", alias="aspectRatio")
+    seconds: int = Field(default=5, ge=1, le=10)
+    seed: int | None = Field(default=None, ge=0)
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedVideo:
+    content: bytes
+    media_type: str
+    request_id: str | None
+    inference_time_seconds: str | None
+
+
+_MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
+
+
 class ModelConfigurationService:
     def __init__(
         self,
@@ -147,7 +168,7 @@ class ModelConfigurationService:
                     authScheme=route.auth_scheme,
                     capabilities=route.capabilities,
                     enabled=route.enabled,
-                    credentialConfigured=route.route_id in stored,
+                    credentialConfigured=(route.auth_scheme == "none" or route.route_id in stored),
                     deletable=True,
                     version=route.version,
                 )
@@ -174,15 +195,15 @@ class ModelConfigurationService:
         credential = await self._credentials.repository.get(
             tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
         )
-        if (
-            request.api_key is None
-            and credential is None
-        ):
+        if request.auth_scheme == "none" and request.api_key is not None:
+            raise ConflictError("API keys cannot be stored for an unauthenticated model")
+        if request.auth_scheme != "none" and request.api_key is None and credential is None:
             raise ConflictError("an API key is required when creating a model connection")
         capabilities = {
             "chat": ("streaming", "tool_use"),
             "vision": ("streaming", "tool_use", "vision"),
             "image_generation": ("image_generation",),
+            "video_generation": ("video_generation",),
         }[request.model_type]
         route = ModelRouteCapability(
             routeId=route_id,
@@ -211,6 +232,8 @@ class ModelConfigurationService:
         )
         if request.api_key is not None:
             await self._store_secret(tenant_id, user_id, route_id, request.api_key)
+        elif request.auth_scheme == "none" and credential is not None:
+            await self._credentials.repository.delete(tenant_id, _MODEL_CREDENTIAL_OWNER, route_id)
         return await self.list(tenant_id)
 
     async def disable(
@@ -244,9 +267,7 @@ class ModelConfigurationService:
             resource_id=route_id,
             expected_revision=expected_revision,
         )
-        await self._credentials.repository.delete(
-            tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
-        )
+        await self._credentials.repository.delete(tenant_id, _MODEL_CREDENTIAL_OWNER, route_id)
         if self._credentials.audit is not None:
             await self._credentials.audit.record(
                 tenant_id=tenant_id,
@@ -270,7 +291,7 @@ class ModelConfigurationService:
             (item for item in record.catalog.model_routes if item.route_id == request.route_id),
             None,
         )
-        if route is None or not route.enabled or route.model_type == "image_generation":
+        if route is None or not route.enabled or route.model_type not in {"chat", "vision"}:
             raise ConflictError("Agent defaults require an enabled chat or vision model")
         bindings = dict(record.catalog.agent_model_bindings)
         bindings[agent_name] = request.route_id
@@ -279,9 +300,7 @@ class ModelConfigurationService:
             user_id=user_id,
             request=ReplaceCapabilityCatalogRequest(
                 expectedRevision=request.expected_revision,
-                catalog=record.catalog.model_copy(
-                    update={"agent_model_bindings": bindings}
-                ),
+                catalog=record.catalog.model_copy(update={"agent_model_bindings": bindings}),
             ),
         )
         return await self.list(tenant_id)
@@ -305,7 +324,9 @@ class ModelConfigurationService:
         )
         if route is None or not route.enabled:
             return None
-        if route.base_url is None or route.model_type == "image_generation":
+        if route.base_url is None or route.model_type not in {"chat", "vision"}:
+            return None
+        if route.auth_scheme == "none":
             return None
         secret = await self._secret(tenant_id, route_id)
         if secret is None:
@@ -321,15 +342,28 @@ class ModelConfigurationService:
             capabilities=frozenset(route.capabilities),
         )
 
-    async def test(
-        self, tenant_id: str, route_id: str
-    ) -> ModelConnectionTestResult:
+    async def test(self, tenant_id: str, route_id: str) -> ModelConnectionTestResult:
         from time import monotonic
 
         route = await self._route(tenant_id, route_id)
-        secret = await self._require_secret(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
         started = monotonic()
         payload: dict[str, object]
+        if route.model_type == "video_generation":
+            try:
+                response = await self._get(route, secret, "models")
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise ConflictError(
+                    f"model provider rejected the test request (HTTP {error.response.status_code})"
+                ) from None
+            except httpx.HTTPError:
+                raise ConflictError("model provider connection failed") from None
+            return ModelConnectionTestResult(
+                ok=True,
+                latencyMs=int((monotonic() - started) * 1000),
+                message="连接成功，视频服务已就绪。",
+            )
         if route.model_type == "image_generation":
             payload = {
                 "model": route.models[0],
@@ -373,7 +407,7 @@ class ModelConfigurationService:
         route = await self._route(tenant_id, route_id)
         if route.model_type != "image_generation" or not route.enabled:
             raise ConflictError("the selected route is not an enabled image generation model")
-        secret = await self._require_secret(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
         try:
             response = await self._post(
                 route,
@@ -414,15 +448,53 @@ class ModelConfigurationService:
                     url=raw_url if isinstance(raw_url, str) else None,
                     b64Json=raw_b64 if isinstance(raw_b64, str) else None,
                     revisedPrompt=(
-                        raw_revised_prompt
-                        if isinstance(raw_revised_prompt, str)
-                        else None
+                        raw_revised_prompt if isinstance(raw_revised_prompt, str) else None
                     ),
                 )
             )
         if not images:
             raise ConflictError("image provider returned no images")
         return GenerateImageResult(model=route.models[0], images=tuple(images))
+
+    async def generate_video(
+        self, tenant_id: str, route_id: str, request: GenerateVideoRequest
+    ) -> GeneratedVideo:
+        route = await self._route(tenant_id, route_id)
+        if route.model_type != "video_generation" or not route.enabled:
+            raise ConflictError("the selected route is not an enabled video generation model")
+        secret = await self._credential_for_route(tenant_id, route)
+        form: dict[str, str] = {
+            "model": route.models[0],
+            "prompt": request.prompt,
+            "aspect_ratio": request.aspect_ratio,
+            "seconds": str(request.seconds),
+        }
+        if request.seed is not None:
+            form["seed"] = str(request.seed)
+        try:
+            response = await self._post_multipart(route, secret, "videos/sync", form)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"video provider rejected the request (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        media_type = response.headers.get("content-type", "").partition(";")[0].strip()
+        if (
+            media_type != "video/mp4"
+            or len(response.content) < 12
+            or response.content[4:8] != b"ftyp"
+        ):
+            raise ConflictError("video provider returned an invalid MP4 response")
+        if len(response.content) > _MAX_GENERATED_VIDEO_BYTES:
+            raise ConflictError("video provider response exceeds the 128 MiB limit")
+        return GeneratedVideo(
+            content=response.content,
+            media_type=media_type,
+            request_id=response.headers.get("x-request-id"),
+            inference_time_seconds=response.headers.get("x-inference-time-s"),
+        )
 
     async def _route(self, tenant_id: str, route_id: str) -> ModelRouteCapability:
         record = await self._import_server_models(tenant_id)
@@ -475,9 +547,7 @@ class ModelConfigurationService:
             return self._credentials.cipher.decrypt(stored).get(_API_KEY)
         return None
 
-    async def _import_server_models(
-        self, tenant_id: str
-    ) -> CapabilityCatalogRecord:
+    async def _import_server_models(self, tenant_id: str) -> CapabilityCatalogRecord:
         """One-time import from deployment settings into the frontend control plane."""
 
         record = await self._catalogs.get(tenant_id)
@@ -537,7 +607,7 @@ class ModelConfigurationService:
     @staticmethod
     def _server_model_type(
         route: CcSwitchClaudeConfig,
-    ) -> Literal["chat", "vision", "image_generation"]:
+    ) -> Literal["chat", "vision", "image_generation", "video_generation"]:
         return "vision" if "vision" in route.capabilities else "chat"
 
     @staticmethod
@@ -571,21 +641,37 @@ class ModelConfigurationService:
             raise ConflictError(f"credentials are not configured for model: {route_id}")
         return secret
 
+    async def _credential_for_route(
+        self, tenant_id: str, route: ModelRouteCapability
+    ) -> SecretStr | None:
+        if route.auth_scheme == "none":
+            return None
+        return await self._require_secret(tenant_id, route.route_id)
+
+    @staticmethod
+    def _headers(route: ModelRouteCapability, secret: SecretStr | None) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if route.api_format == "anthropic_compatible":
+            headers["anthropic-version"] = "2023-06-01"
+        if route.auth_scheme == "x-api-key":
+            if secret is None:
+                raise ConflictError(f"credentials are not configured for model: {route.route_id}")
+            headers["x-api-key"] = secret.get_secret_value()
+        elif route.auth_scheme == "bearer":
+            if secret is None:
+                raise ConflictError(f"credentials are not configured for model: {route.route_id}")
+            headers["authorization"] = f"Bearer {secret.get_secret_value()}"
+        return headers
+
     async def _post(
         self,
         route: ModelRouteCapability,
-        secret: SecretStr,
+        secret: SecretStr | None,
         path: str,
         payload: dict[str, object],
     ) -> httpx.Response:
         assert route.base_url is not None
-        headers = {"content-type": "application/json"}
-        if route.api_format == "anthropic_compatible":
-            headers["anthropic-version"] = "2023-06-01"
-        if route.auth_scheme == "x-api-key":
-            headers["x-api-key"] = secret.get_secret_value()
-        else:
-            headers["authorization"] = f"Bearer {secret.get_secret_value()}"
+        headers = {"content-type": "application/json", **self._headers(route, secret)}
         client = self._http_client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
         try:
             return await client.post(
@@ -597,11 +683,49 @@ class ModelConfigurationService:
             if self._http_client is None:
                 await client.aclose()
 
+    async def _get(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(timeout=15.0, follow_redirects=False)
+        try:
+            return await client.get(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
+    async def _post_multipart(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+        form: dict[str, str],
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(
+            timeout=httpx.Timeout(900.0, connect=15.0),
+            follow_redirects=False,
+        )
+        try:
+            return await client.post(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+                files={name: (None, value) for name, value in form.items()},
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
     def _validate_endpoint(self, value: str) -> None:
         normalized = value.rstrip("/")
         if normalized in {
-            self._server_direct_base_url(route)
-            for route in self._server_routes.values()
+            self._server_direct_base_url(route) for route in self._server_routes.values()
         }:
             return
         parsed = urlsplit(value)
@@ -613,9 +737,7 @@ class ModelConfigurationService:
             address = ipaddress.ip_address(parsed.hostname)
         except ValueError:
             if self._environment == "production" and parsed.scheme != "https":
-                raise ConflictError(
-                    "production public model connections require HTTPS"
-                ) from None
+                raise ConflictError("production public model connections require HTTPS") from None
             return
         if self._environment != "production":
             return

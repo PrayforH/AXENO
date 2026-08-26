@@ -15,7 +15,7 @@ interface CapabilityResponse {
     provider: string;
     models: string[];
     capabilities: string[];
-    modelType?: "chat" | "vision" | "image_generation";
+    modelType?: "chat" | "vision" | "image_generation" | "video_generation";
     enabled: boolean;
   }>;
 }
@@ -39,8 +39,9 @@ export async function loadTaskModelRoutes(): Promise<TaskModelRoute[]> {
         route.routeId !== "new-api-default" &&
         route.enabled &&
         route.models.length === 1 &&
-        route.modelType !== "image_generation" &&
-        !route.capabilities.includes("image_generation"),
+        (route.modelType === undefined || ["chat", "vision"].includes(route.modelType)) &&
+        !route.capabilities.includes("image_generation") &&
+        !route.capabilities.includes("video_generation"),
     )
     .map((route) => ({
       id: route.routeId,

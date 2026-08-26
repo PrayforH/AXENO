@@ -4,8 +4,8 @@ import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { SecretInput } from "./secret-input";
 import styles from "./model-management.module.css";
 
-type ModelType = "chat" | "vision" | "image_generation";
-type ApiFormat = "anthropic_compatible" | "openai_compatible" | "openai_images";
+type ModelType = "chat" | "vision" | "image_generation" | "video_generation";
+type ApiFormat = "anthropic_compatible" | "openai_compatible" | "openai_images" | "openai_videos";
 
 type ManagedModel = {
   routeId: string;
@@ -15,7 +15,7 @@ type ManagedModel = {
   model: string;
   baseUrl: string | null;
   apiFormat: ApiFormat;
-  authScheme: "bearer" | "x-api-key";
+  authScheme: "bearer" | "x-api-key" | "none";
   capabilities: string[];
   enabled: boolean;
   credentialConfigured: boolean;
@@ -30,12 +30,13 @@ type ModelState = {
 };
 
 type AgentItem = { name: string; display_name: string };
-type ProviderPreset = "minimax" | "openai" | "anthropic" | "custom";
+type ProviderPreset = "minimax" | "minimax_h3" | "openai" | "anthropic" | "custom";
 
 const TYPE_COPY: Record<ModelType, { label: string; mark: string; description: string }> = {
   chat: { label: "对话", mark: "C", description: "文本理解、工具调用与流式回答" },
   vision: { label: "视觉", mark: "V", description: "同时理解文本、图片与文档截图" },
   image_generation: { label: "图像生成", mark: "I", description: "通过独立接口生成图片，不参与对话路由" },
+  video_generation: { label: "视频生成", mark: "M", description: "通过独立接口生成 MP4，不参与对话路由" },
 };
 
 const EMPTY_STATE: ModelState = { revision: 1, models: [], agentModelBindings: {} };
@@ -44,7 +45,7 @@ const PROVIDER_PRESETS: Record<Exclude<ProviderPreset, "custom">, {
   label: string;
   provider: string;
   baseUrl: string;
-  apiFormat: Exclude<ApiFormat, "openai_images">;
+  apiFormat: ApiFormat;
   authScheme: ManagedModel["authScheme"];
 }> = {
   minimax: {
@@ -53,6 +54,13 @@ const PROVIDER_PRESETS: Record<Exclude<ProviderPreset, "custom">, {
     baseUrl: "https://api.minimaxi.com/anthropic/v1",
     apiFormat: "anthropic_compatible",
     authScheme: "x-api-key",
+  },
+  minimax_h3: {
+    label: "MiniMax H3（229 内网）",
+    provider: "MiniMax",
+    baseUrl: "http://172.20.109.229:18000/v1",
+    apiFormat: "openai_videos",
+    authScheme: "none",
   },
   openai: {
     label: "OpenAI",
@@ -97,6 +105,7 @@ function routeIdFromLabel(value: string) {
 function providerPresetFor(model: ManagedModel | null): ProviderPreset {
   if (!model) return "minimax";
   const signature = `${model.provider} ${model.baseUrl ?? ""}`.toLowerCase();
+  if (model.apiFormat === "openai_videos" || signature.includes("172.20.109.229:18000")) return "minimax_h3";
   if (signature.includes("minimax")) return "minimax";
   if (signature.includes("anthropic")) return "anthropic";
   if (signature.includes("openai")) return "openai";
@@ -142,7 +151,7 @@ export function ModelManagement() {
     [filter, state.models],
   );
   const conversational = state.models.filter(
-    (model) => model.enabled && model.modelType !== "image_generation" && model.baseUrl && model.credentialConfigured,
+    (model) => model.enabled && ["chat", "vision"].includes(model.modelType) && model.baseUrl && model.credentialConfigured,
   );
 
   async function testConnection(model: ManagedModel) {
@@ -225,7 +234,7 @@ export function ModelManagement() {
 
       <div className={styles.toolbar}>
         <div className={styles.filters} aria-label="模型类型">
-          {(["all", "chat", "vision", "image_generation"] as const).map((type) => (
+          {(["all", "chat", "vision", "image_generation", "video_generation"] as const).map((type) => (
             <button key={type} type="button" className={filter === type ? styles.filterActive : ""} onClick={() => setFilter(type)}>
               {type === "all" ? `全部 ${state.models.length}` : `${TYPE_COPY[type].label} ${state.models.filter((item) => item.modelType === type).length}`}
             </button>
@@ -250,7 +259,7 @@ export function ModelManagement() {
                 <div className={styles.statusRow}>
                   <span data-ok>控制面配置</span>
                   <span data-ok={Boolean(model.baseUrl)}>端点{model.baseUrl ? "已配置" : "待配置"}</span>
-                  <span data-ok={model.credentialConfigured}>密钥{model.credentialConfigured ? "已保存" : "待配置"}</span>
+                  <span data-ok={model.credentialConfigured}>{model.authScheme === "none" ? "内网免鉴权" : `密钥${model.credentialConfigured ? "已保存" : "待配置"}`}</span>
                 </div>
               </div>
               <div className={styles.cardActions}>
@@ -264,7 +273,7 @@ export function ModelManagement() {
             </article>
           ))}
           <button type="button" className={styles.emptyCard} onClick={() => setEditing(null)}>
-            <span>+</span><strong>添加模型</strong><small>对话、视觉或图像生成</small>
+            <span>+</span><strong>添加模型</strong><small>对话、视觉、图像或视频生成</small>
           </button>
         </div>
       )}
@@ -319,8 +328,9 @@ function ModelDialog({
   const [providerPreset, setProviderPreset] = useState<ProviderPreset>(initialPreset);
   const [provider, setProvider] = useState(model?.provider ?? initialConnection?.provider ?? "MiniMax");
   const [baseUrl, setBaseUrl] = useState(model?.baseUrl ?? initialConnection?.baseUrl ?? "");
-  const [apiFormat, setApiFormat] = useState<Exclude<ApiFormat, "openai_images">>(
-    model?.apiFormat === "anthropic_compatible" ? "anthropic_compatible" : initialConnection?.apiFormat ?? "openai_compatible",
+  const [modelName, setModelName] = useState(model?.model ?? (initialPreset === "minimax_h3" ? "/model" : ""));
+  const [apiFormat, setApiFormat] = useState<ApiFormat>(
+    model?.apiFormat ?? initialConnection?.apiFormat ?? "openai_compatible",
   );
   const [authScheme, setAuthScheme] = useState<ManagedModel["authScheme"]>(model?.authScheme ?? initialConnection?.authScheme ?? "bearer");
   const [pending, setPending] = useState(false);
@@ -334,6 +344,13 @@ function ModelDialog({
     setBaseUrl(preset.baseUrl);
     setApiFormat(preset.apiFormat);
     setAuthScheme(preset.authScheme);
+    if (next === "minimax_h3") setModelName("/model");
+  }
+
+  function chooseType(next: ModelType) {
+    setType(next);
+    if (next === "video_generation") chooseProvider("minimax_h3");
+    else if (providerPreset === "minimax_h3") chooseProvider("minimax");
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -341,9 +358,9 @@ function ModelDialog({
     setPending(true);
     setError("");
     const form = new FormData(event.currentTarget);
-    const modelName = String(form.get("model") ?? "").trim();
-    const label = String(form.get("label") ?? "").trim() || modelName;
-    const routeId = model?.routeId ?? routeIdFromLabel(String(form.get("routeId") ?? "").trim() || modelName || label);
+    const normalizedModelName = modelName.trim();
+    const label = String(form.get("label") ?? "").trim() || (providerPreset === "minimax_h3" ? "MiniMax H3 视频" : normalizedModelName);
+    const routeId = model?.routeId ?? routeIdFromLabel(String(form.get("routeId") ?? "").trim() || (providerPreset === "minimax_h3" ? "minimax-h3-video" : normalizedModelName) || label);
     if (!routeId) {
       setError("路由 ID 需以英文字母开头，只能包含小写字母、数字和连字符。");
       setPending(false);
@@ -359,9 +376,9 @@ function ModelDialog({
           label,
           modelType: type,
           provider,
-          model: modelName,
+          model: normalizedModelName,
           baseUrl,
-          apiFormat: type === "image_generation" ? "openai_images" : apiFormat,
+          apiFormat: type === "image_generation" ? "openai_images" : type === "video_generation" ? "openai_videos" : apiFormat,
           authScheme,
           apiKey: apiKey || null,
           enabled: true,
@@ -385,9 +402,9 @@ function ModelDialog({
         <form onSubmit={save}>
           <fieldset className={styles.typePicker}>
             <legend>模型类型</legend>
-            {(["chat", "vision", "image_generation"] as const).map((item) => (
+            {(["chat", "vision", "image_generation", "video_generation"] as const).map((item) => (
               <label key={item} className={type === item ? styles.typeActive : ""}>
-                <input type="radio" name="modelType" value={item} checked={type === item} onChange={() => setType(item)} />
+                <input type="radio" name="modelType" value={item} checked={type === item} onChange={() => chooseType(item)} />
                 <span>{TYPE_COPY[item].mark}</span><strong>{TYPE_COPY[item].label}</strong>
               </label>
             ))}
@@ -397,9 +414,9 @@ function ModelDialog({
             <small>选择服务商后会自动填写接口地址和鉴权方式，通常只需确认模型名称并粘贴 API Key。</small>
           </div>
           <div className={styles.formGrid}>
-            <label>服务商<select value={providerPreset} onChange={(event) => chooseProvider(event.target.value as ProviderPreset)}><option value="minimax">MiniMax</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">自定义兼容接口</option></select></label>
-            <label>模型名称<input name="model" defaultValue={model?.model ?? ""} required placeholder="服务商使用的实际模型名" /></label>
-            <label className={styles.full}>API Key<SecretInput name="apiKey" autoComplete="new-password" required={!model?.credentialConfigured} placeholder={model?.credentialConfigured ? "已安全保存；留空则保持不变" : "输入 API Key"} revealLabel="API Key" /><small>保存后不会再次显示明文。</small></label>
+            <label>服务商<select value={providerPreset} onChange={(event) => chooseProvider(event.target.value as ProviderPreset)}><option value="minimax">MiniMax</option><option value="minimax_h3">MiniMax H3（229 内网）</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="custom">自定义兼容接口</option></select></label>
+            <label>模型名称<input name="model" value={modelName} onChange={(event) => setModelName(event.target.value)} required placeholder="服务商使用的实际模型名" /></label>
+            <label className={styles.full}>API Key<SecretInput name="apiKey" autoComplete="new-password" disabled={authScheme === "none"} required={authScheme !== "none" && !model?.credentialConfigured} placeholder={authScheme === "none" ? "该内网服务无需鉴权" : model?.credentialConfigured ? "已安全保存；留空则保持不变" : "输入 API Key"} revealLabel="API Key" /><small>{authScheme === "none" ? "不会保存或发送密钥。" : "保存后不会再次显示明文。"}</small></label>
           </div>
           <details className={styles.advanced} open={providerPreset === "custom" ? true : undefined}>
             <summary><span><strong>高级配置</strong><small>显示名称、路由 ID、接口地址与协议</small></span><span aria-hidden="true">⌄</span></summary>
@@ -408,10 +425,10 @@ function ModelDialog({
               <label>路由 ID（可选）<input name="routeId" defaultValue={model?.routeId ?? ""} disabled={Boolean(model)} placeholder="默认按模型名称生成" pattern="[a-z][a-z0-9-]*" /></label>
               <label>服务商标识<input value={provider} onChange={(event) => setProvider(event.target.value)} required placeholder="例如：MiniMax" /></label>
               <label>Base URL<input type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} required placeholder="https://api.example.com/v1" /></label>
-              {type !== "image_generation" && (
-                <label>接口格式<select value={apiFormat} onChange={(event) => setApiFormat(event.target.value as Exclude<ApiFormat, "openai_images">)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic_compatible">Anthropic 兼容</option></select></label>
-              )}
-              <label>鉴权方式<select value={authScheme} onChange={(event) => setAuthScheme(event.target.value as ManagedModel["authScheme"])}><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option></select></label>
+              {type === "chat" || type === "vision" ? (
+                <label>接口格式<select value={apiFormat} onChange={(event) => setApiFormat(event.target.value as ApiFormat)}><option value="openai_compatible">OpenAI 兼容</option><option value="anthropic_compatible">Anthropic 兼容</option></select></label>
+              ) : null}
+              <label>鉴权方式<select value={authScheme} onChange={(event) => setAuthScheme(event.target.value as ManagedModel["authScheme"])}><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option>{type === "video_generation" && <option value="none">无需鉴权（仅限受控内网）</option>}</select></label>
             </div>
           </details>
           {error && <p className={`${styles.message} ${styles.error}`} role="alert">{error}</p>}

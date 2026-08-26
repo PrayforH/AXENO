@@ -73,6 +73,7 @@ from harness.studio.model_configuration import (
     ConfigureModelRequest,
     GenerateImageRequest,
     GenerateImageResult,
+    GenerateVideoRequest,
     ModelConfigurationList,
     ModelConfigurationService,
     ModelConnectionTestResult,
@@ -793,9 +794,7 @@ async def get_catalog(
 @router.get("/models", response_model=ModelConfigurationList)
 async def list_model_configurations(
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     """List administrator-only connection metadata; credentials are status-only."""
 
@@ -807,9 +806,7 @@ async def configure_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: ConfigureModelRequest,
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     return await service.configure(actor.tenant_id, actor.user_id, route_id, body)
 
@@ -819,41 +816,27 @@ async def disable_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
-    return await service.disable(
-        actor.tenant_id, actor.user_id, route_id, expected_revision
-    )
+    return await service.disable(actor.tenant_id, actor.user_id, route_id, expected_revision)
 
 
-@router.delete(
-    "/models/{route_id}/permanent", response_model=ModelConfigurationList
-)
+@router.delete("/models/{route_id}/permanent", response_model=ModelConfigurationList)
 async def delete_model(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
-    return await service.delete(
-        actor.tenant_id, actor.user_id, route_id, expected_revision
-    )
+    return await service.delete(actor.tenant_id, actor.user_id, route_id, expected_revision)
 
 
-@router.put(
-    "/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList
-)
+@router.put("/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList)
 async def bind_agent_model(
     agent_name: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: BindAgentModelRequest,
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConfigurationList:
     return await service.bind_agent(actor.tenant_id, actor.user_id, agent_name, body)
 
@@ -862,9 +845,7 @@ async def bind_agent_model(
 async def test_model_connection(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> ModelConnectionTestResult:
     return await service.test(actor.tenant_id, route_id)
 
@@ -874,12 +855,31 @@ async def generate_image(
     route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
     body: GenerateImageRequest,
     identity: Annotated[Identity, Depends(require_identity)],
-    service: Annotated[
-        ModelConfigurationService, Depends(get_model_configuration_service)
-    ],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
 ) -> GenerateImageResult:
     ensure_permission(identity, "tasks:write")
     return await service.generate_image(identity.tenant_id, route_id, body)
+
+
+@router.post("/models/{route_id}/videos")
+async def generate_video(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: GenerateVideoRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> Response:
+    ensure_permission(identity, "tasks:write")
+    result = await service.generate_video(identity.tenant_id, route_id, body)
+    headers = {
+        "Content-Disposition": f'inline; filename="{route_id}.mp4"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if result.request_id:
+        headers["X-Request-Id"] = result.request_id
+    if result.inference_time_seconds:
+        headers["X-Inference-Time-S"] = result.inference_time_seconds
+    return Response(content=result.content, media_type=result.media_type, headers=headers)
 
 
 @router.post("/mcp/discover", response_model=McpDiscoveryResult)
@@ -1032,9 +1032,7 @@ async def upsert_catalog_resource(
             resource_id,
         )
     ):
-        raise ConflictError(
-            "Authenticated MCP registration requires the current user's credential"
-        )
+        raise ConflictError("Authenticated MCP registration requires the current user's credential")
     return await service.upsert(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,
@@ -1079,9 +1077,7 @@ async def list_drafts(
 ) -> list[AgentDraftSummary]:
     if space_id is not None:
         try:
-            return await service.list_workspace_drafts(
-                actor.tenant_id, actor.user_id, space_id
-            )
+            return await service.list_workspace_drafts(actor.tenant_id, actor.user_id, space_id)
         except (ConflictError, NotFoundError, PermissionDeniedError) as error:
             raise _translate_domain_error(error) from error
     return await service.list(actor.tenant_id, actor.user_id)
@@ -1385,9 +1381,7 @@ async def import_draft_bundle(
             user_id=actor.user_id,
             content=bytes(content),
         )
-        return imported.model_copy(
-            update={"draft": compact_draft_for_editor(imported.draft)}
-        )
+        return imported.model_copy(update={"draft": compact_draft_for_editor(imported.draft)})
     except (AgentBundleValidationError, AgentBundleImportError) as error:
         raise HTTPException(
             status_code=422,

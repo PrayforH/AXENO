@@ -91,9 +91,7 @@ async def list_agents(
                 version,
                 can_edit=True,
                 agent_id=(
-                    workspace_agent.agent_id
-                    if workspace_agent is not None
-                    else version.agent_id
+                    workspace_agent.agent_id if workspace_agent is not None else version.agent_id
                 ),
                 current_version=(
                     workspace_agent.current_version
@@ -124,15 +122,13 @@ async def list_agents(
             )
         )
     items: list[AgentCatalogItem] = [*personal, *shared]
-    catalog = await container.capability_catalogs.get_for_user(
-        identity.tenant_id, identity.user_id
-    )
+    catalog = await container.capability_catalogs.get_for_user(identity.tenant_id, identity.user_id)
     routes = {route.route_id: route for route in catalog.catalog.model_routes}
     bindings = catalog.catalog.agent_model_bindings
     projected: list[AgentCatalogItem] = []
     for item in items:
         route = routes.get(bindings.get(item.name, ""))
-        if route is None or not route.enabled or route.model_type == "image_generation":
+        if route is None or not route.enabled or route.model_type not in {"chat", "vision"}:
             projected.append(item)
             continue
         projected.append(

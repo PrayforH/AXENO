@@ -18,6 +18,7 @@ from harness.studio.model_configuration import (
     BindAgentModelRequest,
     ConfigureModelRequest,
     GenerateImageRequest,
+    GenerateVideoRequest,
     ModelConfigurationService,
 )
 from harness.studio.repositories import InMemoryAgentDraftRepository
@@ -73,23 +74,17 @@ def request(**updates: object) -> ConfigureModelRequest:
 async def test_configure_encrypts_key_and_redacts_runtime_catalog() -> None:
     models, catalogs, credentials = service()
 
-    configured = await models.configure(
-        "tenant-a", "admin-a", "vision-primary", request()
-    )
+    configured = await models.configure("tenant-a", "admin-a", "vision-primary", request())
 
     view = next(item for item in configured.models if item.route_id == "vision-primary")
     assert view.credential_configured is True
     assert "secret-value-never-returned" not in view.model_dump_json()
-    stored = await credentials.get(
-        "tenant-a", "tenant:model-control-plane", "vision-primary"
-    )
+    stored = await credentials.get("tenant-a", "tenant:model-control-plane", "vision-primary")
     assert stored is not None
     assert "secret-value-never-returned" not in stored.ciphertext
     runtime_catalog = await catalogs.get_for_user("tenant-a", "member-a")
     route = next(
-        item
-        for item in runtime_catalog.catalog.model_routes
-        if item.route_id == "vision-primary"
+        item for item in runtime_catalog.catalog.model_routes if item.route_id == "vision-primary"
     )
     assert route.base_url is None
     assert route.model_type == "vision"
@@ -98,9 +93,7 @@ async def test_configure_encrypts_key_and_redacts_runtime_catalog() -> None:
 @pytest.mark.asyncio
 async def test_agent_binding_changes_runtime_route_without_manifest_edit() -> None:
     models, _catalogs, _credentials = service()
-    configured = await models.configure(
-        "tenant-a", "admin-a", "vision-primary", request()
-    )
+    configured = await models.configure("tenant-a", "admin-a", "vision-primary", request())
     bound = await models.bind_agent(
         "tenant-a",
         "admin-a",
@@ -111,9 +104,7 @@ async def test_agent_binding_changes_runtime_route_without_manifest_edit() -> No
         ),
     )
 
-    resolved = await models.resolve_runtime(
-        "tenant-a", "helper-agent", "manifest-route"
-    )
+    resolved = await models.resolve_runtime("tenant-a", "helper-agent", "manifest-route")
 
     assert bound.agent_model_bindings == {"helper-agent": "vision-primary"}
     assert resolved is not None
@@ -162,29 +153,108 @@ async def test_image_generation_uses_dedicated_endpoint_and_never_chat_route() -
 
 
 @pytest.mark.asyncio
+async def test_video_generation_supports_private_unauthenticated_sync_endpoint() -> None:
+    captured: list[httpx.Request] = []
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"video-bytes"
+
+    def handler(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        if incoming.method == "GET":
+            return httpx.Response(200, json={"object": "list", "data": []})
+        return httpx.Response(
+            200,
+            content=mp4,
+            headers={
+                "content-type": "video/mp4",
+                "x-request-id": "video-request-1",
+                "x-inference-time-s": "128.4",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models, _catalogs, credentials = service(environment="production", client=client)
+        configured = await models.configure(
+            "tenant-a",
+            "admin-a",
+            "minimax-h3-video",
+            request(
+                label="MiniMax H3 视频",
+                modelType="video_generation",
+                model="/model",
+                baseUrl="http://172.20.109.229:18000/v1",
+                apiFormat="openai_videos",
+                authScheme="none",
+                apiKey=None,
+            ),
+        )
+        connection = await models.test("tenant-a", "minimax-h3-video")
+        result = await models.generate_video(
+            "tenant-a",
+            "minimax-h3-video",
+            GenerateVideoRequest(
+                prompt="一只猫在草地上奔跑",
+                aspectRatio="16:9",
+                seconds=5,
+                seed=7,
+            ),
+        )
+
+    video = next(item for item in configured.models if item.route_id == "minimax-h3-video")
+    assert video.capabilities == ("video_generation",)
+    assert video.credential_configured is True
+    assert (
+        await credentials.get("tenant-a", "tenant:model-control-plane", "minimax-h3-video") is None
+    )
+    assert connection.ok is True
+    assert captured[0].method == "GET"
+    assert captured[0].url == "http://172.20.109.229:18000/v1/models"
+    assert "authorization" not in captured[0].headers
+    assert captured[1].url == "http://172.20.109.229:18000/v1/videos/sync"
+    assert b'name="prompt"' in captured[1].content
+    assert b'name="aspect_ratio"' in captured[1].content
+    assert b'name="seconds"' in captured[1].content
+    assert b'name="seed"' in captured[1].content
+    assert result.content == mp4
+    assert result.request_id == "video-request-1"
+    assert result.inference_time_seconds == "128.4"
+    assert await models.resolve_runtime("tenant-a", "helper-agent", "minimax-h3-video") is None
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_video_route_rejects_api_key_storage() -> None:
+    models, _catalogs, _credentials = service(environment="production")
+
+    with pytest.raises(ConflictError, match="cannot be stored"):
+        await models.configure(
+            "tenant-a",
+            "admin-a",
+            "minimax-h3-video",
+            request(
+                modelType="video_generation",
+                model="/model",
+                baseUrl="http://172.20.109.229:18000/v1",
+                apiFormat="openai_videos",
+                authScheme="none",
+            ),
+        )
+
+
+@pytest.mark.asyncio
 async def test_delete_permanently_removes_workspace_model_and_credential() -> None:
     models, _catalogs, credentials = service()
-    configured = await models.configure(
-        "tenant-a", "admin-a", "minimax-h3", request()
-    )
+    configured = await models.configure("tenant-a", "admin-a", "minimax-h3", request())
 
-    deleted = await models.delete(
-        "tenant-a", "admin-a", "minimax-h3", configured.revision
-    )
+    deleted = await models.delete("tenant-a", "admin-a", "minimax-h3", configured.revision)
 
     assert "minimax-h3" not in {item.route_id for item in deleted.models}
-    assert await credentials.get(
-        "tenant-a", "tenant:model-control-plane", "minimax-h3"
-    ) is None
+    assert await credentials.get("tenant-a", "tenant:model-control-plane", "minimax-h3") is None
 
 
 @pytest.mark.asyncio
 async def test_delete_of_platform_model_route_persists() -> None:
     models, _catalogs, _credentials = service()
 
-    deleted = await models.delete(
-        "tenant-a", "admin-a", "deepseek-v4-flash", 1
-    )
+    deleted = await models.delete("tenant-a", "admin-a", "deepseek-v4-flash", 1)
     repeated = await models.list("tenant-a")
 
     assert "deepseek-v4-flash" not in {item.route_id for item in deleted.models}
@@ -194,9 +264,7 @@ async def test_delete_of_platform_model_route_persists() -> None:
 @pytest.mark.asyncio
 async def test_delete_rejects_model_still_bound_to_an_agent() -> None:
     models, _catalogs, _credentials = service()
-    configured = await models.configure(
-        "tenant-a", "admin-a", "minimax-h3", request()
-    )
+    configured = await models.configure("tenant-a", "admin-a", "minimax-h3", request())
     bound = await models.bind_agent(
         "tenant-a",
         "admin-a",
@@ -208,9 +276,7 @@ async def test_delete_rejects_model_still_bound_to_an_agent() -> None:
     )
 
     with pytest.raises(ConflictError, match="agent:helper-agent"):
-        await models.delete(
-            "tenant-a", "admin-a", "minimax-h3", bound.revision
-        )
+        await models.delete("tenant-a", "admin-a", "minimax-h3", bound.revision)
 
 
 @pytest.mark.asyncio
@@ -223,9 +289,10 @@ async def test_production_allows_private_models_but_rejects_unsafe_endpoints() -
         "private-model",
         request(baseUrl="http://172.20.109.112:31300/v1"),
     )
-    assert next(
-        item for item in configured.models if item.route_id == "private-model"
-    ).base_url == "http://172.20.109.112:31300/v1"
+    assert (
+        next(item for item in configured.models if item.route_id == "private-model").base_url
+        == "http://172.20.109.112:31300/v1"
+    )
 
     with pytest.raises(ConflictError, match="require HTTPS"):
         await models.configure(
@@ -281,9 +348,7 @@ async def test_server_route_is_imported_testable_and_does_not_expose_secret() ->
     assert view.credential_configured is True
     assert view.deletable is True
     assert "server-only-secret" not in listed.model_dump_json()
-    stored = await credentials.get(
-        "tenant-a", "tenant:model-control-plane", "minimax-m3"
-    )
+    stored = await credentials.get("tenant-a", "tenant:model-control-plane", "minimax-m3")
     assert stored is not None
     assert result.ok is True
     assert captured[0].url == "https://api.minimaxi.com/anthropic/v1/messages"
@@ -301,9 +366,7 @@ async def test_trusted_server_route_may_use_private_http_but_workspace_override_
         credential=SecretStr("server-only-secret"),
         auth_scheme="bearer",
     )
-    models, _catalogs, _credentials = service(
-        environment="production", server_routes=(route,)
-    )
+    models, _catalogs, _credentials = service(environment="production", server_routes=(route,))
 
     resolved = await models.resolve_runtime("tenant-a", "helper-agent", "glm-5-2")
 
@@ -333,9 +396,7 @@ async def test_imported_server_model_runs_without_server_fallback_after_import()
     )
 
     listed = await database_only.list("tenant-a")
-    resolved = await database_only.resolve_runtime(
-        "tenant-a", "helper-agent", "minimax-m3"
-    )
+    resolved = await database_only.resolve_runtime("tenant-a", "helper-agent", "minimax-m3")
 
     view = next(item for item in listed.models if item.route_id == "minimax-m3")
     assert listed == imported
