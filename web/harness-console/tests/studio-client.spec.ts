@@ -210,40 +210,6 @@ describe("Studio typed API mapping", () => {
     expect(imported.skill.name).toBe("ppt-master");
   });
 
-  it("installs an online Skill into the current draft with revision CAS", async () => {
-    let captured: { url: string; body: unknown } | null = null;
-    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
-      captured = {
-        url: String(input),
-        body: init?.body ? JSON.parse(String(init.body)) : null,
-      };
-      return Response.json({
-        draft: { draftId: "draft-1", revision: 4, spec: {} },
-        skillName: "office-docs",
-        sourceContentHash: "a".repeat(64),
-        riskLevel: "low",
-        findings: [],
-        warnings: [],
-        fileCount: 0,
-        binaryFileCount: 0,
-      });
-    });
-
-    await studioClient.installOnlineSkill(
-      "draft-1",
-      3,
-      "https://github.com/openai/skills/tree/main/skills/office",
-    );
-
-    expect(captured).toEqual({
-      url: "/api/studio/drafts/draft-1/skills/install-online",
-      body: {
-        expectedRevision: 3,
-        sourceUrl: "https://github.com/openai/skills/tree/main/skills/office",
-      },
-    });
-  });
-
   it("reads usage and replaces quota policy with revision CAS", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {

@@ -96,7 +96,6 @@ from harness.studio.models import (
     ImportedAgentBundle,
     ImportedSkill,
     InstalledSkill,
-    InstallOnlineSkillRequest,
     McpCapability,
     McpDiscoveryRequest,
     McpDiscoveryResult,
@@ -106,7 +105,6 @@ from harness.studio.models import (
     ReplaceCapabilityCatalogRequest,
     UpsertCatalogResourceRequest,
 )
-from harness.studio.online_skill import OnlineSkillError, fetch_online_skill
 from harness.studio.preflight_models import PreflightEvent
 from harness.studio.preview_controller import PreviewController
 from harness.studio.preview_models import CreatePreviewRequest, PreviewDeployment
@@ -1182,43 +1180,6 @@ async def install_skill_file(
         raise HTTPException(
             status_code=422,
             detail={"code": "skill_import_invalid", "message": str(error)},
-        ) from error
-    except (ConflictError, NotFoundError) as error:
-        raise _translate_domain_error(error) from error
-    return _installed_skill_response(draft, imported)
-
-
-@router.post("/drafts/{draft_id}/skills/install-online", response_model=InstalledSkill)
-async def install_online_skill(
-    draft_id: str,
-    body: InstallOnlineSkillRequest,
-    actor: Annotated[StudioActor, Depends(require_studio_writer)],
-    service: Annotated[AgentStudioService, Depends(get_studio_service)],
-) -> InstalledSkill:
-    """Install a public GitHub Skill as a reviewed, immutable draft snapshot."""
-
-    try:
-        downloaded = await fetch_online_skill(body.source_url)
-        imported = import_skill(downloaded.content, filename=downloaded.filename)
-        imported = imported.model_copy(
-            update={
-                "warnings": (
-                    *imported.warnings,
-                    f"在线来源已下载并快照化：{body.source_url}",
-                )
-            }
-        )
-        draft = await service.install_skill(
-            tenant_id=actor.tenant_id,
-            user_id=actor.user_id,
-            draft_id=draft_id,
-            expected_revision=body.expected_revision,
-            imported=imported,
-        )
-    except (OnlineSkillError, SkillImportError) as error:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "online_skill_invalid", "message": str(error)},
         ) from error
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error

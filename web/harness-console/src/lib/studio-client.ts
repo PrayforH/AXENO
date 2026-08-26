@@ -1677,27 +1677,6 @@ export const studioClient = {
     rememberStudioDraft(installed.draft);
     return installed;
   },
-  async installOnlineSkill(
-    draftId: string,
-    expectedRevision: number,
-    sourceUrl: string,
-  ): Promise<StudioInstalledSkill> {
-    const response = requireAuthenticatedResponse(
-      await fetch(
-        `/api/studio/drafts/${encodeURIComponent(draftId)}/skills/install-online`,
-        {
-          method: "POST",
-          cache: "no-store",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ expectedRevision, sourceUrl }),
-        },
-      ),
-    );
-    if (!response.ok) throw await errorFrom(response);
-    const installed = await response.json() as StudioInstalledSkill;
-    rememberStudioDraft(installed.draft);
-    return installed;
-  },
   replaceDraft: (draft: StudioDraft) =>
     request<ApiAgentDraft>(`drafts/${encodeURIComponent(draft.id)}`, {
       method: "PUT",

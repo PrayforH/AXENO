@@ -29,7 +29,6 @@ from harness.studio.mcp_discovery import (
     DiscoveredServer,
     McpDiscoveryService,
 )
-from harness.studio.online_skill import OnlineSkillPayload
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -700,58 +699,6 @@ async def test_studio_imports_a_skill_archive_without_executing_its_scripts() ->
     assert response.json()["skill"]["name"] == "ppt-master"
     assert response.json()["riskLevel"] == "review"
     assert response.json()["findings"] == ["包含可执行脚本：scripts/render.py"]
-
-
-@pytest.mark.asyncio
-async def test_studio_installs_online_skill_as_draft_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    headers = {
-        "Authorization": f"Bearer {SERVICE_TOKEN}",
-        "X-Tenant-ID": "tenant-online-skill",
-        "X-User-ID": "builder-a",
-    }
-    source_url = "https://github.com/openai/skills/blob/main/skills/office/SKILL.md"
-    markdown = (
-        b"---\nname: office-docs\ndescription: Build Office documents.\n---\n"
-        b"Create and verify the requested Office deliverable.\n"
-    )
-
-    async def fake_fetch(value: str) -> OnlineSkillPayload:
-        assert value == source_url
-        return OnlineSkillPayload(
-            content=markdown,
-            filename="SKILL.md",
-            source_url=(
-                "https://raw.githubusercontent.com/openai/skills/main/"
-                "skills/office/SKILL.md"
-            ),
-        )
-
-    monkeypatch.setattr("harness.studio.api.fetch_online_skill", fake_fetch)
-    async with AsyncClient(
-        transport=ASGITransport(app=app()),
-        base_url="http://test",
-    ) as client:
-        created = await client.post(
-            "/v1/studio/drafts",
-            headers=headers,
-            json=draft_request("online-skill-agent"),
-        )
-        installed = await client.post(
-            f"/v1/studio/drafts/{created.json()['draftId']}/skills/install-online",
-            headers=headers,
-            json={"expectedRevision": 1, "sourceUrl": source_url},
-        )
-
-    assert installed.status_code == 200, installed.text
-    payload = installed.json()
-    assert payload["skillName"] == "office-docs"
-    assert payload["draft"]["revision"] == 2
-    assert "office-docs" in {
-        skill["name"] for skill in payload["draft"]["spec"]["skills"]
-    }
-    assert payload["warnings"] == [f"在线来源已下载并快照化：{source_url}"]
 
 
 @pytest.mark.asyncio

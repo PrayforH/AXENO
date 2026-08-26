@@ -2777,68 +2777,6 @@
   cursor: not-allowed;
 }
 
-.onlineSkillInstall {
-  display: grid;
-  grid-template-columns: auto minmax(240px, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--studio-line);
-  border-radius: 10px;
-  background: var(--panel-subtle);
-}
-
-.onlineSkillInstall label {
-  color: var(--studio-muted);
-  font: 700 11px/1 var(--codex-font-ui, sans-serif);
-  white-space: nowrap;
-}
-
-.onlineSkillInstall input {
-  min-width: 0;
-  min-height: 34px;
-  padding: 0 11px;
-  border: 1px solid var(--studio-line);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--studio-panel);
-  font: 500 12px/1.35 ui-monospace, monospace;
-  outline: none;
-}
-
-.onlineSkillInstall input:focus {
-  border-color: var(--studio-violet, #ad7bf9);
-  box-shadow: 0 0 0 3px var(--studio-violet-soft, rgb(173 123 249 / 14%));
-}
-
-.onlineSkillInstall button {
-  min-height: 34px;
-  padding: 0 13px;
-  border: 1px solid var(--studio-violet, #ad7bf9);
-  border-radius: 8px;
-  color: var(--ink);
-  background: transparent;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.onlineSkillInstall button:hover:not(:disabled) {
-  background: var(--studio-violet-soft, rgb(173 123 249 / 14%));
-}
-
-.onlineSkillInstall input:disabled,
-.onlineSkillInstall button:disabled {
-  opacity: .5;
-  cursor: not-allowed;
-}
-
-@media (max-width: 760px) {
-  .onlineSkillInstall {
-    grid-template-columns: 1fr;
-  }
-}
-
 .skillEmpty {
   min-height: 112px;
   margin-top: 18px;
