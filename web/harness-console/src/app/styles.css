@@ -4029,6 +4029,97 @@ textarea:not(.aui-composer-input):focus-visible,
   background: #f7f9f7;
 }
 
+.video-mode-control {
+  margin: -2px -2px 10px;
+  padding: 2px 2px 10px;
+  border-bottom: 1px solid #e1e4e0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.video-mode-control > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.video-mode-control > span strong {
+  color: #303831;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.video-mode-control > span small,
+.video-mode-control button small {
+  color: #7b837c;
+  font-size: 10px;
+}
+
+.video-mode-control fieldset {
+  margin: 0;
+  padding: 3px;
+  border: 1px solid #d7dcd7;
+  border-radius: 10px;
+  display: flex;
+  gap: 3px;
+  background: #edf0ed;
+}
+
+.video-mode-legend {
+  width: 1px;
+  height: 1px;
+  position: absolute;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.video-mode-control button {
+  min-width: 92px;
+  min-height: 38px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  display: grid;
+  gap: 1px;
+  color: #525b54;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.video-mode-control button:hover:not(:disabled) {
+  background: rgb(255 255 255 / 68%);
+}
+
+.video-mode-control button[aria-pressed="true"] {
+  border-color: #b4cdbb;
+  color: #205f39;
+  background: #fff;
+  box-shadow: 0 3px 8px rgb(42 72 51 / 8%);
+}
+
+.video-mode-control button[aria-pressed="true"] small {
+  color: #43815a;
+}
+
+.video-mode-control button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.video-mode-control button:focus-visible {
+  outline: 2px solid #2db56a;
+  outline-offset: 2px;
+}
+
 .composer-video-settings-primary {
   display: flex;
   align-items: center;
@@ -4182,6 +4273,18 @@ textarea:not(.aui-composer-input):focus-visible,
 .composer-video-duration-note {
   margin: 7px 0 0;
   color: #8a6727;
+  font-size: 11px;
+}
+
+.composer-video-mode-note {
+  margin: 7px 2px 0;
+  color: #4f755d;
+  font-size: 11px;
+}
+
+.composer-video-mode-warning {
+  margin: 7px 2px 0;
+  color: #9a493f;
   font-size: 11px;
 }
 
@@ -4448,6 +4551,16 @@ textarea:not(.aui-composer-input):focus-visible,
 }
 
 @media (max-width: 680px) {
+  .video-mode-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .video-mode-control fieldset,
+  .video-mode-control button {
+    width: 100%;
+  }
+
   .composer-video-settings-primary {
     gap: 10px;
   }

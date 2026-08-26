@@ -8,6 +8,7 @@ included in API responses, logs, manifests, or task input.
 from __future__ import annotations
 
 import ipaddress
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -115,13 +116,14 @@ class GenerateImageResult(StudioModel):
 
 class GenerateVideoRequest(StudioModel):
     prompt: str = Field(min_length=1, max_length=8_000)
+    mode: Literal["auto", "ref2va"] = "auto"
     aspect_ratio: Literal["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"] = Field(
         default="16:9", alias="aspectRatio"
     )
     seconds: int = Field(default=5, ge=4, le=15)
     seed: int | None = Field(default=None, ge=0)
     negative_prompt: str | None = Field(default=None, alias="negativePrompt", max_length=4_000)
-    input_artifact_ids: tuple[str, ...] = Field(default=(), alias="inputArtifactIds", max_length=2)
+    input_artifact_ids: tuple[str, ...] = Field(default=(), alias="inputArtifactIds", max_length=9)
 
     @model_validator(mode="after")
     def validate_input_artifacts(self) -> GenerateVideoRequest:
@@ -132,6 +134,10 @@ class GenerateVideoRequest(StudioModel):
             for item in self.input_artifact_ids
         ):
             raise ValueError("invalid input artifact ID")
+        if self.mode == "ref2va" and not self.input_artifact_ids:
+            raise ValueError("Ref2VA requires at least one reference image")
+        if self.mode == "auto" and len(self.input_artifact_ids) > 2:
+            raise ValueError("automatic video mode accepts at most two reference images")
         return self
 
 
@@ -708,6 +714,8 @@ class ModelConfigurationService:
             form["seed"] = str(request.seed)
         if request.negative_prompt:
             form["negative_prompt"] = request.negative_prompt
+        if request.mode == "ref2va":
+            form["extra_params"] = json.dumps({"task": "ref2va"}, separators=(",", ":"))
         reference_files = tuple(
             (
                 "input_reference" if len(references) == 1 else "input_references",

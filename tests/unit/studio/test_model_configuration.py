@@ -221,6 +221,7 @@ async def test_video_generation_supports_private_unauthenticated_async_lifecycle
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="一只猫在草地上奔跑",
+                mode="ref2va",
                 aspectRatio="16:9",
                 seconds=5,
                 seed=7,
@@ -262,6 +263,8 @@ async def test_video_generation_supports_private_unauthenticated_async_lifecycle
     assert b'name="seconds"' in captured[1].content
     assert b'name="seed"' in captured[1].content
     assert b'name="negative_prompt"' in captured[1].content
+    assert b'name="extra_params"' in captured[1].content
+    assert b'{"task":"ref2va"}' in captured[1].content
     assert "画面抖动、文字水印".encode() in captured[1].content
     assert captured[1].content.count(b'name="input_references"') == 2
     assert b'filename="first.png"' in captured[1].content
@@ -313,6 +316,7 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
             "minimax-h3-video",
             GenerateVideoRequest(
                 prompt="让图片动起来",
+                mode="ref2va",
                 inputArtifactIds=("input_artifact_a",),
             ),
             references=(
@@ -326,6 +330,29 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
 
     assert b'name="input_reference"' in captured[0].content
     assert b'name="input_references"' not in captured[0].content
+    assert b'{"task":"ref2va"}' in captured[0].content
+
+
+def test_ref2va_requires_an_image_and_auto_mode_keeps_two_image_limit() -> None:
+    with pytest.raises(ValueError, match="Ref2VA requires at least one reference image"):
+        GenerateVideoRequest(prompt="缺少参考图", mode="ref2va")
+
+    with pytest.raises(ValueError, match="at most two reference images"):
+        GenerateVideoRequest(
+            prompt="自动模式图片过多",
+            inputArtifactIds=(
+                "input_artifact_a",
+                "input_artifact_b",
+                "input_artifact_c",
+            ),
+        )
+
+    request = GenerateVideoRequest(
+        prompt="九张参考图",
+        mode="ref2va",
+        inputArtifactIds=tuple(f"input_artifact_{index}" for index in range(9)),
+    )
+    assert len(request.input_artifact_ids) == 9
 
 
 @pytest.mark.asyncio

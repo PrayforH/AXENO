@@ -282,8 +282,17 @@ function HarnessComposer() {
       setVideoValidationError("H3 参考素材只支持图片，请移除文档或其他文件。");
       return;
     }
-    if (composerAttachments.length > 2) {
-      setVideoValidationError("H3 最多使用两张参考图片，分别作为首帧和尾帧。");
+    if (videoGeneration.settings.mode === "ref2va" && composerAttachments.length === 0) {
+      setVideoValidationError("Ref2VA 至少需要添加一张参考图片。");
+      return;
+    }
+    const maximumReferences = videoGeneration.settings.mode === "ref2va" ? 9 : 2;
+    if (composerAttachments.length > maximumReferences) {
+      setVideoValidationError(
+        videoGeneration.settings.mode === "ref2va"
+          ? "Ref2VA 最多使用九张参考图片。"
+          : "自动模式最多使用两张参考图片。",
+      );
       return;
     }
     const maybeArtifactIds = composerAttachments.map(inputArtifactIdFromAttachment);

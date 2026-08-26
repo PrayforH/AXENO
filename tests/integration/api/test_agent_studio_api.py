@@ -2191,6 +2191,7 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
                 headers=owner_headers,
                 json={
                     "prompt": "组合两张参考图",
+                    "mode": "ref2va",
                     "seconds": 11,
                     "negativePrompt": "画面抖动、文字水印",
                     "inputArtifactIds": artifact_ids,
@@ -2227,6 +2228,7 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
     assert captured[0].content.count(b'name="input_references"') == 2
     assert b"\r\n11\r\n" in captured[0].content
     assert b'name="negative_prompt"' in captured[0].content
+    assert b'{"task":"ref2va"}' in captured[0].content
     assert image_bytes() in captured[0].content
     assert image_bytes(format="JPEG") in captured[0].content
     assert captured[1].url.path == "/v1/videos/provider-video-1"

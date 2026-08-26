@@ -23,6 +23,7 @@ export type VideoAspectRatio = "21:9" | "16:9" | "4:3" | "1:1" | "3:4" | "9:16";
 export type VideoDuration = number;
 
 export interface VideoGenerationSettings {
+  mode: "auto" | "ref2va";
   seconds: VideoDuration;
   aspectRatio: VideoAspectRatio;
   seed: string;
@@ -68,6 +69,7 @@ interface VideoGenerationController {
 }
 
 const DEFAULT_SETTINGS: VideoGenerationSettings = {
+  mode: "auto",
   seconds: 5,
   aspectRatio: "16:9",
   seed: "",
@@ -154,6 +156,7 @@ export function VideoGenerationProvider({ children }: { children: ReactNode }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               prompt: request.prompt,
+              mode: request.settings.mode,
               aspectRatio: request.settings.aspectRatio,
               seconds: request.settings.seconds,
               inputArtifactIds: request.inputArtifactIds,
@@ -380,12 +383,48 @@ export function VideoGenerationControls({
 }) {
   const { settings, setSettings } = useVideoGeneration();
   const followsReference = referenceCount > 0;
+  const resolvedMode = settings.mode === "ref2va"
+    ? "Ref2VA"
+    : referenceCount > 0
+      ? "FL2VA"
+      : "T2VA";
   return (
     <section className="composer-video-settings" aria-label="视频生成设置">
+      <div className="video-mode-control">
+        <span>
+          <strong>生成模式</strong>
+          <small>
+            {settings.mode === "ref2va"
+              ? "参考图片控制人物、场景或风格"
+              : "根据当前素材自动选择文本或图片驱动"}
+          </small>
+        </span>
+        <fieldset disabled={disabled}>
+          <legend className="video-mode-legend">选择视频生成模式</legend>
+          <button
+            type="button"
+            aria-pressed={settings.mode === "auto"}
+            onClick={() => setSettings({ ...settings, mode: "auto" })}
+          >
+            自动
+            <small>{referenceCount ? "FL2VA" : "T2VA"}</small>
+          </button>
+          <button
+            type="button"
+            aria-pressed={settings.mode === "ref2va"}
+            onClick={() => setSettings({ ...settings, mode: "ref2va" })}
+          >
+            Ref2VA
+            <small>1–9 张参考图</small>
+          </button>
+        </fieldset>
+      </div>
       <div className="composer-video-settings-primary">
         <span className="composer-video-model">
           <strong>{label}</strong>
-          <small>{referenceCount ? `${referenceCount} 张参考图` : "文本生成视频"}</small>
+          <small>
+            {resolvedMode} · {referenceCount ? `${referenceCount} 张参考图` : "文本生成视频"}
+          </small>
         </span>
         <fieldset className="video-duration-control" disabled={disabled}>
           <legend>时长</legend>
@@ -420,6 +459,16 @@ export function VideoGenerationControls({
           )}
         </label>
       </div>
+      {settings.mode === "ref2va" ? (
+        <p
+          className={referenceCount ? "composer-video-mode-note" : "composer-video-mode-warning"}
+          role="status"
+        >
+          {referenceCount
+            ? `将使用 ${referenceCount} 张图片作为 Ref2VA 参考素材。`
+            : "Ref2VA 至少需要添加 1 张参考图片。"}
+        </p>
+      ) : null}
       {settings.seconds > 5 ? (
         <p className="composer-video-duration-note" role="status">
           10–15 秒视频生成耗时较长，提交后可查看实时状态或取消任务。
@@ -483,13 +532,18 @@ export function VideoGenerationMessagePart({
   const entry = data.generationId ? entries[data.generationId] : undefined;
   if (!entry) return null;
   const ratio = entry.inputArtifactIds.length ? "跟随首图" : entry.settings.aspectRatio;
+  const mode = entry.settings.mode === "ref2va"
+    ? "Ref2VA"
+    : entry.inputArtifactIds.length
+      ? "FL2VA"
+      : "T2VA";
   return (
     <article className="video-answer-card" data-status={entry.status}>
       <header>
         <span>
           <strong>{entry.routeLabel}</strong>
           <small>
-            {entry.settings.seconds} 秒 · {ratio} · MP4
+            {mode} · {entry.settings.seconds} 秒 · {ratio} · MP4
             {entry.inputArtifactIds.length
               ? ` · ${entry.inputArtifactIds.length} 张参考图`
               : ""}
