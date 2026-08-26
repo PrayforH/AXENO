@@ -116,6 +116,56 @@ async def test_run_checkpoint_projects_final_answer_and_durable_object_reference
 
 
 @pytest.mark.asyncio
+async def test_codex_checkpoint_builds_durable_recovery_without_claude_transcript() -> None:
+    contexts = ContextService(
+        InMemoryContextRepository(),
+        clock=lambda: NOW,
+        id_generator=lambda prefix: f"{prefix}-a",
+    )
+    service = ContextCheckpointService(contexts, StubTranscriptCheckpoints())
+    session = Session(
+        session_id="session-a",
+        tenant_id="tenant-a",
+        user_id="owner-a",
+        agent_name="assistant",
+        agent_version="1.0.0",
+        runtime_type="codex-app-server",
+        runtime_thread_id="codex-thread-a",
+        created_at=NOW,
+    )
+    run = Run(
+        run_id="run-a",
+        session_id="session-a",
+        tenant_id="tenant-a",
+        status=RunStatus.RUNNING,
+        idempotency_key="run-a",
+        input={"prompt": "remember the selected company"},
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+    digest = await service.checkpoint_run(
+        session=session,
+        run=run,
+        events=[_event(3, "message.completed", {"message_id": "message-a"})],
+        final_response="Selected company is Example Corp.",
+    )
+
+    assert digest is not None
+    assert digest.created_by.route_id == "event-projection-v1"
+    assert digest.source.sdk_session_id_hash.startswith("sha256:")
+    assert [entry.text for entry in digest.facts] == [
+        "用户请求：remember the selected company",
+        "助手结果：Selected company is Example Corp.",
+    ]
+    projection = await contexts.recovery_projection(
+        "tenant-a", "owner-a", "session-a"
+    )
+    assert "remember the selected company" in projection
+    assert "Selected company is Example Corp." in projection
+
+
+@pytest.mark.asyncio
 async def test_run_checkpoint_skips_session_without_sdk_resume_identity() -> None:
     contexts = ContextService(
         InMemoryContextRepository(),

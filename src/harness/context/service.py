@@ -23,6 +23,7 @@ from harness.policy.results import stricter_trust
 from harness.runtime.audit_redaction import redact_text
 
 CONTEXT_REBASE_ROUTE_ID = "context-rebase-v1"
+CONTEXT_EVENT_PROJECTION_ROUTE_ID = "event-projection-v1"
 
 
 class ContextService:
@@ -271,7 +272,10 @@ class ContextService:
         session_id: str,
     ) -> str:
         digest = await self.latest_digest(tenant_id, owner_user_id, session_id)
-        if digest is None or digest.created_by.route_id != CONTEXT_REBASE_ROUTE_ID:
+        if digest is None or digest.created_by.route_id not in {
+            CONTEXT_REBASE_ROUTE_ID,
+            CONTEXT_EVENT_PROJECTION_ROUTE_ID,
+        }:
             return ""
         payload = {
             "schema_version": digest.schema_version,

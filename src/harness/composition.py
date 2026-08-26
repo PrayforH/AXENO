@@ -85,6 +85,7 @@ from harness.reliability.controller import MaintenanceReaper, ReliabilityControl
 from harness.reliability.metrics import ReliabilityMetrics
 from harness.reliability.probes import CapacityProbe, QueueStats
 from harness.reliability.service import ReliabilityService
+from harness.runtime.codex_tool_gate import CodexToolGate
 from harness.runtime.default_tools import (
     TAVILY_REFERENCE,
     default_tool_resolver,
@@ -92,6 +93,7 @@ from harness.runtime.default_tools import (
 )
 from harness.runtime.fake import FakeRuntime
 from harness.runtime.mcp_credentials import DynamicMcpCredentialProvider
+from harness.runtime.registry_codex_runtime import RegistryCodexRuntime, RegistryRuntimeRouter
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.runtime.session_store import PostgresSessionStore
@@ -269,6 +271,9 @@ def _sandbox(settings: Settings) -> SandboxProvider:
         remote_workspace_root=settings.daytona_remote_workspace_root,
         cli_version=settings.daytona_claude_cli_version,
         cli_path=settings.daytona_claude_cli_path,
+        codex_cli_version=settings.daytona_codex_cli_version,
+        codex_cli_path=settings.daytona_codex_cli_path,
+        codex_cli_sha256=settings.daytona_codex_cli_sha256,
         delete_on_destroy=settings.daytona_delete_on_destroy,
         auto_stop_interval_minutes=settings.daytona_auto_stop_interval_minutes,
         auto_delete_interval_minutes=settings.daytona_auto_delete_interval_minutes,
@@ -320,8 +325,8 @@ def build_production_container(
 ) -> ApiContainer:
     if settings.environment != "production":
         raise ValueError("production composition requires HARNESS_ENVIRONMENT=production")
-    if settings.runtime != "claude-sdk":
-        raise ValueError("production composition requires HARNESS_RUNTIME=claude-sdk")
+    if settings.runtime not in {"claude-sdk", "multi"}:
+        raise ValueError("production composition requires HARNESS_RUNTIME=claude-sdk or multi")
     access_key = settings.minio_access_key.get_secret_value()
     secret_key = settings.minio_secret_key.get_secret_value()
     if not access_key or not secret_key:
@@ -834,6 +839,7 @@ def build_production_container(
         agent_name: str,
         agent_version: str,
         workspace: Path,
+        allow_validated_graph: bool,
     ) -> tuple[str, ...]:
         return await stage_published_agent_assets(
             registry,
@@ -842,6 +848,7 @@ def build_production_container(
             agent_name=agent_name,
             agent_version=agent_version,
             workspace=workspace,
+            allow_validated_graph=allow_validated_graph,
         )
 
     async def resolve_policy(
@@ -872,7 +879,7 @@ def build_production_container(
             credential_provider,
             catalogs=capability_catalogs,
         )
-        runtime = RegistryClaudeRuntime(
+        claude_runtime = RegistryClaudeRuntime(
             registry=registry,
             model_configurations=model_configurations,
             tool_resolver=tool_resolver,
@@ -896,6 +903,31 @@ def build_production_container(
             ),
             observability=observability,
             credential_broker=credential_broker,
+        )
+        runtime = (
+            RegistryRuntimeRouter(
+                registry=registry,
+                runtimes={
+                    "claude-agent-sdk": claude_runtime,
+                    "codex-app-server": RegistryCodexRuntime(
+                        registry=registry,
+                        codex_path=Path(settings.codex_cli_path),
+                        model_configurations=model_configurations,
+                        tool_resolver=tool_resolver,
+                        model_by_route=settings.codex_model_by_route,
+                        provider_by_route=settings.codex_provider_by_route,
+                        approval_policy=settings.codex_approval_policy,
+                        network_access=settings.codex_network_access,
+                        tool_output_token_limit=settings.codex_tool_output_token_limit,
+                        server_request_handler=CodexToolGate(
+                            approvals=approval_service,
+                            events=events,
+                        ).authorize,
+                    ),
+                },
+            )
+            if settings.runtime == "multi"
+            else claude_runtime
         )
         model_probe = ControlPlaneModelPreflightProbe(model_configurations)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
@@ -937,6 +969,7 @@ def build_production_container(
                 owner_user_id=session.resolved_agent_owner_user_id,
                 agent_name=session.agent_name,
                 agent_version=session.agent_version,
+                allow_validated_graph=session.environment == "preview",
             )
             manifests = tuple(
                 AgentManifestSnapshot.model_validate(version.snapshot).manifest

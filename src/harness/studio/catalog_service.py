@@ -17,6 +17,7 @@ from harness.studio.models import (
     ModelRouteCapability,
     PolicyCapability,
     ReplaceCapabilityCatalogRequest,
+    RuntimeCapability,
     TemplateCapability,
     UpsertCatalogResourceRequest,
 )
@@ -56,6 +57,7 @@ def _append_missing[
         PolicyCapability,
         ExecutionProfileMetadata,
         TemplateCapability,
+        RuntimeCapability,
     )
 ](
     current: tuple[CatalogEntry, ...],
@@ -188,12 +190,18 @@ def _upgrade_system_managed_catalog(
         defaults.templates,
         lambda item: item.template.value,
     )
+    runtime_capabilities, runtime_capabilities_changed = _append_missing(
+        catalog.runtime_capabilities,
+        defaults.runtime_capabilities,
+        lambda item: item.runtime,
+    )
     changed = changed or any(
         (
             mcp_changed,
             policies_changed,
             profiles_changed,
             templates_changed,
+            runtime_capabilities_changed,
         )
     )
 
@@ -204,6 +212,7 @@ def _upgrade_system_managed_catalog(
             "policies": policies,
             "execution_profiles": execution_profiles,
             "templates": templates,
+            "runtime_capabilities": runtime_capabilities,
         }
     )
     permission_copy_upgrade = _upgrade_known_legacy_permission_copy(upgraded)
@@ -243,6 +252,16 @@ class CapabilityCatalogService:
                 _upgrade_known_legacy_permission_copy(catalog_for_upgrade)
                 or retired_catalog
             )
+            catalog_for_runtime_upgrade = upgraded_catalog or current.catalog
+            runtime_capabilities, runtime_capabilities_changed = _append_missing(
+                catalog_for_runtime_upgrade.runtime_capabilities,
+                default_capability_catalog().runtime_capabilities,
+                lambda item: item.runtime,
+            )
+            if runtime_capabilities_changed:
+                upgraded_catalog = catalog_for_runtime_upgrade.model_copy(
+                    update={"runtime_capabilities": runtime_capabilities}
+                )
             updated_by = current.updated_by
         catalog_for_scope = upgraded_catalog or current.catalog
         scoped_catalog = await self._scope_legacy_mcp_capabilities(

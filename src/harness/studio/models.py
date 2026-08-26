@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from harness.core.manifest import ToolExposureMode
+from harness.core.models import AgentRuntimeType
 from harness.evals.suite import EvalCase
 
 
@@ -154,6 +155,12 @@ class DraftWorkspace(StudioModel):
 
 class DraftLimits(StudioModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
+    max_tool_calls: int | None = Field(
+        default=256,
+        alias="maxToolCalls",
+        ge=1,
+        le=4096,
+    )
     timeout_seconds: int | None = Field(
         default=None,
         alias="timeoutSeconds",
@@ -175,6 +182,17 @@ class DraftSubagent(StudioModel):
     background: bool = False
 
 
+class DraftTaskContract(StudioModel):
+    """Business-facing contract compiled into Prompt and acceptance tests."""
+
+    goal: str = Field(min_length=1, max_length=2_000)
+    audience: str = Field(default="当前用户", min_length=1, max_length=500)
+    inputs: tuple[str, ...] = Field(min_length=1, max_length=20)
+    outputs: tuple[str, ...] = Field(min_length=1, max_length=20)
+    constraints: tuple[str, ...] = Field(default=(), max_length=20)
+    examples: tuple[str, ...] = Field(default=(), max_length=10)
+
+
 class AgentDraftSpec(StudioModel):
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     version: str = Field(default="0.1.0", min_length=1)
@@ -182,6 +200,8 @@ class AgentDraftSpec(StudioModel):
     description: str = Field(min_length=1, max_length=500)
     domain: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     template: AgentTemplate = AgentTemplate.ANALYST
+    task_contract: DraftTaskContract | None = Field(default=None, alias="taskContract")
+    runtime: AgentRuntimeType = "claude-agent-sdk"
     model: DraftModelSelection
     system_prompt: str = Field(alias="systemPrompt", min_length=1, max_length=512 * 1024)
     skills: tuple[DraftSkill, ...] = Field(min_length=1)
@@ -629,6 +649,19 @@ class TemplateCapability(StudioModel):
     description: str
 
 
+class RuntimeCapability(StudioModel):
+    """Version-aware feature declaration consumed by Compiler and Builder."""
+
+    runtime: AgentRuntimeType
+    label: str
+    stability: Literal["stable", "preview", "experimental"] = "stable"
+    capabilities: tuple[str, ...]
+    model_api_formats: tuple[
+        Literal["anthropic_compatible", "openai_compatible", "openai_images"], ...
+    ] = Field(alias="modelApiFormats")
+    limitations: tuple[str, ...] = ()
+
+
 class CapabilityCatalog(StudioModel):
     model_routes: tuple[ModelRouteCapability, ...] = Field(alias="modelRoutes")
     builtin_tools: tuple[BuiltinToolCapability, ...] = Field(alias="builtinTools")
@@ -638,7 +671,12 @@ class CapabilityCatalog(StudioModel):
         default=(), alias="executionProfiles"
     )
     templates: tuple[TemplateCapability, ...]
-    agent_model_bindings: dict[str, str] = Field(default_factory=dict, alias="agentModelBindings")
+    runtime_capabilities: tuple[RuntimeCapability, ...] = Field(
+        default=(), alias="runtimeCapabilities"
+    )
+    agent_model_bindings: dict[str, str] = Field(
+        default_factory=dict, alias="agentModelBindings"
+    )
 
     @model_validator(mode="after")
     def unique_managed_ids(self) -> CapabilityCatalog:
@@ -751,11 +789,21 @@ class EffectiveAgentContract(StudioModel):
     risk: CapabilityRisk
 
 
+class RuntimeCompatibility(StudioModel):
+    runtime: AgentRuntimeType
+    label: str
+    stability: Literal["stable", "preview", "experimental"]
+    compatible: bool
+    capabilities: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+
 class DraftValidationResult(StudioModel):
     ready: bool
     production_eligible: bool = Field(alias="productionEligible")
     issues: tuple[ValidationIssue, ...]
     contract: EffectiveAgentContract
+    runtime_compatibility: RuntimeCompatibility = Field(alias="runtimeCompatibility")
     manifest_yaml: str = Field(alias="manifestYaml")
     content_hash: str | None = Field(default=None, alias="contentHash")
     package_hash: str | None = Field(default=None, alias="packageHash")

@@ -20,6 +20,7 @@ from harness.studio.compiler import AgentDraftCompiler, DraftCompilationError
 from harness.studio.models import (
     AgentTemplate,
     CreateAgentDraftRequest,
+    DraftSubagent,
     ReplaceAgentDraftRequest,
 )
 from harness.studio.repositories import InMemoryAgentDraftRepository
@@ -179,6 +180,26 @@ async def test_unpublished_subagent_blocks_validation_and_publication() -> None:
         tenant_id="tenant-a",
         user_id="builder",
         request=create_request(template=AgentTemplate.ORCHESTRATOR),
+    )
+    created = await service.replace(
+        tenant_id="tenant-a",
+        user_id="builder",
+        draft_id=created.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=created.revision,
+            spec=created.spec.model_copy(
+                update={
+                    "builtin_tools": (*created.spec.builtin_tools, "Task"),
+                    "subagents": (
+                        DraftSubagent(
+                            alias="risk-reviewer",
+                            ref="helper-agent@1.0.0",
+                            responsibility="独立复核风险结论。",
+                        ),
+                    ),
+                }
+            ),
+        ),
     )
 
     validation = await service.validate("tenant-a", "builder", created.draft_id)
@@ -370,6 +391,26 @@ async def test_subagent_hash_drift_blocks_lead_publication() -> None:
         tenant_id="tenant-a",
         user_id="builder",
         request=create_request(name="contract-lead", template=AgentTemplate.ORCHESTRATOR),
+    )
+    lead = await lead_service.replace(
+        tenant_id="tenant-a",
+        user_id="builder",
+        draft_id=lead.draft_id,
+        request=ReplaceAgentDraftRequest(
+            expectedRevision=lead.revision,
+            spec=lead.spec.model_copy(
+                update={
+                    "builtin_tools": (*lead.spec.builtin_tools, "Task"),
+                    "subagents": (
+                        DraftSubagent(
+                            alias="risk-reviewer",
+                            ref="helper-agent@1.0.0",
+                            responsibility="独立复核风险结论。",
+                        ),
+                    ),
+                }
+            ),
+        ),
     )
 
     validation = await lead_service.validate("tenant-a", "builder", lead.draft_id)

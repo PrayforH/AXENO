@@ -55,6 +55,7 @@ def test_downloaded_agent_packages_compile_to_studio_specs(
     assert spec["name"] == name
     assert spec["displayName"] == display_name
     assert spec["template"] == template
+    assert spec["runtime"] == "claude-agent-sdk"
     assert len(spec["skills"]) >= 1  # type: ignore[arg-type]
     expected_cases = 5 if name == "networked-knowledge-research-agent" else 3
     assert len(spec["evaluationCases"]) == expected_cases  # type: ignore[arg-type]
@@ -73,6 +74,12 @@ def test_networked_research_agent_uses_production_profile_and_multiple_mcp() -> 
     cases = cast(list[dict[str, object]], spec["evaluationCases"])
     coverage: set[str] = {str(tag) for case in cases for tag in cast(list[object], case["tags"])}
     assert {"happy", "ambiguous", "safety"} <= coverage
+
+
+def test_codex_manifest_keeps_runtime_when_converted_to_studio_spec() -> None:
+    spec = studio_spec_from_manifest(ROOT / "agents" / "public-opinion-agent" / "agent.yaml")
+
+    assert spec["runtime"] == "codex-app-server"
 
 
 def test_archive_studio_spec_pins_internal_classifier() -> None:

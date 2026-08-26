@@ -63,16 +63,31 @@ class ContextCheckpointService:
         events: list[RunEvent],
         final_response: str,
     ) -> SessionContextDigest | None:
-        sdk_session_id = session.claude_session_id
+        if session.runtime_type not in {"claude-agent-sdk", "codex-app-server"}:
+            return None
+        sdk_session_id = session.resolved_runtime_thread_id
         if sdk_session_id is None:
             return None
-        checkpoint = await self._transcripts.checkpoint(
-            run.tenant_id,
-            run.session_id,
-            sdk_session_id,
-        )
-        if checkpoint is None:
-            return None
+        if session.runtime_type == "claude-agent-sdk":
+            checkpoint = await self._transcripts.checkpoint(
+                run.tenant_id,
+                run.session_id,
+                sdk_session_id,
+            )
+            if checkpoint is None:
+                return None
+        else:
+            through_sequence = max((event.sequence for event in events), default=0)
+            checkpoint_key = (
+                f"codex-app-server\0{sdk_session_id}\0{run.run_id}\0{through_sequence}"
+            )
+            checkpoint = TranscriptCheckpoint(
+                sdk_session_id_hash=sdk_session_id_hash(sdk_session_id),
+                transcript_checkpoint_hash=(
+                    f"sha256:{hashlib.sha256(checkpoint_key.encode()).hexdigest()}"
+                ),
+                entry_count=max(1, len(events)),
+            )
         through_sequence = max((event.sequence for event in events), default=0)
         state = await self._contexts.state(
             run.tenant_id,
@@ -83,20 +98,35 @@ class ContextCheckpointService:
             (event for event in reversed(events) if event.type == "message.completed"),
             None,
         )
-        facts = (
-            (
-                ContextDigestEntry(
-                    text=final_response[:1_000],
-                    source_refs=(
-                        "run:"
-                        f"{run.run_id}:event:"
-                        f"{final_event.sequence if final_event else through_sequence}",
-                    ),
-                    trust=state.trust_high_watermark,
+        prompt = run.input.get("prompt")
+        prompt_text = prompt.strip() if isinstance(prompt, str) else ""
+        facts = tuple(
+            entry
+            for entry in (
+                (
+                    ContextDigestEntry(
+                        text=f"用户请求：{prompt_text[:950]}",
+                        source_refs=(f"run:{run.run_id}:input",),
+                        trust=state.trust_high_watermark,
+                    )
+                    if prompt_text
+                    else None
+                ),
+                (
+                    ContextDigestEntry(
+                        text=f"助手结果：{final_response[:950]}",
+                        source_refs=(
+                            "run:"
+                            f"{run.run_id}:event:"
+                            f"{final_event.sequence if final_event else through_sequence}",
+                        ),
+                        trust=state.trust_high_watermark,
+                    )
+                    if final_response.strip()
+                    else None
                 ),
             )
-            if final_response.strip()
-            else ()
+            if entry is not None
         )
         artifact_refs = tuple(
             ContextDigestObjectRef(

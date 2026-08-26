@@ -7,10 +7,21 @@ x-python-build: &python-build
   args:
     UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
     KUBECTL_IMAGE: ${KUBECTL_IMAGE:-cgr.dev/chainguard/kubectl@sha256:1e1aa9dedf0d9008e5a3710b23f2072bc2ab83117146d503c689b5d2592add3d}
+    CODEX_VERSION: ${CODEX_VERSION:-0.149.0}
+    CODEX_LINUX_X64_SHA256: ${CODEX_LINUX_X64_SHA256:-e06f3d106fe8bb058a6bfd30075d89ea17deaee7c8425e0c5d23072df0fdd0e7}
+    CODEX_NPM_REGISTRY: ${CODEX_NPM_REGISTRY:-https://registry.npmmirror.com}
 
 x-harness-environment: &harness-environment
   HARNESS_ENVIRONMENT: production
-  HARNESS_RUNTIME: claude-sdk
+  HARNESS_RUNTIME: ${HARNESS_RUNTIME:-claude-sdk}
+  HARNESS_CODEX_CLI_PATH: ${HARNESS_CODEX_CLI_PATH:-/usr/local/bin/codex}
+  HARNESS_CODEX_MODEL_BY_ROUTE: ${HARNESS_CODEX_MODEL_BY_ROUTE:-{}}
+  HARNESS_CODEX_PROVIDER_BY_ROUTE: ${HARNESS_CODEX_PROVIDER_BY_ROUTE:-{}}
+  HARNESS_CODEX_APPROVAL_POLICY: ${HARNESS_CODEX_APPROVAL_POLICY:-untrusted}
+  HARNESS_CODEX_NETWORK_ACCESS: ${HARNESS_CODEX_NETWORK_ACCESS:-false}
+  # Token budget for one model-visible tool result. Keep large MCP queries
+  # useful without allowing one unbounded response to consume the whole turn.
+  HARNESS_CODEX_TOOL_OUTPUT_TOKEN_LIMIT: ${HARNESS_CODEX_TOOL_OUTPUT_TOKEN_LIMIT:-32000}
   # Workers decrypt tenant-scoped MCP credentials issued by the API, so both
   # control and execution planes must derive their cipher from the same secret.
   HARNESS_AUTH_JWT_SECRET: ${HARNESS_AUTH_JWT_SECRET:?set HARNESS_AUTH_JWT_SECRET}
@@ -90,7 +101,7 @@ x-harness-environment: &harness-environment
 
 x-control-environment: &control-environment
   HARNESS_ENVIRONMENT: production
-  HARNESS_RUNTIME: claude-sdk
+  HARNESS_RUNTIME: ${HARNESS_RUNTIME:-claude-sdk}
   HARNESS_DATABASE_URL: postgresql+asyncpg://harness:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/harness
   HARNESS_REDIS_URL: redis://redis:6379/0
   HARNESS_MINIO_ENDPOINT: minio:9000
@@ -289,8 +300,8 @@ services:
       HARNESS_TENANT_ID: ${HARNESS_TENANT_ID:-local}
       HARNESS_USER_ID: ${HARNESS_USER_ID:-system}
       HARNESS_SEED_AGENT_MANIFESTS: /app/agents/lead-agent/agent.yaml,/app/agents/helper-agent/agent.yaml,/app/agents/echo-agent/agent.yaml,/app/agents/archive-file-classifier-agent/agent.yaml
-      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml,/app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml
-      HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS: /app/agents/networked-knowledge-research-agent/agent.yaml
+      HARNESS_SEED_STUDIO_MANIFESTS: /app/agents/similar-case-analysis-agent/agent.yaml,/app/agents/govdoc-writer-agent/agent.yaml,/app/agents/archive-assistant-agent/agent.yaml
+      HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS: /app/agents/public-opinion-agent/agent.yaml,/app/agents/networked-knowledge-research-agent/agent.yaml
     depends_on:
       api:
         condition: service_healthy

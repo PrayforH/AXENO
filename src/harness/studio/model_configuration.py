@@ -312,17 +312,39 @@ class ModelConfigurationService:
         requested_route_id: str,
         *,
         apply_agent_binding: bool = True,
+        required_api_format: Literal[
+            "anthropic_compatible", "openai_compatible", "openai_images"
+        ]
+        | None = None,
     ) -> CcSwitchClaudeConfig | None:
         record = await self._import_server_models(tenant_id)
+        bound_route_id = (
+            record.catalog.agent_model_bindings.get(agent_name) if apply_agent_binding else None
+        )
+        bound_route = next(
+            (
+                item
+                for item in record.catalog.model_routes
+                if item.route_id == bound_route_id
+            ),
+            None,
+        )
         route_id = (
-            record.catalog.agent_model_bindings.get(agent_name, requested_route_id)
-            if apply_agent_binding
+            bound_route_id
+            if bound_route_id is not None
+            and bound_route is not None
+            and (
+                required_api_format is None
+                or bound_route.api_format == required_api_format
+            )
             else requested_route_id
         )
         route = next(
             (item for item in record.catalog.model_routes if item.route_id == route_id), None
         )
         if route is None or not route.enabled:
+            return None
+        if required_api_format is not None and route.api_format != required_api_format:
             return None
         if route.base_url is None or route.model_type not in {"chat", "vision"}:
             return None

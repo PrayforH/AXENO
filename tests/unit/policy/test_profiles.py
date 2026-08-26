@@ -107,6 +107,17 @@ def test_standard_profile_uses_trusted_sandbox_facts() -> None:
         _decision("production-standard", "mcp__knowledge-search__sag_explain_search")
         is PolicyDecision.ALLOW
     )
+    assert (
+        _decision(
+            "production-standard",
+            "mcp__sentiment_query_mcp__search_risk_subjects",
+        )
+        is PolicyDecision.ALLOW
+    )
+    assert (
+        _decision("production-standard", "mcp__sentiment_query_mcp__unknown")
+        is PolicyDecision.DENY
+    )
 
 
 def test_orchestrator_profile_allows_explicit_delegation() -> None:

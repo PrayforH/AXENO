@@ -12,7 +12,6 @@ import {
   DEFAULT_STUDIO_DRAFT,
   REQUIRED_PROMPT_HEADINGS,
   applyStudioDraftUpdate,
-  createPersonalStudioDraft,
   evaluateStudioDraft,
   mcpOptionsForDraft,
   type StudioDraft,
@@ -38,6 +37,7 @@ import {
   type StudioPreflightCheck,
   type StudioPreview,
   type StudioQualityGate,
+  type StudioTaskDrivenRecommendation,
   type StudioValidation,
 } from "../../lib/studio-client";
 import { migrateLegacyStudioDraft } from "../../lib/studio-migration";
@@ -50,12 +50,13 @@ import {
 } from "../../lib/unsaved-navigation";
 import { useDialogFocus } from "../../lib/use-dialog-focus";
 import { useDismissablePopovers } from "../../lib/use-dismissable-popovers";
-import { parseEvalDatasetFile } from "../../lib/eval-dataset-import";
-import { AgentTriggerControlPlane } from "./agent-trigger-control-plane";
-import { EnvironmentPolicyControlPlane } from "./environment-policy-control-plane";
 import { GovernanceControlPlane } from "./governance-control-plane";
 import { SkillConversationBuilder } from "./skill-conversation-builder";
 import { StudioCodeEditor } from "./studio-code-editor";
+import {
+  NewAgentDialog,
+  TryRunPanel,
+} from "./agent-builder-overlays";
 import styles from "./agent-studio.module.css";
 
 const sections: Array<{ id: StudioSection; label: string; hint: string }> = [
@@ -110,6 +111,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       description: "允许委派并为较长的协同链路预留运行时间。",
       policy: "production-orchestrator",
       maxTurns: 64,
+      maxToolCalls: 512,
     };
   }
   if (writes) {
@@ -118,6 +120,7 @@ function runtimeRecommendation(draft: StudioDraft) {
       description: "常规文件与命令在沙箱自动执行，敏感边界才需要确认。",
       policy: "production-standard",
       maxTurns: 64,
+      maxToolCalls: 256,
     };
   }
   return {
@@ -128,6 +131,7 @@ function runtimeRecommendation(draft: StudioDraft) {
         : "仅允许工作区读取和检索，不产生写入副作用。",
     policy: "production-read-only",
     maxTurns: 64,
+    maxToolCalls: 128,
   };
 }
 
@@ -305,18 +309,9 @@ export function AgentStudioWorkbench() {
   const [evalDatasets, setEvalDatasets] = useState<StudioEvalDataset[]>([]);
   const [evalRuns, setEvalRuns] = useState<StudioEvalRun[]>([]);
   const [evalGate, setEvalGate] = useState<StudioEvalGate | null>(null);
-  const [evalAction, setEvalAction] = useState<"dataset" | "run" | "cancel" | "">("");
-  const [evalManagerOpen, setEvalManagerOpen] = useState(false);
-  const [evalImporting, setEvalImporting] = useState(false);
-  const [evalImportPreview, setEvalImportPreview] = useState<{
-    fileName: string;
-    cases: StudioEvalCase[];
-    errors: string[];
-  } | null>(null);
   const [environments, setEnvironments] = useState<StudioEnvironment[]>([]);
   const [deployments, setDeployments] = useState<StudioDeployment[]>([]);
   const [deploymentSnapshots, setDeploymentSnapshots] = useState<StudioDeploymentSnapshot[]>([]);
-  const [deploymentAction, setDeploymentAction] = useState("");
   const [qualityGate, setQualityGate] = useState<StudioQualityGate | null>(null);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -337,6 +332,13 @@ export function AgentStudioWorkbench() {
     warnings: string[];
   } | null>(null);
   const [contractOpen, setContractOpen] = useState(false);
+  const [newAgentOpen, setNewAgentOpen] = useState(false);
+  const [tryRunOpen, setTryRunOpen] = useState(false);
+  const [tryRunSeed, setTryRunSeed] = useState<{
+    prompt: string;
+    autoStart: boolean;
+    recommendation: StudioTaskDrivenRecommendation | null;
+  }>({ prompt: "", autoStart: false, recommendation: null });
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const [personalVersions, setPersonalVersions] = useState<PersonalAgentVersion[]>([]);
   const [versionHistoryLoading, setVersionHistoryLoading] = useState(false);
@@ -354,9 +356,6 @@ export function AgentStudioWorkbench() {
   const versionHistoryTriggerRef = useRef<HTMLButtonElement>(null);
   const versionHistoryRailRef = useRef<HTMLElement>(null);
   const versionHistoryCloseRef = useRef<HTMLButtonElement>(null);
-  const evalManagerRef = useRef<HTMLDivElement>(null);
-  const evalManagerCloseRef = useRef<HTMLButtonElement>(null);
-  const evalImportInputRef = useRef<HTMLInputElement>(null);
   const leavePromptOpenRef = useRef(false);
   const allowNavigationRef = useRef(false);
   const draftSwitchingRef = useRef(false);
@@ -370,7 +369,7 @@ export function AgentStudioWorkbench() {
   const options = useMemo(
     () => capabilities
       ? capabilityOptions(capabilities)
-      : { routes: [], tools: [], mcp: [], profiles: [] },
+      : { routes: [], tools: [], mcp: [], profiles: [], templates: [], runtimes: [] },
     [capabilities],
   );
   useDialogFocus({
@@ -378,12 +377,6 @@ export function AgentStudioWorkbench() {
     panelRef: contractRailRef,
     initialFocusRef: contractCloseRef,
     onEscape: () => setContractOpen(false),
-  });
-  useDialogFocus({
-    open: evalManagerOpen,
-    panelRef: evalManagerRef,
-    initialFocusRef: evalManagerCloseRef,
-    onEscape: () => setEvalManagerOpen(false),
   });
   useDialogFocus({
     open: versionHistoryOpen,
@@ -443,6 +436,7 @@ export function AgentStudioWorkbench() {
   const recommendationApplied =
     draft.policy === recommendedRuntime.policy
     && draft.maxTurns === recommendedRuntime.maxTurns
+    && draft.maxToolCalls === recommendedRuntime.maxToolCalls
     && draft.timeoutSeconds === null
     && draft.maxBudgetUsd === null
     && draft.maxModelTokens === null;
@@ -560,8 +554,9 @@ export function AgentStudioWorkbench() {
           setDraft(apiDraftToStudioDraft(selected));
           setNotice("已从控制面加载草稿");
         } else {
-          setDraft(createPersonalStudioDraft());
+          setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
           setActiveSection("identity");
+          if (canEdit) setNewAgentOpen(true);
           setNotice(canEdit ? "当前没有草稿，可新建第一个 Agent" : "当前没有可查看的草稿");
         }
       } catch (error) {
@@ -631,60 +626,6 @@ export function AgentStudioWorkbench() {
       ),
     });
     if (name !== nextSkill.name) setActiveSkillName(nextSkill.name);
-  }
-
-  function updateEvalCase(
-    index: number,
-    update: Partial<StudioEvalCase>,
-  ) {
-    updateDraft({
-      evalCases: draft.evalCases.map((testCase, currentIndex) =>
-        currentIndex === index ? { ...testCase, ...update } : testCase
-      ),
-    });
-  }
-
-  function addEvalCase() {
-    const testCase = evaluationCoverageCase("happy", draft);
-    updateDraft({ evalCases: [...draft.evalCases, testCase] });
-  }
-
-  function removeEvalCase(index: number) {
-    if (draft.evalCases.length <= 1) return;
-    updateDraft({
-      evalCases: draft.evalCases.filter(
-        (_testCase, currentIndex) => currentIndex !== index,
-      ),
-    });
-  }
-
-  async function importEvalDataset(file: File) {
-    setEvalImporting(true);
-    setEvalImportPreview(null);
-    try {
-      const result = await parseEvalDatasetFile(file);
-      setEvalImportPreview({ fileName: file.name, ...result });
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "评测集解析失败");
-    } finally {
-      setEvalImporting(false);
-      if (evalImportInputRef.current) evalImportInputRef.current.value = "";
-    }
-  }
-
-  function confirmEvalDatasetImport() {
-    if (!evalImportPreview?.cases.length) return;
-    const used = new Set(draft.evalCases.map((testCase) => testCase.id));
-    const imported = evalImportPreview.cases.map((testCase) => {
-      let id = testCase.id;
-      let suffix = 2;
-      while (used.has(id)) id = `${testCase.id}-${suffix++}`;
-      used.add(id);
-      return id === testCase.id ? testCase : { ...testCase, id };
-    });
-    updateDraft({ evalCases: [...draft.evalCases, ...imported] });
-    setNotice(`已导入 ${imported.length} 条评测场景，请保存草稿后固化 Dataset`);
-    setEvalImportPreview(null);
   }
 
   function moveToPromptSection(heading: string) {
@@ -863,12 +804,9 @@ export function AgentStudioWorkbench() {
     try {
       let saved;
       if (!candidate.id) {
-        const created = await studioClient.createDraft(candidate);
-        saved = await studioClient.replaceDraft({
-          ...candidate,
-          id: created.draftId,
-          revision: created.revision,
-        });
+        setNewAgentOpen(true);
+        setNotice("请先选择服务端模板创建 Agent");
+        return null;
       } else {
         saved = await studioClient.replaceDraft(candidate);
       }
@@ -1115,24 +1053,10 @@ export function AgentStudioWorkbench() {
     await publishDraft();
   }
 
-  function beginNewDraft(reservedNames: string[] = []) {
-    setDraft(createPersonalStudioDraft([
-      ...drafts.map((item) => item.name),
-      ...reservedNames,
-    ]));
-    setDirty(true);
-    setConflict(false);
-    setVersionConflict(false);
-    setServerValidation(null);
-    setReleaseFeedbackOpen(false);
-    setActiveSection("identity");
-    setNotice("新草稿尚未保存到控制面");
-  }
-
   async function startNewDraft() {
     if (!canEdit || saving) return;
     if (!dirty) {
-      beginNewDraft();
+      setNewAgentOpen(true);
       return;
     }
     const confirmed = await requestConfirmation({
@@ -1145,7 +1069,18 @@ export function AgentStudioWorkbench() {
     if (!confirmed) return;
     const saved = await saveDraft();
     if (!saved) return;
-    beginNewDraft([saved.name]);
+    setNewAgentOpen(true);
+  }
+
+  async function openTryRun() {
+    const current = dirty ? await saveDraft() : draft;
+    if (!current?.id) return;
+    setTryRunSeed({
+      prompt: current.taskContract?.examples[0] ?? "",
+      autoStart: false,
+      recommendation: null,
+    });
+    setTryRunOpen(true);
   }
 
   async function selectDraft(draftId: string) {
@@ -1464,69 +1399,6 @@ export function AgentStudioWorkbench() {
     }
   }
 
-  async function createEvalDataset() {
-    if (!draft.evaluationEnabled || !draft.id || dirty || !canEdit) return;
-    setEvalAction("dataset");
-    try {
-      const existing = evalDatasets
-        .filter((item) => item.agentName === draft.name)
-        .sort((left, right) => right.version - left.version)[0];
-      const created = await studioClient.createEvalDataset(
-        draft.id,
-        draft.revision,
-        `${draft.displayName} 发布必测集`,
-        existing?.datasetId,
-      );
-      setEvalDatasets(await studioClient.listEvalDatasets());
-      setNotice(`已固化 Dataset ${created.datasetId}@${created.version} · ${created.cases.length} 用例`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Dataset 创建失败");
-    } finally {
-      setEvalAction("");
-    }
-  }
-
-  async function startEvalRun(dataset: StudioEvalDataset) {
-    if (!draft.publishedVersion || !canEdit) return;
-    setEvalAction("run");
-    try {
-      const previewId = activePreview?.status === "ready" && !activePreview.stale
-        ? activePreview.previewId
-        : undefined;
-      const started = await studioClient.createEvalRun(
-        dataset,
-        draft.publishedVersion,
-        `studio-eval:${dataset.datasetId}:v${dataset.version}:${draft.publishedVersion}:${createRandomId()}`,
-        previewId,
-      );
-      setEvalRuns((current) => [
-        started,
-        ...current.filter((item) => item.run.evalRunId !== started.run.evalRunId),
-      ]);
-      setNotice(`Eval 已排队 · ${started.totalCases} 个独立 Case`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Eval 创建失败");
-    } finally {
-      setEvalAction("");
-    }
-  }
-
-  async function cancelEvalRun(evalRunId: string) {
-    setEvalAction("cancel");
-    try {
-      const updated = await studioClient.cancelEvalRun(evalRunId);
-      setEvalRuns((current) => [
-        updated,
-        ...current.filter((item) => item.run.evalRunId !== evalRunId),
-      ]);
-      setNotice("Eval 正在取消；活动子 Run 会先进入 cancelled");
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Eval 取消失败");
-    } finally {
-      setEvalAction("");
-    }
-  }
-
   async function refreshDeployments(agentName = draft.name) {
     if (!agentName) return;
     const [nextEnvironments, nextDeployments, nextSnapshots] = await Promise.all([
@@ -1537,54 +1409,6 @@ export function AgentStudioWorkbench() {
     setEnvironments(nextEnvironments);
     setDeployments(nextDeployments);
     setDeploymentSnapshots(nextSnapshots);
-  }
-
-  async function promoteTo(environment: StudioEnvironment) {
-    if (!draft.publishedVersion || !draft.publishedPackageHash || !canPublish) return;
-    setDeploymentAction(`promote:${environment.name}`);
-    try {
-      const canaryPercent = environment.name === "canary" && environment.healthySnapshotId
-        ? 10
-        : 100;
-      const deployment = await studioClient.promoteDeployment(
-        draft.name,
-        draft.publishedVersion,
-        environment,
-        draft.publishedPackageHash,
-        draft.executionProfile,
-        canaryPercent,
-      );
-      await refreshDeployments();
-      setNotice(
-        `${environment.name} 发布已进入 ${deployment.deployment.status}`
-        + (canaryPercent < 100 ? ` · 新会话 ${canaryPercent}% 灰度` : ""),
-      );
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "环境发布失败");
-    } finally {
-      setDeploymentAction("");
-    }
-  }
-
-  async function rollbackTo(
-    environment: StudioEnvironment,
-    snapshot: StudioDeploymentSnapshot,
-  ) {
-    if (!canPublish) return;
-    setDeploymentAction(`rollback:${snapshot.snapshotId}`);
-    try {
-      const deployment = await studioClient.rollbackDeployment(
-        draft.name,
-        environment,
-        snapshot.snapshotId,
-      );
-      await refreshDeployments();
-      setNotice(`${environment.name} 回滚已进入 ${deployment.deployment.status}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "环境回滚失败");
-    } finally {
-      setDeploymentAction("");
-    }
   }
 
   function sectionSummary(section: StudioSection) {
@@ -1982,6 +1806,15 @@ export function AgentStudioWorkbench() {
             )}
           </div>
           <div className={styles.headerActions}>
+            <button
+              type="button"
+              className={`${styles.headerActionButton} ${styles.startTaskButton}`}
+              disabled={!canEdit || !draft.id || saving}
+              onClick={() => void openTryRun()}
+            >
+              <HeaderActionIcon name="task" />
+              <span>试跑</span>
+            </button>
             {taskHref && (
               <Link
                 className={`${styles.headerActionButton} ${styles.startTaskButton}`}
@@ -2453,7 +2286,9 @@ export function AgentStudioWorkbench() {
                   </Field>
                 </div>
                 <InfoStrip tone="neutral">
-                  模型目录只展示已完成 Anthropic-compatible、流式输出和工具调用验证的组合。
+                  {draft.runtime === "codex-app-server"
+                    ? "Codex App Server 只接受 Responses 协议；发布检查会拒绝不兼容路由。"
+                    : "Claude Agent SDK 使用已完成 Anthropic-compatible、流式输出和工具调用验证的组合。"}
                 </InfoStrip>
               </section>
             )}
@@ -3215,13 +3050,49 @@ export function AgentStudioWorkbench() {
                   title="隔离是生产基线，不是 Agent 开关"
                   description="构建者声明能力，平台把执行档位绑定到 Daytona、gVisor 或其他安全后端。"
                 />
+                <div className={styles.formGridSingle}>
+                  <Field label="Agent Runtime" hint="发布后固定到版本 Bundle">
+                    <select
+                      value={draft.runtime}
+                      onChange={(event) => {
+                        const runtime = event.target.value as StudioDraft["runtime"];
+                        const compatibleRoute = options.routes.find((route) =>
+                          runtime === "codex-app-server"
+                            ? route.apiFormat === "openai_compatible"
+                            : route.apiFormat !== "openai_images",
+                        );
+                        updateDraft({
+                          runtime,
+                          ...(runtime === "codex-app-server"
+                            && selectedRoute?.apiFormat !== "openai_compatible"
+                            && compatibleRoute
+                            ? {
+                                modelRoute: compatibleRoute.id,
+                                model: compatibleRoute.models[0],
+                              }
+                            : {}),
+                        });
+                      }}
+                    >
+                      <option value="claude-agent-sdk">Claude Agent SDK · 完整 Studio 能力</option>
+                      <option value="codex-app-server">Codex App Server · Codex Loop</option>
+                    </select>
+                  </Field>
+                </div>
+                {draft.runtime === "codex-app-server" && (
+                  <InfoStrip tone="warning">
+                    Codex P0 已支持 Responses、线程续接、Shell/文件操作与审批事件；Studio MCP、自定义算子、Knowledge、按需工具和 Sub Agent 尚未接通，发布检查会明确阻止这些组合。
+                  </InfoStrip>
+                )}
                 <div className={styles.runtimeRecommendation}>
                   <span>当前场景推荐</span>
                   <div>
                     <strong>{recommendedRuntime.label}</strong>
                     <p>{recommendedRuntime.description}</p>
                     <small>
-                      {recommendedRuntime.policy} · 最多 {recommendedRuntime.maxTurns} 轮 · 无硬超时、预算或 Token 中止
+                      {recommendedRuntime.policy} · 最多 {recommendedRuntime.maxTurns} 轮
+                      {draft.runtime === "codex-app-server" ? ` · ${recommendedRuntime.maxToolCalls} 次工具调用` : ""}
+                      {" · 无硬超时、预算或 Token 中止"}
                     </small>
                   </div>
                   <button
@@ -3231,6 +3102,7 @@ export function AgentStudioWorkbench() {
                       updateDraft({
                         policy: recommendedRuntime.policy,
                         maxTurns: recommendedRuntime.maxTurns,
+                        maxToolCalls: recommendedRuntime.maxToolCalls,
                         timeoutSeconds: null,
                         maxBudgetUsd: null,
                         maxModelTokens: null,
@@ -3273,7 +3145,7 @@ export function AgentStudioWorkbench() {
                         checked={draft.restoreSession}
                         onChange={(event) => updateDraft({ restoreSession: event.target.checked })}
                       />
-                      <span>恢复同一会话的 SDK 上下文</span>
+                      <span>恢复同一会话的运行时线程上下文</span>
                     </label>
                     <label>
                       <input
@@ -3404,6 +3276,23 @@ export function AgentStudioWorkbench() {
                       })}
                     />
                   </Field>
+                  {draft.runtime === "codex-app-server" && (
+                    <Field
+                      label="Codex 工具调用上限"
+                      hint="与模型轮次独立；长程编排建议 256–512"
+                    >
+                      <input
+                        type="number"
+                        min={1}
+                        max={4096}
+                        value={draft.maxToolCalls ?? ""}
+                        placeholder="不限制"
+                        onChange={(event) => updateDraft({
+                          maxToolCalls: event.target.value ? Number(event.target.value) : null,
+                        })}
+                      />
+                    </Field>
+                  )}
                   <Field label="硬超时（秒）" hint="留空表示不以时长中止">
                     <input
                       type="number"
@@ -3498,139 +3387,18 @@ export function AgentStudioWorkbench() {
                   </label>
                 </div>
                 {draft.evaluationEnabled ? (
-                  <>
-                    <div className={styles.evalDatasetSummary}>
-                      <div>
-                        <strong>{draft.evalCases.length} 条评测场景</strong>
-                        <span>场景编辑与文件导入已移至独立评测集管理器。</span>
-                      </div>
-                      {(["happy", "ambiguous", "safety"] as const).map((tag) => (
-                        <span key={tag}>
-                          {evaluationCoverageLabels[tag]} {draft.evalCases.filter((testCase) => testCase.tag === tag).length}
-                        </span>
-                      ))}
-                      <button type="button" onClick={() => setEvalManagerOpen(true)}>
-                        管理评测集
-                      </button>
-                    </div>
-                <section className={styles.evalControlPlane} aria-label="持久化评测控制面">
-                  <header>
+                  <div className={styles.evalDatasetSummary}>
                     <div>
-                      <span>耐久 Eval 控制面</span>
-                      <strong>
-                        {latestDataset
-                          ? `${latestDataset.name} · v${latestDataset.version}`
-                          : "尚未启用发布必测集"}
-                      </strong>
-                      <small>
-                        {latestDataset
-                          ? "最新 Dataset 会成为环境部署门禁；每个 Case 使用独立 Session。"
-                          : "可直接发布 Agent 版本；固化后，这组用例会成为环境部署前的必测门禁。"}
-                      </small>
+                      <strong>{draft.evalCases.length} 条草稿基础场景</strong>
+                      <span>Builder 只维护随 Agent 版本化的 happy / ambiguous / safety 基线。</span>
                     </div>
-                    <div className={styles.evalControlActions}>
-                      <button
-                        type="button"
-                        disabled={!canEdit || !draft.id || dirty || Boolean(evalAction)}
-                        onClick={() => void createEvalDataset()}
-                      >
-                        {evalAction === "dataset"
-                          ? "固化中…"
-                          : latestDataset
-                            ? "创建新 Dataset 版本"
-                            : "设为发布必测集"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canEdit || !latestDataset || !draft.publishedVersion || Boolean(evalAction) || Boolean(activeEvalRun && ["queued", "running", "cancelling"].includes(activeEvalRun.run.status))}
-                        onClick={() => latestDataset && void startEvalRun(latestDataset)}
-                      >
-                        {evalAction === "run"
-                          ? "排队中…"
-                          : `运行 ${draft.publishedVersion ?? "已发布版本"} Eval`}
-                      </button>
-                    </div>
-                  </header>
-
-                  {activeEvalRun ? (
-                    <article className={styles.evalRunCard} data-status={activeEvalRun.run.status}>
-                      <div className={styles.evalRunSummary}>
-                        <span className={styles.evalRunSignal} aria-hidden="true" />
-                        <div>
-                          <strong>
-                            {activeEvalRun.run.status} · {activeEvalRun.passedCases}/{activeEvalRun.totalCases} 通过
-                          </strong>
-                          <small>
-                            {activeEvalRun.run.agentName}@{activeEvalRun.run.agentVersion} · Dataset v{activeEvalRun.run.datasetVersion}
-                            {activeEvalRun.run.activeCaseId ? ` · 正在处理 ${activeEvalRun.run.activeCaseId}` : ""}
-                          </small>
-                        </div>
-                        {["queued", "running", "cancelling"].includes(activeEvalRun.run.status) && (
-                          <button
-                            type="button"
-                            disabled={Boolean(evalAction)}
-                            onClick={() => void cancelEvalRun(activeEvalRun.run.evalRunId)}
-                          >
-                            {evalAction === "cancel" ? "取消中…" : "取消"}
-                          </button>
-                        )}
-                      </div>
-                      <ol className={styles.evalCaseResults}>
-                        {activeEvalRun.cases.map((result) => (
-                          <li key={result.caseId} data-status={result.status}>
-                            <span>{result.passed ? "✓" : "!"}</span>
-                            <div>
-                              <strong>{result.caseId}</strong>
-                              <small>
-                                {result.status} · {result.durationSeconds.toFixed(2)}s
-                                {result.tools.length ? ` · ${result.tools.join(" / ")}` : ""}
-                              </small>
-                              {result.failures.length > 0 && <p>{result.failures.join("；")}</p>}
-                            </div>
-                            <code>{result.runId ? result.runId.slice(-10) : "no-run"}</code>
-                          </li>
-                        ))}
-                      </ol>
-                      {activeEvalRun.run.artifacts.length > 0 && (
-                        <div className={styles.evalArtifacts}>
-                          {activeEvalRun.run.artifacts.map((artifact) => (
-                            <button
-                              type="button"
-                              key={artifact.artifactId}
-                              onClick={() => void studioClient.downloadEvalArtifact(activeEvalRun.run.evalRunId, artifact.artifactId)}
-                            >
-                              下载 {artifact.name} · {artifact.sizeBytes} B
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </article>
-                  ) : (
-                    <div className={styles.evalRunEmpty}>
-                      {!latestDataset
-                        ? "当前没有发布门禁。需要更严格的上线保障时，再把上方用例设为必测集。"
-                        : !draft.publishedVersion
-                          ? "先发布不可变 Agent 版本，再运行这组必测用例。"
-                          : "必测集已准备好，可以运行已发布版本 Eval。"}
-                    </div>
-                  )}
-
-                  {agentEvalRuns.length > 1 && (
-                    <details className={styles.evalHistory}>
-                      <summary>版本对比 · 最近 {agentEvalRuns.length} 轮</summary>
-                      <div>
-                        {agentEvalRuns.slice(0, 6).map((item) => (
-                          <span key={item.run.evalRunId} data-status={item.run.status}>
-                            <code>{item.run.agentVersion}</code>
-                            <strong>{item.passedCases}/{item.totalCases}</strong>
-                            <small>{item.run.status} · Dataset v{item.run.datasetVersion}</small>
-                          </span>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </section>
-                  </>
+                    {(["happy", "ambiguous", "safety"] as const).map((tag) => (
+                      <span key={tag}>{evaluationCoverageLabels[tag]} {draft.evalCases.filter((item) => item.tag === tag).length}</span>
+                    ))}
+                    <Link href={`/studio/agents/${encodeURIComponent(draft.name)}/operations?draft=${encodeURIComponent(draft.id)}`}>
+                      打开 Evaluate &amp; Operate
+                    </Link>
+                  </div>
                 ) : (
                   <div className={styles.evalDisabled}>
                     <strong>Eval 已对当前 Agent 关闭</strong>
@@ -3687,145 +3455,10 @@ export function AgentStudioWorkbench() {
                     <code>test → canary → production</code>
                   </article>
                 </div>
-                <section className={styles.deploymentControlPlane} aria-label="环境部署控制面">
-                  <header>
-                    <div>
-                      <span>DEPLOYMENT CONTROL PLANE</span>
-                      <strong>环境指针、灰度与可验证回滚</strong>
-                      <small>发布不修改 Agent Version；新 Session 解析当前路由，已存在 Session 始终固定原快照。</small>
-                    </div>
-                    {activeDeployment && (
-                      <em>{activeDeployment.deployment.environment} · {activeDeployment.deployment.status}</em>
-                    )}
-                  </header>
-                  <div className={styles.environmentGrid}>
-                    {environments.map((environment) => {
-                      const currentRoutes = environment.routes.map((route) => ({
-                        ...route,
-                        snapshot: snapshotById.get(route.snapshotId),
-                      }));
-                      const alreadyCurrent = currentRoutes.some(
-                        (route) => route.snapshot?.agentVersion === draft.publishedVersion,
-                      );
-                      const profileCompatible =
-                        environment.resourcePolicy.executionProfileId
-                        === draft.executionProfile;
-                      return (
-                        <article key={environment.name} data-environment={environment.name}>
-                          <div className={styles.environmentHeading}>
-                            <span>{environment.name.toUpperCase()}</span>
-                            <code>revision {environment.revision}</code>
-                          </div>
-                          <strong>
-                            {currentRoutes.length
-                              ? currentRoutes.map((route) => `${route.snapshot?.agentVersion ?? "未知版本"} · ${route.weight}%`).join(" / ")
-                              : "尚未部署"}
-                          </strong>
-                          <small>
-                            {environment.healthySnapshotId
-                              ? `健康快照 ${environment.healthySnapshotId.slice(-10)}`
-                              : "等待首次健康发布"}
-                          </small>
-                          <button
-                            type="button"
-                            disabled={
-                              !canPublish
-                              || !draft.publishedVersion
-                              || !draft.publishedPackageHash
-                              || !evalGate?.passed
-                              || alreadyCurrent
-                              || !profileCompatible
-                              || Boolean(deploymentAction)
-                            }
-                            onClick={() => void promoteTo(environment)}
-                          >
-                            {deploymentAction === `promote:${environment.name}`
-                              ? "提交中…"
-                              : alreadyCurrent
-                                ? "当前版本"
-                                : !draft.publishedVersion
-                                  ? "先发布 Agent 版本"
-                                : !profileCompatible
-                                  ? "执行 Profile 不匹配"
-                                  : !evalGate
-                                    ? "正在检查发布门禁"
-                                    : !evalGate.passed
-                                      ? "先通过发布必测集"
-                                : environment.name === "canary" && environment.healthySnapshotId
-                                  ? "灰度 10% 新会话"
-                                  : `发布 ${draft.publishedVersion ?? "版本"}`}
-                          </button>
-                        </article>
-                      );
-                    })}
-                  </div>
-                  {capabilities && (
-                    <EnvironmentPolicyControlPlane
-                      agentName={draft.name}
-                      environments={environments}
-                      capabilities={capabilities}
-                      canManage={canPublish}
-                      onUpdated={(updated) => {
-                        setEnvironments((current) => current.map((item) =>
-                          item.name === updated.name ? updated : item
-                        ));
-                        setNotice(
-                          `${updated.name} 环境策略已更新到 r${updated.policyRevision}`,
-                        );
-                      }}
-                    />
-                  )}
-                  <details className={styles.deploymentHistory} open={deployments.some((item) => item.deployment.status === "failed")}>
-                    <summary>部署记录与版本差异 · {deployments.length} 次</summary>
-                    <div>
-                      {deployments.slice(0, 8).map((item) => {
-                        const previous = item.deployment.previousSnapshotId
-                          ? snapshotById.get(item.deployment.previousSnapshotId)
-                          : undefined;
-                        const environment = environments.find(
-                          (candidate) => candidate.name === item.deployment.environment,
-                        );
-                        const canRollback = Boolean(
-                          environment
-                          && item.deployment.status === "succeeded"
-                          && environment.healthySnapshotId !== item.target.snapshotId,
-                        );
-                        return (
-                          <article key={item.deployment.deploymentId} data-status={item.deployment.status}>
-                            <span>{item.deployment.action === "rollback" ? "回滚" : "发布"}</span>
-                            <div>
-                              <strong>
-                                {item.deployment.environment} · {previous?.agentVersion ?? "空环境"} → {item.target.agentVersion}
-                              </strong>
-                              <small>
-                                {item.deployment.status}
-                                {item.deployment.canaryPercent < 100 ? ` · 新会话 ${item.deployment.canaryPercent}%` : " · 全量"}
-                                {item.deployment.errorCode ? ` · ${item.deployment.errorCode}` : ""}
-                              </small>
-                              <code>{previous?.packageHash.slice(0, 10) ?? "—"} → {item.target.packageHash.slice(0, 10)}</code>
-                            </div>
-                            {canRollback && environment && (
-                              <button
-                                type="button"
-                                disabled={Boolean(deploymentAction)}
-                                onClick={() => void rollbackTo(environment, item.target)}
-                              >
-                                {deploymentAction === `rollback:${item.target.snapshotId}` ? "回滚中…" : "回滚到此快照"}
-                              </button>
-                            )}
-                          </article>
-                        );
-                      })}
-                      {deployments.length === 0 && <p>发布后会在此保留快照、操作者、状态和差异。</p>}
-                    </div>
-                  </details>
+                <section className={styles.deploymentControlPlane} aria-label="运行控制面摘要">
+                  <header><div><span>EVALUATE &amp; OPERATE</span><strong>运行配置已从 Builder 分离</strong><small>{latestDataset ? `Dataset ${latestDataset.name} v${latestDataset.version}` : "无耐久 Dataset"} · {agentEvalRuns.length} 次 Eval · {environments.length} 个环境 · {deployments.length} 次部署</small></div></header>
+                  <Link href={`/studio/agents/${encodeURIComponent(draft.name)}/operations?draft=${encodeURIComponent(draft.id)}`}>管理 Dataset、运行 Eval、环境策略、部署历史与触发器 →</Link>
                 </section>
-                <AgentTriggerControlPlane
-                  agentName={draft.name}
-                  publishedVersion={draft.publishedVersion}
-                  environments={environments}
-                  canManage={canPublish}
-                />
               </section>
             )}
           </fieldset>
@@ -3837,135 +3470,6 @@ export function AgentStudioWorkbench() {
           <code>{draft.id ? `revision ${draft.revision}` : "unsaved"}</code>
         </footer>
       </section>
-
-      {evalManagerOpen && (
-        <div
-          className={styles.evalManagerBackdrop}
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setEvalManagerOpen(false);
-          }}
-        >
-          <div
-            ref={evalManagerRef}
-            className={styles.evalManager}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="eval-manager-title"
-          >
-            <header>
-              <div>
-                <span>EVAL DATASET</span>
-                <h2 id="eval-manager-title">评测集管理器</h2>
-                <p>编辑场景，或从 JSON、CSV、Excel 批量导入；保存 Agent 草稿后即可固化 Dataset 版本。</p>
-              </div>
-              <button
-                ref={evalManagerCloseRef}
-                type="button"
-                aria-label="关闭评测集管理器"
-                onClick={() => setEvalManagerOpen(false)}
-              >
-                ×
-              </button>
-            </header>
-            <div className={styles.evalImportBar}>
-              <div>
-                <strong>批量导入评测场景</strong>
-                <span>首行使用 id、label、tag、prompt 等字段；支持中文列名。</span>
-              </div>
-              <input
-                ref={evalImportInputRef}
-                hidden
-                type="file"
-                accept=".json,.csv,.xlsx,application/json,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  if (file) void importEvalDataset(file);
-                }}
-              />
-              <button
-                type="button"
-                disabled={!canEdit || evalImporting}
-                onClick={() => evalImportInputRef.current?.click()}
-              >
-                {evalImporting ? "解析中…" : "导入 JSON / CSV / Excel"}
-              </button>
-            </div>
-            {evalImportPreview && (
-              <section className={styles.evalImportPreview} aria-label="导入预览">
-                <div>
-                  <strong>{evalImportPreview.fileName}</strong>
-                  <span>{evalImportPreview.cases.length} 条有效 · {evalImportPreview.errors.length} 条需修正</span>
-                  {evalImportPreview.errors.length > 0 && (
-                    <small>{evalImportPreview.errors.slice(0, 4).join("；")}</small>
-                  )}
-                </div>
-                <button type="button" onClick={() => setEvalImportPreview(null)}>取消</button>
-                <button
-                  type="button"
-                  disabled={!evalImportPreview.cases.length}
-                  onClick={confirmEvalDatasetImport}
-                >
-                  确认追加
-                </button>
-              </section>
-            )}
-            <div className={styles.evalManagerToolbar}>
-              <span>当前 {draft.evalCases.length} 条</span>
-              <button type="button" disabled={!canEdit} onClick={addEvalCase}>新增场景</button>
-            </div>
-            <div className={styles.evalManagerList}>
-              {draft.evalCases.map((testCase, index) => (
-                <article key={testCase.id} className={styles.evalCase}>
-                  <select
-                    aria-label={`${testCase.id} 场景类型`}
-                    value={testCase.tag}
-                    disabled={!canEdit}
-                    onChange={(event) => updateEvalCase(index, {
-                      tag: event.target.value as StudioEvalCase["tag"],
-                    })}
-                  >
-                    <option value="happy">正常 happy</option>
-                    <option value="ambiguous">歧义 ambiguous</option>
-                    <option value="safety">安全 safety</option>
-                  </select>
-                  <div className={styles.evalCaseEditor}>
-                    <input
-                      aria-label={`${testCase.id} 名称`}
-                      value={testCase.label}
-                      disabled={!canEdit}
-                      onChange={(event) => updateEvalCase(index, { label: event.target.value })}
-                    />
-                    <textarea
-                      aria-label={`${testCase.id} 提示词`}
-                      value={testCase.prompt}
-                      disabled={!canEdit}
-                      onChange={(event) => updateEvalCase(index, { prompt: event.target.value })}
-                    />
-                    <details className={styles.evalExpectationEditor}>
-                      <summary>断言与运行边界</summary>
-                      <div>
-                        <label>必须调用<input value={testCase.expect.requiredTools.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, requiredTools: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
-                        <label>禁止调用<input value={testCase.expect.forbiddenTools.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, forbiddenTools: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
-                        <label>输出包含<input value={testCase.expect.outputContains.join(", ")} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, outputContains: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } })} /></label>
-                        <label>最大耗时（秒）<input type="number" min={1} value={testCase.expect.maxDurationSeconds} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, maxDurationSeconds: Math.max(1, Number(event.target.value) || 1) } })} /></label>
-                        <label className={styles.evalApprovalCheck}><input type="checkbox" checked={testCase.expect.approvalRequired} disabled={!canEdit} onChange={(event) => updateEvalCase(index, { expect: { ...testCase.expect, approvalRequired: event.target.checked } })} />必须经过审批</label>
-                      </div>
-                    </details>
-                  </div>
-                  <div className={styles.evalCaseActions}>
-                    <code>{testCase.id}</code>
-                    <button type="button" disabled={!canEdit || draft.evalCases.length <= 1} onClick={() => removeEvalCase(index)}>删除</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-            <footer>
-              <span>修改会进入当前 Agent 草稿，尚未固化为 Dataset。</span>
-              <button type="button" onClick={() => setEvalManagerOpen(false)}>完成</button>
-            </footer>
-          </div>
-        </div>
-      )}
 
       {contractOpen && (
         <button
@@ -4272,6 +3776,80 @@ export function AgentStudioWorkbench() {
           页面不保存 Endpoint、Token 或任意 MCP URL。凭据只在运行时按租户与执行身份注入。
         </p>
       </aside>
+      <NewAgentDialog
+        open={newAgentOpen}
+        onClose={() => setNewAgentOpen(false)}
+        onCreated={(flow) => {
+          const created = flow.draft;
+          setDraft(created);
+          setDrafts((current) => [
+            {
+              draftId: created.id,
+              agentId: created.agentId,
+              spaceId: created.spaceId,
+              name: created.name,
+              displayName: created.displayName,
+              domain: created.domain,
+              version: created.version,
+              template: created.template,
+              revision: created.revision,
+              updatedAt: new Date().toISOString(),
+              publishedVersion: created.publishedVersion,
+            },
+            ...current,
+          ]);
+          setDirty(false);
+          setServerValidation(null);
+          setNewAgentOpen(false);
+          setActiveSection("identity");
+          setTryRunSeed({
+            prompt: flow.prompt,
+            autoStart: flow.autoRun,
+            recommendation: flow.recommendation,
+          });
+          setTryRunOpen(true);
+          setNotice(
+            flow.recommendation
+              ? `已按任务生成 ${flow.recommendation.runtime} 草稿，正在启动真实试跑`
+              : `已创建 ${created.displayName}`,
+          );
+        }}
+      />
+      <TryRunPanel
+        open={tryRunOpen}
+        draft={draft}
+        initialPrompt={tryRunSeed.prompt}
+        autoStart={tryRunSeed.autoStart}
+        recommendation={tryRunSeed.recommendation}
+        canSolidify={canPublish}
+        onClose={() => setTryRunOpen(false)}
+        onSolidified={(result) => {
+          const next = apiDraftToStudioDraft(result.draft);
+          setDraft(next);
+          setDrafts((current) => current.map((item) => item.draftId === next.id
+            ? {
+                ...item,
+                version: next.version,
+                revision: next.revision,
+                publishedVersion: next.publishedVersion,
+                updatedAt: new Date().toISOString(),
+              }
+            : item));
+          setEvalDatasets((current) => [
+            result.dataset,
+            ...current.filter((item) => !(
+              item.datasetId === result.dataset.datasetId
+              && item.version === result.dataset.version
+            )),
+          ]);
+          setDirty(false);
+          setServerValidation(null);
+          setNotice(
+            `已固化 ${result.version.name}@${result.version.version} · `
+            + `评测基线 ${result.dataset.datasetId}@${result.dataset.version}`,
+          );
+        }}
+      />
       {confirmationDialog}
     </main>
   );

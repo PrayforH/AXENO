@@ -5,11 +5,16 @@ import yaml
 
 ROOT = Path(__file__).parents[3]
 COMPOSE_PATH = ROOT / "deploy/docker-compose/compose.yaml"
+CODEX_RUNTIME_COMPOSE_PATH = ROOT / "deploy/docker-compose/compose.codex-runtime.yaml"
 COLLECTOR_PATH = ROOT / "deploy/otel-collector/collector.yaml"
 
 
 def compose() -> dict[str, Any]:
     return cast(dict[str, Any], yaml.safe_load(COMPOSE_PATH.read_text()))
+
+
+def codex_runtime_compose() -> dict[str, Any]:
+    return cast(dict[str, Any], yaml.safe_load(CODEX_RUNTIME_COMPOSE_PATH.read_text()))
 
 
 def test_compose_contains_deployable_application_and_infrastructure() -> None:
@@ -28,7 +33,9 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
         "otel-collector",
     } <= services.keys()
     assert services["api"]["environment"]["HARNESS_ENVIRONMENT"] == "production"
-    assert services["api"]["environment"]["HARNESS_RUNTIME"] == "claude-sdk"
+    assert services["api"]["environment"]["HARNESS_RUNTIME"] == (
+        "${HARNESS_RUNTIME:-claude-sdk}"
+    )
     assert "build" in services["api"]
     assert services["api"]["image"] == (
         "${HARNESS_API_IMAGE_REPOSITORY:-claude-agent-harness-api}:"
@@ -73,7 +80,6 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert "public-opinion-agent/agent.yaml" not in seed_manifests
     studio_manifests = services["seed"]["environment"]["HARNESS_SEED_STUDIO_MANIFESTS"]
     for manifest in (
-        "public-opinion-agent/agent.yaml",
         "similar-case-analysis-agent/agent.yaml",
         "govdoc-writer-agent/agent.yaml",
         "archive-assistant-agent/agent.yaml",
@@ -83,6 +89,7 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     optional_studio_manifests = services["seed"]["environment"][
         "HARNESS_SEED_OPTIONAL_STUDIO_MANIFESTS"
     ]
+    assert "public-opinion-agent/agent.yaml" in optional_studio_manifests
     assert "networked-knowledge-research-agent/agent.yaml" in optional_studio_manifests
     assert services["otel-collector"]["profiles"] == ["observability"]
     assert services["postgres"]["image"] == "postgres:18.4-bookworm"
@@ -93,6 +100,25 @@ def test_compose_contains_deployable_application_and_infrastructure() -> None:
     assert "postgres18-cluster-data" in compose()["volumes"]
     assert "redis-data" in compose()["volumes"]
     assert "minio-data" in compose()["volumes"]
+
+
+def test_codex_runtime_overlay_is_explicit_and_scoped_to_python_services() -> None:
+    overlay = codex_runtime_compose()
+    services = cast(dict[str, Any], overlay["services"])
+
+    assert set(services) == {"api", "worker", "quality-sync"}
+    for service in services.values():
+        environment = cast(dict[str, str], service["environment"])
+        assert environment["HARNESS_RUNTIME"] == "multi"
+        assert environment["HARNESS_CODEX_CLI_PATH"] == (
+            "${HARNESS_CODEX_CLI_PATH:-/usr/local/bin/codex}"
+        )
+        assert environment["HARNESS_CODEX_APPROVAL_POLICY"] == (
+            "${HARNESS_CODEX_APPROVAL_POLICY:-untrusted}"
+        )
+        assert environment["HARNESS_CODEX_NETWORK_ACCESS"] == (
+            "${HARNESS_CODEX_NETWORK_ACCESS:-false}"
+        )
 
 
 def test_images_run_as_non_root_and_expose_health_checks() -> None:

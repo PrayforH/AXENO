@@ -5,6 +5,12 @@ from httpx import ASGITransport, AsyncClient
 
 from harness.api.app import create_app
 from harness.api.dependencies import build_memory_container
+from harness.studio.models import (
+    CapabilityRisk,
+    McpCapability,
+    NetworkAccess,
+    UpsertCatalogResourceRequest,
+)
 
 
 @pytest.mark.asyncio
@@ -157,6 +163,33 @@ async def test_shared_release_preflight_blocks_missing_workspace_mcp_credentials
         display_name="Dependency owner",
     )
     owner_id = owner_session.user.user_id
+    catalog = await container.capability_catalogs.get("local")
+    await container.capability_catalogs.upsert(
+        tenant_id="local",
+        user_id=owner_id,
+        resource_type="mcp",
+        resource_id="sentiment_query_mcp",
+        request=UpsertCatalogResourceRequest(
+            expectedRevision=catalog.revision,
+            resource=McpCapability(
+                reference="sentiment_query_mcp",
+                ownerUserId=owner_id,
+                serverName="sentiment_query_mcp",
+                label="Sentiment query",
+                description="Read-only internal sentiment data.",
+                endpointUrl="http://sentiment-mcp:8001/mcp",
+                tools=("mcp__sentiment_query_mcp__search_risk_subjects",),
+                risk=CapabilityRisk.MEDIUM,
+                networkAccess=NetworkAccess.INTERNAL,
+                sendsUserData=True,
+                readOnly=True,
+                executionLocation="external-mcp",
+                authMode="bearer",
+                credentialReference="SENTIMENT_QUERY_MCP_TOKEN",
+            ),
+            allowedExecutionProfileIds=("isolated-default",),
+        ),
+    )
     version = await container.agents.publish(
         "local",
         owner_id,
@@ -190,7 +223,7 @@ async def test_shared_release_preflight_blocks_missing_workspace_mcp_credentials
             },
         )
         configured = await client.put(
-            f"/v1/spaces/{space_id}/mcp/tavily-readonly/credentials",
+            f"/v1/spaces/{space_id}/mcp/sentiment_query_mcp/credentials",
             headers=owner,
             json={"authKey": "authorization", "value": "workspace-token"},
         )
@@ -204,7 +237,7 @@ async def test_shared_release_preflight_blocks_missing_workspace_mcp_credentials
             },
         )
 
-    assert personal["mcp_references"] == ["tavily-readonly"]
+    assert personal["mcp_references"] == ["sentiment_query_mcp"]
     assert personal["knowledge_references"] == []
     assert blocked.status_code == 409
     assert "workspace MCP credential" in blocked.text
