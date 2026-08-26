@@ -242,7 +242,7 @@ function HarnessComposer() {
   const pendingApproval = usePendingApproval();
   const reuseNotice = useRunReuseNotice();
   const runLocked = selectComposerDisabled(runView);
-  const draftRestored = useTaskComposerDraft(composerText);
+  useTaskComposerDraft(composerText);
   const videoRoute = routes.find(
     (route) => route.id === overrideRouteId && route.modelType === "video_generation",
   );
@@ -276,16 +276,6 @@ function HarnessComposer() {
     runView?.phase,
   );
   const videoGenerating = videoGeneration.status === "generating";
-  const composerHint = videoRoute
-    ? videoGenerating
-      ? "MiniMax H3 正在生成视频，可取消本次生成"
-      : "输入视频描述后发送 · 当前不会启动 Agent 对话"
-    : runLocked
-    ? runView?.phase === "waiting_approval"
-      ? "处理审批后，Agent 会从当前步骤继续"
-      : "Agent 正在执行，可随时停止"
-    : "Enter 发送 · Shift + Enter 换行";
-
   async function generateVideo() {
     const prompt = composerText.trim();
     if (!videoRoute || !prompt || videoGenerating) return;
@@ -489,12 +479,6 @@ function HarnessComposer() {
           <Composer.Send />
         )}
       </Composer.Root>
-      <div className="composer-meta" aria-live="polite">
-        <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
-        <span className="composer-hint">
-          {composerText && draftRestored ? "未发送内容已保存在当前浏览器" : composerHint}
-        </span>
-      </div>
     </div>
   );
 }

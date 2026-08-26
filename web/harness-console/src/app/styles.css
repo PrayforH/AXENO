@@ -3282,39 +3282,6 @@ body,
   background: #fbf2f1;
 }
 
-.composer-meta {
-  height: 32px;
-  min-height: 22px;
-  padding: 6px 10px 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  color: #969b96;
-  font-size: 9px;
-  line-height: 16px;
-}
-
-.composer-hint {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sandbox-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.sandbox-indicator i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--rail);
-  box-shadow: 0 0 0 3px var(--rail-soft);
-}
-
 .developer-drawer {
   border-left-color: var(--line);
   background: #fbfcfa;
@@ -3511,13 +3478,6 @@ body,
     padding: 10px 8px 7px;
   }
 
-  .composer-hint {
-    display: none;
-  }
-
-  .composer-meta {
-    justify-content: space-between;
-  }
 }
 
 @media (max-width: 460px) {

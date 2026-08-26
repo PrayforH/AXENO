@@ -408,14 +408,14 @@ describe("full-page agent workbench", () => {
     expect(page).toContain('<AgentThread userId={user.user_id} threadId={threadId} />');
     expect(agentThread).toContain("loadTaskComposerDraft");
     expect(agentThread).toContain("persistTaskComposerDraft");
-    expect(agentThread).toContain("未发送内容已保存在当前浏览器");
+    expect(agentThread).not.toContain("未发送内容已保存在当前浏览器");
     expect(agentThread).toContain("auiRef.current.composer().setText(saved)");
   });
 
   it("runs managed video models through a dedicated conversation composer path", () => {
     expect(agentThread).toContain('route.modelType === "video_generation"');
     expect(agentThread).toContain("/videos`");
-    expect(agentThread).toContain("当前不会启动 Agent 对话");
+    expect(agentThread).toContain("inputArtifactIds");
     expect(agentThread).toContain("下载 MP4");
     expect(styles).toContain(".composer-video-generation");
     expect(styles).toContain(".aui-composer-video-send");
@@ -576,9 +576,7 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /\.harness-composer-shell \.aui-composer-attach,[\s\S]*?width:\s*40px;[^}]*height:\s*40px;[^}]*margin:\s*0;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;/s,
     );
-    expect(styles).toMatch(
-      /\.composer-meta\s*\{[^}]*padding:\s*6px 10px 0;[^}]*align-items:\s*center;/s,
-    );
+    expect(styles).not.toContain(".composer-meta");
   });
 
   it("uses a single-column assistant flow so errors cannot occupy an avatar grid cell", () => {
