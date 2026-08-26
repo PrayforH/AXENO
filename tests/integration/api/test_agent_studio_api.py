@@ -13,6 +13,7 @@ import pytest
 import yaml
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from pydantic import SecretStr
 
 from harness.adapters.memory import InMemoryAgentRegistry
@@ -32,6 +33,12 @@ from harness.studio.mcp_discovery import (
 )
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
+
+
+def image_bytes(*, format: str = "PNG") -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (64, 64), color="white").save(output, format=format)
+    return output.getvalue()
 
 
 def app() -> FastAPI:
@@ -2158,8 +2165,8 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
                     files={"file": (name, content, media_type)},
                 )
                 for name, content, media_type in (
-                    ("first.png", b"first-image", "image/png"),
-                    ("second.jpg", b"second-image", "image/jpeg"),
+                    ("first.png", image_bytes(), "image/png"),
+                    ("second.jpg", image_bytes(format="JPEG"), "image/jpeg"),
                 )
             ]
             artifact_ids = [upload.json()["input_artifact_id"] for upload in uploads]
@@ -2181,8 +2188,8 @@ async def test_video_generation_forwards_user_owned_single_and_multiple_images()
     assert generated.headers["content-type"] == "video/mp4"
     assert len(captured) == 1
     assert captured[0].content.count(b'name="input_references"') == 2
-    assert b"first-image" in captured[0].content
-    assert b"second-image" in captured[0].content
+    assert image_bytes() in captured[0].content
+    assert image_bytes(format="JPEG") in captured[0].content
 
 
 @pytest.mark.asyncio

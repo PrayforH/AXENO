@@ -11,10 +11,12 @@ import ipaddress
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
+from PIL import Image, UnidentifiedImageError
 from pydantic import Field, SecretStr, model_validator
 
 from harness.core.errors import ConflictError, NotFoundError
@@ -148,6 +150,8 @@ class GeneratedVideoReference:
 
 _MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
 _MAX_VIDEO_REFERENCE_BYTES = 100 * 1024 * 1024
+_MIN_VIDEO_REFERENCE_ASPECT_RATIO = 1 / 4
+_MAX_VIDEO_REFERENCE_ASPECT_RATIO = 4
 
 
 class ModelConfigurationService:
@@ -518,6 +522,24 @@ class ModelConfigurationService:
             raise ConflictError("video references must be image files")
         if sum(len(item.content) for item in references) > _MAX_VIDEO_REFERENCE_BYTES:
             raise ConflictError("video reference images exceed the 100 MiB limit")
+        for index, item in enumerate(references, start=1):
+            try:
+                with Image.open(BytesIO(item.content)) as image:
+                    width, height = image.size
+                    image.verify()
+            except (OSError, UnidentifiedImageError, ValueError):
+                raise ConflictError(
+                    f"video reference image {index} is invalid or unsupported"
+                ) from None
+            aspect_ratio = width / height
+            if not (
+                _MIN_VIDEO_REFERENCE_ASPECT_RATIO
+                <= aspect_ratio
+                <= _MAX_VIDEO_REFERENCE_ASPECT_RATIO
+            ):
+                raise ConflictError(
+                    f"video reference image {index} aspect ratio must be between 1:4 and 4:1"
+                )
         form: dict[str, str] = {
             "model": route.models[0],
             "prompt": request.prompt,

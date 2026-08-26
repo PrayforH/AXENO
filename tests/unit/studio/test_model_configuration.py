@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+from io import BytesIO
 
 import httpx
 import pytest
+from PIL import Image
 from pydantic import SecretStr
 
 from harness.core.errors import ConflictError
@@ -23,6 +25,12 @@ from harness.studio.model_configuration import (
     ModelConfigurationService,
 )
 from harness.studio.repositories import InMemoryAgentDraftRepository
+
+
+def image_bytes(*, size: tuple[int, int] = (64, 64), format: str = "PNG") -> bytes:
+    output = BytesIO()
+    Image.new("RGB", size, color="white").save(output, format=format)
+    return output.getvalue()
 
 
 def service(
@@ -157,6 +165,8 @@ async def test_image_generation_uses_dedicated_endpoint_and_never_chat_route() -
 async def test_video_generation_supports_private_unauthenticated_sync_endpoint() -> None:
     captured: list[httpx.Request] = []
     mp4 = b"\x00\x00\x00\x18ftypmp42" + b"video-bytes"
+    first_image = image_bytes()
+    second_image = image_bytes(format="JPEG")
 
     def handler(incoming: httpx.Request) -> httpx.Response:
         captured.append(incoming)
@@ -201,10 +211,10 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
             ),
             references=(
                 GeneratedVideoReference(
-                    name="first.png", media_type="image/png", content=b"first-image"
+                    name="first.png", media_type="image/png", content=first_image
                 ),
                 GeneratedVideoReference(
-                    name="second.jpg", media_type="image/jpeg", content=b"second-image"
+                    name="second.jpg", media_type="image/jpeg", content=second_image
                 ),
             ),
         )
@@ -227,8 +237,8 @@ async def test_video_generation_supports_private_unauthenticated_sync_endpoint()
     assert captured[1].content.count(b'name="input_references"') == 2
     assert b'filename="first.png"' in captured[1].content
     assert b'filename="second.jpg"' in captured[1].content
-    assert b"first-image" in captured[1].content
-    assert b"second-image" in captured[1].content
+    assert first_image in captured[1].content
+    assert second_image in captured[1].content
     assert result.content == mp4
     assert result.request_id == "video-request-1"
     assert result.inference_time_seconds == "128.4"
@@ -273,13 +283,48 @@ async def test_video_generation_uses_single_reference_field_for_one_image() -> N
                 GeneratedVideoReference(
                     name="reference.webp",
                     media_type="image/webp",
-                    content=b"reference-image",
+                    content=image_bytes(format="WEBP"),
                 ),
             ),
         )
 
     assert b'name="input_reference"' in captured[0].content
     assert b'name="input_references"' not in captured[0].content
+
+
+@pytest.mark.asyncio
+async def test_video_generation_rejects_extreme_reference_aspect_ratio() -> None:
+    models, _catalogs, _credentials = service(environment="production")
+    await models.configure(
+        "tenant-a",
+        "admin-a",
+        "minimax-h3-video",
+        request(
+            modelType="video_generation",
+            model="/model",
+            baseUrl="http://172.20.109.229:18000/v1",
+            apiFormat="openai_videos",
+            authScheme="none",
+            apiKey=None,
+        ),
+    )
+
+    with pytest.raises(ConflictError, match="aspect ratio must be between 1:4 and 4:1"):
+        await models.generate_video(
+            "tenant-a",
+            "minimax-h3-video",
+            GenerateVideoRequest(
+                prompt="让长图动起来",
+                inputArtifactIds=["input_artifact_a"],
+            ),
+            references=(
+                GeneratedVideoReference(
+                    name="extreme.png",
+                    media_type="image/png",
+                    content=image_bytes(size=(500, 100)),
+                ),
+            ),
+        )
 
 
 @pytest.mark.asyncio
