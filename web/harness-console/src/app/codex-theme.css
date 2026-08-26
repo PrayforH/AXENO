@@ -788,17 +788,6 @@ select:not([multiple]):not(.task-model-control select):not(.task-agent-version-s
   transform: scale(0.95);
 }
 
-.composer-meta,
-.sandbox-indicator {
-  color: var(--codex-faint);
-}
-
-.sandbox-indicator i,
-.sandbox-indicator::before {
-  background: var(--codex-success);
-  box-shadow: 0 0 10px rgb(64 201 119 / 45%);
-}
-
 .aui-user-message-content {
   border-color: rgb(51 156 255 / 22%);
   color: var(--codex-ink-soft);
