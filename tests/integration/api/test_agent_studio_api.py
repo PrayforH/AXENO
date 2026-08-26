@@ -29,6 +29,7 @@ from harness.studio.mcp_discovery import (
     DiscoveredServer,
     McpDiscoveryService,
 )
+from harness.studio.online_skill import OnlineSkillPayload
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
 
@@ -234,12 +235,37 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
     assert spec["model"]["routeId"] == "deepseek-v4-flash"
     assert spec["template"] == "operator"
     assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
-    assert spec["mcpServers"] == []
+    assert spec["mcpServers"] == ["tavily-readonly"]
     assert spec["name"].startswith("agent-")
     assert spec["displayName"] == "搜索最新互联网舆情，分析风险并生成可下载报告。"
     assert len(spec["evaluationCases"]) == 3
     assert recommendation["validation"]["ready"] is True
     assert recommendation["runtime"] == "codex-app-server"
+
+
+@pytest.mark.asyncio
+async def test_task_driven_builder_treats_office_assistant_as_writable() -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-office-builder",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
+        created = await client.post(
+            "/v1/studio/drafts/from-task",
+            headers=headers,
+            json={
+                "task": "办公文档助手，各种 Office 能力，可以做 PPT、写 Word、转换 Excel 图表。",
+                "runtimePreference": "auto",
+            },
+        )
+
+    assert created.status_code == 201, created.text
+    spec = created.json()["draft"]["spec"]
+    assert spec["template"] == "operator"
+    assert spec["permissionPolicy"] == "production-standard"
+    assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
+    assert spec["mcpServers"] == ["tavily-readonly"]
 
 
 @pytest.mark.asyncio
@@ -674,6 +700,58 @@ async def test_studio_imports_a_skill_archive_without_executing_its_scripts() ->
     assert response.json()["skill"]["name"] == "ppt-master"
     assert response.json()["riskLevel"] == "review"
     assert response.json()["findings"] == ["包含可执行脚本：scripts/render.py"]
+
+
+@pytest.mark.asyncio
+async def test_studio_installs_online_skill_as_draft_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-online-skill",
+        "X-User-ID": "builder-a",
+    }
+    source_url = "https://github.com/openai/skills/blob/main/skills/office/SKILL.md"
+    markdown = (
+        b"---\nname: office-docs\ndescription: Build Office documents.\n---\n"
+        b"Create and verify the requested Office deliverable.\n"
+    )
+
+    async def fake_fetch(value: str) -> OnlineSkillPayload:
+        assert value == source_url
+        return OnlineSkillPayload(
+            content=markdown,
+            filename="SKILL.md",
+            source_url=(
+                "https://raw.githubusercontent.com/openai/skills/main/"
+                "skills/office/SKILL.md"
+            ),
+        )
+
+    monkeypatch.setattr("harness.studio.api.fetch_online_skill", fake_fetch)
+    async with AsyncClient(
+        transport=ASGITransport(app=app()),
+        base_url="http://test",
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("online-skill-agent"),
+        )
+        installed = await client.post(
+            f"/v1/studio/drafts/{created.json()['draftId']}/skills/install-online",
+            headers=headers,
+            json={"expectedRevision": 1, "sourceUrl": source_url},
+        )
+
+    assert installed.status_code == 200, installed.text
+    payload = installed.json()
+    assert payload["skillName"] == "office-docs"
+    assert payload["draft"]["revision"] == 2
+    assert "office-docs" in {
+        skill["name"] for skill in payload["draft"]["spec"]["skills"]
+    }
+    assert payload["warnings"] == [f"在线来源已下载并快照化：{source_url}"]
 
 
 @pytest.mark.asyncio

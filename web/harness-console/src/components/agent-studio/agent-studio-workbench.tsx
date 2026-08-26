@@ -304,6 +304,7 @@ export function AgentStudioWorkbench() {
   const [publishing, setPublishing] = useState(false);
   const [importingBundle, setImportingBundle] = useState(false);
   const [importingSkill, setImportingSkill] = useState(false);
+  const [onlineSkillUrl, setOnlineSkillUrl] = useState("");
   const [creatingPreview, setCreatingPreview] = useState(false);
   const [previews, setPreviews] = useState<StudioPreview[]>([]);
   const [evalDatasets, setEvalDatasets] = useState<StudioEvalDataset[]>([]);
@@ -1259,6 +1260,50 @@ export function AgentStudioWorkbench() {
     } finally {
       setImportingSkill(false);
       if (skillInputRef.current) skillInputRef.current.value = "";
+    }
+  }
+
+  async function installOnlineSkill() {
+    const sourceUrl = onlineSkillUrl.trim();
+    if (!sourceUrl) {
+      setNotice("请先粘贴 GitHub Skill 目录、SKILL.md 或 ZIP 地址");
+      return;
+    }
+    setImportingSkill(true);
+    try {
+      const current = dirty || !draft.id ? await saveDraft() : draft;
+      if (!current?.id) return;
+      const installed = await studioClient.installOnlineSkill(
+        current.id,
+        current.revision,
+        sourceUrl,
+      );
+      const saved = apiDraftToStudioDraft(installed.draft);
+      const duplicate = current.skills.some(
+        (candidate) => candidate.name === installed.skillName,
+      );
+      setDraft(saved);
+      setDrafts(await studioClient.listAccessibleDrafts());
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setActiveSkillName(installed.skillName);
+      setActiveSection("skills");
+      setSkillImportReport({
+        skillName: installed.skillName,
+        findings: installed.findings,
+        warnings: installed.warnings,
+      });
+      setOnlineSkillUrl("");
+      setNotice(
+        `${duplicate ? "已更新" : "已安装"}在线 Skill：${installed.skillName}`
+        + ` · ${installed.fileCount.toLocaleString("zh-CN")} 个文件`
+        + (installed.findings.length ? " · 需审阅" : " · 已快照化"),
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "在线 Skill 安装失败");
+    } finally {
+      setImportingSkill(false);
     }
   }
 
@@ -2621,13 +2666,37 @@ export function AgentStudioWorkbench() {
                     </button>
                   )}
                 </div>
+                <div className={styles.onlineSkillInstall}>
+                  <label htmlFor="online-skill-url">从在线地址安装</label>
+                  <input
+                    id="online-skill-url"
+                    type="url"
+                    value={onlineSkillUrl}
+                    disabled={!canEdit || importingSkill || saving}
+                    placeholder="https://github.com/openai/skills/tree/main/skills/..."
+                    onChange={(event) => setOnlineSkillUrl(event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void installOnlineSkill();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!canEdit || importingSkill || saving || !onlineSkillUrl.trim()}
+                    onClick={() => void installOnlineSkill()}
+                  >
+                    {importingSkill ? "正在下载并检查…" : "安装在线 Skill"}
+                  </button>
+                </div>
                 <InfoStrip tone="neutral">
-                  支持单个 SKILL.md 或 ZIP。声明式内容直接安装到当前草稿；脚本和依赖只进入不可变快照，实际执行与安装仍走 Sandbox 权限门。
+                  支持上传单个 SKILL.md / ZIP，或从公开 GitHub 目录、SKILL.md、ZIP 安装。在线内容先下载、扫描并固化到当前草稿；脚本和依赖实际执行仍走 Sandbox 权限门。
                 </InfoStrip>
                 {!skill && (
                   <div className={styles.skillEmpty}>
                     <strong>当前草稿尚未安装 Skill</strong>
-                    <span>可上传 SKILL.md 或 ZIP；不安装 Skill 也可以继续配置和发布 Agent。</span>
+                    <span>可上传文件或粘贴公开 GitHub Skill 地址；不安装 Skill 也可以继续配置和发布 Agent。</span>
                   </div>
                 )}
                 {skill && skillImportReport?.skillName === skill.name

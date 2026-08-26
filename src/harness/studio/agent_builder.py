@@ -221,6 +221,19 @@ _ARTIFACT_HINTS = (
     "document",
     "report",
 )
+_OFFICE_DELIVERY_HINTS = (
+    "office",
+    "办公文档",
+    "文档助手",
+    "ppt",
+    "powerpoint",
+    "演示文稿",
+    "幻灯片",
+    "excel",
+    "工作簿",
+    "电子表格",
+    "图表转换",
+)
 
 
 def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
@@ -230,9 +243,31 @@ def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
 
 def _requires_workspace_write(task: str) -> bool:
     lowered = task.lower()
-    return _contains_any(lowered, _WRITE_HINTS) or (
-        _contains_any(lowered, ("生成", "创建", "产出", "create", "produce"))
-        and _contains_any(lowered, _ARTIFACT_HINTS)
+    return (
+        _contains_any(lowered, _OFFICE_DELIVERY_HINTS)
+        or _contains_any(lowered, _WRITE_HINTS)
+        or (
+            _contains_any(lowered, ("生成", "创建", "产出", "create", "produce"))
+            and _contains_any(lowered, _ARTIFACT_HINTS)
+        )
+    )
+
+
+def _default_platform_mcp(catalog: CapabilityCatalog) -> tuple[McpCapability, ...]:
+    """Bind only the platform's reviewed public-search MCP by default.
+
+    Tenant/business MCPs can encode private data semantics and must remain an
+    explicit design-time choice. Tavily is the one platform-owned, read-only
+    public network capability that the task-driven Builder may safely suggest.
+    """
+
+    return tuple(
+        item
+        for item in catalog.mcp_servers
+        if item.reference == "tavily-readonly"
+        and item.owner_user_id is None
+        and item.enabled
+        and item.read_only
     )
 
 
@@ -335,10 +370,10 @@ def configure_task_driven_draft(
     if policy not in enabled_policies and enabled_policies:
         policy = sorted(enabled_policies)[0]
 
-    # Business MCPs can carry tenant-specific semantics and data boundaries.
-    # A task phrase is not sufficient authorization to bind one automatically;
-    # every external connection remains review-before-apply.
-    selected_mcp: tuple[McpCapability, ...] = ()
+    # The platform-owned public search connector is a reviewed default. Business
+    # MCPs still require an explicit design-time selection because their data
+    # semantics and tenant boundaries cannot be inferred from task wording.
+    selected_mcp = _default_platform_mcp(catalog)
     execution_profile = _execution_profile(catalog, selected_mcp)
 
     sample = request.sample_input.strip() if request.sample_input else ""
@@ -390,7 +425,12 @@ def configure_task_driven_draft(
         if writes
         else "任务以分析和回答为主，保持最小只读工具权限"
     )
-    reasons.append("外部 MCP 默认不自动接入；需在能力配置中明确选择后才扩大数据边界")
+    reasons.append(
+        "默认接入平台只读 Tavily 公网检索；凭据与网络边界仍需通过发布前预检"
+        if selected_mcp
+        else "平台只读 Tavily 当前不可用；业务 MCP 仍需在能力配置中明确选择"
+    )
+    reasons.append("租户与业务 MCP 不会按任务关键词自动绑定，避免误用专有数据源")
     reasons.extend(
         (
             "生成 TaskContract、五段式 System Prompt 和三类发布基础评测",

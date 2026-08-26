@@ -291,6 +291,11 @@ class InstalledSkill(StudioModel):
     binary_file_count: int = Field(alias="binaryFileCount", ge=0)
 
 
+class InstallOnlineSkillRequest(StudioModel):
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+    source_url: str = Field(alias="sourceUrl", min_length=12, max_length=2_048)
+
+
 class CreateAgentDraftRequest(StudioModel):
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     domain: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
