@@ -165,7 +165,9 @@ export function TaskAgentSwitcher({
           <small>当前智能体</small>
           <strong>
             {selected
-              ? `${selected.displayName} · ${selected.version}`
+              ? selected.domain === "historical"
+                ? `${selected.displayName} · ${selected.version} · 已删除`
+                : `${selected.displayName} · ${selected.version}`
               : (loading ? "正在读取…" : "暂无可用版本")}
           </strong>
         </span>

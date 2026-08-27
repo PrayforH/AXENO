@@ -194,19 +194,10 @@ function AuthenticatedHome() {
                 spaceId: coordinates.spaceId,
               }
             : catalog.defaultAgent);
-        // Task selector lists agents the user may chat with (can_chat). The
-        // selected historical agent stays visible even when its grant was
-        // revoked so the thread can still be read.
+        // Historical coordinates remain selected for replay, but deleted or
+        // revoked Agents never return to the new-task/version selector.
         const chatUsable = chatUsableAgents(catalog.agents);
-        const selectedUsable = chatUsable.some(
-          (agent) => agentItemKey(agent) === agentItemKey(selected),
-        );
-        const agents = selectedUsable
-          ? chatUsable
-          : currentTask
-            ? [selected, ...chatUsable]
-            : chatUsable;
-        setTaskAgents(agents);
+        setTaskAgents(chatUsable);
         setModelRoutes(routes);
         setSelectedAgent(selected);
         const storedModelRoute = loadTaskModelOverride(
@@ -283,14 +274,19 @@ function AuthenticatedHome() {
   }, [createTaskWithAgent, currentThreadState, focusTaskComposer, threadId, user.user_id]);
 
   const startNewTask = useCallback(() => {
-    if (!selectedAgent) return;
+    const nextAgent = selectedAgent && taskAgents.some(
+      (agent) => agentItemKey(agent) === agentItemKey(selectedAgent),
+    )
+      ? selectedAgent
+      : taskAgents[0];
+    if (!nextAgent) return;
     const launchMode = resolveTaskLaunchMode(currentThreadState, "new-task");
     if (launchMode === "focus-current") {
       focusTaskComposer();
       return;
     }
-    createTaskWithAgent(selectedAgent);
-  }, [createTaskWithAgent, currentThreadState, focusTaskComposer, selectedAgent]);
+    createTaskWithAgent(nextAgent);
+  }, [createTaskWithAgent, currentThreadState, focusTaskComposer, selectedAgent, taskAgents]);
 
   function switchTask(task: TaskSummary) {
     const nextAgent =
@@ -308,13 +304,6 @@ function AuthenticatedHome() {
         scope: task.space_id ? "team" : "personal",
         spaceId: task.space_id ?? undefined,
       };
-    if (
-      !taskAgents.some(
-        (agent) => agentItemKey(agent) === agentItemKey(nextAgent),
-      )
-    ) {
-      setTaskAgents((current) => [nextAgent, ...current]);
-    }
     const storage = taskStorage();
     bindThreadAgent(storage, task.thread_id, nextAgent);
     setSelectedAgent(nextAgent);

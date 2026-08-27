@@ -88,7 +88,7 @@ describe("task agent catalog", () => {
     })?.version).toBe("0.3.13");
   });
 
-  it("filters the task selector by can_chat while keeping revoked historical Agents", () => {
+  it("filters revoked and deleted historical Agents from the task selector", () => {
     const agents = [
       {
         name: "lead-agent",
@@ -118,10 +118,7 @@ describe("task agent catalog", () => {
       },
     ];
     const usable = chatUsableAgents(agents);
-    expect(usable.map((agent) => agent.name)).toEqual([
-      "lead-agent",
-      "historical-agent",
-    ]);
+    expect(usable.map((agent) => agent.name)).toEqual(["lead-agent"]);
   });
 
   it("keeps the neutral Lead default while offering business Agents explicitly", async () => {

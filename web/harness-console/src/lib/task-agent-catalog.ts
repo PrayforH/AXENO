@@ -107,7 +107,9 @@ export function findTaskAgent(
 
 /** Agents the requesting user may actually chat with (task selector). */
 export function chatUsableAgents(agents: readonly TaskAgent[]): TaskAgent[] {
-  return agents.filter((agent) => agent.canChat !== false);
+  return agents.filter(
+    (agent) => agent.canChat !== false && agent.domain !== "historical",
+  );
 }
 
 async function json<T>(url: string): Promise<T> {

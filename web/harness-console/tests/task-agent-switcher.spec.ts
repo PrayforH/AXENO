@@ -69,7 +69,7 @@ describe("task agent switcher", () => {
     expect(component).toContain("<select");
     expect(component).toContain("task-agent-version-select");
     expect(component).toContain("group.agents.length > 1");
-    expect(component).toContain("`${selected.displayName} · ${selected.version}`");
+    expect(component).toContain("`${selected.displayName} · ${selected.version} · 已删除`");
     expect(component).toContain('document.addEventListener("focusin", closeFromFocus)');
     expect(component).toContain("closeMenu(true)");
     expect(component).toContain("当前任务运行中，版本暂锁定");
