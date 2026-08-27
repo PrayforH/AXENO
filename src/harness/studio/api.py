@@ -19,9 +19,11 @@ from harness.api.dependencies import (
     ApiContainer,
     Identity,
     ensure_permission,
+    get_container,
     require_identity,
 )
 from harness.core.errors import ConflictError, NotFoundError, PermissionDeniedError
+from harness.core.models import RunStatus
 from harness.deployments.controller import DeploymentController
 from harness.deployments.models import (
     DeploymentSnapshot,
@@ -59,6 +61,12 @@ from harness.quota.models import (
 )
 from harness.quota.repositories import QuotaExceededError
 from harness.quota.service import QuotaService
+from harness.studio.agent_builder import (
+    AgentBuilderPatch,
+    AgentBuilderPatchRequest,
+    CreateTaskDrivenDraftRequest,
+    TaskDrivenDraftResult,
+)
 from harness.studio.bundle_import import AgentBundleImportError
 from harness.studio.catalog_service import CapabilityCatalogService, CatalogResourceType
 from harness.studio.compiler import DraftCompilationError
@@ -68,6 +76,18 @@ from harness.studio.mcp_credential_store import (
     McpCredentialStatus,
 )
 from harness.studio.mcp_discovery import McpDiscoveryError, McpDiscoveryService
+from harness.studio.model_configuration import (
+    BindAgentModelRequest,
+    ConfigureModelRequest,
+    GeneratedVideoReference,
+    GenerateImageRequest,
+    GenerateImageResult,
+    GenerateVideoRequest,
+    ModelConfigurationList,
+    ModelConfigurationService,
+    ModelConnectionTestResult,
+    VideoGenerationJob,
+)
 from harness.studio.models import (
     AgentDraft,
     AgentDraftSummary,
@@ -110,6 +130,14 @@ from harness.studio.skill_import import (
     MAX_SKILL_UPLOAD_BYTES,
     SkillImportError,
     import_skill,
+)
+from harness.studio.try_run import (
+    CreateStudioTryRunRequest,
+    SolidifiedAgentResult,
+    SolidifyStudioTryRunRequest,
+    StudioTryRunView,
+    build_codex_loop,
+    final_text,
 )
 
 
@@ -231,6 +259,20 @@ def get_mcp_credential_service(request: Request) -> McpCredentialService:
             detail={
                 "code": "mcp_credentials_not_configured",
                 "message": "MCP credential storage is not configured",
+            },
+        )
+    return service
+
+
+def get_model_configuration_service(request: Request) -> ModelConfigurationService:
+    container = getattr(request.app.state, "container", None)
+    service = getattr(container, "model_configurations", None)
+    if not isinstance(service, ModelConfigurationService):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "model_configuration_not_configured",
+                "message": "Model configuration control plane is not configured",
             },
         )
     return service
@@ -767,6 +809,159 @@ async def get_catalog(
     return await service.get_for_user(actor.tenant_id, actor.user_id)
 
 
+@router.get("/models", response_model=ModelConfigurationList)
+async def list_model_configurations(
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConfigurationList:
+    """List administrator-only connection metadata; credentials are status-only."""
+
+    return await service.list(actor.tenant_id)
+
+
+@router.put("/models/{route_id}", response_model=ModelConfigurationList)
+async def configure_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: ConfigureModelRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConfigurationList:
+    return await service.configure(actor.tenant_id, actor.user_id, route_id, body)
+
+
+@router.delete("/models/{route_id}", response_model=ModelConfigurationList)
+async def disable_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConfigurationList:
+    return await service.disable(actor.tenant_id, actor.user_id, route_id, expected_revision)
+
+
+@router.delete("/models/{route_id}/permanent", response_model=ModelConfigurationList)
+async def delete_model(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConfigurationList:
+    return await service.delete(actor.tenant_id, actor.user_id, route_id, expected_revision)
+
+
+@router.put("/models/agent-bindings/{agent_name}", response_model=ModelConfigurationList)
+async def bind_agent_model(
+    agent_name: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: BindAgentModelRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConfigurationList:
+    return await service.bind_agent(actor.tenant_id, actor.user_id, agent_name, body)
+
+
+@router.post("/models/{route_id}/test", response_model=ModelConnectionTestResult)
+async def test_model_connection(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    actor: Annotated[StudioActor, Depends(require_studio_catalog_admin)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> ModelConnectionTestResult:
+    return await service.test(actor.tenant_id, route_id)
+
+
+@router.post("/models/{route_id}/images", response_model=GenerateImageResult)
+async def generate_image(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: GenerateImageRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> GenerateImageResult:
+    ensure_permission(identity, "tasks:write")
+    return await service.generate_image(identity.tenant_id, route_id, body)
+
+
+@router.post("/models/{route_id}/videos", response_model=VideoGenerationJob)
+async def generate_video(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    body: GenerateVideoRequest,
+    identity: Annotated[Identity, Depends(require_identity)],
+    container: Annotated[ApiContainer, Depends(get_container)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> VideoGenerationJob:
+    ensure_permission(identity, "tasks:write")
+    references: list[GeneratedVideoReference] = []
+    if body.input_artifact_ids:
+        artifacts = await container.input_artifacts.resolve_for_run(
+            tenant_id=identity.tenant_id,
+            user_id=identity.user_id,
+            input_artifact_ids=body.input_artifact_ids,
+        )
+        for artifact in artifacts:
+            if not artifact.media_type.lower().startswith("image/"):
+                raise ConflictError("video references must be image files")
+            _metadata, content = await container.input_artifacts.download(
+                tenant_id=identity.tenant_id,
+                user_id=identity.user_id,
+                input_artifact_id=artifact.input_artifact_id,
+            )
+            references.append(
+                GeneratedVideoReference(
+                    name=artifact.name,
+                    media_type=artifact.media_type,
+                    content=content,
+                )
+            )
+    return await service.create_video_job(
+        identity.tenant_id,
+        identity.user_id,
+        route_id,
+        body,
+        references=tuple(references),
+    )
+
+
+@router.get("/models/{route_id}/videos/{job_id}", response_model=VideoGenerationJob)
+async def get_video_generation_job(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> VideoGenerationJob:
+    ensure_permission(identity, "tasks:write")
+    return await service.get_video_job(identity.tenant_id, identity.user_id, route_id, job_id)
+
+
+@router.delete("/models/{route_id}/videos/{job_id}", response_model=VideoGenerationJob)
+async def cancel_video_generation_job(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> VideoGenerationJob:
+    ensure_permission(identity, "tasks:write")
+    return await service.cancel_video_job(identity.tenant_id, identity.user_id, route_id, job_id)
+
+
+@router.get("/models/{route_id}/videos/{job_id}/content")
+async def download_generated_video(
+    route_id: Annotated[str, Path(pattern=r"^[a-z][a-z0-9-]*$")],
+    job_id: Annotated[str, Path(pattern=r"^video_job_[a-f0-9]{32}$")],
+    identity: Annotated[Identity, Depends(require_identity)],
+    service: Annotated[ModelConfigurationService, Depends(get_model_configuration_service)],
+) -> Response:
+    ensure_permission(identity, "tasks:write")
+    result = await service.download_video(identity.tenant_id, identity.user_id, route_id, job_id)
+    headers = {
+        "Content-Disposition": f'inline; filename="{route_id}.mp4"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if result.request_id:
+        headers["X-Request-Id"] = result.request_id
+    if result.inference_time_seconds:
+        headers["X-Inference-Time-S"] = result.inference_time_seconds
+    return Response(content=result.content, media_type=result.media_type, headers=headers)
+
+
 @router.post("/mcp/discover", response_model=McpDiscoveryResult)
 async def discover_mcp(
     body: McpDiscoveryRequest,
@@ -917,9 +1112,7 @@ async def upsert_catalog_resource(
             resource_id,
         )
     ):
-        raise ConflictError(
-            "Authenticated MCP registration requires the current user's credential"
-        )
+        raise ConflictError("Authenticated MCP registration requires the current user's credential")
     return await service.upsert(
         tenant_id=actor.tenant_id,
         user_id=actor.user_id,
@@ -964,9 +1157,7 @@ async def list_drafts(
 ) -> list[AgentDraftSummary]:
     if space_id is not None:
         try:
-            return await service.list_workspace_drafts(
-                actor.tenant_id, actor.user_id, space_id
-            )
+            return await service.list_workspace_drafts(actor.tenant_id, actor.user_id, space_id)
         except (ConflictError, NotFoundError, PermissionDeniedError) as error:
             raise _translate_domain_error(error) from error
     return await service.list(actor.tenant_id, actor.user_id)
@@ -975,14 +1166,14 @@ async def list_drafts(
 @router.post("/skills/conversation", response_model=SkillConversationReply)
 async def continue_skill_conversation(
     body: SkillConversationRequest,
-    _actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
     service: Annotated[
         SkillConversationService,
         Depends(get_skill_conversation_service),
     ],
 ) -> SkillConversationReply:
     try:
-        return await service.respond(body)
+        return await service.respond(actor.tenant_id, body)
     except SkillConversationUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1079,6 +1270,10 @@ async def install_skill_file(
         ) from error
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
+    return _installed_skill_response(draft, imported)
+
+
+def _installed_skill_response(draft: AgentDraft, imported: ImportedSkill) -> InstalledSkill:
     compact = compact_draft_for_editor(draft)
     compact_skill = next(
         skill for skill in compact.spec.skills if skill.name == imported.skill.name
@@ -1217,6 +1412,34 @@ async def create_draft(
 
 
 @router.post(
+    "/drafts/from-task",
+    response_model=TaskDrivenDraftResult,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_task_driven_draft(
+    body: CreateTaskDrivenDraftRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> TaskDrivenDraftResult:
+    """Compile one business task into a complete, explainable Agent draft."""
+
+    try:
+        result = await service.create_from_task(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            request=body,
+        )
+        return result.model_copy(update={"draft": compact_draft_for_editor(result.draft)})
+    except ValueError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "task_builder_unavailable", "message": str(error)},
+        ) from error
+    except (ConflictError, NotFoundError, PermissionDeniedError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
     "/drafts/import",
     response_model=ImportedAgentBundle,
     status_code=status.HTTP_201_CREATED,
@@ -1270,9 +1493,7 @@ async def import_draft_bundle(
             user_id=actor.user_id,
             content=bytes(content),
         )
-        return imported.model_copy(
-            update={"draft": compact_draft_for_editor(imported.draft)}
-        )
+        return imported.model_copy(update={"draft": compact_draft_for_editor(imported.draft)})
     except (AgentBundleValidationError, AgentBundleImportError) as error:
         raise HTTPException(
             status_code=422,
@@ -1361,6 +1582,25 @@ async def replace_draft(
     return draft
 
 
+@router.delete("/drafts/{draft_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_draft(
+    draft_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+) -> Response:
+    try:
+        await service.delete(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+        )
+    except (ConflictError, NotFoundError, PermissionDeniedError) as error:
+        raise _translate_domain_error(error) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/drafts/{draft_id}/validate", response_model=DraftValidationResult)
 async def validate_draft(
     draft_id: str,
@@ -1369,6 +1609,265 @@ async def validate_draft(
 ) -> DraftValidationResult:
     try:
         return await service.validate(actor.tenant_id, actor.user_id, draft_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post("/drafts/{draft_id}/builder-patch", response_model=AgentBuilderPatch)
+async def create_agent_builder_patch(
+    draft_id: str,
+    body: AgentBuilderPatchRequest,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> AgentBuilderPatch:
+    """Generate a reviewable whole-Agent patch without mutating the draft."""
+
+    try:
+        return await service.build_agent_patch(actor.tenant_id, actor.user_id, draft_id, body)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+async def _studio_try_run_view(
+    container: ApiContainer,
+    actor: StudioActor,
+    draft_id: str,
+    draft_revision: int,
+    run_id: str,
+) -> StudioTryRunView:
+    run = await container.runs.get(actor.tenant_id, run_id)
+    session = await container.sessions.get(actor.tenant_id, run.session_id)
+    prefix = f"preview-{draft_id}-{draft_revision}-"
+    if (
+        session.user_id != actor.user_id
+        or session.environment != "preview"
+        or not session.agent_version.startswith(prefix)
+    ):
+        raise NotFoundError(f"Studio Try Run not found: {run_id}")
+    events = await container.observed_events.list_after(actor.tenant_id, run_id, 0)
+    approvals = await container.approvals.list_for_runs(actor.tenant_id, [run_id])
+    artifacts = await container.artifacts.list_for_run(actor.tenant_id, run_id)
+    return StudioTryRunView(
+        draftId=draft_id,
+        draftRevision=draft_revision,
+        run=run,
+        events=tuple(events),
+        approvals=tuple(approvals),
+        artifacts=tuple(artifacts),
+        finalText=final_text(events),
+        loop=build_codex_loop(run, events),
+    )
+
+
+@router.post(
+    "/drafts/{draft_id}/try-runs",
+    response_model=StudioTryRunView,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_studio_try_run(
+    draft_id: str,
+    body: CreateStudioTryRunRequest,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+) -> StudioTryRunView:
+    """Compile and execute the current draft without publishing it."""
+
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        draft = await service.get(actor.tenant_id, actor.user_id, draft_id)
+        if draft.revision != body.expected_revision:
+            raise ConflictError(
+                f"draft revision changed: expected {body.expected_revision}, "
+                f"actual {draft.revision}"
+            )
+        graph = await service.preview_graph(actor.tenant_id, actor.user_id, draft_id)
+        compiled = graph.root
+        preview_version = (
+            f"preview-{draft_id}-{draft.revision}-{compiled.report.snapshot.content_hash[:12]}"
+        )
+        for dependency in graph.dependencies:
+            await container.agents.register_preview_snapshot(
+                actor.tenant_id,
+                actor.user_id,
+                dependency.compiled.report.snapshot,
+                version=dependency.preview_version,
+                package_hash=dependency.compiled.report.package_hash,
+                agent_id=dependency.draft.agent_id,
+            )
+        await container.agents.register_preview_snapshot(
+            actor.tenant_id,
+            actor.user_id,
+            compiled.report.snapshot,
+            version=preview_version,
+            package_hash=compiled.report.package_hash,
+            agent_id=draft.agent_id,
+        )
+        session_key = hashlib.sha256(
+            f"{actor.tenant_id}:{actor.user_id}:{draft_id}:{body.idempotency_key}".encode()
+        ).hexdigest()[:32]
+        session = await container.sessions.create(
+            actor.tenant_id,
+            actor.user_id,
+            draft.spec.name,
+            preview_version,
+            session_id=f"studio_try_{session_key}",
+            preview=True,
+        )
+        creation = await container.runs.create_with_result(
+            actor.tenant_id,
+            session.session_id,
+            body.idempotency_key,
+            input={"prompt": body.prompt},
+        )
+        if container.auto_execute and creation.created:
+            background_tasks.add_task(
+                container.worker.execute, actor.tenant_id, creation.run.run_id
+            )
+        return await _studio_try_run_view(
+            container, actor, draft_id, draft.revision, creation.run.run_id
+        )
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
+            },
+        ) from error
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.get(
+    "/drafts/{draft_id}/try-runs/{run_id}",
+    response_model=StudioTryRunView,
+)
+async def get_studio_try_run(
+    draft_id: str,
+    run_id: str,
+    draft_revision: Annotated[int, Query(alias="draftRevision", ge=1)],
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_previewer)],
+) -> StudioTryRunView:
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        return await _studio_try_run_view(container, actor, draft_id, draft_revision, run_id)
+    except (ConflictError, NotFoundError) as error:
+        raise _translate_domain_error(error) from error
+
+
+@router.post(
+    "/drafts/{draft_id}/solidify",
+    response_model=SolidifiedAgentResult,
+)
+async def solidify_studio_try_run(
+    draft_id: str,
+    body: SolidifyStudioTryRunRequest,
+    request: Request,
+    actor: Annotated[StudioActor, Depends(require_studio_publisher)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    eval_service: Annotated[EvalControlPlaneService, Depends(get_eval_service)],
+) -> SolidifiedAgentResult:
+    """Freeze one successful Try Run into a release plus required eval baseline."""
+
+    container = getattr(request.app.state, "container", None)
+    if not isinstance(container, ApiContainer):
+        raise HTTPException(status_code=503, detail="Harness container is unavailable")
+    try:
+        view = await _studio_try_run_view(
+            container,
+            actor,
+            draft_id,
+            body.draft_revision,
+            body.run_id,
+        )
+        if view.run.status is not RunStatus.SUCCEEDED:
+            raise ConflictError("only a succeeded Studio Try Run can be solidified")
+        current = await service.get(actor.tenant_id, actor.user_id, draft_id)
+        first_publish = current.revision == body.expected_revision == body.draft_revision
+        idempotent_retry = (
+            current.revision == body.expected_revision + 1
+            and body.expected_revision == body.draft_revision
+            and current.published_version == current.spec.version
+        )
+        if not first_publish and not idempotent_retry:
+            raise ConflictError(
+                "draft changed after the verified Try Run; run it again before solidifying"
+            )
+        if first_publish:
+            session = await container.sessions.get(actor.tenant_id, view.run.session_id)
+            await service.publish_preview_dependencies(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                draft_id=draft_id,
+                preview_version=session.agent_version,
+            )
+        datasets = await eval_service.list_datasets(actor.tenant_id, actor.user_id)
+        matching = [
+            item
+            for item in datasets
+            if item.source_draft_id == draft_id
+            and item.source_draft_revision == body.draft_revision
+            and item.required
+        ]
+        if matching:
+            dataset = max(matching, key=lambda item: item.version)
+        else:
+            dataset = await eval_service.create_dataset_version(
+                tenant_id=actor.tenant_id,
+                user_id=actor.user_id,
+                request=CreateEvalDatasetVersionRequest(
+                    draftId=draft_id,
+                    expectedRevision=body.draft_revision,
+                    name=f"{current.spec.display_name} · 发布基线",
+                    datasetId=f"release-{current.spec.name}",
+                    required=True,
+                ),
+            )
+        version = await service.publish(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            draft_id=draft_id,
+            expected_revision=current.revision,
+        )
+        updated = compact_draft_for_editor(
+            await service.get(actor.tenant_id, actor.user_id, draft_id)
+        )
+        published = PublishedAgentVersion.model_validate(
+            version.model_dump(exclude={"snapshot", "owner_user_id"})
+        )
+        return SolidifiedAgentResult(
+            draft=updated,
+            version=published,
+            dataset=dataset,
+            loop=view.loop,
+        )
+    except StudioPublicationConflictError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "version_conflict", "message": str(error)},
+        ) from error
+    except DraftCompilationError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "draft_not_ready",
+                "message": str(error),
+                "issues": [issue.model_dump(mode="json", by_alias=True) for issue in error.issues],
+            },
+        ) from error
+    except StudioPublisherNotConfiguredError as error:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "studio_publisher_unavailable", "message": str(error)},
+        ) from error
     except (ConflictError, NotFoundError) as error:
         raise _translate_domain_error(error) from error
 

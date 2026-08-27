@@ -202,6 +202,46 @@ class AgentService:
                 agent_id=agent_id,
             )
 
+    async def register_preview_snapshot(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        snapshot: AgentManifestSnapshot,
+        *,
+        version: str,
+        package_hash: str | None = None,
+        agent_id: str | None = None,
+    ) -> AgentVersion:
+        """Register an immutable Studio-only snapshot without publishing it."""
+
+        manifest = snapshot.manifest
+        candidate = AgentVersion(
+            tenant_id=tenant_id,
+            owner_user_id=owner_user_id,
+            name=manifest.metadata.name,
+            version=version,
+            status=AgentVersionStatus.VALIDATED,
+            manifest_hash=snapshot.content_hash,
+            package_hash=package_hash,
+            snapshot=snapshot.model_dump(mode="json"),
+            created_at=self._clock(),
+            agent_id=agent_id,
+        )
+        try:
+            await self._registry.add(candidate)
+        except ConflictError:
+            existing = await self._registry.get(
+                tenant_id, owner_user_id, candidate.name, candidate.version
+            )
+            if (
+                existing.status is not AgentVersionStatus.VALIDATED
+                or existing.manifest_hash != candidate.manifest_hash
+                or existing.package_hash != candidate.package_hash
+            ):
+                raise
+            return existing
+        return candidate
+
     async def _publish_snapshot(
         self,
         tenant_id: str,

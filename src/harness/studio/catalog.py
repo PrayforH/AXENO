@@ -10,6 +10,7 @@ from harness.studio.models import (
     ModelRouteCapability,
     NetworkAccess,
     PolicyCapability,
+    RuntimeCapability,
     TemplateCapability,
 )
 
@@ -19,16 +20,6 @@ def default_capability_catalog() -> CapabilityCatalog:
 
     return CapabilityCatalog(
         modelRoutes=(
-            ModelRouteCapability(
-                routeId="new-api-default",
-                label="DeepSeek V4（兼容路由）",
-                provider="deepseek",
-                models=("deepseek-v4-pro",),
-                capabilities=("streaming", "tool_use"),
-                credentialReference="NEW_API_KEY",
-                version=2,
-                enabled=False,
-            ),
             ModelRouteCapability(
                 routeId="deepseek-v4-flash",
                 label="DeepSeek V4 Flash",
@@ -51,6 +42,7 @@ def default_capability_catalog() -> CapabilityCatalog:
                 provider="minimax",
                 models=("MiniMax-M3",),
                 capabilities=("streaming", "tool_use", "vision"),
+                modelType="vision",
                 credentialReference="MINIMAX_M3_API_KEY",
             ),
             ModelRouteCapability(
@@ -137,9 +129,9 @@ def default_capability_catalog() -> CapabilityCatalog:
                 readOnly=True,
                 executionLocation="external-mcp",
                 credentialReference="TAVILY_API_KEY",
-                authMode="query",
-                authName="tavilyApiKey",
+                authMode="bearer",
                 authKey="api_key",
+                version=2,
             ),
         ),
         policies=(
@@ -273,6 +265,46 @@ def default_capability_catalog() -> CapabilityCatalog:
                 template=AgentTemplate.ORCHESTRATOR,
                 label="编排型",
                 description="将可独立验收的任务委派给固定版本子 Agent。",
+            ),
+        ),
+        runtimeCapabilities=(
+            RuntimeCapability(
+                runtime="claude-agent-sdk",
+                label="Claude Agent SDK",
+                capabilities=(
+                    "skills",
+                    "builtin_tools",
+                    "python_tools",
+                    "mcp_http",
+                    "mcp_sse",
+                    "knowledge",
+                    "subagents",
+                    "tool_search",
+                    "session_resume",
+                    "approvals",
+                    "artifacts",
+                ),
+                modelApiFormats=("anthropic_compatible", "openai_compatible"),
+            ),
+            RuntimeCapability(
+                runtime="codex-app-server",
+                label="Codex App Server",
+                capabilities=(
+                    "skills",
+                    "builtin_tools",
+                    "mcp_http",
+                    "subagents",
+                    "session_resume",
+                    "approvals",
+                    "artifacts",
+                ),
+                modelApiFormats=("openai_compatible",),
+                limitations=(
+                    "Studio Python tools are not connected",
+                    "Knowledge references are not connected",
+                    "On-demand tool search is not connected",
+                    "Only streamable HTTP MCP registrations are supported",
+                ),
             ),
         ),
     )

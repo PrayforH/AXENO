@@ -20,7 +20,10 @@ const studioSidebar = readFileSync(
 );
 const workbench = readFileSync(join(process.cwd(), "src/app/page.tsx"), "utf8");
 const styles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
-const login = readFileSync(join(process.cwd(), "src/app/login/page.tsx"), "utf8");
+const login = readFileSync(
+  join(process.cwd(), "src/app/login/page.tsx"),
+  "utf8",
+);
 const memory = readFileSync(
   join(process.cwd(), "src/components/memory-bank/memory-bank.tsx"),
   "utf8",
@@ -53,7 +56,7 @@ describe("account settings", () => {
     expect(productIcons).toContain("export type ProductIconName");
     expect(productIcons).toContain("data-product-icon={name}");
     expect(settings).toContain("const SETTINGS_NAV");
-    expect(settings.match(/href: "#/g)).toHaveLength(8);
+    expect(settings.match(/href: "#/g)).toHaveLength(10);
     expect(settings).toContain("<ProductIcon name={item.icon} />");
     expect(styles).toMatch(
       /\.account-actions svg\s*\{[^}]*stroke-width:\s*1\.65;/s,
@@ -70,7 +73,9 @@ describe("account settings", () => {
     expect(studioSidebar).toContain("<AccountMenu />");
     expect(workbench).not.toContain("<AccountMenu />");
     expect(styles).toMatch(/\.task-rail-account\s*\{[^}]*margin-top:\s*auto;/s);
-    expect(styles).toMatch(/\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;[^}]*right:\s*0;[^}]*width:\s*auto;/s);
+    expect(styles).toMatch(
+      /\.account-popover\s*\{[^}]*bottom:\s*calc\(100% \+ 8px\);[^}]*left:\s*0;[^}]*right:\s*0;[^}]*width:\s*auto;/s,
+    );
     expect(menu).toContain('className="account-trigger-chevron"');
     expect(styles).toMatch(
       /@media \(max-width: 820px\)[\s\S]*?\.task-sidebar\.is-collapsed\s*\{[^}]*z-index:\s*20;/s,
@@ -87,7 +92,9 @@ describe("account settings", () => {
   });
 
   it("keeps the only theme control in account appearance settings", () => {
-    expect(settings).toContain('{ href: "#appearance", label: "外观", icon: "appearance" }');
+    expect(settings).toMatch(
+      /id:\s*"appearance",\s*href:\s*"#appearance",\s*label:\s*"外观"/s,
+    );
     expect(settings).toContain('id="appearance"');
     expect(settings).toContain("<ThemeSelector />");
     expect(themeSelector).toContain('"浅色"');
@@ -102,9 +109,26 @@ describe("account settings", () => {
     expect(memory).not.toContain("ThemeToggle");
   });
 
-  it("keeps the settings page responsive and visually restrained", () => {
-    expect(styles).toMatch(/\.settings-layout\s*\{[^}]*grid-template-columns:\s*160px minmax\(0,\s*760px\);/s);
-    expect(styles).toMatch(/@media \(max-width: 760px\)[\s\S]*?\.settings-layout\s*\{[^}]*display:\s*block;/s);
-    expect(styles).not.toContain(".settings-shell {\n  background: linear-gradient");
+  it("uses a rounded paged settings dialog instead of one long document", () => {
+    expect(settings).toContain('className="settings-dialog"');
+    expect(settings).toContain(
+      'aria-current={activeSection === item.id ? "page" : undefined}',
+    );
+    expect(settings).toMatch(
+      /id="profile"[\s\S]*?hidden=\{activeSection !== "profile"\}/,
+    );
+    expect(styles).toMatch(
+      /\.settings-dialog\s*\{[^}]*border-radius:\s*24px;/s,
+    );
+    expect(styles).toMatch(
+      /\.settings-layout\s*\{[^}]*grid-template-columns:\s*220px minmax\(0,\s*1fr\);/s,
+    );
+    expect(styles).toMatch(/\.settings-content\s*\{[^}]*overflow-y:\s*auto;/s);
+    expect(styles).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*?\.settings-dialog\s*\{[^}]*border-radius:\s*0;/s,
+    );
+    expect(styles).not.toContain(
+      ".settings-shell {\n  background: linear-gradient",
+    );
   });
 });

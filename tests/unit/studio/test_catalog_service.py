@@ -27,9 +27,27 @@ def test_default_catalog_exposes_separate_deepseek_v4_routes() -> None:
 
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
-    assert routes["new-api-default"].enabled is False
+    assert "new-api-default" not in routes
     assert routes["glm-5-2"].models == ("shdata-glm",)
     assert "anthropic-official" not in routes
+
+
+def test_catalog_accepts_existing_unauthenticated_video_route() -> None:
+    route = ModelRouteCapability(
+        routeId="minimax-h3-video",
+        label="MiniMax H3 Video",
+        provider="MiniMax",
+        models=("/model",),
+        capabilities=("video_generation",),
+        modelType="video_generation",
+        baseUrl="http://video-service:8000/v1",
+        apiFormat="openai_videos",
+        authScheme="none",
+    )
+
+    assert route.model_type == "video_generation"
+    assert route.api_format == "openai_videos"
+    assert route.auth_scheme == "none"
 
 
 @pytest.mark.asyncio
@@ -152,6 +170,43 @@ async def test_get_upgrades_an_untouched_system_catalog() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_migrates_legacy_platform_tavily_query_auth_to_bearer() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = default_capability_catalog()
+    tavily = catalog.mcp_servers[0].model_copy(
+        update={
+            "auth_mode": "query",
+            "auth_name": "tavilyApiKey",
+            "version": 1,
+        }
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=7,
+            catalog=catalog.model_copy(update={"mcp_servers": (tavily,)}),
+            updatedBy="system-route-migration",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+    repeated = await service.get("tenant-a")
+
+    migrated = upgraded.catalog.mcp_servers[0]
+    assert upgraded.revision == 8
+    assert migrated.auth_mode == "bearer"
+    assert migrated.auth_name is None
+    assert migrated.version == 2
+    assert repeated == upgraded
+
+
+@pytest.mark.asyncio
 async def test_get_never_drops_tenant_mcp_from_a_system_authored_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
     catalog = previous_system_catalog()
@@ -216,6 +271,39 @@ async def test_get_preserves_a_tenant_managed_catalog() -> None:
     assert "local-development" not in {
         profile.profile_id for profile in current.catalog.execution_profiles
     }
+
+
+@pytest.mark.asyncio
+async def test_get_adds_platform_runtime_capabilities_to_tenant_legacy_catalog() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = default_capability_catalog().model_copy(
+        update={"runtime_capabilities": ()}
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=9,
+            catalog=catalog,
+            updatedBy="tenant-admin",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+    repeated = await service.get("tenant-a")
+
+    assert upgraded.revision == 10
+    assert upgraded.updated_by == "tenant-admin"
+    assert {item.runtime for item in upgraded.catalog.runtime_capabilities} == {
+        "claude-agent-sdk",
+        "codex-app-server",
+    }
+    assert repeated == upgraded
 
 
 @pytest.mark.asyncio
@@ -339,7 +427,7 @@ async def test_get_refreshes_only_known_legacy_system_permission_copy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_splits_legacy_deepseek_route_in_system_migrated_catalog() -> None:
+async def test_get_retires_legacy_deepseek_route_in_system_migrated_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
     catalog = default_capability_catalog()
     legacy_route = ModelRouteCapability(
@@ -387,7 +475,7 @@ async def test_get_splits_legacy_deepseek_route_in_system_migrated_catalog() -> 
     routes = {route.route_id: route for route in upgraded.catalog.model_routes}
     assert upgraded.revision == 25
     assert upgraded.updated_by == "system-route-migration"
-    assert routes["new-api-default"].enabled is False
+    assert "new-api-default" not in routes
     assert routes["deepseek-v4-flash"].models == ("deepseek-v4-flash",)
     assert routes["deepseek-v4-pro"].models == ("deepseek-v4-pro",)
     assert routes["deepseek-v4-flash"].credential_reference == "CUSTOM_NEW_API_KEY"

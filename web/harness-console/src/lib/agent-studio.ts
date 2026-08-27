@@ -11,6 +11,7 @@ export type StudioSection =
 export type StudioRisk = "low" | "medium" | "high";
 export type NetworkAccess = "none" | "internal" | "external";
 export type ToolExposureMode = "eager" | "on_demand";
+export type AgentRuntime = "claude-agent-sdk" | "codex-app-server";
 
 export interface ModelRouteOption {
   id: string;
@@ -18,6 +19,7 @@ export interface ModelRouteOption {
   provider: string;
   models: string[];
   capabilities: string[];
+  apiFormat?: "anthropic_compatible" | "openai_compatible" | "openai_images";
 }
 
 export interface BuiltinToolOption {
@@ -110,6 +112,15 @@ export interface StudioDraft {
   domain: string;
   version: string;
   template: "analyst" | "operator" | "orchestrator";
+  taskContract: {
+    goal: string;
+    audience: string;
+    inputs: string[];
+    outputs: string[];
+    constraints: string[];
+    examples: string[];
+  } | null;
+  runtime: AgentRuntime;
   modelRoute: string;
   model: string;
   requiredCapabilities: string[];
@@ -126,6 +137,7 @@ export interface StudioDraft {
   restoreSession: boolean;
   archiveOnComplete: boolean;
   maxTurns: number | null;
+  maxToolCalls: number | null;
   timeoutSeconds: number | null;
   maxBudgetUsd: number | null;
   maxModelTokens: number | null;
@@ -183,6 +195,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "deepseek",
     models: ["deepseek-v4-flash"],
     capabilities: ["streaming", "tool_use"],
+    apiFormat: "anthropic_compatible",
   },
   {
     id: "deepseek-v4-pro",
@@ -190,6 +203,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "deepseek",
     models: ["deepseek-v4-pro"],
     capabilities: ["streaming", "tool_use"],
+    apiFormat: "anthropic_compatible",
   },
   {
     id: "minimax-m3",
@@ -197,6 +211,7 @@ export const MODEL_ROUTES: ModelRouteOption[] = [
     provider: "minimax",
     models: ["MiniMax-M3"],
     capabilities: ["streaming", "tool_use", "vision"],
+    apiFormat: "anthropic_compatible",
   },
 ];
 
@@ -339,6 +354,15 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   domain: "general-assistant",
   version: "1.0.0",
   template: "orchestrator",
+  taskContract: {
+    goal: "理解用户目标，利用当前实际可用的工具完成工作，并交付可核验的结果。",
+    audience: "需要完成通用知识工作与文件任务的用户",
+    inputs: ["用户目标、约束、附件与工作区材料"],
+    outputs: ["可核验的回答、变更或 outputs/ 下的交付文件"],
+    constraints: ["不得伪造工具结果，不得绕过平台权限、审批或沙箱边界"],
+    examples: [],
+  },
+  runtime: "claude-agent-sdk",
   modelRoute: "deepseek-v4-pro",
   model: "deepseek-v4-pro",
   requiredCapabilities: ["streaming", "tool_use"],
@@ -362,6 +386,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   restoreSession: true,
   archiveOnComplete: true,
   maxTurns: 80,
+  maxToolCalls: 256,
   timeoutSeconds: null,
   maxBudgetUsd: null,
   maxModelTokens: null,
@@ -494,6 +519,8 @@ export function restoreStudioDraft(value: unknown): StudioDraft | null {
     evalCases,
     toolExposureMode:
       raw.toolExposureMode === "on_demand" ? "on_demand" : "eager",
+    runtime:
+      raw.runtime === "codex-app-server" ? "codex-app-server" : "claude-agent-sdk",
     restoreSession:
       typeof raw.restoreSession === "boolean"
         ? raw.restoreSession
@@ -535,6 +562,9 @@ export function evaluateStudioDraft(
     issues.push("System Prompt 缺少必需章节");
   }
   if (draft.skills.length === 0) issues.push("至少需要一个 Skill");
+  // Runtime compatibility is intentionally not duplicated here. The server
+  // Compiler returns the authoritative RuntimeCompatibility and issues after
+  // resolving the tenant capability catalog.
   if (draft.toolExposureMode === "on_demand" && draft.pythonTools.length > 0) {
     issues.push("自定义算子仅支持启动时加载");
   }

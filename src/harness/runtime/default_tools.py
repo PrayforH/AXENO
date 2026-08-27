@@ -77,7 +77,8 @@ def default_tool_resolver(
                     {"type": "http", "url": "https://mcp.tavily.com/mcp/"},
                 ),
                 allowed_tools=TAVILY_ALLOWED_TOOLS,
-                credential_query_parameters=(("tavilyApiKey", "api_key"),),
+                credential_headers=(("Authorization", "api_key"),),
+                credential_header_prefixes=(("Authorization", "Bearer "),),
                 result_trust=ContextTrust.UNTRUSTED,
                 preflight_smoke=McpSmokeCheck(
                     tool="tavily_search",

@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from harness.core.manifest import ToolExposureMode
+from harness.core.models import AgentRuntimeType
 from harness.evals.suite import EvalCase
 
 
@@ -154,6 +155,12 @@ class DraftWorkspace(StudioModel):
 
 class DraftLimits(StudioModel):
     max_turns: int | None = Field(default=None, alias="maxTurns", ge=1)
+    max_tool_calls: int | None = Field(
+        default=256,
+        alias="maxToolCalls",
+        ge=1,
+        le=4096,
+    )
     timeout_seconds: int | None = Field(
         default=None,
         alias="timeoutSeconds",
@@ -165,9 +172,7 @@ class DraftLimits(StudioModel):
     max_subagents: int = Field(default=8, alias="maxSubagents", ge=1, le=32)
     max_subagent_tasks: int = Field(default=16, alias="maxSubagentTasks", ge=1, le=128)
     max_concurrent_subagents: int = Field(default=4, alias="maxConcurrentSubagents", ge=1, le=16)
-    max_subagent_usage_units: int | None = Field(
-        default=None, alias="maxSubagentUsageUnits", gt=0
-    )
+    max_subagent_usage_units: int | None = Field(default=None, alias="maxSubagentUsageUnits", gt=0)
 
 
 class DraftSubagent(StudioModel):
@@ -177,6 +182,17 @@ class DraftSubagent(StudioModel):
     background: bool = False
 
 
+class DraftTaskContract(StudioModel):
+    """Business-facing contract compiled into Prompt and acceptance tests."""
+
+    goal: str = Field(min_length=1, max_length=2_000)
+    audience: str = Field(default="当前用户", min_length=1, max_length=500)
+    inputs: tuple[str, ...] = Field(min_length=1, max_length=20)
+    outputs: tuple[str, ...] = Field(min_length=1, max_length=20)
+    constraints: tuple[str, ...] = Field(default=(), max_length=20)
+    examples: tuple[str, ...] = Field(default=(), max_length=10)
+
+
 class AgentDraftSpec(StudioModel):
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     version: str = Field(default="0.1.0", min_length=1)
@@ -184,6 +200,8 @@ class AgentDraftSpec(StudioModel):
     description: str = Field(min_length=1, max_length=500)
     domain: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
     template: AgentTemplate = AgentTemplate.ANALYST
+    task_contract: DraftTaskContract | None = Field(default=None, alias="taskContract")
+    runtime: AgentRuntimeType = "claude-agent-sdk"
     model: DraftModelSelection
     system_prompt: str = Field(alias="systemPrompt", min_length=1, max_length=512 * 1024)
     skills: tuple[DraftSkill, ...] = Field(min_length=1)
@@ -231,9 +249,7 @@ class AgentDraftSpec(StudioModel):
             {name for name in python_tool_names if python_tool_names.count(name) > 1}
         )
         if duplicate_python_tools:
-            raise ValueError(
-                f"duplicate Python tool: {', '.join(duplicate_python_tools)}"
-            )
+            raise ValueError(f"duplicate Python tool: {', '.join(duplicate_python_tools)}")
         return self
 
 
@@ -354,11 +370,21 @@ class AgentDraftSummary(StudioModel):
 
 
 class ModelRouteCapability(StudioModel):
-    route_id: str = Field(alias="routeId")
-    label: str
-    provider: str
-    models: tuple[str, ...]
+    route_id: str = Field(alias="routeId", pattern=r"^[a-z][a-z0-9-]*$")
+    label: str = Field(min_length=1, max_length=160)
+    provider: str = Field(min_length=1, max_length=80)
+    models: tuple[str, ...] = Field(min_length=1)
     capabilities: tuple[str, ...]
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
+        default="chat", alias="modelType"
+    )
+    base_url: str | None = Field(default=None, alias="baseUrl", max_length=2048)
+    api_format: Literal[
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
+    ] = Field(default="anthropic_compatible", alias="apiFormat")
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(
+        default="bearer", alias="authScheme"
+    )
     credential_managed: bool = Field(default=True, alias="credentialManaged")
     credential_reference: str | None = Field(
         default=None,
@@ -367,6 +393,48 @@ class ModelRouteCapability(StudioModel):
     )
     version: int = Field(default=1, ge=1)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_model_connection(self) -> ModelRouteCapability:
+        if len(self.capabilities) != len(set(self.capabilities)):
+            raise ValueError("duplicate model capability")
+        required = {
+            "chat": {"streaming", "tool_use"},
+            "vision": {"streaming", "tool_use", "vision"},
+            "image_generation": {"image_generation"},
+            "video_generation": {"video_generation"},
+        }[self.model_type]
+        if not required.issubset(self.capabilities):
+            raise ValueError(
+                f"{self.model_type} model is missing required capabilities: "
+                + ", ".join(sorted(required - set(self.capabilities)))
+            )
+        if self.model_type == "image_generation" and self.api_format != "openai_images":
+            raise ValueError("image generation models must use the openai_images API format")
+        if self.model_type != "image_generation" and self.api_format == "openai_images":
+            raise ValueError("openai_images is only valid for image generation models")
+        if self.model_type == "video_generation" and self.api_format != "openai_videos":
+            raise ValueError("video generation models must use the openai_videos API format")
+        if self.model_type != "video_generation" and self.api_format == "openai_videos":
+            raise ValueError("openai_videos is only valid for video generation models")
+        if self.auth_scheme == "none" and self.model_type != "video_generation":
+            raise ValueError(
+                "unauthenticated model connections are only valid for video generation"
+            )
+        if self.base_url is not None:
+            parsed = urlsplit(self.base_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "model Base URL must be HTTP(S) without credentials, query, or fragment"
+                )
+        return self
 
 
 class BuiltinToolCapability(StudioModel):
@@ -482,9 +550,7 @@ class McpCapability(StudioModel):
             raise ValueError("authenticated MCP requires credentialReference")
         if len(self.tools) != len(set(self.tools)):
             raise ValueError("duplicate MCP tool")
-        if len(self.allowed_execution_profile_ids) != len(
-            set(self.allowed_execution_profile_ids)
-        ):
+        if len(self.allowed_execution_profile_ids) != len(set(self.allowed_execution_profile_ids)):
             raise ValueError("duplicate MCP Execution Profile")
         return self
 
@@ -583,6 +649,25 @@ class TemplateCapability(StudioModel):
     description: str
 
 
+class RuntimeCapability(StudioModel):
+    """Version-aware feature declaration consumed by Compiler and Builder."""
+
+    runtime: AgentRuntimeType
+    label: str
+    stability: Literal["stable", "preview", "experimental"] = "stable"
+    capabilities: tuple[str, ...]
+    model_api_formats: tuple[
+        Literal[
+            "anthropic_compatible",
+            "openai_compatible",
+            "openai_images",
+            "openai_videos",
+        ],
+        ...,
+    ] = Field(alias="modelApiFormats")
+    limitations: tuple[str, ...] = ()
+
+
 class CapabilityCatalog(StudioModel):
     model_routes: tuple[ModelRouteCapability, ...] = Field(alias="modelRoutes")
     builtin_tools: tuple[BuiltinToolCapability, ...] = Field(alias="builtinTools")
@@ -592,6 +677,12 @@ class CapabilityCatalog(StudioModel):
         default=(), alias="executionProfiles"
     )
     templates: tuple[TemplateCapability, ...]
+    runtime_capabilities: tuple[RuntimeCapability, ...] = Field(
+        default=(), alias="runtimeCapabilities"
+    )
+    agent_model_bindings: dict[str, str] = Field(
+        default_factory=dict, alias="agentModelBindings"
+    )
 
     @model_validator(mode="after")
     def unique_managed_ids(self) -> CapabilityCatalog:
@@ -619,6 +710,14 @@ class CapabilityCatalog(StudioModel):
         )
         if duplicate_mcp:
             raise ValueError(f"duplicate MCP: {', '.join(duplicate_mcp)}")
+        route_ids = {item.route_id for item in self.model_routes}
+        invalid_agents = sorted(
+            name
+            for name, route_id in self.agent_model_bindings.items()
+            if not name or not re.fullmatch(r"[a-z][a-z0-9-]*", name) or route_id not in route_ids
+        )
+        if invalid_agents:
+            raise ValueError("invalid Agent model bindings: " + ", ".join(invalid_agents))
         return self
 
 
@@ -675,12 +774,8 @@ class ValidationIssue(StudioModel):
     severity: ValidationSeverity
     path: str | None = None
     stage: ValidationStage = ValidationStage.PUBLISH
-    related_references: tuple[str, ...] = Field(
-        default=(), alias="relatedReferences"
-    )
-    suggested_profile_ids: tuple[str, ...] = Field(
-        default=(), alias="suggestedProfileIds"
-    )
+    related_references: tuple[str, ...] = Field(default=(), alias="relatedReferences")
+    suggested_profile_ids: tuple[str, ...] = Field(default=(), alias="suggestedProfileIds")
 
 
 class EffectiveAgentContract(StudioModel):
@@ -700,11 +795,21 @@ class EffectiveAgentContract(StudioModel):
     risk: CapabilityRisk
 
 
+class RuntimeCompatibility(StudioModel):
+    runtime: AgentRuntimeType
+    label: str
+    stability: Literal["stable", "preview", "experimental"]
+    compatible: bool
+    capabilities: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+
 class DraftValidationResult(StudioModel):
     ready: bool
     production_eligible: bool = Field(alias="productionEligible")
     issues: tuple[ValidationIssue, ...]
     contract: EffectiveAgentContract
+    runtime_compatibility: RuntimeCompatibility = Field(alias="runtimeCompatibility")
     manifest_yaml: str = Field(alias="manifestYaml")
     content_hash: str | None = Field(default=None, alias="contentHash")
     package_hash: str | None = Field(default=None, alias="packageHash")

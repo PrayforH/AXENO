@@ -85,6 +85,24 @@ class AuditLogRow(Base):
     details: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class ApiAccessKeyRow(Base):
+    __tablename__ = "api_access_keys"
+    __table_args__ = (
+        Index("ix_api_access_keys_tenant_created", "tenant_id", "created_at"),
+    )
+
+    key_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), index=True)
+    user_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    prefix: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    permissions: Mapped[list[str]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class AgentVersionRow(Base):
     __tablename__ = "agent_versions"
 

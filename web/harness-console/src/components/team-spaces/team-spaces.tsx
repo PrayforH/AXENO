@@ -5,6 +5,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { spaceMemberDirectory } from "../../lib/team-space-members";
 import { useDialogFocus } from "../../lib/use-dialog-focus";
 import { useAuth } from "../auth-provider";
+import { SecretInput } from "../secret-input";
 import { StudioSidebar } from "../agent-studio/studio-sidebar";
 import styles from "./team-spaces.module.css";
 
@@ -726,7 +727,7 @@ export function TeamSpaces() {
                                 : configured || !requiresCredential
                                   ? <em>{requiresCredential ? "空间凭据已配置" : "无需凭据"}</em>
                                   : canManage
-                                    ? <input type="password" autoComplete="new-password" value={mcpCredentialInputs[reference] ?? ""} onChange={(event) => setMcpCredentialInputs((current) => ({ ...current, [reference]: event.target.value }))} placeholder="输入空间共享凭据" aria-label={`${reference} 空间共享凭据`} />
+                                    ? <SecretInput autoComplete="new-password" value={mcpCredentialInputs[reference] ?? ""} onChange={(event) => setMcpCredentialInputs((current) => ({ ...current, [reference]: event.target.value }))} placeholder="输入空间共享凭据" aria-label={`${reference} 空间共享凭据`} revealLabel={`${reference} 空间共享凭据`} />
                                     : <em>需空间管理员配置凭据</em>}
                           </label>;
                         })}

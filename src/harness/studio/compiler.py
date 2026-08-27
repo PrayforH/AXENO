@@ -36,6 +36,7 @@ from harness.studio.models import (
     DraftValidationResult,
     EffectiveAgentContract,
     NetworkAccess,
+    RuntimeCompatibility,
     ValidationIssue,
     ValidationSeverity,
     ValidationStage,
@@ -106,7 +107,7 @@ class AgentDraftCompiler:
                     },
                 },
                 "spec": {
-                    "runtime": "claude-agent-sdk",
+                    "runtime": spec.runtime,
                     "model": {
                         "route": spec.model.route_id,
                         "model": spec.model.model,
@@ -137,6 +138,7 @@ class AgentDraftCompiler:
                     },
                     "limits": {
                         "maxTurns": spec.limits.max_turns,
+                        "maxToolCalls": spec.limits.max_tool_calls,
                         "timeoutSeconds": spec.limits.timeout_seconds,
                         "maxBudgetUsd": spec.limits.max_budget_usd,
                         "maxModelTokens": spec.limits.max_model_tokens,
@@ -194,6 +196,27 @@ class AgentDraftCompiler:
             issue.severity is ValidationSeverity.ERROR and issue.stage is ValidationStage.PUBLISH
             for issue in issues
         )
+        runtime = next(
+            (
+                item
+                for item in self._catalog.runtime_capabilities
+                if item.runtime == draft.spec.runtime
+            ),
+            None,
+        )
+        runtime_issue_codes = {
+            "runtime_unknown",
+            "runtime_model_protocol_incompatible",
+            "runtime_python_tools_unsupported",
+            "runtime_knowledge_unsupported",
+            "runtime_tool_search_unsupported",
+            "runtime_subagents_unsupported",
+            "runtime_mcp_transport_unsupported",
+            "codex_responses_route_required",
+            "codex_python_tools_unsupported",
+            "codex_knowledge_unsupported",
+            "codex_tool_search_unsupported",
+        }
         return DraftValidationResult(
             ready=publish_ready,
             productionEligible=publish_ready
@@ -204,6 +227,18 @@ class AgentDraftCompiler:
             ),
             issues=tuple(issues),
             contract=self.effective_contract(draft),
+            runtimeCompatibility=RuntimeCompatibility(
+                runtime=draft.spec.runtime,
+                label=runtime.label if runtime is not None else draft.spec.runtime,
+                stability=runtime.stability if runtime is not None else "experimental",
+                compatible=not any(
+                    issue.severity is ValidationSeverity.ERROR
+                    and issue.code in runtime_issue_codes
+                    for issue in issues
+                ),
+                capabilities=runtime.capabilities if runtime is not None else (),
+                limitations=runtime.limitations if runtime is not None else (),
+            ),
             manifestYaml=manifest_yaml,
             contentHash=(report.snapshot.content_hash if report is not None else None),
             packageHash=(report.package_hash if report is not None else None),
@@ -289,6 +324,23 @@ class AgentDraftCompiler:
     def _catalog_issues(self, draft: AgentDraft) -> tuple[ValidationIssue, ...]:
         spec = draft.spec
         issues: list[ValidationIssue] = []
+        runtimes = {
+            capability.runtime: capability
+            for capability in self._catalog.runtime_capabilities
+        }
+        runtime = runtimes.get(spec.runtime)
+        runtime_features: set[str] = (
+            set(runtime.capabilities) if runtime is not None else set()
+        )
+        if runtime is None:
+            issues.append(
+                ValidationIssue(
+                    code="runtime_unknown",
+                    message=f"Agent Runtime 未注册：{spec.runtime}",
+                    severity=ValidationSeverity.ERROR,
+                    path="runtime",
+                )
+            )
         routes = {route.route_id: route for route in self._catalog.model_routes}
         route = routes.get(spec.model.route_id)
         if route is None:
@@ -301,6 +353,19 @@ class AgentDraftCompiler:
                 )
             )
         else:
+            if route.model_type in {"image_generation", "video_generation"}:
+                generation_kind = "图像" if route.model_type == "image_generation" else "视频"
+                issues.append(
+                    ValidationIssue(
+                        code="model_route_not_conversational",
+                        message=(
+                            f"{generation_kind}生成模型不能作为 Agent 对话路由："
+                            f"{spec.model.route_id}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="model.routeId",
+                    )
+                )
             if not route.enabled:
                 issues.append(
                     ValidationIssue(
@@ -317,6 +382,22 @@ class AgentDraftCompiler:
                         message=(f"模型 {spec.model.model} 不属于路由 {spec.model.route_id}"),
                         severity=ValidationSeverity.ERROR,
                         path="model.model",
+                    )
+                )
+            if runtime is not None and route.api_format not in runtime.model_api_formats:
+                issues.append(
+                    ValidationIssue(
+                        code=(
+                            "codex_responses_route_required"
+                            if spec.runtime == "codex-app-server"
+                            else "runtime_model_protocol_incompatible"
+                        ),
+                        message=(
+                            f"{runtime.label} 不支持模型路由协议 {route.api_format}；"
+                            f"请选择 {', '.join(runtime.model_api_formats)} 路由"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="model.routeId",
                     )
                 )
             missing = set(spec.model.required_capabilities) - set(route.capabilities)
@@ -350,6 +431,52 @@ class AgentDraftCompiler:
                         path="builtinTools",
                     )
                 )
+        if runtime is not None:
+            unsupported: tuple[tuple[bool, str, str, str, str], ...] = (
+                (
+                    bool(spec.python_tools),
+                    "python_tools",
+                    "codex_python_tools_unsupported",
+                    "当前运行时尚未接通 Studio 自定义算子，请移除后发布",
+                    "pythonTools",
+                ),
+                (
+                    bool(spec.knowledge_references),
+                    "knowledge",
+                    "codex_knowledge_unsupported",
+                    "当前运行时尚未接通 Studio Knowledge，请移除后发布",
+                    "knowledgeReferences",
+                ),
+                (
+                    spec.tool_exposure_mode == "on_demand",
+                    "tool_search",
+                    "codex_tool_search_unsupported",
+                    "当前运行时尚未接通 Studio 按需工具加载，请改为启动时加载",
+                    "toolExposureMode",
+                ),
+                (
+                    bool(spec.subagents) or "Task" in spec.builtin_tools,
+                    "subagents",
+                    "runtime_subagents_unsupported",
+                    "当前运行时尚未接通 Studio Sub Agent",
+                    "subagents",
+                ),
+            )
+            issues.extend(
+                ValidationIssue(
+                    code=(
+                        legacy_code
+                        if spec.runtime == "codex-app-server"
+                        and legacy_code.startswith("codex_")
+                        else f"runtime_{feature}_unsupported"
+                    ),
+                    message=f"{runtime.label}：{message}",
+                    severity=ValidationSeverity.ERROR,
+                    path=path,
+                )
+                for enabled, feature, legacy_code, message, path in unsupported
+                if enabled and feature not in runtime_features
+            )
         mcp_servers = {server.reference: server for server in self._catalog.mcp_servers}
         if spec.python_tools and spec.tool_exposure_mode == "on_demand":
             issues.append(
@@ -387,6 +514,19 @@ class AgentDraftCompiler:
                         message=f"MCP 能力已禁用：{reference}",
                         severity=ValidationSeverity.ERROR,
                         path="mcpServers",
+                    )
+                )
+            elif runtime is not None and f"mcp_{server.transport}" not in runtime_features:
+                issues.append(
+                    ValidationIssue(
+                        code="runtime_mcp_transport_unsupported",
+                        message=(
+                            f"{runtime.label} 不支持 MCP {server.transport} transport："
+                            f"{reference}"
+                        ),
+                        severity=ValidationSeverity.ERROR,
+                        path="mcpServers",
+                        relatedReferences=(reference,),
                     )
                 )
         policies = {policy.policy_id: policy for policy in self._catalog.policies}
@@ -661,6 +801,7 @@ class AgentDraftCompiler:
                     apiVersion="harness.studio/v1",
                     kind="AgentDraftMetadata",
                     description=spec.description,
+                    taskContract=spec.task_contract,
                     executionProfile=spec.execution_profile,
                 ).model_dump(mode="json", by_alias=True),
                 ensure_ascii=False,

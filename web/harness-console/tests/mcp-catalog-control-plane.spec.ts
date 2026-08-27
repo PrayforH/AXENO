@@ -126,7 +126,8 @@ describe("MCP capability catalog", () => {
   it("configures required credentials without echoing stored secret values", () => {
     expect(component).toContain("studioClient.configureMcpCredential");
     expect(component).toContain("studioClient.listMcpCredentials");
-    expect(component).toContain('type="password"');
+    expect(component).toContain("<SecretInput");
+    expect(component).toContain('revealLabel="认证凭据"');
     expect(component).toContain("凭据已加密保存；为安全起见不会回显原值");
     expect(component).toContain("HARNESS_MCP_SECRET_REFERENCES_JSON");
     expect(component).not.toContain('placeholder="sk-');

@@ -15,7 +15,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
-from harness.sharing.models import WorkspaceAgent
+from harness.sharing.models import WorkspaceAgent, WorkspaceAgentStatus
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -86,14 +86,17 @@ async def list_agents(
         if f"{version.name}@{version.version}" in dependency_coordinates or _is_internal(version):
             continue
         workspace_agent = personal_by_name.get(version.name)
+        if (
+            workspace_agent is not None
+            and workspace_agent.status is WorkspaceAgentStatus.ARCHIVED
+        ):
+            continue
         personal.append(
             AgentCatalogItem.from_version(
                 version,
                 can_edit=True,
                 agent_id=(
-                    workspace_agent.agent_id
-                    if workspace_agent is not None
-                    else version.agent_id
+                    workspace_agent.agent_id if workspace_agent is not None else version.agent_id
                 ),
                 current_version=(
                     workspace_agent.current_version
@@ -123,7 +126,26 @@ async def list_agents(
                 can_chat=entry.can_chat,
             )
         )
-    return [*personal, *shared]
+    items: list[AgentCatalogItem] = [*personal, *shared]
+    catalog = await container.capability_catalogs.get_for_user(identity.tenant_id, identity.user_id)
+    routes = {route.route_id: route for route in catalog.catalog.model_routes}
+    bindings = catalog.catalog.agent_model_bindings
+    projected: list[AgentCatalogItem] = []
+    for item in items:
+        route = routes.get(bindings.get(item.name, ""))
+        if route is None or not route.enabled or route.model_type not in {"chat", "vision"}:
+            projected.append(item)
+            continue
+        projected.append(
+            item.model_copy(
+                update={
+                    "model_route": route.route_id,
+                    "model": route.models[0],
+                    "model_capabilities": route.capabilities,
+                }
+            )
+        )
+    return projected
 
 
 @router.get(

@@ -779,7 +779,12 @@
   text-align: right;
 }
 
-.dependencyGroup input[type="password"] {
+.dependencyGroup :global(.secret-input) {
+  width: 100%;
+  min-width: 0;
+}
+
+.dependencyGroup :global(.secret-input) input {
   width: 100%;
   min-width: 0;
   min-height: 32px;

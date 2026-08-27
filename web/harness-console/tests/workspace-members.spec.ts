@@ -14,7 +14,9 @@ const styles = readFileSync(
 
 describe("Workspace member management", () => {
   it("is discoverable from account settings", () => {
-    expect(page).toContain('{ href: "#members", label: "工作区成员", icon: "members" }');
+    expect(page).toMatch(
+      /id:\s*"members",\s*href:\s*"#members",\s*label:\s*"工作区成员"/s,
+    );
     expect(page).toContain("<WorkspaceMembers");
     expect(page).toContain("至少保留一位 Owner");
   });

@@ -198,6 +198,8 @@ type ApiDraftSpec = {
   description: string;
   domain: string;
   template: StudioDraft["template"];
+  taskContract?: StudioDraft["taskContract"];
+  runtime?: StudioDraft["runtime"];
   model: {
     routeId: string;
     model: string;
@@ -233,6 +235,7 @@ type ApiDraftSpec = {
   workspace: { restoreSession: boolean; archiveOnComplete: boolean };
   limits: {
     maxTurns: number | null;
+    maxToolCalls: number | null;
     timeoutSeconds: number | null;
     maxBudgetUsd: number | null;
     maxModelTokens: number | null;
@@ -506,6 +509,14 @@ export type StudioValidation = {
   }>;
   contentHash: string | null;
   packageHash: string | null;
+  runtimeCompatibility: {
+    runtime: StudioDraft["runtime"];
+    label: string;
+    stability: "stable" | "preview" | "experimental";
+    compatible: boolean;
+    capabilities: string[];
+    limitations: string[];
+  };
 };
 
 export type StudioPreflightCheck = {
@@ -567,6 +578,71 @@ export type StudioPreview = {
   staleReason: string | null;
 };
 
+export type StudioTaskDrivenRecommendation = {
+  runtime: StudioDraft["runtime"];
+  modelRouteId: string;
+  model: string;
+  template: StudioDraft["template"];
+  builtinTools: string[];
+  mcpServers: string[];
+  permissionPolicy: string;
+  executionProfile: string;
+  reasons: string[];
+  validation: StudioValidation;
+};
+
+export type StudioTaskDrivenDraftResult = {
+  draft: ApiAgentDraft;
+  recommendation: StudioTaskDrivenRecommendation;
+};
+
+export type CodexLoopStage = {
+  id: "plan" | "tools" | "correction" | "verification" | "result";
+  label: string;
+  status: "pending" | "active" | "completed" | "skipped" | "failed";
+  summary: string;
+  evidence: Array<{
+    eventType: string;
+    sequence: number;
+    summary: string;
+  }>;
+};
+
+export type StudioTryRun = {
+  draftId: string;
+  draftRevision: number;
+  run: {
+    run_id: string;
+    session_id: string;
+    status: "queued" | "provisioning" | "running" | "waiting_approval" | "cancelling" | "cancelled" | "succeeded" | "failed" | "timed_out" | "rejected";
+    error_code: string | null;
+  };
+  events: Array<{
+    event_id: string;
+    sequence: number;
+    type: string;
+    timestamp: string;
+    payload: Record<string, unknown>;
+  }>;
+  approvals: Array<{
+    approval_id: string;
+    status: "pending" | "approved" | "rejected" | "expired" | "cancelled";
+    tool_name: string | null;
+    reason: string;
+    argument_summary: Record<string, unknown>;
+    risk: string | null;
+  }>;
+  artifacts: Array<{
+    artifact_id: string;
+    name: string;
+    media_type: string;
+    status: "pending" | "ready" | "failed";
+    size_bytes: number | null;
+  }>;
+  finalText: string;
+  loop: CodexLoopStage[];
+};
+
 export type StudioEvalDataset = {
   tenantId: string;
   datasetId: string;
@@ -588,6 +664,13 @@ export type StudioEvalDataset = {
   }>;
   createdBy: string;
   createdAt: string;
+};
+
+export type StudioSolidifiedAgentResult = {
+  draft: ApiAgentDraft;
+  version: ApiAgentVersion;
+  dataset: StudioEvalDataset;
+  loop: CodexLoopStage[];
 };
 
 export type StudioEvalCaseResult = {
@@ -827,6 +910,8 @@ export type StudioCapabilities = {
     provider: string;
     models: string[];
     capabilities: string[];
+    modelType?: "chat" | "vision" | "image_generation" | "video_generation";
+    apiFormat: "anthropic_compatible" | "openai_compatible" | "openai_images" | "openai_videos";
     enabled: boolean;
   }>;
   builtinTools: Array<{
@@ -879,6 +964,19 @@ export type StudioCapabilities = {
     productionAllowed: boolean;
     version: number;
     enabled: boolean;
+  }>;
+  templates: Array<{
+    template: StudioDraft["template"];
+    label: string;
+    description: string;
+  }>;
+  runtimeCapabilities: Array<{
+    runtime: StudioDraft["runtime"];
+    label: string;
+    stability: "stable" | "preview" | "experimental";
+    capabilities: string[];
+    modelApiFormats: Array<"anthropic_compatible" | "openai_compatible" | "openai_images">;
+    limitations: string[];
   }>;
 };
 
@@ -1058,6 +1156,21 @@ async function agentRequest<T>(path: string, init: RequestInit = {}): Promise<T>
   return response.json() as Promise<T>;
 }
 
+async function harnessRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = requireAuthenticatedResponse(
+    await fetch(`/api/harness/${path.replace(/^\//, "")}`, {
+      ...init,
+      cache: "no-store",
+      headers: {
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+    }),
+  );
+  if (!response.ok) throw await errorFrom(response);
+  return response.json() as Promise<T>;
+}
+
 async function lifecycleRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = requireAuthenticatedResponse(
     await fetch(`/api/data-lifecycle/${path.replace(/^\//, "")}`, {
@@ -1130,6 +1243,8 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     domain: spec.domain,
     version: spec.version,
     template: spec.template,
+    taskContract: spec.taskContract ?? null,
+    runtime: spec.runtime ?? "claude-agent-sdk",
     modelRoute: spec.model.routeId,
     model: spec.model.model,
     requiredCapabilities: spec.model.requiredCapabilities,
@@ -1146,6 +1261,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     restoreSession: spec.workspace.restoreSession,
     archiveOnComplete: spec.workspace.archiveOnComplete,
     maxTurns: spec.limits.maxTurns,
+    maxToolCalls: spec.limits.maxToolCalls ?? 256,
     timeoutSeconds: spec.limits.timeoutSeconds,
     maxBudgetUsd: spec.limits.maxBudgetUsd,
     maxModelTokens: spec.limits.maxModelTokens,
@@ -1172,6 +1288,8 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     description: draft.description,
     domain: draft.domain,
     template: draft.template,
+    taskContract: draft.taskContract,
+    runtime: draft.runtime,
     model: {
       routeId: draft.modelRoute,
       model: draft.model,
@@ -1195,6 +1313,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     },
     limits: {
       maxTurns: draft.maxTurns,
+      maxToolCalls: draft.maxToolCalls,
       timeoutSeconds: draft.timeoutSeconds,
       maxBudgetUsd: draft.maxBudgetUsd,
       maxModelTokens: draft.maxModelTokens,
@@ -1477,7 +1596,7 @@ export const studioClient = {
       `catalog/mcp/${encodeURIComponent(reference)}/permanent?expected_revision=${expectedRevision}`,
       { method: "DELETE" },
     ),
-  createDraft: (draft: StudioDraft) =>
+  createDraft: (draft: Pick<StudioDraft, "name" | "domain" | "displayName" | "description" | "template">) =>
     request<ApiAgentDraft>("drafts", {
       method: "POST",
       body: JSON.stringify({
@@ -1488,6 +1607,18 @@ export const studioClient = {
         template: draft.template,
       }),
     }).then(rememberStudioDraft),
+  createDraftFromTask: (body: {
+    task: string;
+    audience?: string;
+    sampleInput?: string;
+    runtimePreference: "auto" | StudioDraft["runtime"];
+  }) => request<StudioTaskDrivenDraftResult>("drafts/from-task", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }).then((result) => {
+    rememberStudioDraft(result.draft);
+    return result;
+  }),
   async importBundle(file: Blob): Promise<StudioImportedAgentBundle> {
     const response = requireAuthenticatedResponse(
       await fetch("/api/studio/drafts/import", {
@@ -1554,10 +1685,59 @@ export const studioClient = {
         spec: studioDraftToSpec(draft),
       }),
     }).then(rememberStudioDraft),
+  async deleteDraft(draftId: string, expectedRevision: number): Promise<void> {
+    const response = requireAuthenticatedResponse(
+      await fetch(
+        `/api/studio/drafts/${encodeURIComponent(draftId)}`
+          + `?expectedRevision=${expectedRevision}`,
+        { method: "DELETE", cache: "no-store" },
+      ),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    forgetStudioDraft(draftId);
+  },
   validateDraft: (draftId: string) =>
     request<StudioValidation>(`drafts/${encodeURIComponent(draftId)}/validate`, {
       method: "POST",
     }),
+  createTryRun: (
+    draftId: string,
+    expectedRevision: number,
+    prompt: string,
+    idempotencyKey: string,
+  ) => request<StudioTryRun>(`drafts/${encodeURIComponent(draftId)}/try-runs`, {
+    method: "POST",
+    body: JSON.stringify({ expectedRevision, prompt, idempotencyKey }),
+  }),
+  getTryRun: (draftId: string, draftRevision: number, runId: string) =>
+    request<StudioTryRun>(
+      `drafts/${encodeURIComponent(draftId)}/try-runs/${encodeURIComponent(runId)}`
+        + `?draftRevision=${draftRevision}`,
+    ),
+  solidifyTryRun: (
+    draftId: string,
+    expectedRevision: number,
+    draftRevision: number,
+    runId: string,
+  ) => request<StudioSolidifiedAgentResult>(
+    `drafts/${encodeURIComponent(draftId)}/solidify`,
+    {
+      method: "POST",
+      body: JSON.stringify({ expectedRevision, draftRevision, runId }),
+    },
+  ).then((result) => {
+    rememberStudioDraft(result.draft);
+    return result;
+  }),
+  decideTryRunApproval: (approvalId: string, decision: "approved" | "rejected") =>
+    harnessRequest(`approvals/${encodeURIComponent(approvalId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ decision }),
+    }),
+  cancelTryRun: (runId: string) =>
+    harnessRequest(`runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+  tryRunArtifactHref: (artifactId: string) =>
+    `/api/harness/artifacts/${encodeURIComponent(artifactId)}/content`,
   publishDraft: (draftId: string, expectedRevision: number) =>
     request<ApiAgentVersion>(`drafts/${encodeURIComponent(draftId)}/publish`, {
       method: "POST",
@@ -1823,14 +2003,25 @@ export function capabilityOptions(catalog: StudioCapabilities): {
   tools: BuiltinToolOption[];
   mcp: McpOption[];
   profiles: StudioCapabilities["executionProfiles"];
+  templates: StudioCapabilities["templates"];
+  runtimes: StudioCapabilities["runtimeCapabilities"];
 } {
   return {
-    routes: catalog.modelRoutes.filter((item) => item.enabled).map((item) => ({
+    routes: catalog.modelRoutes.filter(
+      (item) =>
+        item.enabled &&
+        (item.modelType === undefined || ["chat", "vision"].includes(item.modelType)) &&
+        item.apiFormat !== "openai_images" &&
+        item.apiFormat !== "openai_videos" &&
+        !item.capabilities.includes("image_generation") &&
+        !item.capabilities.includes("video_generation"),
+    ).map((item) => ({
       id: item.routeId,
       label: item.label,
       provider: item.provider,
       models: item.models,
       capabilities: item.capabilities,
+      apiFormat: item.apiFormat === "openai_videos" ? undefined : item.apiFormat,
     })),
     tools: catalog.builtinTools.map((item) => ({
       id: item.name,
@@ -1849,5 +2040,7 @@ export function capabilityOptions(catalog: StudioCapabilities): {
       sendsUserData: item.sendsUserData,
     })),
     profiles: catalog.executionProfiles.filter((item) => item.enabled),
+    templates: catalog.templates ?? [],
+    runtimes: catalog.runtimeCapabilities ?? [],
   };
 }

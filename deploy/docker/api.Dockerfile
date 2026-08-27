@@ -16,6 +16,18 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX}
 
+# The official platform package is a standalone musl binary plus its sandbox
+# resources. Verify the immutable npm artifact and avoid shipping Node/npm in
+# the Python runtime image.
+ARG CODEX_VERSION=0.149.0
+ARG CODEX_LINUX_X64_SHA256=e06f3d106fe8bb058a6bfd30075d89ea17deaee7c8425e0c5d23072df0fdd0e7
+ARG CODEX_NPM_REGISTRY=https://registry.npmmirror.com
+RUN python -c 'import os, urllib.request; version=os.environ["CODEX_VERSION"]; registry=os.environ["CODEX_NPM_REGISTRY"].rstrip("/"); urllib.request.urlretrieve(f"{registry}/@openai/codex/-/codex-{version}-linux-x64.tgz", "/tmp/codex.tgz")' \
+    && printf '%s  %s\n' "${CODEX_LINUX_X64_SHA256}" /tmp/codex.tgz | sha256sum --check --strict \
+    && mkdir -p /opt/codex \
+    && tar -xzf /tmp/codex.tgz --strip-components=1 -C /opt/codex \
+    && /opt/codex/vendor/x86_64-unknown-linux-musl/bin/codex --version
+
 COPY pyproject.toml uv.lock README.md ./
 RUN uv export \
     --frozen \
@@ -51,7 +63,9 @@ ENV PATH="/app/project/bin:/app/.venv/bin:$PATH" \
 # uses urllib. Keeping runtime setup package-manager-free makes rebuilds
 # deterministic even when a Debian mirror is slow or unavailable.
 RUN groupadd --system --gid 10001 harness \
-    && useradd --system --uid 10001 --gid harness --home-dir /app harness
+    && useradd --system --uid 10001 --gid harness --home-dir /app harness \
+    && mkdir -p /app/.codex \
+    && chown -R harness:harness /app/.codex
 
 WORKDIR /app
 COPY --from=builder --chown=harness:harness /app/.venv /app/.venv
@@ -61,8 +75,12 @@ COPY --from=builder --chown=harness:harness /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=harness:harness /app/agents /app/agents
 COPY --from=builder --chown=harness:harness /app/scripts /app/scripts
 COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+COPY --from=builder /opt/codex /opt/codex
 COPY --chown=harness:harness deploy/docker/entrypoint-api.sh /usr/local/bin/entrypoint-api
 COPY --chown=harness:harness deploy/docker/entrypoint-worker.sh /usr/local/bin/entrypoint-worker
+
+RUN ln -s /opt/codex/vendor/x86_64-unknown-linux-musl/bin/codex /usr/local/bin/codex \
+    && codex --version
 
 USER harness
 EXPOSE 8000

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
@@ -19,6 +20,14 @@ from harness.sharing.models import (
     AgentPermission,
     WorkspaceAgent,
 )
+from harness.studio.agent_builder import (
+    AgentBuilderPatch,
+    AgentBuilderPatchRequest,
+    CreateTaskDrivenDraftRequest,
+    TaskDrivenDraftResult,
+    build_agent_patch,
+    configure_task_driven_draft,
+)
 from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
 from harness.studio.compiler import (
@@ -31,10 +40,12 @@ from harness.studio.models import (
     AgentDraft,
     AgentDraftSpec,
     AgentDraftSummary,
+    AgentTemplate,
     CapabilityCatalog,
     CreateAgentDraftRequest,
     DraftSkill,
     DraftSkillFile,
+    DraftSubagent,
     DraftValidationResult,
     ImportedAgentBundle,
     ImportedSkill,
@@ -54,6 +65,20 @@ _SEMVER = re.compile(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class PreviewGraphNode:
+    draft: AgentDraft
+    compiled: CompiledAgentDraft
+    preview_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPreviewGraph:
+    root_draft: AgentDraft
+    root: CompiledAgentDraft
+    dependencies: tuple[PreviewGraphNode, ...]
+
+
 def _next_patch_version(version: str) -> str:
     match = _SEMVER.fullmatch(version)
     if match is None:
@@ -70,9 +95,7 @@ def _auto_version_modified_release(
         and candidate.version == current.published_version
         and candidate != current.spec
     ):
-        return candidate.model_copy(
-            update={"version": _next_patch_version(candidate.version)}
-        )
+        return candidate.model_copy(update={"version": _next_patch_version(candidate.version)})
     return candidate
 
 
@@ -258,15 +281,11 @@ class AgentStudioService:
             raise RuntimeError("Agent Studio compiler is not configured")
         return self._compiler
 
-    async def _resolve_agent_id(
-        self, tenant_id: str, user_id: str, name: str
-    ) -> str | None:
+    async def _resolve_agent_id(self, tenant_id: str, user_id: str, name: str) -> str | None:
         """Stable Agent identity for a new personal draft, when configured."""
         if self._agent_ids is None:
             return None
-        return await self._agent_ids.get_or_create_personal_agent_id(
-            tenant_id, user_id, name
-        )
+        return await self._agent_ids.get_or_create_personal_agent_id(tenant_id, user_id, name)
 
     async def create(
         self,
@@ -296,9 +315,113 @@ class AgentStudioService:
         await self._repository.add(draft)
         return draft
 
-    async def _load_draft(
-        self, tenant_id: str, user_id: str, draft_id: str
-    ) -> AgentDraft:
+    async def create_from_task(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        request: CreateTaskDrivenDraftRequest,
+    ) -> TaskDrivenDraftResult:
+        """Create a valid draft by compiling business intent against tenant capabilities."""
+
+        now = self._clock()
+        draft_id = self._id_generator()
+        first_line = request.task.strip().splitlines()[0].strip()
+        display_name = request.display_name or first_line[:36]
+        generated_suffix = hashlib.sha256(
+            f"{request.task.strip()}\0{draft_id}".encode()
+        ).hexdigest()[:10]
+        name = request.name or f"agent-{generated_suffix}"
+        draft = AgentDraft(
+            draftId=draft_id,
+            tenantId=tenant_id,
+            revision=1,
+            spec=create_draft_spec(
+                name=name,
+                domain=request.domain,
+                display_name=display_name,
+                description=request.task.strip()[:500],
+                template=AgentTemplate.ANALYST,
+            ),
+            createdBy=user_id,
+            updatedBy=user_id,
+            createdAt=now,
+            updatedAt=now,
+            agentId=await self._resolve_agent_id(tenant_id, user_id, name),
+        )
+        catalog = await self.capabilities(tenant_id, user_id)
+        compiler = await self._compiler_for(tenant_id, user_id)
+        draft, recommendation = configure_task_driven_draft(
+            draft,
+            request,
+            catalog,
+            compiler,
+        )
+        await self._repository.add(draft)
+        return TaskDrivenDraftResult(draft=draft, recommendation=recommendation)
+
+    async def delete(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_revision: int,
+    ) -> None:
+        draft = await self._repository.get(tenant_id, user_id, draft_id)
+        if draft.revision != expected_revision:
+            raise ConflictError(
+                "Agent draft revision changed: "
+                f"expected={expected_revision} actual={draft.revision}"
+            )
+        if draft.space_id is not None:
+            raise ConflictError("协作空间智能体不能从个人 Builder 删除")
+
+        dependents = sorted(
+            item.spec.display_name
+            for item in await self._repository.list_for_user(tenant_id, user_id)
+            if item.draft_id != draft_id
+            and any(
+                binding.ref.rsplit("@", 1)[0] == draft.spec.name
+                for binding in item.spec.subagents
+            )
+        )
+        if dependents:
+            raise ConflictError(
+                "智能体仍被其他草稿绑定为 Sub Agent，请先解除绑定："
+                + "、".join(dependents)
+            )
+
+        await self._repository.delete(
+            tenant_id,
+            user_id,
+            draft_id,
+            expected_revision,
+        )
+        if self._agent_ids is not None and draft.agent_id is not None:
+            await self._agent_ids.archive_personal_agent(
+                tenant_id,
+                user_id,
+                draft.agent_id,
+                draft.spec.name,
+            )
+        if self._audit is not None:
+            await self._audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.draft.delete",
+                resource_type="agent_draft",
+                resource_id=draft_id,
+                outcome="success",
+                details={
+                    "agent_id": draft.agent_id or "",
+                    "name": draft.spec.name,
+                    "published_version": draft.published_version or "",
+                    "immutable_versions_preserved": True,
+                },
+            )
+
+    async def _load_draft(self, tenant_id: str, user_id: str, draft_id: str) -> AgentDraft:
         """Owner-scoped draft, or a shared draft the user may view."""
         try:
             return await self._repository.get(tenant_id, user_id, draft_id)
@@ -307,9 +430,7 @@ class AgentStudioService:
         shared = await self._repository.get_shared(tenant_id, draft_id)
         if shared is None:
             raise NotFoundError(f"Agent draft not found: {draft_id}")
-        await self._require_shared_permission(
-            tenant_id, user_id, shared, AgentPermission.VIEW
-        )
+        await self._require_shared_permission(tenant_id, user_id, shared, AgentPermission.VIEW)
         return shared
 
     async def _require_shared_permission(
@@ -341,9 +462,7 @@ class AgentStudioService:
         """Drafts of every workspace Agent the member may view."""
         if self._draft_permissions is None:
             raise RuntimeError("shared draft permission checker is not configured")
-        agents = await self._draft_permissions.list_agents(
-            tenant_id, user_id, space_id
-        )
+        agents = await self._draft_permissions.list_agents(tenant_id, user_id, space_id)
         result: list[AgentDraftSummary] = []
         for agent in agents:
             draft = await self._repository.get_by_agent(tenant_id, agent.agent_id)
@@ -378,8 +497,7 @@ class AgentStudioService:
         )
         if request.name != agent.name:
             raise ConflictError(
-                "shared draft name must match the workspace Agent identity: "
-                f"expected {agent.name}"
+                f"shared draft name must match the workspace Agent identity: expected {agent.name}"
             )
         now = self._clock()
         draft = AgentDraft(
@@ -431,17 +549,11 @@ class AgentStudioService:
 
         candidates = [
             draft
-            for draft in await self._repository.list_for_user(
-                tenant_id, source_owner_user_id
-            )
+            for draft in await self._repository.list_for_user(tenant_id, source_owner_user_id)
             if draft.space_id is None and draft.spec.name == source_name
         ]
         source = next(
-            (
-                draft
-                for draft in candidates
-                if draft.published_version == source_version
-            ),
+            (draft for draft in candidates if draft.published_version == source_version),
             candidates[0] if candidates else None,
         )
         if source is None:
@@ -462,9 +574,7 @@ class AgentStudioService:
             spaceId=space_id,
             publishedVersion=source_version,
             publishedHash=source.published_hash if source_is_release else None,
-            publishedPackageHash=(
-                source.published_package_hash if source_is_release else None
-            ),
+            publishedPackageHash=(source.published_package_hash if source_is_release else None),
         )
         await self._repository.add(shared)
         return shared
@@ -481,9 +591,7 @@ class AgentStudioService:
         request: ReplaceAgentDraftRequest,
     ) -> AgentDraft:
         current = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, current, AgentPermission.EDIT
-        )
+        await self._require_shared_permission(tenant_id, user_id, current, AgentPermission.EDIT)
         if current.space_id is not None and request.spec.name != current.spec.name:
             raise ConflictError(
                 "shared draft name cannot change; it is the workspace Agent identity"
@@ -518,9 +626,7 @@ class AgentStudioService:
         imported: ImportedSkill,
     ) -> AgentDraft:
         current = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, current, AgentPermission.EDIT
-        )
+        await self._require_shared_permission(tenant_id, user_id, current, AgentPermission.EDIT)
         skills = tuple(
             imported.skill if skill.name == imported.skill.name else skill
             for skill in current.spec.skills
@@ -558,9 +664,144 @@ class AgentStudioService:
             }
         )
 
+    async def build_agent_patch(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        draft_id: str,
+        request: AgentBuilderPatchRequest,
+    ) -> AgentBuilderPatch:
+        draft = await self.get(tenant_id, owner_user_id, draft_id)
+        if draft.revision != request.expected_revision:
+            raise ConflictError(
+                f"draft revision changed: expected {request.expected_revision}, "
+                f"actual {draft.revision}"
+            )
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
+        return build_agent_patch(draft, request, compiler)
+
     async def bundle(self, tenant_id: str, owner_user_id: str, draft_id: str) -> CompiledAgentDraft:
         compiler = await self._compiler_for(tenant_id, owner_user_id)
         return compiler.compile(await self.get(tenant_id, owner_user_id, draft_id))
+
+    async def preview_graph(
+        self, tenant_id: str, owner_user_id: str, draft_id: str
+    ) -> CompiledPreviewGraph:
+        """Compile one immutable root-and-subagent graph for a Studio Try Run."""
+
+        root = await self.get(tenant_id, owner_user_id, draft_id)
+        compiler = await self._compiler_for(tenant_id, owner_user_id)
+        drafts = await self._repository.list_for_user(tenant_id, owner_user_id)
+        dependencies: list[PreviewGraphNode] = []
+        dependency_by_draft: dict[str, PreviewGraphNode] = {}
+        rewritten: list[DraftSubagent] = []
+        for binding in root.spec.subagents:
+            name, version = binding.ref.rsplit("@", 1)
+            published = None
+            if self._registry is not None:
+                try:
+                    candidate = await self._registry.get(
+                        tenant_id, owner_user_id, name, version
+                    )
+                    if candidate.status is AgentVersionStatus.PUBLISHED:
+                        published = candidate
+                except NotFoundError:
+                    pass
+            if published is not None:
+                rewritten.append(binding)
+                continue
+            source = next(
+                (
+                    item
+                    for item in drafts
+                    if item.draft_id != root.draft_id
+                    and item.spec.name == name
+                    and item.spec.version == version
+                ),
+                None,
+            )
+            if source is None:
+                raise DraftCompilationError(
+                    (
+                        ValidationIssue(
+                            code="subagent_preview_unavailable",
+                            message=f"找不到可试跑的 Sub Agent 草稿或发布版本：{binding.ref}",
+                            severity=ValidationSeverity.ERROR,
+                            path="subagents",
+                        ),
+                    )
+                )
+            if source.spec.subagents:
+                raise DraftCompilationError(
+                    (
+                        ValidationIssue(
+                            code="nested_subagent_preview_unsupported",
+                            message=f"Sub Agent 不能继续嵌套委派：{binding.ref}",
+                            severity=ValidationSeverity.ERROR,
+                            path="subagents",
+                        ),
+                    )
+                )
+            node = dependency_by_draft.get(source.draft_id)
+            if node is None:
+                compiled = compiler.compile(source)
+                preview_version = (
+                    f"preview-{source.draft_id}-{source.revision}-"
+                    f"{compiled.report.snapshot.content_hash[:12]}"
+                )
+                node = PreviewGraphNode(
+                    draft=source,
+                    compiled=compiled,
+                    preview_version=preview_version,
+                )
+                dependency_by_draft[source.draft_id] = node
+                dependencies.append(node)
+            rewritten.append(
+                binding.model_copy(update={"ref": f"{name}@{node.preview_version}"})
+            )
+        preview_spec = root.spec.model_copy(update={"subagents": tuple(rewritten)})
+        preview_root = root.model_copy(update={"spec": preview_spec})
+        return CompiledPreviewGraph(
+            root_draft=root,
+            root=compiler.compile(preview_root),
+            dependencies=tuple(dependencies),
+        )
+
+    async def publish_preview_dependencies(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        preview_version: str,
+    ) -> tuple[AgentVersion, ...]:
+        """Publish the exact dependency graph proven by a successful Try Run."""
+
+        graph = await self.preview_graph(tenant_id, user_id, draft_id)
+        if self._registry is None:
+            raise ConflictError("Agent Registry is unavailable for Preview verification")
+        preview = await self._registry.get(
+            tenant_id,
+            user_id,
+            graph.root_draft.spec.name,
+            preview_version,
+        )
+        if graph.root.report.snapshot.content_hash != preview.manifest_hash:
+            raise ConflictError(
+                "Sub Agent graph changed after the verified Try Run; "
+                "run it again before solidifying"
+            )
+        published: list[AgentVersion] = []
+        for node in graph.dependencies:
+            published.append(
+                await self.publish(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    draft_id=node.draft.draft_id,
+                    expected_revision=node.draft.revision,
+                )
+            )
+        return tuple(published)
 
     async def nexau_bundle(
         self, tenant_id: str, owner_user_id: str, draft_id: str
@@ -641,9 +882,7 @@ class AgentStudioService:
         if self._publisher is None:
             raise StudioPublisherNotConfiguredError("Agent Studio publisher is not configured")
         draft = await self._load_draft(tenant_id, user_id, draft_id)
-        await self._require_shared_permission(
-            tenant_id, user_id, draft, AgentPermission.PUBLISH
-        )
+        await self._require_shared_permission(tenant_id, user_id, draft, AgentPermission.PUBLISH)
         compiler = await self._compiler_for(tenant_id, user_id)
         try:
             if expected_revision is not None and draft.revision != expected_revision:

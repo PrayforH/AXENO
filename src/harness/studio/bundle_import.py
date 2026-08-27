@@ -692,6 +692,8 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             description=description,
             domain=labels.get("domain", "imported-agent"),
             template=template,
+            taskContract=metadata.task_contract if metadata is not None else None,
+            runtime=manifest_spec.runtime,
             model=DraftModelSelection(
                 routeId=model.route,
                 model=model.model,
@@ -715,6 +717,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             ),
             limits=DraftLimits(
                 maxTurns=limits.max_turns,
+                maxToolCalls=limits.max_tool_calls,
                 timeoutSeconds=limits.timeout_seconds,
                 maxBudgetUsd=limits.max_budget_usd,
                 maxModelTokens=limits.max_model_tokens,

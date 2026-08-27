@@ -59,7 +59,10 @@ class SessionService:
         api_key_id: str | None = None,
         agent_owner_user_id: str | None = None,
         connection_mode: Literal["caller_owned", "service_owned"] = "caller_owned",
+        preview: bool = False,
     ) -> Session:
+        if preview and (agent_version is None or environment is not None):
+            raise ConflictError("preview sessions require an explicit Agent version")
         if (agent_version is None) == (environment is None):
             raise ConflictError("provide exactly one of agent_version or environment")
         resolved_session_id = session_id or self._id_generator("session")
@@ -95,7 +98,10 @@ class SessionService:
         version = await self._registry.get(
             tenant_id, resolved_agent_owner, agent_name, agent_version
         )
-        if version.status is not AgentVersionStatus.PUBLISHED:
+        allowed_status = (
+            AgentVersionStatus.VALIDATED if preview else AgentVersionStatus.PUBLISHED
+        )
+        if version.status is not allowed_status:
             raise ConflictError("sessions can only use a published Agent version")
         if self._require_published_dependencies:
             await resolve_published_agent_versions(
@@ -104,6 +110,7 @@ class SessionService:
                 owner_user_id=resolved_agent_owner,
                 agent_name=agent_name,
                 agent_version=agent_version,
+                allow_validated_graph=preview,
             )
         snapshot = AgentManifestSnapshot.model_validate(version.snapshot)
         knowledge_bindings: tuple[dict[str, object], ...] = ()
@@ -126,14 +133,20 @@ class SessionService:
             agent_owner_user_id=resolved_agent_owner,
             team_ids=team_ids,
             api_key_id=api_key_id,
+            runtime_type=snapshot.manifest.spec.runtime,
             agent_name=agent_name,
             agent_version=agent_version,
             created_at=self._clock(),
-            environment=environment.value if environment is not None else None,
+            environment=(
+                "preview" if preview else environment.value if environment is not None else None
+            ),
             deployment_snapshot_id=deployment_snapshot_id,
             environment_snapshot=environment_snapshot,
             knowledge_snapshot_bindings=knowledge_bindings,
             connection_mode=connection_mode,
+        )
+        expected_environment = (
+            "preview" if preview else environment.value if environment is not None else None
         )
         try:
             await self._sessions.add(session)
@@ -146,9 +159,10 @@ class SessionService:
                 or existing.resolved_agent_owner_user_id != resolved_agent_owner
                 or existing.team_ids != team_ids
                 or existing.api_key_id != api_key_id
+                or existing.runtime_type != snapshot.manifest.spec.runtime
                 or existing.agent_name != agent_name
                 or existing.agent_version != agent_version
-                or existing.environment != (environment.value if environment is not None else None)
+                or existing.environment != expected_environment
                 or existing.deployment_snapshot_id != deployment_snapshot_id
                 or existing.environment_snapshot != environment_snapshot
                 or existing.knowledge_snapshot_bindings != knowledge_bindings
@@ -183,6 +197,7 @@ class SessionService:
         cloned = source.model_copy(
             update={
                 "session_id": session_id,
+                "runtime_thread_id": None,
                 "claude_session_id": None,
                 "created_at": self._clock(),
             }

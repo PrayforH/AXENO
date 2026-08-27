@@ -40,6 +40,7 @@ from harness.application.memory import UserMemoryService
 from harness.application.runs import RunQuotaPlan, RunService
 from harness.application.sessions import SessionService
 from harness.application.workspaces import WorkspacePolicy, WorkspaceService
+from harness.auth.api_access import ApiAccessService, InMemoryApiAccessKeyRepository
 from harness.auth.audit import AuditService
 from harness.auth.repositories import InMemoryAuditRepository, InMemoryAuthRepository
 from harness.auth.service import (
@@ -116,11 +117,13 @@ from harness.reliability.repositories import InMemoryReliabilityRepository
 from harness.reliability.service import ReliabilityService
 from harness.runtime.base import AgentRuntime
 from harness.runtime.cc_switch import load_cc_switch_claude_config
+from harness.runtime.codex_tool_gate import CodexToolGate
 from harness.runtime.default_tools import (
     default_tool_resolver,
     server_secret_credential_provider,
 )
 from harness.runtime.fake import FakeRuntime
+from harness.runtime.registry_codex_runtime import RegistryCodexRuntime, RegistryRuntimeRouter
 from harness.runtime.registry_runtime import RegistryClaudeRuntime
 from harness.runtime.sdk_tool_gate import SdkToolGate
 from harness.sandbox.daytona import (
@@ -150,6 +153,7 @@ from harness.studio.mcp_discovery import (
     AutoDetectMcpConnector,
     McpDiscoveryService,
 )
+from harness.studio.model_configuration import ModelConfigurationService
 from harness.studio.preflight import LivePreflightProvisioner, LivePreflightRunner
 from harness.studio.preflight_probes import (
     AnthropicSandboxModelProbe,
@@ -186,6 +190,7 @@ class Identity:
     email: str = ""
     display_name: str = ""
     authentication_method: str = "service"
+    permissions: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -193,11 +198,13 @@ class ApiContainer:
     environment: str
     api_bearer_token: SecretStr
     auth: AuthService
+    api_access: ApiAccessService
     audit: AuditService
     agent_drafts: AgentDraftRepository
     capability_catalogs: CapabilityCatalogService
     mcp_discovery: McpDiscoveryService
     mcp_credentials: McpCredentialService
+    model_configurations: ModelConfigurationService
     studio: AgentStudioService
     preview_repository: PreviewRepository
     previews: PreviewService
@@ -302,6 +309,7 @@ def build_memory_container(
         ),
     )
     audit = AuditService(InMemoryAuditRepository())
+    api_access = ApiAccessService(InMemoryApiAccessKeyRepository(), audit=audit)
     active_policy_profiles = policy_profiles or default_policy_profiles()
     governance = GovernanceService(
         governance_repository,
@@ -413,6 +421,11 @@ def build_memory_container(
         InMemoryMcpCredentialRepository(),
         McpCredentialCipher(resolved_settings.auth_jwt_secret),
         audit=audit,
+    )
+    model_configurations = ModelConfigurationService(
+        capability_catalogs,
+        mcp_credential_service,
+        environment=resolved_settings.environment,
     )
     mcp_credentials = StoredMcpCredentialProvider(
         mcp_credential_service,
@@ -649,6 +662,7 @@ def build_memory_container(
         agent_name: str,
         agent_version: str,
         workspace: Path,
+        allow_validated_graph: bool,
     ) -> tuple[str, ...]:
         return await stage_published_agent_assets(
             registry,
@@ -657,6 +671,7 @@ def build_memory_container(
             agent_name=agent_name,
             agent_version=agent_version,
             workspace=workspace,
+            allow_validated_graph=allow_validated_graph,
         )
 
     async def resolve_policy(
@@ -762,7 +777,7 @@ def build_memory_container(
         sandbox = LocalSandboxProvider()
     preflight_sandbox = sandbox
     if (
-        resolved_settings.runtime == "claude-sdk"
+        resolved_settings.runtime in {"claude-sdk", "multi"}
         and resolved_settings.sandbox_execution_mode == "worker_cli_deferred"
     ):
         if resolved_settings.sandbox_provider == "local":
@@ -788,9 +803,10 @@ def build_memory_container(
             credential_provider,
             catalogs=capability_catalogs,
         )
-        runtime = RegistryClaudeRuntime(
+        claude_runtime = RegistryClaudeRuntime(
             registry=registry,
             config=gateway,
+            model_configurations=model_configurations,
             tool_resolver=tool_resolver,
             tool_gate=SdkToolGate(
                 profiles=active_policy_profiles,
@@ -806,6 +822,33 @@ def build_memory_container(
             knowledge=knowledge,
             remote_knowledge_mcp=remote_knowledge_mcp,
             observability=observability,
+        )
+        runtime = (
+            RegistryRuntimeRouter(
+                registry=registry,
+                runtimes={
+                    "claude-agent-sdk": claude_runtime,
+                    "codex-app-server": RegistryCodexRuntime(
+                        registry=registry,
+                        codex_path=Path(resolved_settings.codex_cli_path),
+                        model_configurations=model_configurations,
+                        tool_resolver=tool_resolver,
+                        model_by_route=resolved_settings.codex_model_by_route,
+                        provider_by_route=resolved_settings.codex_provider_by_route,
+                        approval_policy=resolved_settings.codex_approval_policy,
+                        network_access=resolved_settings.codex_network_access,
+                        tool_output_token_limit=(
+                            resolved_settings.codex_tool_output_token_limit
+                        ),
+                        server_request_handler=CodexToolGate(
+                            approvals=approval_service,
+                            events=event_service,
+                        ).authorize,
+                    ),
+                },
+            )
+            if resolved_settings.runtime == "multi"
+            else claude_runtime
         )
         model_probe = AnthropicSandboxModelProbe(gateway)
         mcp_probe = StreamableHttpMcpProbe(tool_resolver)
@@ -848,7 +891,7 @@ def build_memory_container(
         memory=memory_service,
         workspace_policy_resolver=workspace_policy_resolver,
         runtime_asset_stager=(
-            stage_runtime_assets if resolved_settings.runtime == "claude-sdk" else None
+            stage_runtime_assets if resolved_settings.runtime != "fake" else None
         ),
         policy_resolver=resolve_policy,
         output_artifact_max_bytes=resolved_settings.output_artifact_max_bytes,
@@ -916,11 +959,13 @@ def build_memory_container(
         environment=resolved_settings.environment,
         api_bearer_token=resolved_settings.api_bearer_token,
         auth=auth,
+        api_access=api_access,
         audit=audit,
         agent_drafts=agent_drafts,
         capability_catalogs=capability_catalogs,
         mcp_discovery=mcp_discovery,
         mcp_credentials=mcp_credential_service,
+        model_configurations=model_configurations,
         studio=studio_service,
         preview_repository=preview_repository,
         previews=preview_service,
@@ -988,6 +1033,10 @@ async def require_identity(
     user_id: Annotated[str | None, Header(alias="X-User-ID")] = None,
 ) -> Identity:
     container: ApiContainer = request.app.state.container
+    api_key_identity = getattr(request.state, "api_key_identity", None)
+    if isinstance(api_key_identity, Identity):
+        request.state.identity = api_key_identity
+        return api_key_identity
     scheme, separator, credential = (authorization or "").partition(" ")
     service_authenticated = bool(getattr(request.state, "service_authenticated", False))
     if separator and scheme.lower() == "bearer" and credential.count(".") == 2:
@@ -1068,6 +1117,16 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 
 
 def ensure_permission(identity: Identity, permission: str) -> None:
+    if identity.permissions is not None:
+        if permission not in identity.permissions:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "permission_denied",
+                    "message": f"API key permission required: {permission}",
+                },
+            )
+        return
     granted: set[str] = set()
     for role in identity.roles:
         granted.update(_ROLE_PERMISSIONS.get(role, frozenset()))

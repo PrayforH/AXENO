@@ -10,6 +10,7 @@ from harness.studio.models import (
     DraftModelSelection,
     DraftSkill,
     DraftSubagent,
+    DraftTaskContract,
 )
 
 
@@ -123,28 +124,11 @@ def create_draft_spec(
         policy = "production-standard"
         limits = DraftLimits(maxTurns=64)
     elif template is AgentTemplate.ORCHESTRATOR:
-        tools = ("Read", "Glob", "Grep", "Task")
+        # Delegation stays opt-in. The Builder adds Task when the first
+        # explicitly selected subagent is bound and removes it with the last.
+        tools = ("Read", "Glob", "Grep")
         policy = "production-orchestrator"
         limits = DraftLimits(maxTurns=64)
-        subagents = (
-            DraftSubagent(
-                alias="evidence-researcher",
-                ref="helper-agent@1.0.0",
-                responsibility="并行收集证据、标记来源并返回可核验事实。",
-                background=True,
-            ),
-            DraftSubagent(
-                alias="risk-reviewer",
-                ref="helper-agent@1.0.0",
-                responsibility="独立挑战关键判断，识别反例、风险和未解决的不确定性。",
-                background=True,
-            ),
-            DraftSubagent(
-                alias="quality-reviewer",
-                ref="helper-agent@1.0.0",
-                responsibility="在交付前核验输出契约、证据覆盖和禁止事项。",
-            ),
-        )
     else:
         tools = ("Read", "Glob", "Grep")
         policy = "production-read-only"
@@ -157,6 +141,12 @@ def create_draft_spec(
         description=description,
         domain=domain,
         template=template,
+        taskContract=DraftTaskContract(
+            goal=description,
+            inputs=(f"用户提供的 {domain} 任务说明与材料",),
+            outputs=("可核验的完成结果与必要交付物",),
+            constraints=("不得绕过平台权限、审批、Sandbox 或网络边界",),
+        ),
         model=DraftModelSelection(
             routeId="deepseek-v4-pro",
             model="deepseek-v4-pro",

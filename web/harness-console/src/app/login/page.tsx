@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { publishAuthEvent } from "../../lib/auth-coordination";
 import { PRODUCT_NAME, ProductBrandCopy, ProductBrandMark } from "../../components/product-brand";
+import { SecretInput } from "../../components/secret-input";
 
 type AuthConfig = {
   registration_enabled: boolean;
@@ -115,7 +116,7 @@ export default function LoginPage() {
               <label>姓名<input name="display_name" autoComplete="name" required placeholder="你希望显示的名称" /></label>
             )}
             <label>邮箱<input name="email" type="email" autoComplete="email" required placeholder="name@company.com" /></label>
-            <label>密码<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={10} placeholder="至少 10 位，含大小写与数字" /></label>
+            <label>密码<SecretInput name="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={10} placeholder="至少 10 位，含大小写与数字" revealLabel="密码" /></label>
             {error && <p className="login-error" role="alert">{error}</p>}
             {notice && <p className="login-notice" role="status">{notice}</p>}
             <button className="login-submit" type="submit" disabled={pending}>{pending ? "正在验证…" : mode === "login" ? "登录" : "创建并登录"}</button>

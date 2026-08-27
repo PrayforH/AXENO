@@ -15,12 +15,7 @@ cp deploy/docker-compose/.env.docker.example deploy/docker-compose/.env.docker
 
 - `POSTGRES_PASSWORD`
 - `MINIO_ROOT_PASSWORD`
-- `HARNESS_NEW_API_BASE_URL`
-- `HARNESS_NEW_API_KEY`
-- `HARNESS_NEW_API_MODEL`
 - `HARNESS_API_BEARER_TOKEN`（至少 32 个随机字符）
-- `HARNESS_NEW_API_COMPATIBILITY`
-- `HARNESS_NEW_API_CAPABILITIES`
 - `HARNESS_SANDBOX_PROVIDER`（`daytona`、`e2b`、`kubernetes` 或显式不安全的 `local`）
 - `HARNESS_SANDBOX_EXECUTION_MODE`：`remote_cli` 让 Claude CLI 在沙箱中运行；
   `worker_cli_deferred` 让 CLI 常驻 Worker，首次文件或 Bash 工具调用时才创建远端沙箱，
@@ -33,7 +28,7 @@ cp deploy/docker-compose/.env.docker.example deploy/docker-compose/.env.docker
 任意 stdio 命令。只有管理员显式设置 `readOnly=true` 的 MCP 才允许由 Worker
 直接调用，其余 MCP 会随 Run 回退到远端 Sandbox CLI。
 
-`HARNESS_NEW_API_*` 直接连接 Anthropic-compatible 网关，包括 new-api；生产链路不依赖 cc-switch。凭据只通过容器环境注入，不应写进镜像或提交到 Git。`HARNESS_API_BEARER_TOKEN` 用于 Web BFF、seed、E2E 与 API 之间的服务认证，不进入浏览器 bundle。`COMPATIBILITY` 可取 `full/degraded/unsupported`，`CAPABILITIES` 是逗号分隔的已验证能力（例如 `streaming,tool_use`）。只声明实际通过 `uv run python scripts/smoke_new_api.py` 黑盒验证的能力；Manifest 要求的能力不在该集合时，Run 会在模型请求前 fail closed。
+生产模型端点、模型名和凭据不再通过环境变量注入。服务启动后由系统管理员在“设置 → 模型管理”中配置；运行时、Preflight 与 Skill 共创均按租户实时读取模型管理数据。API Key 加密保存且不会返回前端。`HARNESS_API_BEARER_TOKEN` 只用于 Web BFF、seed、E2E 与 API 之间的服务认证，不进入浏览器 bundle。
 
 新建智能体不再提供 `anthropic-official` 路由或官方回退配置；发布模型从已验证的 DeepSeek、MiniMax 与 GLM 路由中选择。运行时仍能读取历史不可变版本中已固定的兼容路由，但不会把它重新加入 Studio 或任务模型目录。
 

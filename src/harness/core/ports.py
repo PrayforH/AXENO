@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from harness.core.events import RunEvent
 from harness.core.models import (
+    AgentRuntimeType,
     AgentVersion,
     AguiThreadBinding,
     ApprovalRequest,
@@ -91,6 +92,16 @@ class AgentIdentityProvider(Protocol):
         """
         ...
 
+    async def archive_personal_agent(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+    ) -> None:
+        """Hide a personal Agent while retaining immutable releases for history."""
+        ...
+
 
 class SessionRepository(Protocol):
     async def add(self, session: Session) -> None: ...
@@ -98,6 +109,22 @@ class SessionRepository(Protocol):
     async def get(self, tenant_id: str, session_id: str) -> Session: ...
 
     async def list_for_ids(self, tenant_id: str, session_ids: list[str]) -> list[Session]: ...
+
+    async def bind_runtime_thread(
+        self,
+        tenant_id: str,
+        session_id: str,
+        runtime_type: AgentRuntimeType,
+        runtime_thread_id: str,
+    ) -> Session: ...
+
+    async def clear_runtime_thread(
+        self,
+        tenant_id: str,
+        session_id: str,
+        runtime_type: AgentRuntimeType,
+        expected_runtime_thread_id: str,
+    ) -> Session: ...
 
     async def bind_claude_session_id(
         self, tenant_id: str, session_id: str, claude_session_id: str
