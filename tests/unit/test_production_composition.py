@@ -221,7 +221,8 @@ async def test_production_composition_uses_server_owned_mcp_registry() -> None:
         resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
         tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])
-        assert tavily.get("url") == ("https://mcp.tavily.com/mcp/?tavilyApiKey=production-key")
+        assert tavily.get("url") == "https://mcp.tavily.com/mcp/"
+        assert tavily.get("headers") == {"Authorization": "Bearer production-key"}
     finally:
         assert container.close is not None
         await container.close()

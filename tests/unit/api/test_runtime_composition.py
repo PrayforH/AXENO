@@ -142,9 +142,8 @@ async def test_local_claude_composition_uses_server_owned_mcp_registry(
     resolved = await resolver.resolve(tavily_manifest(), execution_identity())
 
     tavily = cast(dict[str, object], resolved.mcp_servers["tavily"])
-    assert tavily.get("url") == (
-        "https://mcp.tavily.com/mcp/?tavilyApiKey=local-key"
-    )
+    assert tavily.get("url") == "https://mcp.tavily.com/mcp/"
+    assert tavily.get("headers") == {"Authorization": "Bearer local-key"}
 
 
 def test_claude_sdk_composition_fails_instead_of_falling_back(tmp_path: Path) -> None:

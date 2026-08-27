@@ -152,6 +152,43 @@ async def test_get_upgrades_an_untouched_system_catalog() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_migrates_legacy_platform_tavily_query_auth_to_bearer() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = default_capability_catalog()
+    tavily = catalog.mcp_servers[0].model_copy(
+        update={
+            "auth_mode": "query",
+            "auth_name": "tavilyApiKey",
+            "version": 1,
+        }
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=7,
+            catalog=catalog.model_copy(update={"mcp_servers": (tavily,)}),
+            updatedBy="system-route-migration",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+    repeated = await service.get("tenant-a")
+
+    migrated = upgraded.catalog.mcp_servers[0]
+    assert upgraded.revision == 8
+    assert migrated.auth_mode == "bearer"
+    assert migrated.auth_name is None
+    assert migrated.version == 2
+    assert repeated == upgraded
+
+
+@pytest.mark.asyncio
 async def test_get_never_drops_tenant_mcp_from_a_system_authored_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
     catalog = previous_system_catalog()

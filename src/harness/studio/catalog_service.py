@@ -112,10 +112,39 @@ def _upgrade_known_legacy_permission_copy(
         else:
             templates.append(template)
 
+    default_mcp_servers = {item.reference: item for item in defaults.mcp_servers}
+    mcp_servers: list[McpCapability] = []
+    for mcp in catalog.mcp_servers:
+        replacement = default_mcp_servers.get(mcp.reference)
+        if (
+            replacement is not None
+            and mcp.reference == "tavily-readonly"
+            and mcp.owner_user_id is None
+            and mcp.auth_mode == "query"
+            and mcp.auth_name == "tavilyApiKey"
+            and mcp.auth_key == "api_key"
+        ):
+            mcp_servers.append(
+                mcp.model_copy(
+                    update={
+                        "auth_mode": replacement.auth_mode,
+                        "auth_name": replacement.auth_name,
+                        "version": max(mcp.version + 1, replacement.version),
+                    }
+                )
+            )
+            changed = True
+        else:
+            mcp_servers.append(mcp)
+
     if not changed:
         return None
     return catalog.model_copy(
-        update={"policies": tuple(policies), "templates": tuple(templates)}
+        update={
+            "policies": tuple(policies),
+            "templates": tuple(templates),
+            "mcp_servers": tuple(mcp_servers),
+        }
     )
 
 

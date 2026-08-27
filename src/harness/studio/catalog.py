@@ -129,9 +129,9 @@ def default_capability_catalog() -> CapabilityCatalog:
                 readOnly=True,
                 executionLocation="external-mcp",
                 credentialReference="TAVILY_API_KEY",
-                authMode="query",
-                authName="tavilyApiKey",
+                authMode="bearer",
                 authKey="api_key",
+                version=2,
             ),
         ),
         policies=(
