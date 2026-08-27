@@ -14,6 +14,7 @@ import { approvalStore } from "../lib/approval-store";
 import { useDialogFocus } from "../lib/use-dialog-focus";
 import {
   loadTasks,
+  prefetchThreadHistory,
   setTaskArchived,
   type TaskSummary,
 } from "../lib/task-history";
@@ -325,6 +326,12 @@ export function TaskSidebar({
                 <button
                   type="button"
                   className={`task-list-item ${task.thread_id === currentThreadId ? "is-active" : ""} ${task.pending_approval ? "needs-approval" : ""}`}
+                  onPointerEnter={() => {
+                    void prefetchThreadHistory(task.thread_id).catch(() => {});
+                  }}
+                  onFocus={() => {
+                    void prefetchThreadHistory(task.thread_id).catch(() => {});
+                  }}
                   onClick={() => onSelect(task)}
                 >
                   <span className="task-list-title">{task.title}</span>

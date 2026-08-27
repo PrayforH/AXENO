@@ -29,6 +29,8 @@ const taskListRequests = new Map<boolean, Promise<TaskSummary[]>>();
 const taskListSnapshots = new Map<boolean, { receivedAt: number; tasks: TaskSummary[] }>();
 const taskListCoalesceMs = 250;
 export const TASK_LIST_REQUEST_TIMEOUT_MS = 8_000;
+export const THREAD_HISTORY_PREFETCH_TTL_MS = 30_000;
+const threadHistoryCacheMax = 8;
 
 interface ThreadHistoryResponse {
   thread_id: string;
@@ -52,6 +54,22 @@ const activeStatuses = new Set([
   "waiting_approval",
   "cancelling",
 ]);
+
+const threadHistoryRequests = new Map<string, Promise<ThreadHistoryResponse | null>>();
+const threadHistorySnapshots = new Map<
+  string,
+  { receivedAt: number; history: ThreadHistoryResponse | null }
+>();
+
+function cacheThreadHistory(threadId: string, history: ThreadHistoryResponse | null) {
+  threadHistorySnapshots.delete(threadId);
+  threadHistorySnapshots.set(threadId, { receivedAt: Date.now(), history });
+  while (threadHistorySnapshots.size > threadHistoryCacheMax) {
+    const oldest = threadHistorySnapshots.keys().next().value;
+    if (typeof oldest !== "string") break;
+    threadHistorySnapshots.delete(oldest);
+  }
+}
 
 function resumedStatus(status: string): NonNullable<ChatModelRunResult["status"]> {
   if (activeStatuses.has(status)) return { type: "running" };
@@ -93,14 +111,59 @@ async function loadThreadHistory(
   threadId: string,
   signal?: AbortSignal,
 ): Promise<ThreadHistoryResponse | null> {
-  const response = requireAuthenticatedResponse(
-    await fetch(historyUrl(threadId), { cache: "no-store", signal }),
-  );
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error((await response.text()) || `HTTP ${response.status}`);
+  const snapshot = threadHistorySnapshots.get(threadId);
+  if (snapshot && Date.now() - snapshot.receivedAt < THREAD_HISTORY_PREFETCH_TTL_MS) {
+    threadHistorySnapshots.delete(threadId);
+    threadHistorySnapshots.set(threadId, snapshot);
+    return snapshot.history;
   }
-  return response.json() as Promise<ThreadHistoryResponse>;
+  if (snapshot) threadHistorySnapshots.delete(threadId);
+
+  let request = threadHistoryRequests.get(threadId);
+  if (!request) {
+    request = fetch(historyUrl(threadId), { cache: "no-store" })
+      .then(requireAuthenticatedResponse)
+      .then(async (response) => {
+        if (response.status === 404) return null;
+        if (!response.ok) {
+          throw new Error((await response.text()) || `HTTP ${response.status}`);
+        }
+        return response.json() as Promise<ThreadHistoryResponse>;
+      })
+      .then((history) => {
+        if (!history || !activeStatuses.has(history.status)) {
+          cacheThreadHistory(threadId, history);
+        }
+        return history;
+      })
+      .finally(() => {
+        if (threadHistoryRequests.get(threadId) === request) {
+          threadHistoryRequests.delete(threadId);
+        }
+      });
+    threadHistoryRequests.set(threadId, request);
+  }
+
+  if (!signal) return request;
+  const abortSignal = signal;
+  if (abortSignal.aborted) throw abortSignal.reason;
+  return new Promise<ThreadHistoryResponse | null>((resolve, reject) => {
+    function cancelled() {
+      reject(abortSignal.reason);
+    }
+    abortSignal.addEventListener("abort", cancelled, { once: true });
+    request.then(resolve, reject).finally(() => {
+      abortSignal.removeEventListener("abort", cancelled);
+    });
+  });
+}
+
+export function prefetchThreadHistory(threadId: string): Promise<void> {
+  return loadThreadHistory(threadId).then(() => undefined);
+}
+
+export function invalidateThreadHistory(threadId: string): void {
+  threadHistorySnapshots.delete(threadId);
 }
 
 function publishHistoryActivity(history: ThreadHistoryResponse, threadId: string) {

@@ -239,6 +239,91 @@ function MessageCopyButton({
   );
 }
 
+type MessageFeedback = "positive" | "negative";
+
+export function feedbackRunId(
+  messageId: string,
+  isLast: boolean,
+  currentRunId?: string,
+): string | undefined {
+  if (isLast && currentRunId) return currentRunId;
+  if (messageId.startsWith("assistant-") && messageId.length > "assistant-".length) {
+    return messageId.slice("assistant-".length);
+  }
+  return undefined;
+}
+
+function MessageFeedbackButtons({ runId }: { runId?: string }) {
+  const [value, setValue] = useState<MessageFeedback | null>(null);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!runId || typeof window === "undefined") {
+      setValue(null);
+      return;
+    }
+    const saved = window.localStorage.getItem(`harness:run-feedback:${runId}`);
+    setValue(saved === "positive" || saved === "negative" ? saved : null);
+  }, [runId]);
+
+  async function submit(next: MessageFeedback) {
+    if (!runId || pending || value === next) return;
+    const previous = value;
+    setValue(next);
+    setPending(true);
+    setError("");
+    try {
+      const response = requireAuthenticatedResponse(
+        await fetch(`/api/studio/runs/${encodeURIComponent(runId)}/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: next === "positive" ? 1 : 0 }),
+        }),
+      );
+      if (!response.ok) {
+        throw new Error((await response.text()) || `HTTP ${response.status}`);
+      }
+      window.localStorage.setItem(`harness:run-feedback:${runId}`, next);
+    } catch {
+      setValue(previous);
+      setError("反馈未提交，请稍后重试");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <>
+      <button
+        className="assistant-message-feedback"
+        data-feedback="positive"
+        type="button"
+        aria-label="赞同回答"
+        title={value ? "反馈已提交" : runId ? "赞同回答" : "本条回答暂无可反馈的运行记录"}
+        aria-pressed={value === "positive"}
+        disabled={!runId || pending || value !== null}
+        onClick={() => void submit("positive")}
+      >
+        <ThumbUpIcon />
+      </button>
+      <button
+        className="assistant-message-feedback"
+        data-feedback="negative"
+        type="button"
+        aria-label="不赞同回答"
+        title={value ? "反馈已提交" : runId ? "不赞同回答" : "本条回答暂无可反馈的运行记录"}
+        aria-pressed={value === "negative"}
+        disabled={!runId || pending || value !== null}
+        onClick={() => void submit("negative")}
+      >
+        <ThumbDownIcon />
+      </button>
+      <span className="message-copy-status" aria-live="polite">{error}</span>
+    </>
+  );
+}
+
 function HarnessComposer() {
   const aui = useAui();
   const { routes, overrideRouteId } = useTaskModel();
@@ -958,6 +1043,7 @@ function HarnessAssistantMessage() {
   const isLast = useAuiState((state) => state.message.isLast);
   const messageId = useAuiState((state) => state.message.id);
   const messageStatus = useAuiState((state) => state.message.status);
+  const runView = useRunViewModel();
   const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus);
   const content = useAuiState((state) => state.message.content);
   const hasVideoGeneration = content.some(
@@ -979,6 +1065,7 @@ function HarnessAssistantMessage() {
           ))
           .join("\n"),
       );
+  const feedbackRun = feedbackRunId(messageId, isLast, runView?.runId);
   return (
     <AssistantMessage.Root
       className="harness-assistant-message"
@@ -1016,16 +1103,17 @@ function HarnessAssistantMessage() {
         <div className="assistant-message-controls">
           <HarnessBranchPicker />
           <AssistantActionBar.Root
+            className="assistant-feedback-actions"
             hideWhenRunning
             autohide="not-last"
             autohideFloat="single-branch"
           >
-            <AssistantActionBar.SpeechControl />
             <MessageCopyButton
               className="assistant-message-copy"
               label="复制回答"
               text={copyText}
             />
+            <MessageFeedbackButtons runId={feedbackRun} />
           </AssistantActionBar.Root>
         </div>
       ) : null}
@@ -1084,6 +1172,24 @@ function CopySuccessIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <path d="m4.5 10.2 3.4 3.4 7.6-7.7" />
+    </svg>
+  );
+}
+
+function ThumbUpIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M6.5 8.2 9.2 3c.3-.6 1-.9 1.6-.6.7.3 1.1 1 1 1.7l-.5 3h3.8c1 0 1.7.9 1.5 1.9l-1 5.3c-.1.8-.8 1.3-1.6 1.3H6.5Z" />
+      <path d="M3.4 8.2h3.1v7.4H3.4Z" />
+    </svg>
+  );
+}
+
+function ThumbDownIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m6.5 11.8 2.7 5.2c.3.6 1 .9 1.6.6.7-.3 1.1-1 1-1.7l-.5-3h3.8c1 0 1.7-.9 1.5-1.9l-1-5.3c-.1-.8-.8-1.3-1.6-1.3H6.5Z" />
+      <path d="M3.4 4.4h3.1v7.4H3.4Z" />
     </svg>
   );
 }
@@ -1403,7 +1509,7 @@ export function AgentThread({
             assistantMessage={{
               allowCopy: false,
               allowReload: false,
-              allowSpeak: true,
+              allowSpeak: false,
               allowFeedbackPositive: false,
               allowFeedbackNegative: false,
               components: { ToolFallback: HarnessToolPart },
@@ -1423,7 +1529,6 @@ export function AgentThread({
               assistantMessage: {
                 reload: { tooltip: "重新运行" },
                 copy: { tooltip: "复制回答" },
-                speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
               },
               branchPicker: {
                 previous: { tooltip: "上一个分支" },

@@ -6159,3 +6159,31 @@
     backdrop-filter: blur(16px);
   }
 }
+
+/* Selection is a control-plane state, not a disabled/washed-out row. Keep the
+   text readable and use one quiet green rail as the state signature. */
+.agentRowActive,
+:global(html[data-color-mode="light"]) .agentRowActive {
+  position: relative;
+  color: var(--studio-ink);
+  background: color-mix(in srgb, var(--studio-green) 7%, var(--studio-panel));
+  box-shadow:
+    inset 3px 0 0 var(--studio-green),
+    inset 0 0 0 1px color-mix(in srgb, var(--studio-green) 18%, transparent);
+}
+
+.agentRowActive .agentMonogram {
+  border-color: color-mix(in srgb, var(--studio-green) 32%, var(--studio-line));
+  color: var(--studio-green);
+  background: color-mix(in srgb, var(--studio-green) 11%, var(--studio-panel));
+}
+
+.agentRowActive .agentRowCopy strong,
+:global(html[data-color-mode="light"]) .agentRowActive .agentRowCopy strong {
+  color: var(--studio-ink);
+}
+
+.agentRowActive .agentRowCopy small,
+:global(html[data-color-mode="light"]) .agentRowActive .agentRowCopy small {
+  color: var(--studio-muted);
+}

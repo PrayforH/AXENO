@@ -2,7 +2,6 @@
 
 import {
   AssistantRuntimeProvider,
-  WebSpeechSynthesisAdapter,
   useThreadRuntime,
 } from "@assistant-ui/react";
 import { useAgUiRuntime } from "@assistant-ui/react-ag-ui";
@@ -21,7 +20,10 @@ import { liveResponseStore } from "../lib/live-response-store";
 import { runStreamStore } from "../lib/run-stream-store";
 import { runReuseStore } from "../lib/run-reuse-store";
 import { uploadFeedbackStore } from "../lib/upload-feedback-store";
-import { createThreadHistoryAdapter } from "../lib/task-history";
+import {
+  createThreadHistoryAdapter,
+  invalidateThreadHistory,
+} from "../lib/task-history";
 import { activateRuntimeThread } from "../lib/runtime-thread-scope";
 import type { TaskModelRoute } from "../lib/task-model-catalog";
 import { TaskModelProvider } from "./task-model-context";
@@ -93,8 +95,9 @@ export function AssistantRuntimeShell({
     (route) => route.id === modelRouteOverride && route.modelType !== "video_generation",
   )?.id ?? null;
   const refreshDurableHistory = useCallback(() => {
+    invalidateThreadHistory(threadId);
     setHistoryRevision((current) => current + 1);
-  }, []);
+  }, [threadId]);
   const agent = useMemo(() => {
     const query = new URLSearchParams({
       agent_name: agentName,
@@ -119,7 +122,6 @@ export function AssistantRuntimeShell({
     threadId,
   ]);
   const attachments = useMemo(() => createInputAttachmentAdapter(), []);
-  const speech = useMemo(() => new WebSpeechSynthesisAdapter(), []);
   const history = useMemo(
     () =>
       createThreadHistoryAdapter(threadId, {
@@ -146,7 +148,7 @@ export function AssistantRuntimeShell({
   const runtime = useAgUiRuntime({
     agent,
     showThinking: true,
-    adapters: { attachments, speech, history },
+    adapters: { attachments, history },
     onCancel: () => agent.cancelActiveRun(),
     onError: (error) => console.error("[Harness Console]", error),
   });

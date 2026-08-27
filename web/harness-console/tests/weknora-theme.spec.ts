@@ -27,6 +27,11 @@ const workspaceNavigationStyles = readFileSync(
   join(process.cwd(), "src/components/workspace-navigation.module.css"),
   "utf8",
 );
+const appStyles = readFileSync(join(process.cwd(), "src/app/styles.css"), "utf8");
+const codexStyles = readFileSync(
+  join(process.cwd(), "src/app/codex-theme.css"),
+  "utf8",
+);
 
 describe("Weknora-inspired product theme", () => {
   it("loads the product layer after the legacy theme and identifies the UI generation", () => {
@@ -72,6 +77,24 @@ describe("Weknora-inspired product theme", () => {
       /data-color-mode="light"[^}]*\.workspaceTabActive,[\s\S]*?box-shadow:\s*none;/,
     );
     expect(studioStyles).toContain("--studio-green: var(--codex-accent)");
+  });
+
+  it("uses a light product surface for the login introduction", () => {
+    expect(appStyles).toMatch(
+      /\.login-context\s*\{[^}]*color:\s*#17241e;[^}]*background:\s*#f1f5f2;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.login-context\s*\{[^}]*--codex-ink:\s*#17241e;[\s\S]*?linear-gradient\(145deg, #f4f8f5, #edf2ee 58%\);/,
+    );
+  });
+
+  it("keeps the selected Agent readable with a compact green state rail", () => {
+    expect(studioStyles).toMatch(
+      /\.agentRowActive,[\s\S]*?inset 3px 0 0 var\(--studio-green\)/,
+    );
+    expect(studioStyles).toMatch(
+      /\.agentRowActive \.agentRowCopy strong,[\s\S]*?color:\s*var\(--studio-ink\);/,
+    );
   });
 
   it("keeps the Markdown prompt editor on the light Studio surface", () => {

@@ -72,7 +72,7 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("keeps user edits aligned to the response column and omits unused ratings", () => {
+  it("keeps user edits aligned and replaces speech with durable answer feedback", () => {
     expect(agentThread).toContain('className="user-message-edit-shell"');
     expect(agentThread).not.toContain('className="user-message-edit-measure"');
     expect(styles).toMatch(
@@ -86,6 +86,18 @@ describe("full-page agent workbench", () => {
     expect(agentThread).not.toContain("<AssistantActionBar.FeedbackNegative");
     expect(agentThread).toContain("allowFeedbackPositive: false");
     expect(agentThread).toContain("allowFeedbackNegative: false");
+    expect(agentThread).toContain('aria-label="赞同回答"');
+    expect(agentThread).toContain('aria-label="不赞同回答"');
+    expect(agentThread).toContain("/feedback`");
+    expect(agentThread).toContain("allowSpeak: false");
+    expect(agentThread).not.toContain("<AssistantActionBar.SpeechControl");
+    expect(agentThread).not.toContain("朗读回答");
+    expect(styles).toMatch(
+      /\.assistant-feedback-actions\s*\{[^}]*align-items:\s*center;[^}]*gap:\s*2px;/s,
+    );
+    expect(styles).toMatch(
+      /\.assistant-message-feedback\s*\{[^}]*width:\s*30px;[^}]*height:\s*30px;[^}]*place-items:\s*center;/s,
+    );
   });
 
   it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {

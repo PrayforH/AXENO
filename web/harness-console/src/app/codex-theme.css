@@ -1461,13 +1461,19 @@ body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
 }
 
 .login-context {
+  --codex-ink: #17241e;
+  --codex-ink-soft: #33433b;
+  --codex-muted: #66766e;
+  --codex-faint: #87938d;
+  --codex-line: #d8dfda;
+  --codex-line-strong: #c4cfc8;
   position: relative;
   overflow: hidden;
   border-color: var(--codex-line);
   color: var(--codex-ink);
   background:
-    radial-gradient(circle at 18% 32%, rgb(51 156 255 / 18%), transparent 24rem),
-    linear-gradient(145deg, #111820, #121212 58%);
+    radial-gradient(circle at 18% 32%, rgb(32 172 102 / 10%), transparent 24rem),
+    linear-gradient(145deg, #f4f8f5, #edf2ee 58%);
 }
 
 .login-context::before {
@@ -1475,10 +1481,10 @@ body.codex-theme-v1 .harness-composer-shell .aui-composer-attachments {
   inset: 0;
   content: "";
   pointer-events: none;
-  opacity: 0.34;
+  opacity: 0.46;
   background-image:
-    linear-gradient(rgb(255 255 255 / 3%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 3%) 1px, transparent 1px);
+    linear-gradient(rgb(27 78 50 / 4%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(27 78 50 / 4%) 1px, transparent 1px);
   background-size: 54px 54px;
   mask-image: radial-gradient(circle at 26% 42%, black, transparent 68%);
 }
@@ -3033,12 +3039,12 @@ html[data-color-mode="light"] .aui-table-scroll {
 }
 
 html[data-color-mode="light"] .login-context {
-  --codex-ink: #ffffff;
-  --codex-ink-soft: #e1e7eb;
-  --codex-muted: #aab4bc;
-  --codex-faint: #85939e;
-  --codex-line: #2d3943;
-  --codex-line-strong: #45535f;
+  --codex-ink: #17241e;
+  --codex-ink-soft: #33433b;
+  --codex-muted: #66766e;
+  --codex-faint: #87938d;
+  --codex-line: #d8dfda;
+  --codex-line-strong: #c4cfc8;
 }
 
 html[data-color-mode="light"] .settings-header {

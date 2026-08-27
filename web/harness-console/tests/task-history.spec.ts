@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { activityStore } from "../src/lib/activity-store";
 import {
   createThreadHistoryAdapter,
+  invalidateThreadHistory,
   loadTasks,
+  prefetchThreadHistory,
   TASK_LIST_REQUEST_TIMEOUT_MS,
 } from "../src/lib/task-history";
 
@@ -102,6 +104,32 @@ describe("thread history activity restoration", () => {
     await expect(fromBindingRestore).resolves.toEqual([]);
     await expect(loadTasks(false)).resolves.toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("prefetches a completed conversation and reuses it on selection", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(historyResponse("succeeded", "预取完成"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await prefetchThreadHistory("thread-prefetched");
+    const repository = await createThreadHistoryAdapter("thread-prefetched").load();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(repository.messages.at(-1)?.message.content).toEqual([
+      { type: "text", text: "预取完成" },
+    ]);
+  });
+
+  it("invalidates a prefetched conversation after a new run finishes", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(historyResponse("succeeded", "旧回答"))
+      .mockResolvedValueOnce(historyResponse("succeeded", "新回答"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await prefetchThreadHistory("thread-invalidated");
+    invalidateThreadHistory("thread-invalidated");
+    await createThreadHistoryAdapter("thread-invalidated").load();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("times out a stalled task-list request and allows the next refresh to recover", async () => {
