@@ -89,6 +89,9 @@ export function AssistantRuntimeShell({
 }) {
   const runView = useRunViewModel();
   const [historyRevision, setHistoryRevision] = useState(0);
+  const conversationalModelRouteOverride = modelRoutes.find(
+    (route) => route.id === modelRouteOverride && route.modelType !== "video_generation",
+  )?.id ?? null;
   const refreshDurableHistory = useCallback(() => {
     setHistoryRevision((current) => current + 1);
   }, []);
@@ -101,7 +104,7 @@ export function AssistantRuntimeShell({
     if (spaceId) query.set("space_id", spaceId);
     const next = new HarnessHttpAgent({
       url: `/api/agui?${query.toString()}`,
-      modelRouteOverride,
+      modelRouteOverride: conversationalModelRouteOverride,
       onRunSucceeded: refreshDurableHistory,
     });
     next.threadId = threadId;
@@ -110,7 +113,7 @@ export function AssistantRuntimeShell({
     agentName,
     agentOwnerUserId,
     agentVersion,
-    modelRouteOverride,
+    conversationalModelRouteOverride,
     refreshDurableHistory,
     spaceId,
     threadId,

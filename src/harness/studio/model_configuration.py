@@ -8,13 +8,18 @@ included in API responses, logs, manifests, or task input.
 from __future__ import annotations
 
 import ipaddress
+import json
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from typing import Literal, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
+from uuid import uuid4
 
 import httpx
-from pydantic import Field, SecretStr
+from PIL import Image, UnidentifiedImageError
+from pydantic import Field, SecretStr, model_validator
 
 from harness.core.errors import ConflictError, NotFoundError
 from harness.core.models import ModelCompatibility
@@ -111,6 +116,74 @@ class GenerateImageResult(StudioModel):
     images: tuple[GeneratedImage, ...]
 
 
+class GenerateVideoRequest(StudioModel):
+    prompt: str = Field(min_length=1, max_length=8_000)
+    mode: Literal["auto", "ref2va"] = "auto"
+    aspect_ratio: Literal["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"] = Field(
+        default="16:9", alias="aspectRatio"
+    )
+    seconds: int = Field(default=5, ge=4, le=15)
+    seed: int | None = Field(default=None, ge=0)
+    negative_prompt: str | None = Field(default=None, alias="negativePrompt", max_length=4_000)
+    input_artifact_ids: tuple[str, ...] = Field(default=(), alias="inputArtifactIds", max_length=9)
+
+    @model_validator(mode="after")
+    def validate_input_artifacts(self) -> GenerateVideoRequest:
+        if len(self.input_artifact_ids) != len(set(self.input_artifact_ids)):
+            raise ValueError("duplicate video reference image")
+        if any(
+            len(item) > 128 or not item.startswith("input_artifact_")
+            for item in self.input_artifact_ids
+        ):
+            raise ValueError("invalid input artifact ID")
+        if self.mode == "ref2va" and not self.input_artifact_ids:
+            raise ValueError("Ref2VA requires at least one reference image")
+        if self.mode == "auto" and len(self.input_artifact_ids) > 2:
+            raise ValueError("automatic video mode accepts at most two reference images")
+        return self
+
+
+class VideoGenerationJob(StudioModel):
+    job_id: str = Field(alias="jobId")
+    status: Literal["queued", "in_progress", "completed", "failed", "cancelled"]
+    progress: int = Field(default=0, ge=0, le=100)
+    error: str | None = None
+    inference_time_seconds: float | None = Field(default=None, alias="inferenceTimeSeconds")
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedVideo:
+    content: bytes
+    media_type: str
+    request_id: str | None
+    inference_time_seconds: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedVideoReference:
+    name: str
+    media_type: str
+    content: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ManagedVideoJob:
+    tenant_id: str
+    user_id: str
+    route_id: str
+    provider_job_id: str
+    created_at: datetime
+
+
+_MAX_GENERATED_VIDEO_BYTES = 128 * 1024 * 1024
+_MAX_VIDEO_REFERENCE_BYTES = 60 * 1024 * 1024
+_MAX_VIDEO_REFERENCE_IMAGE_BYTES = 30 * 1024 * 1024
+_MIN_VIDEO_REFERENCE_DIMENSION = 256
+_MAX_VIDEO_REFERENCE_DIMENSION = 5_760
+_MIN_VIDEO_REFERENCE_ASPECT_RATIO = 1 / 4
+_MAX_VIDEO_REFERENCE_ASPECT_RATIO = 4
+
+
 class ModelConfigurationService:
     def __init__(
         self,
@@ -128,6 +201,7 @@ class ModelConfigurationService:
             route.route_id: route for route in server_routes if route.route_id is not None
         }
         self._http_client = http_client
+        self._video_jobs: dict[str, _ManagedVideoJob] = {}
 
     async def list(self, tenant_id: str) -> ModelConfigurationList:
         record = await self._import_server_models(tenant_id)
@@ -151,7 +225,7 @@ class ModelConfigurationService:
                     authScheme=route.auth_scheme,
                     capabilities=route.capabilities,
                     enabled=route.enabled,
-                    credentialConfigured=route.route_id in stored,
+                    credentialConfigured=(route.auth_scheme == "none" or route.route_id in stored),
                     deletable=True,
                     version=route.version,
                 )
@@ -178,15 +252,15 @@ class ModelConfigurationService:
         credential = await self._credentials.repository.get(
             tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
         )
-        if (
-            request.api_key is None
-            and credential is None
-        ):
+        if request.auth_scheme == "none" and request.api_key is not None:
+            raise ConflictError("API keys cannot be stored for an unauthenticated model")
+        if request.auth_scheme != "none" and request.api_key is None and credential is None:
             raise ConflictError("an API key is required when creating a model connection")
         capabilities = {
             "chat": ("streaming", "tool_use"),
             "vision": ("streaming", "tool_use", "vision"),
             "image_generation": ("image_generation",),
+            "video_generation": ("video_generation",),
         }[request.model_type]
         route = ModelRouteCapability(
             routeId=route_id,
@@ -215,6 +289,8 @@ class ModelConfigurationService:
         )
         if request.api_key is not None:
             await self._store_secret(tenant_id, user_id, route_id, request.api_key)
+        elif request.auth_scheme == "none" and credential is not None:
+            await self._credentials.repository.delete(tenant_id, _MODEL_CREDENTIAL_OWNER, route_id)
         return await self.list(tenant_id)
 
     async def disable(
@@ -248,9 +324,7 @@ class ModelConfigurationService:
             resource_id=route_id,
             expected_revision=expected_revision,
         )
-        await self._credentials.repository.delete(
-            tenant_id, _MODEL_CREDENTIAL_OWNER, route_id
-        )
+        await self._credentials.repository.delete(tenant_id, _MODEL_CREDENTIAL_OWNER, route_id)
         if self._credentials.audit is not None:
             await self._credentials.audit.record(
                 tenant_id=tenant_id,
@@ -283,9 +357,7 @@ class ModelConfigurationService:
             user_id=user_id,
             request=ReplaceCapabilityCatalogRequest(
                 expectedRevision=request.expected_revision,
-                catalog=record.catalog.model_copy(
-                    update={"agent_model_bindings": bindings}
-                ),
+                catalog=record.catalog.model_copy(update={"agent_model_bindings": bindings}),
             ),
         )
         return await self.list(tenant_id)
@@ -297,9 +369,7 @@ class ModelConfigurationService:
         requested_route_id: str,
         *,
         apply_agent_binding: bool = True,
-        required_api_format: Literal[
-            "anthropic_compatible", "openai_compatible", "openai_images"
-        ]
+        required_api_format: Literal["anthropic_compatible", "openai_compatible", "openai_images"]
         | None = None,
     ) -> CcSwitchClaudeConfig | None:
         record = await self._import_server_models(tenant_id)
@@ -307,21 +377,14 @@ class ModelConfigurationService:
             record.catalog.agent_model_bindings.get(agent_name) if apply_agent_binding else None
         )
         bound_route = next(
-            (
-                item
-                for item in record.catalog.model_routes
-                if item.route_id == bound_route_id
-            ),
+            (item for item in record.catalog.model_routes if item.route_id == bound_route_id),
             None,
         )
         route_id = (
             bound_route_id
             if bound_route_id is not None
             and bound_route is not None
-            and (
-                required_api_format is None
-                or bound_route.api_format == required_api_format
-            )
+            and (required_api_format is None or bound_route.api_format == required_api_format)
             else requested_route_id
         )
         route = next(
@@ -332,6 +395,8 @@ class ModelConfigurationService:
         if required_api_format is not None and route.api_format != required_api_format:
             return None
         if route.base_url is None or route.model_type not in {"chat", "vision"}:
+            return None
+        if route.auth_scheme == "none":
             return None
         secret = await self._secret(tenant_id, route_id)
         if secret is None:
@@ -347,15 +412,28 @@ class ModelConfigurationService:
             capabilities=frozenset(route.capabilities),
         )
 
-    async def test(
-        self, tenant_id: str, route_id: str
-    ) -> ModelConnectionTestResult:
+    async def test(self, tenant_id: str, route_id: str) -> ModelConnectionTestResult:
         from time import monotonic
 
         route = await self._route(tenant_id, route_id)
-        secret = await self._require_secret(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
         started = monotonic()
         payload: dict[str, object]
+        if route.model_type == "video_generation":
+            try:
+                response = await self._get(route, secret, "models")
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise ConflictError(
+                    f"model provider rejected the test request (HTTP {error.response.status_code})"
+                ) from None
+            except httpx.HTTPError:
+                raise ConflictError("model provider connection failed") from None
+            return ModelConnectionTestResult(
+                ok=True,
+                latencyMs=int((monotonic() - started) * 1000),
+                message="连接成功，视频服务已就绪。",
+            )
         if route.model_type == "image_generation":
             payload = {
                 "model": route.models[0],
@@ -399,7 +477,7 @@ class ModelConfigurationService:
         route = await self._route(tenant_id, route_id)
         if route.model_type != "image_generation" or not route.enabled:
             raise ConflictError("the selected route is not an enabled image generation model")
-        secret = await self._require_secret(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
         try:
             response = await self._post(
                 route,
@@ -440,15 +518,269 @@ class ModelConfigurationService:
                     url=raw_url if isinstance(raw_url, str) else None,
                     b64Json=raw_b64 if isinstance(raw_b64, str) else None,
                     revisedPrompt=(
-                        raw_revised_prompt
-                        if isinstance(raw_revised_prompt, str)
-                        else None
+                        raw_revised_prompt if isinstance(raw_revised_prompt, str) else None
                     ),
                 )
             )
         if not images:
             raise ConflictError("image provider returned no images")
         return GenerateImageResult(model=route.models[0], images=tuple(images))
+
+    async def create_video_job(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        request: GenerateVideoRequest,
+        *,
+        references: tuple[GeneratedVideoReference, ...] = (),
+    ) -> VideoGenerationJob:
+        route = await self._route(tenant_id, route_id)
+        if route.model_type != "video_generation" or not route.enabled:
+            raise ConflictError("the selected route is not an enabled video generation model")
+        secret = await self._credential_for_route(tenant_id, route)
+        form, reference_files = self._video_request_form(route, request, references)
+        try:
+            response = await self._post_multipart(
+                route,
+                secret,
+                "videos",
+                form,
+                reference_files,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"video provider rejected the request (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        raw = self._video_provider_response(response)
+        provider_job_id = raw.get("id")
+        if (
+            not isinstance(provider_job_id, str)
+            or not provider_job_id
+            or len(provider_job_id) > 256
+        ):
+            raise ConflictError("video provider returned an invalid job identifier")
+        job_id = f"video_job_{uuid4().hex}"
+        self._video_jobs[job_id] = _ManagedVideoJob(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            route_id=route_id,
+            provider_job_id=provider_job_id,
+            created_at=datetime.now(UTC),
+        )
+        self._prune_video_jobs()
+        return self._video_job_view(job_id, raw)
+
+    async def get_video_job(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> VideoGenerationJob:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._get(
+                route, secret, f"videos/{quote(job.provider_job_id, safe='')}"
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                self._video_jobs.pop(job_id, None)
+                raise NotFoundError(f"video generation job not found: {job_id}") from None
+            raise ConflictError(
+                f"video provider rejected the status request (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        return self._video_job_view(job_id, self._video_provider_response(response))
+
+    async def cancel_video_job(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> VideoGenerationJob:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._delete(
+                route, secret, f"videos/{quote(job.provider_job_id, safe='')}"
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 404:
+                self._video_jobs.pop(job_id, None)
+                raise NotFoundError(f"video generation job not found: {job_id}") from None
+            raise ConflictError(
+                f"video provider rejected cancellation (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        self._video_jobs.pop(job_id, None)
+        return VideoGenerationJob(jobId=job_id, status="cancelled", progress=0)
+
+    async def download_video(
+        self,
+        tenant_id: str,
+        user_id: str,
+        route_id: str,
+        job_id: str,
+    ) -> GeneratedVideo:
+        job = self._video_job(tenant_id, user_id, route_id, job_id)
+        route = await self._route(tenant_id, route_id)
+        secret = await self._credential_for_route(tenant_id, route)
+        try:
+            response = await self._get(
+                route,
+                secret,
+                f"videos/{quote(job.provider_job_id, safe='')}/content",
+                timeout=60.0,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"video provider rejected the download (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("video provider connection failed") from None
+        media_type = response.headers.get("content-type", "").partition(";")[0].strip()
+        if (
+            media_type != "video/mp4"
+            or len(response.content) < 12
+            or response.content[4:8] != b"ftyp"
+        ):
+            raise ConflictError("video provider returned an invalid MP4 response")
+        if len(response.content) > _MAX_GENERATED_VIDEO_BYTES:
+            raise ConflictError("video provider response exceeds the 128 MiB limit")
+        return GeneratedVideo(
+            content=response.content,
+            media_type=media_type,
+            request_id=response.headers.get("x-request-id"),
+            inference_time_seconds=response.headers.get("x-inference-time-s"),
+        )
+
+    def _video_request_form(
+        self,
+        route: ModelRouteCapability,
+        request: GenerateVideoRequest,
+        references: tuple[GeneratedVideoReference, ...],
+    ) -> tuple[dict[str, str], tuple[tuple[str, GeneratedVideoReference], ...]]:
+        if len(references) != len(request.input_artifact_ids):
+            raise ConflictError("video reference images could not be resolved")
+        if any(not item.media_type.lower().startswith("image/") for item in references):
+            raise ConflictError("video references must be image files")
+        if sum(len(item.content) for item in references) > _MAX_VIDEO_REFERENCE_BYTES:
+            raise ConflictError("video reference images exceed the 60 MiB total limit")
+        for index, item in enumerate(references, start=1):
+            if len(item.content) > _MAX_VIDEO_REFERENCE_IMAGE_BYTES:
+                raise ConflictError(f"video reference image {index} exceeds the 30 MiB limit")
+            try:
+                with Image.open(BytesIO(item.content)) as image:
+                    width, height = image.size
+                    image.verify()
+            except (OSError, UnidentifiedImageError, ValueError):
+                raise ConflictError(
+                    f"video reference image {index} is invalid or unsupported"
+                ) from None
+            if (
+                min(width, height) < _MIN_VIDEO_REFERENCE_DIMENSION
+                or max(width, height) > _MAX_VIDEO_REFERENCE_DIMENSION
+            ):
+                raise ConflictError(
+                    f"video reference image {index} dimensions must be between 256 and 5760 pixels"
+                )
+            aspect_ratio = width / height
+            if not (
+                _MIN_VIDEO_REFERENCE_ASPECT_RATIO
+                <= aspect_ratio
+                <= _MAX_VIDEO_REFERENCE_ASPECT_RATIO
+            ):
+                raise ConflictError(
+                    f"video reference image {index} aspect ratio must be between 1:4 and 4:1"
+                )
+        form: dict[str, str] = {
+            "model": route.models[0],
+            "prompt": request.prompt,
+            "aspect_ratio": request.aspect_ratio,
+            "seconds": str(request.seconds),
+        }
+        if request.seed is not None:
+            form["seed"] = str(request.seed)
+        if request.negative_prompt:
+            form["negative_prompt"] = request.negative_prompt
+        if request.mode == "ref2va":
+            form["extra_params"] = json.dumps({"task": "ref2va"}, separators=(",", ":"))
+        reference_files = tuple(
+            (
+                "input_reference" if len(references) == 1 else "input_references",
+                item,
+            )
+            for item in references
+        )
+        return form, reference_files
+
+    def _video_job(
+        self, tenant_id: str, user_id: str, route_id: str, job_id: str
+    ) -> _ManagedVideoJob:
+        job = self._video_jobs.get(job_id)
+        if (
+            job is None
+            or job.tenant_id != tenant_id
+            or job.user_id != user_id
+            or job.route_id != route_id
+        ):
+            raise NotFoundError(f"video generation job not found: {job_id}")
+        return job
+
+    @staticmethod
+    def _video_provider_response(response: httpx.Response) -> dict[str, object]:
+        try:
+            raw = cast(object, response.json())
+        except ValueError:
+            raise ConflictError("video provider returned an invalid response") from None
+        if not isinstance(raw, dict):
+            raise ConflictError("video provider returned an invalid response")
+        return cast(dict[str, object], raw)
+
+    @staticmethod
+    def _video_job_view(job_id: str, raw: dict[str, object]) -> VideoGenerationJob:
+        raw_status = raw.get("status")
+        if raw_status not in {"queued", "in_progress", "completed", "failed"}:
+            raise ConflictError("video provider returned an invalid job status")
+        status = cast(Literal["queued", "in_progress", "completed", "failed"], raw_status)
+        raw_progress = raw.get("progress", 0)
+        progress = raw_progress if isinstance(raw_progress, int) else 0
+        raw_error = raw.get("error")
+        error_message: str | None = None
+        if isinstance(raw_error, dict):
+            message = cast(dict[object, object], raw_error).get("message")
+            if isinstance(message, str):
+                error_message = message
+        raw_inference_time = raw.get("inference_time_s")
+        inference_time = (
+            float(raw_inference_time) if isinstance(raw_inference_time, int | float) else None
+        )
+        return VideoGenerationJob(
+            jobId=job_id,
+            status=status,
+            progress=max(0, min(100, progress)),
+            error=error_message,
+            inferenceTimeSeconds=inference_time,
+        )
+
+    def _prune_video_jobs(self) -> None:
+        if len(self._video_jobs) <= 512:
+            return
+        oldest = min(self._video_jobs, key=lambda key: self._video_jobs[key].created_at)
+        self._video_jobs.pop(oldest, None)
 
     async def _route(self, tenant_id: str, route_id: str) -> ModelRouteCapability:
         record = await self._import_server_models(tenant_id)
@@ -501,9 +833,7 @@ class ModelConfigurationService:
             return self._credentials.cipher.decrypt(stored).get(_API_KEY)
         return None
 
-    async def _import_server_models(
-        self, tenant_id: str
-    ) -> CapabilityCatalogRecord:
+    async def _import_server_models(self, tenant_id: str) -> CapabilityCatalogRecord:
         """One-time import from deployment settings into the frontend control plane."""
 
         record = await self._catalogs.get(tenant_id)
@@ -563,7 +893,7 @@ class ModelConfigurationService:
     @staticmethod
     def _server_model_type(
         route: CcSwitchClaudeConfig,
-    ) -> Literal["chat", "vision", "image_generation"]:
+    ) -> Literal["chat", "vision", "image_generation", "video_generation"]:
         return "vision" if "vision" in route.capabilities else "chat"
 
     @staticmethod
@@ -597,21 +927,37 @@ class ModelConfigurationService:
             raise ConflictError(f"credentials are not configured for model: {route_id}")
         return secret
 
+    async def _credential_for_route(
+        self, tenant_id: str, route: ModelRouteCapability
+    ) -> SecretStr | None:
+        if route.auth_scheme == "none":
+            return None
+        return await self._require_secret(tenant_id, route.route_id)
+
+    @staticmethod
+    def _headers(route: ModelRouteCapability, secret: SecretStr | None) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        if route.api_format == "anthropic_compatible":
+            headers["anthropic-version"] = "2023-06-01"
+        if route.auth_scheme == "x-api-key":
+            if secret is None:
+                raise ConflictError(f"credentials are not configured for model: {route.route_id}")
+            headers["x-api-key"] = secret.get_secret_value()
+        elif route.auth_scheme == "bearer":
+            if secret is None:
+                raise ConflictError(f"credentials are not configured for model: {route.route_id}")
+            headers["authorization"] = f"Bearer {secret.get_secret_value()}"
+        return headers
+
     async def _post(
         self,
         route: ModelRouteCapability,
-        secret: SecretStr,
+        secret: SecretStr | None,
         path: str,
         payload: dict[str, object],
     ) -> httpx.Response:
         assert route.base_url is not None
-        headers = {"content-type": "application/json"}
-        if route.api_format == "anthropic_compatible":
-            headers["anthropic-version"] = "2023-06-01"
-        if route.auth_scheme == "x-api-key":
-            headers["x-api-key"] = secret.get_secret_value()
-        else:
-            headers["authorization"] = f"Bearer {secret.get_secret_value()}"
+        headers = {"content-type": "application/json", **self._headers(route, secret)}
         client = self._http_client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
         try:
             return await client.post(
@@ -623,11 +969,84 @@ class ModelConfigurationService:
             if self._http_client is None:
                 await client.aclose()
 
+    async def _get(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+        *,
+        timeout: float = 15.0,
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+        try:
+            return await client.get(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
+    async def _delete(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
+        try:
+            return await client.delete(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
+    async def _post_multipart(
+        self,
+        route: ModelRouteCapability,
+        secret: SecretStr | None,
+        path: str,
+        form: dict[str, str],
+        reference_files: tuple[tuple[str, GeneratedVideoReference], ...] = (),
+    ) -> httpx.Response:
+        assert route.base_url is not None
+        client = self._http_client or httpx.AsyncClient(
+            timeout=httpx.Timeout(900.0, connect=15.0),
+            follow_redirects=False,
+        )
+        try:
+            files: list[tuple[str, tuple[str | None, str | bytes, str | None]]] = [
+                (name, (None, value, None)) for name, value in form.items()
+            ]
+            files.extend(
+                (
+                    field,
+                    (
+                        reference.name.replace("\r", "_").replace("\n", "_")[:120]
+                        or "reference-image",
+                        reference.content,
+                        reference.media_type,
+                    ),
+                )
+                for field, reference in reference_files
+            )
+            return await client.post(
+                f"{route.base_url.rstrip('/')}/{path}",
+                headers=self._headers(route, secret),
+                files=files,
+            )
+        finally:
+            if self._http_client is None:
+                await client.aclose()
+
     def _validate_endpoint(self, value: str) -> None:
         normalized = value.rstrip("/")
         if normalized in {
-            self._server_direct_base_url(route)
-            for route in self._server_routes.values()
+            self._server_direct_base_url(route) for route in self._server_routes.values()
         }:
             return
         parsed = urlsplit(value)
@@ -639,9 +1058,7 @@ class ModelConfigurationService:
             address = ipaddress.ip_address(parsed.hostname)
         except ValueError:
             if self._environment == "production" and parsed.scheme != "https":
-                raise ConflictError(
-                    "production public model connections require HTTPS"
-                ) from None
+                raise ConflictError("production public model connections require HTTPS") from None
             return
         if self._environment != "production":
             return

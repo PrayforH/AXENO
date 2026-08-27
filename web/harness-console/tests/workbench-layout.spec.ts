@@ -38,6 +38,10 @@ const agentThread = readFileSync(
   join(process.cwd(), "src/components/agent-thread.tsx"),
   "utf8",
 );
+const videoGeneration = readFileSync(
+  join(process.cwd(), "src/components/video-generation.tsx"),
+  "utf8",
+);
 const activitySummary = readFileSync(
   join(process.cwd(), "src/components/activity-summary.tsx"),
   "utf8",
@@ -408,8 +412,22 @@ describe("full-page agent workbench", () => {
     expect(page).toContain('<AgentThread userId={user.user_id} threadId={threadId} />');
     expect(agentThread).toContain("loadTaskComposerDraft");
     expect(agentThread).toContain("persistTaskComposerDraft");
-    expect(agentThread).toContain("未发送内容已保存在当前浏览器");
+    expect(agentThread).not.toContain("未发送内容已保存在当前浏览器");
     expect(agentThread).toContain("auiRef.current.composer().setText(saved)");
+  });
+
+  it("runs managed video models through a dedicated conversation composer path", () => {
+    expect(agentThread).toContain('route.modelType === "video_generation"');
+    expect(videoGeneration).toContain("/videos`");
+    expect(videoGeneration).toContain("inputArtifactIds");
+    expect(videoGeneration).toContain("自定义时长（4–15 秒）");
+    expect(videoGeneration).toContain("下载 MP4");
+    expect(videoGeneration).toContain("重新生成");
+    expect(videoGeneration).toContain("沿用参数");
+    expect(videoGeneration).toContain("<video");
+    expect(styles).toContain(".composer-video-settings");
+    expect(styles).toContain(".video-answer-card");
+    expect(styles).toContain(".aui-composer-video-send");
   });
 
   it("removes obsolete custom thread layout rules superseded by assistant-ui", () => {
@@ -567,9 +585,7 @@ describe("full-page agent workbench", () => {
     expect(styles).toMatch(
       /\.harness-composer-shell \.aui-composer-attach,[\s\S]*?width:\s*40px;[^}]*height:\s*40px;[^}]*margin:\s*0;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;/s,
     );
-    expect(styles).toMatch(
-      /\.composer-meta\s*\{[^}]*padding:\s*6px 10px 0;[^}]*align-items:\s*center;/s,
-    );
+    expect(styles).not.toContain(".composer-meta");
   });
 
   it("uses a single-column assistant flow so errors cannot occupy an avatar grid cell", () => {

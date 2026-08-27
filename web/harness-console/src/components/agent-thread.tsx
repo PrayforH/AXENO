@@ -11,6 +11,7 @@ import {
   useAui,
   useAuiState,
   useThreadRuntime,
+  type CompleteAttachment,
   type ReasoningMessagePartComponent,
   type TextMessagePartProps,
   type ToolCallMessagePartProps,
@@ -18,6 +19,7 @@ import {
 import {
   createContext,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useContext,
   useEffect,
   useMemo,
@@ -45,6 +47,7 @@ import { selectComposerDisabled, type RunPhase } from "../lib/run-view-model";
 import {
   TaskModelControl,
   TaskModelVisionNotice,
+  useTaskModel,
 } from "./task-model-context";
 import {
   hasRunActivityToolCall,
@@ -65,6 +68,14 @@ import {
   useRunStream,
 } from "../lib/run-stream-store";
 import { normalizeMessageText } from "../lib/message-text";
+import { inputArtifactIdFromAttachment } from "../lib/input-attachment-adapter";
+import {
+  VIDEO_GENERATION_PART_NAME,
+  VideoGenerationControls,
+  VideoGenerationMessagePart,
+  VideoGenerationProvider,
+  useVideoGeneration,
+} from "./video-generation";
 
 export { normalizeMessageText } from "../lib/message-text";
 import { runReuseStore, useRunReuseNotice } from "../lib/run-reuse-store";
@@ -230,6 +241,7 @@ function MessageCopyButton({
 
 function HarnessComposer() {
   const aui = useAui();
+  const { routes, overrideRouteId } = useTaskModel();
   const threadRunning = useAuiState((state) => state.thread.isRunning);
   const composerText = useAuiState((state) => state.composer.text);
   const composerAttachments = useAuiState((state) => state.composer.attachments);
@@ -238,7 +250,12 @@ function HarnessComposer() {
   const pendingApproval = usePendingApproval();
   const reuseNotice = useRunReuseNotice();
   const runLocked = selectComposerDisabled(runView);
-  const draftRestored = useTaskComposerDraft(composerText);
+  useTaskComposerDraft(composerText);
+  const videoRoute = routes.find(
+    (route) => route.id === overrideRouteId && route.modelType === "video_generation",
+  );
+  const videoGeneration = useVideoGeneration();
+  const [videoValidationError, setVideoValidationError] = useState<string | null>(null);
   useEffect(() => {
     const visibleApprovalId = pendingApproval.details?.approval_id;
     if (
@@ -256,11 +273,66 @@ function HarnessComposer() {
     stream.status,
     runView?.phase,
   );
-  const composerHint = runLocked
-    ? runView?.phase === "waiting_approval"
-      ? "处理审批后，Agent 会从当前步骤继续"
-      : "Agent 正在执行，可随时停止"
-    : "Enter 发送 · Shift + Enter 换行";
+  const videoGenerating = videoGeneration.generating;
+  async function generateVideo() {
+    const prompt = composerText.trim();
+    if (!videoRoute || !prompt || videoGenerating) return;
+    setVideoValidationError(null);
+    if (composerAttachments.some((attachment) => attachment.type !== "image")) {
+      setVideoValidationError("H3 参考素材只支持图片，请移除文档或其他文件。");
+      return;
+    }
+    if (videoGeneration.settings.mode === "ref2va" && composerAttachments.length === 0) {
+      setVideoValidationError("Ref2VA 至少需要添加一张参考图片。");
+      return;
+    }
+    const maximumReferences = videoGeneration.settings.mode === "ref2va" ? 9 : 2;
+    if (composerAttachments.length > maximumReferences) {
+      setVideoValidationError(
+        videoGeneration.settings.mode === "ref2va"
+          ? "Ref2VA 最多使用九张参考图片。"
+          : "自动模式最多使用两张参考图片。",
+      );
+      return;
+    }
+    const maybeArtifactIds = composerAttachments.map(inputArtifactIdFromAttachment);
+    if (maybeArtifactIds.some((item) => !item)) {
+      setVideoValidationError("参考图片仍在上传，请稍后再试。");
+      return;
+    }
+    const inputArtifactIds = maybeArtifactIds.filter(
+      (item): item is string => Boolean(item),
+    );
+    const seed = videoGeneration.settings.seed.trim();
+    if (seed && (!/^\d+$/.test(seed) || !Number.isSafeInteger(Number(seed)))) {
+      setVideoValidationError("随机种子必须是非负整数。");
+      return;
+    }
+    const attachments: CompleteAttachment[] = composerAttachments.map((attachment, index) => {
+      const artifactId = inputArtifactIds[index]!;
+      const mimeType = attachment.contentType ?? "image/*";
+      return {
+        id: artifactId,
+        type: "image",
+        name: attachment.name,
+        contentType: mimeType,
+        status: { type: "complete" },
+        content: [{
+          type: "file",
+          data: artifactId,
+          mimeType,
+          filename: attachment.name,
+        }],
+      };
+    });
+    videoGeneration.start({
+      routeId: videoRoute.id,
+      routeLabel: videoRoute.label,
+      prompt,
+      inputArtifactIds,
+      attachments,
+    });
+  }
   return (
     <div
       className="harness-composer-shell"
@@ -324,15 +396,42 @@ function HarnessComposer() {
       ) : null}
       <UploadFeedbackNotice />
       <TaskModelVisionNotice
-        disabled={runLocked || showStop}
+        disabled={runLocked || showStop || videoGenerating}
         requiresVision={composerAttachments.some((attachment) => attachment.type === "image")}
       />
+      {videoRoute ? (
+        <>
+          <VideoGenerationControls
+            label={videoRoute.label}
+            referenceCount={composerAttachments.length}
+            disabled={videoGenerating}
+          />
+          {videoValidationError ? (
+            <p className="composer-video-validation" role="alert">
+              {videoValidationError}
+            </p>
+          ) : null}
+        </>
+      ) : null}
       <Composer.Root>
         <Composer.Attachments />
-        <Composer.Input autoFocus />
+        <Composer.Input
+          autoFocus
+          onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+            if (
+              videoRoute &&
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
+              event.preventDefault();
+              void generateVideo();
+            }
+          }}
+        />
         <div className="composer-toolbar">
           <Composer.AddAttachment />
-          <TaskModelControl disabled={runLocked || showStop} />
+          <TaskModelControl disabled={runLocked || showStop || videoGenerating} />
         </div>
         {showStop ? (
           <button
@@ -345,16 +444,20 @@ function HarnessComposer() {
               <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
             </svg>
           </button>
+        ) : videoRoute ? (
+          <button
+            type="button"
+            className="aui-button aui-composer-video-send"
+            disabled={videoGenerating || !composerText.trim()}
+            aria-label={videoGenerating ? "视频生成中" : "生成视频"}
+            onClick={() => void generateVideo()}
+          >
+            {videoGenerating ? "生成中" : "生成视频"}
+          </button>
         ) : (
           <Composer.Send />
         )}
       </Composer.Root>
-      <div className="composer-meta" aria-live="polite">
-        <span className="sandbox-indicator"><i aria-hidden="true" />隔离工作区</span>
-        <span className="composer-hint">
-          {composerText && draftRestored ? "未发送内容已保存在当前浏览器" : composerHint}
-        </span>
-      </div>
     </div>
   );
 }
@@ -857,6 +960,9 @@ function HarnessAssistantMessage() {
   const messageStatus = useAuiState((state) => state.message.status);
   const showIncompleteRecovery = shouldOfferIncompleteRetry(messageStatus);
   const content = useAuiState((state) => state.message.content);
+  const hasVideoGeneration = content.some(
+    (part) => part.type === "data" && part.name === VIDEO_GENERATION_PART_NAME,
+  );
   // Own the native text slot as soon as a Harness message starts. Candidate
   // text may still be waiting to see whether a tool call follows, so basing
   // this only on visible text lets assistant-ui paint the same preface once.
@@ -887,6 +993,11 @@ function HarnessAssistantMessage() {
         components={{
           Text: HarnessAssistantText,
           Reasoning: ReasoningPart,
+          data: {
+            by_name: {
+              [VIDEO_GENERATION_PART_NAME]: VideoGenerationMessagePart,
+            },
+          },
         }}
       />
       {showIncompleteRecovery ? (
@@ -901,21 +1012,23 @@ function HarnessAssistantMessage() {
           </ActionBarPrimitive.Reload>
         </div>
       ) : null}
-      <div className="assistant-message-controls">
-        <HarnessBranchPicker />
-        <AssistantActionBar.Root
-          hideWhenRunning
-          autohide="not-last"
-          autohideFloat="single-branch"
-        >
-          <AssistantActionBar.SpeechControl />
-          <MessageCopyButton
-            className="assistant-message-copy"
-            label="复制回答"
-            text={copyText}
-          />
-        </AssistantActionBar.Root>
-      </div>
+      {!hasVideoGeneration ? (
+        <div className="assistant-message-controls">
+          <HarnessBranchPicker />
+          <AssistantActionBar.Root
+            hideWhenRunning
+            autohide="not-last"
+            autohideFloat="single-branch"
+          >
+            <AssistantActionBar.SpeechControl />
+            <MessageCopyButton
+              className="assistant-message-copy"
+              label="复制回答"
+              text={copyText}
+            />
+          </AssistantActionBar.Root>
+        </div>
+      ) : null}
     </AssistantMessage.Root>
   );
 }
@@ -1285,46 +1398,48 @@ export function AgentThread({
   return (
     <ComposerDraftContext.Provider value={composerDraftScope}>
       <MessageEditorContext.Provider value={{ editor, setEditor }}>
-        <Thread
-      assistantMessage={{
-        allowCopy: false,
-        allowReload: false,
-        allowSpeak: true,
-        allowFeedbackPositive: false,
-        allowFeedbackNegative: false,
-        components: { ToolFallback: HarnessToolPart },
-      }}
-      userMessage={{ allowEdit: true }}
-      branchPicker={{ allowBranchPicker: true }}
-      composer={{ allowAttachments: true }}
-      components={{
-        AssistantMessage: HarnessAssistantMessage,
-        UserMessage: HarnessUserMessage,
-        Composer: HarnessComposer,
-        ThreadWelcome: UserTaskWelcome,
-      }}
-      strings={{
-        thread: { scrollToBottom: { tooltip: "滚动到底部" } },
-        userMessage: { edit: { tooltip: "编辑消息" } },
-        assistantMessage: {
-          reload: { tooltip: "重新运行" },
-          copy: { tooltip: "复制回答" },
-          speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
-        },
-        branchPicker: {
-          previous: { tooltip: "上一个分支" },
-          next: { tooltip: "下一个分支" },
-        },
-        composer: {
-          send: { tooltip: "发送任务" },
-          cancel: { tooltip: "停止运行" },
-          addAttachment: { tooltip: "添加本地文件" },
-          removeAttachment: { tooltip: "移除附件" },
-          input: { placeholder: "描述任务，或附加文件…" },
-        },
-        editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
-      }}
-        />
+        <VideoGenerationProvider>
+          <Thread
+            assistantMessage={{
+              allowCopy: false,
+              allowReload: false,
+              allowSpeak: true,
+              allowFeedbackPositive: false,
+              allowFeedbackNegative: false,
+              components: { ToolFallback: HarnessToolPart },
+            }}
+            userMessage={{ allowEdit: true }}
+            branchPicker={{ allowBranchPicker: true }}
+            composer={{ allowAttachments: true }}
+            components={{
+              AssistantMessage: HarnessAssistantMessage,
+              UserMessage: HarnessUserMessage,
+              Composer: HarnessComposer,
+              ThreadWelcome: UserTaskWelcome,
+            }}
+            strings={{
+              thread: { scrollToBottom: { tooltip: "滚动到底部" } },
+              userMessage: { edit: { tooltip: "编辑消息" } },
+              assistantMessage: {
+                reload: { tooltip: "重新运行" },
+                copy: { tooltip: "复制回答" },
+                speak: { tooltip: "朗读回答", stop: { tooltip: "停止朗读" } },
+              },
+              branchPicker: {
+                previous: { tooltip: "上一个分支" },
+                next: { tooltip: "下一个分支" },
+              },
+              composer: {
+                send: { tooltip: "发送任务" },
+                cancel: { tooltip: "停止运行" },
+                addAttachment: { tooltip: "添加本地文件" },
+                removeAttachment: { tooltip: "移除附件" },
+                input: { placeholder: "描述任务，或附加文件…" },
+              },
+              editComposer: { send: { label: "更新" }, cancel: { label: "取消" } },
+            }}
+          />
+        </VideoGenerationProvider>
       </MessageEditorContext.Provider>
     </ComposerDraftContext.Provider>
   );

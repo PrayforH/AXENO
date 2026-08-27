@@ -33,11 +33,14 @@ describe("model management settings", () => {
     expect(settings).toContain("<ModelManagement />");
   });
 
-  it("supports only conversation, vision and image generation", () => {
+  it("supports conversation, vision, image generation and isolated video generation", () => {
     expect(management).toContain(
-      'type ModelType = "chat" | "vision" | "image_generation"',
+      'type ModelType = "chat" | "vision" | "image_generation" | "video_generation"',
     );
     expect(management).toContain("图像生成");
+    expect(management).toContain("视频生成");
+    expect(management).toContain("MiniMax H3（229 内网）");
+    expect(management).toContain('authScheme: "bearer" | "x-api-key" | "none"');
     expect(management).toContain("不参与对话路由");
   });
 

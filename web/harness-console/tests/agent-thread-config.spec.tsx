@@ -136,12 +136,10 @@ it("distinguishes a historical failed turn from the current run", () => {
   );
 });
 
-it("keeps sandbox and keyboard guidance adjacent to the composer", () => {
-  expect(agentThreadSource).toContain('className="composer-meta"');
-  expect(agentThreadSource).toContain("隔离工作区");
-  expect(agentThreadSource).toContain("Enter 发送 · Shift + Enter 换行");
-  expect(agentThreadSource).toContain("处理审批后，Agent 会从当前步骤继续");
-  expect(agentThreadSource).toContain("Agent 正在执行，可随时停止");
+it("keeps implementation status out of the composer footer", () => {
+  expect(agentThreadSource).not.toContain('className="composer-meta"');
+  expect(agentThreadSource).not.toContain("隔离工作区");
+  expect(agentThreadSource).not.toContain("未发送内容已保存在当前浏览器");
   expect(agentThreadSource).not.toContain('className="composer-stop-button"');
   expect(agentThreadSource).toContain('cancel: { tooltip: "停止运行" }');
 });

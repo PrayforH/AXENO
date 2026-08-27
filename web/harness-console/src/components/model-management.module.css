@@ -26,6 +26,7 @@
 .chat { border-color: #bad0f0; color: #3868a6; background: #eff5fd; }
 .vision { border-color: #d4c5ed; color: #7456a5; background: #f4f0fa; }
 .image_generation { border-color: #e9c7a5; color: #99612d; background: #fff5e9; }
+.video_generation { border-color: #c9bfdc; color: #675184; background: #f5f1fb; }
 .modelCopy { min-width: 0; display: grid; gap: 4px; }
 .cardTitle { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .cardTitle strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

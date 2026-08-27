@@ -8,10 +8,12 @@ from io import BytesIO
 from typing import Any, cast
 from zipfile import ZipFile
 
+import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 from pydantic import SecretStr
 
 from harness.adapters.memory import InMemoryAgentRegistry
@@ -31,6 +33,12 @@ from harness.studio.mcp_discovery import (
 )
 
 SERVICE_TOKEN = "studio-service-token-with-at-least-32-characters"
+
+
+def image_bytes(*, format: str = "PNG") -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (256, 256), color="white").save(output, format=format)
+    return output.getvalue()
 
 
 def app() -> FastAPI:
@@ -176,7 +184,7 @@ async def test_capabilities_are_the_runtime_compatibility_source_of_truth() -> N
 
 
 @pytest.mark.asyncio
-async def test_server_templates_create_distinct_complete_scaffolds() -> None:
+async def test_server_templates_keep_delegation_opt_in() -> None:
     headers = {
         "Authorization": f"Bearer {SERVICE_TOKEN}",
         "X-Tenant-ID": "tenant-template-contract",
@@ -194,8 +202,8 @@ async def test_server_templates_create_distinct_complete_scaffolds() -> None:
     specs = {item["spec"]["template"]: item["spec"] for item in created}
     assert specs["analyst"]["taskContract"]["goal"]
     assert "Bash" in specs["operator"]["builtinTools"]
-    assert "Task" in specs["orchestrator"]["builtinTools"]
-    assert specs["orchestrator"]["subagents"]
+    assert "Task" not in specs["orchestrator"]["builtinTools"]
+    assert specs["orchestrator"]["subagents"] == []
 
 
 @pytest.mark.asyncio
@@ -365,9 +373,7 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
     async with AsyncClient(
         transport=ASGITransport(app=application), base_url="http://test"
     ) as client:
-        child = await client.post(
-            "/v1/studio/drafts", headers=headers, json=child_request
-        )
+        child = await client.post("/v1/studio/drafts", headers=headers, json=child_request)
         child_spec = child.json()["spec"]
         child_spec["version"] = "1.0.0"
         child = await client.put(
@@ -375,15 +381,27 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
             headers=headers,
             json={"expectedRevision": 1, "spec": child_spec},
         )
-        parent = await client.post(
-            "/v1/studio/drafts", headers=headers, json=parent_request
-        )
+        parent = await client.post("/v1/studio/drafts", headers=headers, json=parent_request)
         parent_id = parent.json()["draftId"]
+        parent_spec = parent.json()["spec"]
+        parent_spec["builtinTools"].append("Task")
+        parent_spec["subagents"] = [
+            {
+                "alias": "helper",
+                "ref": "helper-agent@1.0.0",
+                "responsibility": "完成委派的专家分析任务",
+            }
+        ]
+        parent = await client.put(
+            f"/v1/studio/drafts/{parent_id}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": parent_spec},
+        )
         started = await client.post(
             f"/v1/studio/drafts/{parent_id}/try-runs",
             headers=headers,
             json={
-                "expectedRevision": 1,
+                "expectedRevision": 2,
                 "prompt": "委派专家后汇总结果",
                 "idempotencyKey": "preview-graph-r1",
             },
@@ -395,7 +413,7 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
             view = await client.get(
                 f"/v1/studio/drafts/{parent_id}/try-runs/{run_id}",
                 headers=headers,
-                params={"draftRevision": 1},
+                params={"draftRevision": 2},
             )
             if view.json()["run"]["status"] in {"succeeded", "failed"}:
                 break
@@ -403,11 +421,11 @@ async def test_try_run_and_solidify_accept_an_unpublished_subagent_graph() -> No
         solidified = await client.post(
             f"/v1/studio/drafts/{parent_id}/solidify",
             headers=headers,
-            json={"expectedRevision": 1, "draftRevision": 1, "runId": run_id},
+            json={"expectedRevision": 2, "draftRevision": 2, "runId": run_id},
         )
 
     assert child.status_code == 200, child.text
-    assert parent.status_code == 201, parent.text
+    assert parent.status_code == 200, parent.text
     assert started.status_code == 202, started.text
     assert view.json()["run"]["status"] == "succeeded"
     assert solidified.status_code == 200, solidified.text
@@ -1691,11 +1709,26 @@ async def test_unpublished_subagent_blocks_validation_and_publish_api() -> None:
             json={**draft_request("lead-agent"), "template": "orchestrator"},
         )
         draft_id = created.json()["draftId"]
+        spec = created.json()["spec"]
+        spec["builtinTools"].append("Task")
+        spec["subagents"] = [
+            {
+                "alias": "reviewer",
+                "ref": "unpublished-reviewer@1.0.0",
+                "responsibility": "复核主任务结果",
+            }
+        ]
+        updated = await client.put(
+            f"/v1/studio/drafts/{draft_id}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": spec},
+        )
+        assert updated.status_code == 200, updated.text
         validation = await client.post(f"/v1/studio/drafts/{draft_id}/validate", headers=headers)
         published = await client.post(
             f"/v1/studio/drafts/{draft_id}/publish",
             headers=headers,
-            json={"expectedRevision": 1},
+            json={"expectedRevision": 2},
         )
 
     assert validation.status_code == 200
@@ -2063,6 +2096,22 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
                 "enabled": True,
             },
         )
+        video = await client.put(
+            "/v1/studio/models/minimax-h3-video",
+            headers=owner_headers,
+            json={
+                "expectedRevision": configured.json()["revision"],
+                "label": "MiniMax H3 视频",
+                "modelType": "video_generation",
+                "provider": "MiniMax",
+                "model": "/model",
+                "baseUrl": "http://172.20.109.229:18000/v1",
+                "apiFormat": "openai_videos",
+                "authScheme": "none",
+                "apiKey": None,
+                "enabled": True,
+            },
+        )
         denied = await client.get("/v1/studio/models", headers=member_headers)
         runtime_catalog = await client.get("/v1/studio/catalog", headers=owner_headers)
 
@@ -2073,6 +2122,14 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
         item for item in configured.json()["models"] if item["routeId"] == "vision-primary"
     )
     assert model["credentialConfigured"] is True
+    assert video.status_code == 200
+    video_model = next(
+        item for item in video.json()["models"] if item["routeId"] == "minimax-h3-video"
+    )
+    assert video_model["modelType"] == "video_generation"
+    assert video_model["apiFormat"] == "openai_videos"
+    assert video_model["authScheme"] == "none"
+    assert video_model["credentialConfigured"] is True
     assert denied.status_code == 403
     public_route = next(
         item
@@ -2080,6 +2137,132 @@ async def test_model_management_is_admin_only_and_never_returns_api_keys() -> No
         if item["routeId"] == "vision-primary"
     )
     assert public_route["baseUrl"] is None
+
+
+@pytest.mark.asyncio
+async def test_video_generation_forwards_user_owned_single_and_multiple_images() -> None:
+    application, container = app_and_container()
+    captured: list[httpx.Request] = []
+
+    def provider(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        if incoming.method == "POST":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "status": "queued", "progress": 0},
+            )
+        if incoming.url.path.endswith("/content"):
+            return httpx.Response(
+                200,
+                content=b"\x00\x00\x00\x18ftypmp42video-bytes",
+                headers={"content-type": "video/mp4"},
+            )
+        if incoming.method == "DELETE":
+            return httpx.Response(
+                200,
+                json={"id": "provider-video-1", "deleted": True},
+            )
+        return httpx.Response(
+            200,
+            json={"id": "provider-video-1", "status": "completed", "progress": 100},
+        )
+
+    owner_headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-video",
+        "X-User-ID": "video-owner",
+    }
+    other_headers = {
+        **owner_headers,
+        "X-User-ID": "other-user",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as provider_client:
+        container.model_configurations._http_client = provider_client
+        async with AsyncClient(
+            transport=ASGITransport(app=application), base_url="http://test"
+        ) as client:
+            initial = await client.get("/v1/studio/models", headers=owner_headers)
+            configured = await client.put(
+                "/v1/studio/models/minimax-h3-video",
+                headers=owner_headers,
+                json={
+                    "expectedRevision": initial.json()["revision"],
+                    "label": "MiniMax H3 视频",
+                    "modelType": "video_generation",
+                    "provider": "MiniMax",
+                    "model": "/model",
+                    "baseUrl": "http://172.20.109.229:18000/v1",
+                    "apiFormat": "openai_videos",
+                    "authScheme": "none",
+                    "apiKey": None,
+                    "enabled": True,
+                },
+            )
+            uploads = [
+                await client.post(
+                    "/v1/input-artifacts",
+                    headers=owner_headers,
+                    files={"file": (name, content, media_type)},
+                )
+                for name, content, media_type in (
+                    ("first.png", image_bytes(), "image/png"),
+                    ("second.jpg", image_bytes(format="JPEG"), "image/jpeg"),
+                )
+            ]
+            artifact_ids = [upload.json()["input_artifact_id"] for upload in uploads]
+            denied = await client.post(
+                "/v1/studio/models/minimax-h3-video/videos",
+                headers=other_headers,
+                json={"prompt": "无权读取", "inputArtifactIds": artifact_ids[:1]},
+            )
+            generated = await client.post(
+                "/v1/studio/models/minimax-h3-video/videos",
+                headers=owner_headers,
+                json={
+                    "prompt": "组合两张参考图",
+                    "mode": "ref2va",
+                    "seconds": 11,
+                    "negativePrompt": "画面抖动、文字水印",
+                    "inputArtifactIds": artifact_ids,
+                },
+            )
+            job_id = generated.json()["jobId"]
+            hidden = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=other_headers,
+            )
+            completed = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=owner_headers,
+            )
+            content = await client.get(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}/content",
+                headers=owner_headers,
+            )
+            cancelled = await client.delete(
+                f"/v1/studio/models/minimax-h3-video/videos/{job_id}",
+                headers=owner_headers,
+            )
+
+    assert configured.status_code == 200
+    assert all(upload.status_code == 201 for upload in uploads)
+    assert denied.status_code == 404
+    assert generated.status_code == 200
+    assert generated.json()["status"] == "queued"
+    assert hidden.status_code == 404
+    assert completed.json()["status"] == "completed"
+    assert content.headers["content-type"] == "video/mp4"
+    assert cancelled.json()["status"] == "cancelled"
+    assert len(captured) == 4
+    assert captured[0].content.count(b'name="input_references"') == 2
+    assert b"\r\n11\r\n" in captured[0].content
+    assert b'name="negative_prompt"' in captured[0].content
+    assert b'{"task":"ref2va"}' in captured[0].content
+    assert image_bytes() in captured[0].content
+    assert image_bytes(format="JPEG") in captured[0].content
+    assert captured[1].url.path == "/v1/videos/provider-video-1"
+    assert captured[2].url.path == "/v1/videos/provider-video-1/content"
+    assert captured[3].method == "DELETE"
 
 
 @pytest.mark.asyncio
