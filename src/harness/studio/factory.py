@@ -126,12 +126,12 @@ def create_draft_spec(
     elif template is AgentTemplate.ORCHESTRATOR:
         # Delegation stays opt-in. The Builder adds Task when the first
         # explicitly selected subagent is bound and removes it with the last.
-        tools = ("Read", "Glob", "Grep")
+        tools = ("Read", "Glob", "Grep", "Write", "Bash")
         policy = "production-orchestrator"
         limits = DraftLimits(maxTurns=64)
     else:
-        tools = ("Read", "Glob", "Grep")
-        policy = "production-read-only"
+        tools = ("Read", "Glob", "Grep", "Write", "Bash")
+        policy = "production-standard"
         limits = DraftLimits(maxTurns=64)
 
     return AgentDraftSpec(

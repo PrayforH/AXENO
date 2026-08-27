@@ -543,8 +543,8 @@ describe("Agent Studio management page", () => {
 
   it("keeps sandbox mandatory and presents Tavily as bounded external egress", () => {
     expect(workbench).toContain("隔离是生产基线，不是 Agent 开关");
-    expect(workbench).toContain("隔离执行 · 平台托管");
-    expect(workbench).toContain("生产强制");
+    expect(workbench).toContain("Docker 容器工作区 · 平台托管");
+    expect(workbench).toContain("当前环境");
     expect(workbench).not.toContain('type="checkbox" checked={sandbox');
     expect(studioConfig).toContain("公网搜索（Tavily）");
     expect(workbench).toContain("这不会开放任意 Bash 网络访问");

@@ -837,9 +837,7 @@ def build_memory_container(
                         provider_by_route=resolved_settings.codex_provider_by_route,
                         approval_policy=resolved_settings.codex_approval_policy,
                         network_access=resolved_settings.codex_network_access,
-                        tool_output_token_limit=(
-                            resolved_settings.codex_tool_output_token_limit
-                        ),
+                        tool_output_token_limit=(resolved_settings.codex_tool_output_token_limit),
                         server_request_handler=CodexToolGate(
                             approvals=approval_service,
                             events=event_service,
@@ -1108,6 +1106,7 @@ _ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
             "studio:read",
             "studio:write",
             "studio:preview",
+            "studio:publish",
             "data:lifecycle:self",
             "operations:read",
         }

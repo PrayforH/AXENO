@@ -430,11 +430,13 @@ def configure_task_driven_draft(
     available_tools = {item.name for item in catalog.builtin_tools}
     writes = _requires_workspace_write(request.task)
     template = AgentTemplate.OPERATOR if writes else AgentTemplate.ANALYST
-    desired_tools = ["Read", "Glob", "Grep"]
+    # New Builder drafts can always create deliverables in their container
+    # workspace. Edit remains intent-driven because it mutates existing files.
+    desired_tools = ["Read", "Glob", "Grep", "Write", "Bash"]
     if writes:
-        desired_tools.extend(("Write", "Edit", "Bash"))
+        desired_tools.append("Edit")
     builtin_tools = tuple(name for name in desired_tools if name in available_tools)
-    policy = "production-standard" if writes else "production-read-only"
+    policy = "production-standard"
     enabled_policies = {item.policy_id for item in catalog.policies if item.enabled}
     if policy not in enabled_policies and enabled_policies:
         policy = sorted(enabled_policies)[0]

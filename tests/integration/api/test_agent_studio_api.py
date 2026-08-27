@@ -202,7 +202,10 @@ async def test_server_templates_keep_delegation_opt_in() -> None:
 
     specs = {item["spec"]["template"]: item["spec"] for item in created}
     assert specs["analyst"]["taskContract"]["goal"]
+    assert {"Write", "Bash"} <= set(specs["analyst"]["builtinTools"])
+    assert specs["analyst"]["permissionPolicy"] == "production-standard"
     assert "Bash" in specs["operator"]["builtinTools"]
+    assert {"Write", "Bash"} <= set(specs["orchestrator"]["builtinTools"])
     assert "Task" not in specs["orchestrator"]["builtinTools"]
     assert specs["orchestrator"]["subagents"] == []
 
@@ -234,9 +237,7 @@ async def test_delete_personal_agent_hides_catalog_and_preserves_release_history
             headers=headers,
             params={"expectedRevision": 2},
         )
-        missing = await client.get(
-            f"/v1/studio/drafts/{draft['draftId']}", headers=headers
-        )
+        missing = await client.get(f"/v1/studio/drafts/{draft['draftId']}", headers=headers)
         catalog = await client.get("/v1/agents", headers=headers)
 
     assert created.status_code == 201, created.text
@@ -248,9 +249,7 @@ async def test_delete_personal_agent_hides_catalog_and_preserves_release_history
         "tenant-delete-agent", "builder-a", "delete-me", "0.1.0"
     )
     assert preserved.name == "delete-me"
-    identity = await container.workspace_agents.get_agent(
-        "tenant-delete-agent", draft["agentId"]
-    )
+    identity = await container.workspace_agents.get_agent("tenant-delete-agent", draft["agentId"])
     assert identity.status is WorkspaceAgentStatus.ARCHIVED
     assert identity.current_version is None
 
@@ -979,7 +978,7 @@ async def test_studio_api_round_trips_and_bundles_on_demand_tool_directory() -> 
     assert validation.status_code == 200, validation.text
     assert validation.json()["ready"] is True
     assert validation.json()["contract"]["toolExposureMode"] == "on_demand"
-    assert validation.json()["contract"]["toolDirectoryEntries"] == 5
+    assert validation.json()["contract"]["toolDirectoryEntries"] == 7
     with ZipFile(BytesIO(bundle.content)) as archive:
         directory = ToolDirectorySnapshot.model_validate_json(archive.read("tool-directory.json"))
     assert directory.exposure_mode == "on_demand"
@@ -1967,7 +1966,7 @@ async def test_jwt_identity_ignores_spoofed_tenant_and_user_headers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_member_can_write_and_validate_but_cannot_publish() -> None:
+async def test_member_can_write_validate_and_publish_personal_agent() -> None:
     async with AsyncClient(transport=ASGITransport(app=app()), base_url="http://test") as client:
         await register(client, "owner@example.com")
         member = await register(client, "member@example.com")
@@ -1980,8 +1979,7 @@ async def test_member_can_write_and_validate_but_cannot_publish() -> None:
     assert member["membership"]["role"] == "member"
     assert created.status_code == 201
     assert validation.status_code == 200
-    assert published.status_code == 403
-    assert published.json()["error"]["code"] == "permission_denied"
+    assert published.status_code == 200, published.text
 
 
 @pytest.mark.asyncio

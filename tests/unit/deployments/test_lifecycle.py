@@ -686,7 +686,7 @@ async def test_profile_revision_requires_environment_approval_and_local_is_rejec
     draft, first_version, second_version = await published_versions(
         container, "profile-deployment-agent"
     )
-    current_version = 1
+    current_version = 2
 
     async def resolve_profile(_tenant_id: str, profile_id: str) -> ExecutionProfileMetadata:
         return ExecutionProfileMetadata(
@@ -716,7 +716,7 @@ async def test_profile_revision_requires_environment_approval_and_local_is_rejec
             key="profile-v1",
         ),
     )
-    current_version = 2
+    current_version = 3
     with pytest.raises(ConflictError, match="outside the Environment policy"):
         await container.deployments.promote(
             tenant_id=TENANT,
@@ -729,7 +729,7 @@ async def test_profile_revision_requires_environment_approval_and_local_is_rejec
             ),
         )
 
-    assert first.execution_profile_version == 1
+    assert first.execution_profile_version == 2
 
     unsafe = promotion(
         agent_name=draft.spec.name,
@@ -737,7 +737,7 @@ async def test_profile_revision_requires_environment_approval_and_local_is_rejec
         revision=1,
         key="local-production",
     ).model_copy(update={"execution_profile": "local-dev"})
-    with pytest.raises(ConflictError, match="cannot target production"):
+    with pytest.raises(ConflictError, match="not enabled for production"):
         await container.deployments.promote(
             tenant_id=TENANT,
             user_id=USER,

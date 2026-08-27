@@ -66,9 +66,7 @@ async def test_get_retires_anthropic_official_from_system_catalog() -> None:
         CapabilityCatalogRecord(
             tenantId="tenant-a",
             revision=8,
-            catalog=catalog.model_copy(
-                update={"model_routes": (*catalog.model_routes, retired)}
-            ),
+            catalog=catalog.model_copy(update={"model_routes": (*catalog.model_routes, retired)}),
             updatedBy="system-route-migration",
             updatedAt=NOW,
         )
@@ -83,9 +81,7 @@ async def test_get_retires_anthropic_official_from_system_catalog() -> None:
     repeated = await service.get("tenant-a")
 
     assert upgraded.revision == 9
-    assert "anthropic-official" not in {
-        route.route_id for route in upgraded.catalog.model_routes
-    }
+    assert "anthropic-official" not in {route.route_id for route in upgraded.catalog.model_routes}
     assert repeated == upgraded
 
 
@@ -105,9 +101,7 @@ async def test_get_retires_anthropic_official_from_tenant_managed_catalog() -> N
         CapabilityCatalogRecord(
             tenantId="tenant-a",
             revision=12,
-            catalog=catalog.model_copy(
-                update={"model_routes": (*catalog.model_routes, retired)}
-            ),
+            catalog=catalog.model_copy(update={"model_routes": (*catalog.model_routes, retired)}),
             updatedBy="tenant-admin",
             updatedAt=NOW,
         )
@@ -123,9 +117,7 @@ async def test_get_retires_anthropic_official_from_tenant_managed_catalog() -> N
 
     assert upgraded.revision == 13
     assert upgraded.updated_by == "tenant-admin"
-    assert "anthropic-official" not in {
-        route.route_id for route in upgraded.catalog.model_routes
-    }
+    assert "anthropic-official" not in {route.route_id for route in upgraded.catalog.model_routes}
     assert repeated == upgraded
 
 
@@ -167,6 +159,58 @@ async def test_get_upgrades_an_untouched_system_catalog() -> None:
     assert "local-development" in {
         profile.profile_id for profile in upgraded.catalog.execution_profiles
     }
+
+
+@pytest.mark.asyncio
+async def test_get_migrates_legacy_daytona_default_to_docker_worker_profile() -> None:
+    repository = InMemoryCapabilityCatalogRepository()
+    catalog = default_capability_catalog()
+    profiles = tuple(
+        profile.model_copy(
+            update={
+                "label": "生产隔离执行",
+                "description": "在平台托管的隔离 Sandbox 中执行文件、命令和工具。",
+                "sandbox_provider": "daytona",
+                "risk": CapabilityRisk.MEDIUM,
+                "provider_config_reference": "daytona-managed",
+                "version": 1,
+            }
+        )
+        if profile.profile_id == "isolated-default"
+        else profile
+        for profile in catalog.execution_profiles
+    )
+    await repository.seed(
+        CapabilityCatalogRecord(
+            tenantId="tenant-a",
+            revision=4,
+            catalog=catalog.model_copy(update={"execution_profiles": profiles}),
+            updatedBy="tenant-admin",
+            updatedAt=NOW,
+        )
+    )
+    service = CapabilityCatalogService(
+        repository,
+        InMemoryAgentDraftRepository(),
+        clock=lambda: NOW,
+    )
+
+    upgraded = await service.get("tenant-a")
+    repeated = await service.get("tenant-a")
+
+    profile = next(
+        item
+        for item in upgraded.catalog.execution_profiles
+        if item.profile_id == "isolated-default"
+    )
+    assert upgraded.revision == 5
+    assert upgraded.updated_by == "tenant-admin"
+    assert profile.label == "Docker 容器工作区"
+    assert profile.sandbox_provider == "local"
+    assert profile.provider_config_reference == "docker-worker-local"
+    assert profile.production_allowed is True
+    assert profile.version == 2
+    assert repeated == upgraded
 
 
 @pytest.mark.asyncio
@@ -276,9 +320,7 @@ async def test_get_preserves_a_tenant_managed_catalog() -> None:
 @pytest.mark.asyncio
 async def test_get_adds_platform_runtime_capabilities_to_tenant_legacy_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
-    catalog = default_capability_catalog().model_copy(
-        update={"runtime_capabilities": ()}
-    )
+    catalog = default_capability_catalog().model_copy(update={"runtime_capabilities": ()})
     await repository.seed(
         CapabilityCatalogRecord(
             tenantId="tenant-a",

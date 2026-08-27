@@ -185,23 +185,27 @@ def default_capability_catalog() -> CapabilityCatalog:
             ExecutionProfileMetadata.model_validate(
                 {
                     "profileId": "isolated-default",
-                    "label": "生产隔离执行",
-                    "description": "在平台托管的隔离 Sandbox 中执行文件、命令和工具。",
-                    "sandboxProvider": "daytona",
+                    "label": "Docker 容器工作区",
+                    "description": (
+                        "在平台 Worker 的 Docker 容器工作区中执行文件、命令和工具；"
+                        "保留租户、会话、产物和策略边界。"
+                    ),
+                    "sandboxProvider": "local",
                     "networkAccess": (
                         NetworkAccess.NONE,
                         NetworkAccess.INTERNAL,
                         NetworkAccess.EXTERNAL,
                     ),
-                    "risk": CapabilityRisk.MEDIUM,
+                    "risk": CapabilityRisk.HIGH,
                     "cpuMillis": 2000,
                     "memoryMiB": 4096,
                     "diskMiB": 20480,
                     "ttlSeconds": 3600,
                     "networkPolicyId": "registered-mcp-only",
                     "allowedMcpReferences": ("tavily-readonly",),
-                    "providerConfigReference": "daytona-managed",
+                    "providerConfigReference": "docker-worker-local",
                     "productionAllowed": True,
+                    "version": 2,
                 }
             ),
             ExecutionProfileMetadata.model_validate(

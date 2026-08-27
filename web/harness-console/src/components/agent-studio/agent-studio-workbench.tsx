@@ -366,7 +366,7 @@ export function AgentStudioWorkbench() {
   const savingRef = useRef(saving);
   savingRef.current = saving;
   const canEdit = membership.role !== "viewer";
-  const canPublish = membership.role === "owner" || membership.role === "admin";
+  const canPublish = membership.role !== "viewer";
   const options = useMemo(
     () => capabilities
       ? capabilityOptions(capabilities)
@@ -1048,7 +1048,7 @@ export function AgentStudioWorkbench() {
       return;
     }
     if (!canPublish) {
-      setNotice("检查已通过，需要 Owner 或 Admin 完成发布");
+      setNotice("检查已通过，但当前角色没有发布权限");
       return;
     }
     await publishDraft();
@@ -3184,10 +3184,10 @@ export function AgentStudioWorkbench() {
                 <div className={styles.isolationCard}>
                   <span className={styles.isolationGlyph} aria-hidden="true"><i /><i /></span>
                   <div>
-                    <strong>隔离执行 · 平台托管</strong>
-                    <p>工作区、进程、网络和生命周期由部署环境统一约束。</p>
+                    <strong>Docker 容器工作区 · 平台托管</strong>
+                    <p>文件和命令在 Worker 容器内执行，租户、会话、产物和策略边界保持独立。</p>
                   </div>
-                  <span className={styles.lockedBadge}>生产强制</span>
+                  <span className={styles.lockedBadge}>当前环境</span>
                 </div>
                 <div className={styles.runtimeAssurances}>
                   <article className={styles.identityBoundary}>
