@@ -40,14 +40,16 @@ _API_KEY = "api_key"
 class ConfigureModelRequest(StudioModel):
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     label: str = Field(min_length=1, max_length=160)
-    model_type: Literal["chat", "vision", "image_generation"] = Field(alias="modelType")
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
+        alias="modelType"
+    )
     provider: str = Field(min_length=1, max_length=80)
     model: str = Field(min_length=1, max_length=300)
     base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
     api_format: Literal[
-        "anthropic_compatible", "openai_compatible", "openai_images"
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
     ] = Field(alias="apiFormat")
-    auth_scheme: Literal["bearer", "x-api-key"] = Field(alias="authScheme")
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(alias="authScheme")
     api_key: SecretStr | None = Field(
         default=None, alias="apiKey", min_length=1, max_length=16_384
     )
@@ -57,14 +59,16 @@ class ConfigureModelRequest(StudioModel):
 class ModelConfiguration(StudioModel):
     route_id: str = Field(alias="routeId")
     label: str
-    model_type: Literal["chat", "vision", "image_generation"] = Field(alias="modelType")
+    model_type: Literal["chat", "vision", "image_generation", "video_generation"] = Field(
+        alias="modelType"
+    )
     provider: str
     model: str
     base_url: str | None = Field(alias="baseUrl")
     api_format: Literal[
-        "anthropic_compatible", "openai_compatible", "openai_images"
+        "anthropic_compatible", "openai_compatible", "openai_images", "openai_videos"
     ] = Field(alias="apiFormat")
-    auth_scheme: Literal["bearer", "x-api-key"] = Field(alias="authScheme")
+    auth_scheme: Literal["bearer", "x-api-key", "none"] = Field(alias="authScheme")
     capabilities: tuple[str, ...]
     enabled: bool
     credential_configured: bool = Field(alias="credentialConfigured")
@@ -270,7 +274,7 @@ class ModelConfigurationService:
             (item for item in record.catalog.model_routes if item.route_id == request.route_id),
             None,
         )
-        if route is None or not route.enabled or route.model_type == "image_generation":
+        if route is None or not route.enabled or route.model_type not in {"chat", "vision"}:
             raise ConflictError("Agent defaults require an enabled chat or vision model")
         bindings = dict(record.catalog.agent_model_bindings)
         bindings[agent_name] = request.route_id
@@ -327,7 +331,7 @@ class ModelConfigurationService:
             return None
         if required_api_format is not None and route.api_format != required_api_format:
             return None
-        if route.base_url is None or route.model_type == "image_generation":
+        if route.base_url is None or route.model_type not in {"chat", "vision"}:
             return None
         secret = await self._secret(tenant_id, route_id)
         if secret is None:

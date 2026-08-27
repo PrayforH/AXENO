@@ -132,7 +132,7 @@ async def list_agents(
     projected: list[AgentCatalogItem] = []
     for item in items:
         route = routes.get(bindings.get(item.name, ""))
-        if route is None or not route.enabled or route.model_type == "image_generation":
+        if route is None or not route.enabled or route.model_type not in {"chat", "vision"}:
             projected.append(item)
             continue
         projected.append(

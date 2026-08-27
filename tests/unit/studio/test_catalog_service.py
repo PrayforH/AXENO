@@ -32,6 +32,24 @@ def test_default_catalog_exposes_separate_deepseek_v4_routes() -> None:
     assert "anthropic-official" not in routes
 
 
+def test_catalog_accepts_existing_unauthenticated_video_route() -> None:
+    route = ModelRouteCapability(
+        routeId="minimax-h3-video",
+        label="MiniMax H3 Video",
+        provider="MiniMax",
+        models=("/model",),
+        capabilities=("video_generation",),
+        modelType="video_generation",
+        baseUrl="http://video-service:8000/v1",
+        apiFormat="openai_videos",
+        authScheme="none",
+    )
+
+    assert route.model_type == "video_generation"
+    assert route.api_format == "openai_videos"
+    assert route.auth_scheme == "none"
+
+
 @pytest.mark.asyncio
 async def test_get_retires_anthropic_official_from_system_catalog() -> None:
     repository = InMemoryCapabilityCatalogRepository()
