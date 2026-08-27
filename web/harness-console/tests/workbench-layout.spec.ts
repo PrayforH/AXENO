@@ -190,11 +190,13 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("uses one flat workspace navigation instead of nested task and Studio modes", () => {
+  it("keeps frequent work in the sidebar and moves resource governance to the account menu", () => {
     expect(taskSidebar).not.toContain("WorkspaceModeSwitcher");
     expect(studioSidebar).not.toContain("WorkspaceModeSwitcher");
-    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed />');
-    expect(studioSidebar).toContain('"tasks", "agents", "capabilities", "knowledge", "spaces"]');
+    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed visible={["agents"]} />');
+    expect(taskSidebar).toContain('visible={["agents"]}');
+    expect(studioSidebar).toContain('visible={["tasks", "agents"]}');
+    expect(studioSidebar).not.toContain('"capabilities", "knowledge", "spaces"]');
     expect(studioSidebar).not.toContain('"usage",');
     expect(studioSidebar).not.toContain('"data",');
     expect(workspaceNavigation).not.toContain('aria-label="工作模式"');

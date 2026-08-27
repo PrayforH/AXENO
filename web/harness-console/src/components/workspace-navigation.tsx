@@ -4,6 +4,7 @@ import styles from "./workspace-navigation.module.css";
 export type WorkspaceId =
   | "tasks"
   | "agents"
+  | "files"
   | "capabilities"
   | "knowledge"
   | "spaces"
@@ -17,6 +18,7 @@ export const workspaceItems: ReadonlyArray<{
 }> = [
   { id: "tasks", href: "/", label: "任务" },
   { id: "agents", href: "/studio/agents", label: "智能体" },
+  { id: "files", href: "/studio/files", label: "我的文件" },
   { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力" },
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
   { id: "spaces", href: "/studio/spaces", label: "协作空间" },
@@ -37,6 +39,14 @@ export function WorkspaceIcon({ workspace }: { workspace: WorkspaceId }) {
         <circle cx="14" cy="6" r="2" />
         <circle cx="10" cy="14" r="2" />
         <path d="m7.7 7.1 1.4 4.8m3.2-4.8-1.4 4.8M8 6h4" />
+      </svg>
+    );
+  }
+  if (workspace === "files") {
+    return (
+      <svg viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M4.5 3.5h7l4 4v9h-11z" />
+        <path d="M11.5 3.5v4h4M7.5 11h5m-5 2.8h5" />
       </svg>
     );
   }

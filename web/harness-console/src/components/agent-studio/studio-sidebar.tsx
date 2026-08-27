@@ -117,7 +117,7 @@ export function StudioSidebar({
       <WorkspaceNavigation
         active={active}
         collapsed={collapsed}
-        visible={["tasks", "agents", "capabilities", "knowledge", "spaces"]}
+        visible={["tasks", "agents"]}
       />
 
       {!collapsed && children && (

@@ -490,6 +490,28 @@ select:not([multiple]):not(.task-model-control select):not(.task-agent-version-s
   color: var(--codex-skill);
 }
 
+.account-workspaces {
+  border-color: var(--codex-line);
+}
+
+.account-section-label {
+  color: var(--codex-faint);
+}
+
+.account-workspace-link {
+  color: var(--codex-ink-soft);
+}
+
+.account-workspace-link:hover,
+.account-workspace-link[aria-current="page"] {
+  color: var(--codex-ink);
+  background: var(--codex-accent-soft);
+}
+
+.account-workspace-link[aria-current="page"] {
+  box-shadow: inset 2px 0 0 var(--codex-accent);
+}
+
 .account-help,
 .account-settings,
 .account-logout {

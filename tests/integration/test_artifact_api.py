@@ -77,6 +77,74 @@ async def test_upload_list_and_download_artifact_are_tenant_scoped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_my_files_indexes_ready_artifacts_across_active_and_archived_tasks() -> None:
+    app = create_memory_app(auto_execute=True)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        await client.post(
+            "/v1/agents",
+            json={"path": str(FIXTURE_MANIFEST)},
+            headers=HEADERS,
+        )
+        response = await client.post(
+            "/v1/agui?agent_name=echo-agent&agent_version=0.1.0",
+            json={
+                "threadId": "thread-deliverables",
+                "runId": "client-deliverables",
+                "state": {},
+                "messages": [
+                    {"id": "message-deliverables", "role": "user", "content": "生成季度报告"}
+                ],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
+            headers=HEADERS,
+        )
+        run_id = response.headers["x-harness-run-id"]
+        uploaded = await client.post(
+            f"/v1/runs/{run_id}/artifacts",
+            files={
+                "file": (
+                    "季度报告.docx",
+                    b"document",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            headers=HEADERS,
+        )
+        active = await client.get("/v1/artifacts", headers=HEADERS)
+        await client.patch(
+            "/v1/agui/threads/thread-deliverables",
+            json={"archived": True},
+            headers=HEADERS,
+        )
+        archived = await client.get("/v1/artifacts", headers=HEADERS)
+        other_user = await client.get(
+            "/v1/artifacts",
+            headers={"X-Tenant-ID": "tenant-a", "X-User-ID": "user-2"},
+        )
+
+    assert uploaded.status_code == 201
+    assert active.status_code == 200
+    assert active.json() == [
+        {
+            "artifact_id": uploaded.json()["artifact_id"],
+            "name": "季度报告.docx",
+            "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "size_bytes": 8,
+            "run_id": run_id,
+            "thread_id": "thread-deliverables",
+            "thread_title": "生成季度报告",
+            "agent_name": "echo-agent",
+            "created_at": active.json()[0]["created_at"],
+            "task_archived": False,
+        }
+    ]
+    assert archived.json()[0]["task_archived"] is True
+    assert other_user.json() == []
+
+
+@pytest.mark.asyncio
 async def test_artifact_upload_stops_at_configured_size_limit() -> None:
     app = create_memory_app()
     app.state.container.artifacts.max_file_bytes = 4

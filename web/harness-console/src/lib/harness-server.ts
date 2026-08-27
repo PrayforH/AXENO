@@ -51,6 +51,17 @@ export function downloadArtifact(
   );
 }
 
+export function listArtifacts(
+  request: Request,
+  fetcher: typeof fetch = fetch,
+  environment: ServerEnvironment = process.env,
+): Promise<Response> {
+  const config = getHarnessServerConfig(environment);
+  const url = new URL(`${config.apiUrl}/v1/artifacts`);
+  url.search = new URL(request.url).search;
+  return authenticatedFetch(request, url.toString(), {}, config, fetcher);
+}
+
 export function downloadInputArtifact(
   inputArtifactId: string,
   request: Request,

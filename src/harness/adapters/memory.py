@@ -525,6 +525,14 @@ class InMemoryArtifactRepository:
             if item_tenant == tenant_id and artifact.run_id == run_id
         ]
 
+    async def list_for_runs(self, tenant_id: str, run_ids: list[str]) -> list[Artifact]:
+        wanted = set(run_ids)
+        return [
+            artifact
+            for (item_tenant, _), artifact in self._items.items()
+            if item_tenant == tenant_id and artifact.run_id in wanted
+        ]
+
 
 class InMemoryInputArtifactRepository:
     def __init__(self) -> None:

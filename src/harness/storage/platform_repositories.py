@@ -473,6 +473,19 @@ class PostgresArtifactRepository:
                 for payload in (await session.scalars(statement)).all()
             ]
 
+    async def list_for_runs(self, tenant_id: str, run_ids: list[str]) -> list[Artifact]:
+        if not run_ids:
+            return []
+        statement = select(ArtifactRow.payload).where(
+            ArtifactRow.tenant_id == tenant_id,
+            ArtifactRow.run_id.in_(list(dict.fromkeys(run_ids))),
+        )
+        async with self._sessions() as session:
+            return [
+                Artifact.model_validate(payload)
+                for payload in (await session.scalars(statement)).all()
+            ]
+
 
 class PostgresInputArtifactRepository:
     def __init__(self, sessions: SessionFactory) -> None:

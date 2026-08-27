@@ -52,6 +52,17 @@ describe("account settings", () => {
     expect(menu).toContain('<ProductIcon name="logout" />');
   });
 
+  it("groups files, MCP, knowledge and collaboration under the bottom account control", () => {
+    expect(menu).toContain('aria-label="文件、资源与协作"');
+    expect(menu).toContain('href: "/studio/files"');
+    expect(menu).toContain('href: "/studio/capabilities"');
+    expect(menu).toContain('href: "/studio/knowledge"');
+    expect(menu).toContain('href: "/studio/spaces"');
+    expect(menu).toContain('aria-current={current ? "page" : undefined}');
+    expect(styles).toContain(".account-workspaces");
+    expect(styles).toContain(".account-workspace-link");
+  });
+
   it("uses one custom line-icon system across account and settings navigation", () => {
     expect(productIcons).toContain("export type ProductIconName");
     expect(productIcons).toContain("data-product-icon={name}");

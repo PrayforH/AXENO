@@ -6634,6 +6634,69 @@ textarea.user-message-editor-input:focus-visible {
   color: #53615a;
 }
 
+.account-workspaces {
+  display: grid;
+  gap: 2px;
+  padding: 5px 0 6px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.account-section-label {
+  padding: 4px 10px 5px;
+  color: var(--muted-ink);
+  font: 650 9px/1.2 var(--codex-font-mono, ui-monospace, monospace);
+  letter-spacing: .08em;
+}
+
+.account-workspace-link {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 9px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 9px;
+  border-radius: 7px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.account-workspace-link:hover,
+.account-workspace-link[aria-current="page"] {
+  color: var(--ink);
+  background: #f0f3f0;
+}
+
+.account-workspace-link[aria-current="page"] {
+  box-shadow: inset 2px 0 0 var(--rail);
+}
+
+.account-workspace-link > svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-workspace-link > span {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-workspace-link > .account-link-arrow {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-ink);
+  opacity: .65;
+}
+
 .account-actions {
   display: grid;
   gap: 2px;

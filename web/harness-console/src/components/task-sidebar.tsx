@@ -252,7 +252,7 @@ export function TaskSidebar({
           >
             <WorkspaceCollapseIcon collapsed />
           </button>
-          <WorkspaceNavigation active="tasks" collapsed />
+          <WorkspaceNavigation active="tasks" collapsed visible={["agents"]} />
           <button
             className="task-rail-action"
             type="button"
@@ -293,7 +293,7 @@ export function TaskSidebar({
           <div className="task-sidebar-mode">
             <WorkspaceNavigation
               active="tasks"
-              visible={["agents", "capabilities", "knowledge", "spaces"]}
+              visible={["agents"]}
             />
           </div>
           <div className="task-list-toolbar">
