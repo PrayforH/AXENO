@@ -25,7 +25,13 @@ PROJECT="${HARNESS_HARBOR_PROJECT:-agent-studio}"
 ARCH="${HARNESS_IMAGE_ARCH:-amd64}"
 BACKUP_SUFFIX="$(date +%Y%m%d-%H%M%S)"
 
-COMPOSE=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_DIR}/compose.yaml" -f "${COMPOSE_DIR}/compose.harbor.yaml")
+COMPOSE=(
+  docker compose
+  --env-file "${ENV_FILE}"
+  -f "${COMPOSE_DIR}/compose.yaml"
+  -f "${COMPOSE_DIR}/compose.harbor.yaml"
+  -f "${COMPOSE_DIR}/compose.codex-runtime.yaml"
+)
 # The deployment env file is authoritative for JSON settings. An interactive
 # shell may still contain values loaded from an older revision; Compose gives
 # those values precedence over --env-file, which can corrupt JSON or deploy an

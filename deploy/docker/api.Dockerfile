@@ -79,8 +79,13 @@ COPY --from=builder /opt/codex /opt/codex
 COPY --chown=harness:harness deploy/docker/entrypoint-api.sh /usr/local/bin/entrypoint-api
 COPY --chown=harness:harness deploy/docker/entrypoint-worker.sh /usr/local/bin/entrypoint-worker
 
+# Codex is a multi-call binary: invoking it with this argv0 activates the
+# Linux sandbox helper used by unified/PTY command execution. The npm platform
+# package currently omits a standalone helper file.
 RUN ln -s /opt/codex/vendor/x86_64-unknown-linux-musl/bin/codex /usr/local/bin/codex \
-    && codex --version
+    && ln -s /opt/codex/vendor/x86_64-unknown-linux-musl/bin/codex /usr/local/bin/codex-linux-sandbox \
+    && codex --version \
+    && codex-linux-sandbox --help >/dev/null
 
 USER harness
 EXPOSE 8000

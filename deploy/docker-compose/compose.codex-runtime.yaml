@@ -16,6 +16,11 @@ services:
   worker:
     environment:
       <<: *codex-runtime-environment
+    # Docker's default seccomp profile blocks the unprivileged user namespace
+    # that Codex bubblewrap needs. This is scoped to Worker only; the inner
+    # Codex sandbox still applies filesystem, process and network restrictions.
+    security_opt:
+      - seccomp=unconfined
 
   quality-sync:
     environment:

@@ -399,7 +399,7 @@ async def test_on_demand_runtime_enables_native_tool_search_and_emits_safe_direc
         "exposure_mode": "on_demand",
         "catalog_revision": 4,
         "content_hash": snapshot.tool_directory.content_hash,
-        "entry_count": 5,
+        "entry_count": 7,
     }
     degraded_event = next(event for event in events if event.type == "tool.directory.degraded")
     assert degraded_event.payload == {

@@ -119,6 +119,9 @@ def test_codex_runtime_overlay_is_explicit_and_scoped_to_python_services() -> No
         assert environment["HARNESS_CODEX_NETWORK_ACCESS"] == (
             "${HARNESS_CODEX_NETWORK_ACCESS:-false}"
         )
+    assert services["worker"]["security_opt"] == ["seccomp=unconfined"]
+    assert "security_opt" not in services["api"]
+    assert "security_opt" not in services["quality-sync"]
 
 
 def test_images_run_as_non_root_and_expose_health_checks() -> None:
@@ -135,6 +138,8 @@ def test_images_run_as_non_root_and_expose_health_checks() -> None:
     assert "--no-emit-project" in api
     assert '.venv/bin/pip install --no-cache-dir' in api
     assert "uv sync" not in api
+    assert "/usr/local/bin/codex-linux-sandbox" in api
+    assert "codex-linux-sandbox --help" in api
     assert "registry.npmmirror.com" in web
     assert 'output: "standalone"' in (ROOT / "web/harness-console/next.config.ts").read_text()
 
@@ -184,6 +189,9 @@ def test_runtime_entrypoints_and_environment_template_exist() -> None:
 
     assert "uvicorn harness.api.app:app" in api_entrypoint.read_text()
     assert "harness-worker" in worker_entrypoint.read_text()
+    assert "--unshare-user --uid 0 --gid 0 --ro-bind / / /bin/true" in (
+        worker_entrypoint.read_text()
+    )
     values = environment.read_text()
     assert "HARNESS_NEW_API_BASE_URL=" not in values
     assert "Settings → Model Management" in values
