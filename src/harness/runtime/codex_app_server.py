@@ -301,8 +301,8 @@ class CodexAppServerOptions:
     request_timeout_seconds: float = CODEX_REQUEST_TIMEOUT_SECONDS
     shutdown_timeout_seconds: float = CODEX_SHUTDOWN_TIMEOUT_SECONDS
     max_line_bytes: int = CODEX_JSONL_MAX_LINE_BYTES
-    client_name: str = "axeno_agent_studio"
-    client_title: str = "AXENO Agent Studio"
+    client_name: str = "axis_agent_studio"
+    client_title: str = "AXIS Agent Studio"
     client_version: str = "0.1.0"
 
 

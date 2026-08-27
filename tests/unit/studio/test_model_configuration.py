@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from io import BytesIO
 
@@ -121,6 +122,37 @@ async def test_agent_binding_changes_runtime_route_without_manifest_edit() -> No
     assert resolved.model == "example-vision-1"
     assert resolved.base_url == "https://models.example.test/v1"
     assert resolved.credential.get_secret_value() == "secret-value-never-returned"
+
+
+@pytest.mark.asyncio
+async def test_text_completion_uses_the_managed_openai_route() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(incoming: httpx.Request) -> httpx.Response:
+        captured.append(incoming)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "精炼后的任务标题"}}]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        models, _catalogs, _credentials = service(client=client)
+        await models.configure("tenant-a", "admin-a", "title-flash", request())
+        text = await models.complete_text(
+            "tenant-a",
+            "title-flash",
+            system_prompt="只输出标题",
+            user_prompt="生成报告",
+            max_tokens=48,
+        )
+
+    assert text == "精炼后的任务标题"
+    assert captured[0].url == "https://models.example.test/v1/chat/completions"
+    assert captured[0].headers["authorization"] == "Bearer secret-value-never-returned"
+    assert json.loads(captured[0].content)["messages"][0] == {
+        "role": "system",
+        "content": "只输出标题",
+    }
 
 
 @pytest.mark.asyncio

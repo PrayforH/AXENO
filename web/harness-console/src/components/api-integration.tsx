@@ -120,27 +120,27 @@ export function ApiIntegration() {
       : { kind: "error", text: `${label}复制失败，请选中文本手动复制。` });
   }
 
-  const curlExample = `curl '${baseUrl}/agents' \\\n+  -H 'X-API-Key: $AXENO_API_KEY'`;
+  const curlExample = `curl '${baseUrl}/agents' \\\n+  -H 'X-API-Key: $AXIS_API_KEY'`;
 
   const displayedCurlExample = curlExample.replace("\n+", "\n");
   const createSessionExample = [
     `curl -sS -X POST '${baseUrl}/sessions' \\`,
-    "  -H 'X-API-Key: $AXENO_API_KEY' \\",
+    "  -H 'X-API-Key: $AXIS_API_KEY' \\",
     "  -H 'Content-Type: application/json' \\",
     `  -d '{"agent_name":"lead-agent","agent_version":"1.0.0"}'`,
   ].join("\n");
   const askExample = [
     "SESSION_ID='填写创建会话返回的 session_id'",
     `curl -sS -X POST "${baseUrl}/sessions/\${SESSION_ID}/runs" \\`,
-    "  -H 'X-API-Key: $AXENO_API_KEY' \\",
+    "  -H 'X-API-Key: $AXIS_API_KEY' \\",
     "  -H 'Idempotency-Key: question-001' \\",
     "  -H 'Content-Type: application/json' \\",
     `  -d '{"prompt":"你好，请介绍一下你能做什么"}'`,
   ].join("\n");
   const answerExample = [
     "RUN_ID='填写提问返回的 run_id'",
-    `curl -sS "${baseUrl}/runs/\${RUN_ID}" -H 'X-API-Key: $AXENO_API_KEY'`,
-    `curl -sS "${baseUrl}/runs/\${RUN_ID}/events" -H 'X-API-Key: $AXENO_API_KEY'`,
+    `curl -sS "${baseUrl}/runs/\${RUN_ID}" -H 'X-API-Key: $AXIS_API_KEY'`,
+    `curl -sS "${baseUrl}/runs/\${RUN_ID}/events" -H 'X-API-Key: $AXIS_API_KEY'`,
   ].join("\n");
 
   return (
@@ -186,7 +186,7 @@ export function ApiIntegration() {
       <section className={styles.block}>
         <header><div><strong>调用示例</strong><small>通过 X-API-Key 请求头调用；不要把密钥写进代码仓库或浏览器前端。</small></div></header>
         <div className={styles.codeBlock}><pre>{displayedCurlExample}</pre><button type="button" onClick={() => void copy(displayedCurlExample, "cURL 示例")}>复制</button></div>
-        <div className={styles.guide}><strong>推荐接入步骤</strong><ol><li>为集成创建独立密钥并选择最小权限。</li><li>将密钥保存到服务端环境变量 <code>AXENO_API_KEY</code>。</li><li>先读取 <code>/v1/agents</code>，再创建会话并发起运行。</li><li>集成下线后立即吊销对应密钥。</li></ol></div>
+        <div className={styles.guide}><strong>推荐接入步骤</strong><ol><li>为集成创建独立密钥并选择最小权限。</li><li>将密钥保存到服务端环境变量 <code>AXIS_API_KEY</code>。</li><li>先读取 <code>/v1/agents</code>，再创建会话并发起运行。</li><li>集成下线后立即吊销对应密钥。</li></ol></div>
       </section>
 
       <section className={styles.block}>

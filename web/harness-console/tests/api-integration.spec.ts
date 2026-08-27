@@ -28,7 +28,7 @@ describe("API integration settings", () => {
   });
 
   it("documents X-API-Key usage without embedding the generated secret", () => {
-    expect(source).toContain("X-API-Key: $AXENO_API_KEY");
+    expect(source).toContain("X-API-Key: $AXIS_API_KEY");
     expect(source).toContain("/v1/agents");
     expect(source).toContain('request<{ baseUrl: string }>("/api/auth/api-config")');
     expect(source).not.toContain("X-API-Key: ${created.secret}");

@@ -12,6 +12,7 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select
 
 from harness.agui.service import AguiRunService
+from harness.agui.task_title import ControlPlaneTaskTitleGenerator
 from harness.api.dependencies import ApiContainer
 from harness.application.agent_assets import (
     resolve_published_agent_versions,
@@ -1062,7 +1063,7 @@ def build_production_container(
         input_artifacts=input_service,
         bindings=binding_repository,
         contexts=context_service,
-        title_generator=None,
+        title_generator=ControlPlaneTaskTitleGenerator(model_configurations),
     )
 
     async def infrastructure_facts(tenant_id: str) -> dict[str, int | None]:

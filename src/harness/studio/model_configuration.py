@@ -412,6 +412,91 @@ class ModelConfigurationService:
             capabilities=frozenset(route.capabilities),
         )
 
+    async def complete_text(
+        self,
+        tenant_id: str,
+        route_id: str,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 256,
+    ) -> str:
+        """Run a small non-streaming control-plane text completion."""
+
+        route = await self._route(tenant_id, route_id)
+        if not route.enabled or route.model_type not in {"chat", "vision"}:
+            raise ConflictError("the selected route is not an enabled text model")
+        if route.api_format not in {"anthropic_compatible", "openai_compatible"}:
+            raise ConflictError("the selected route does not support text completion")
+        secret = await self._credential_for_route(tenant_id, route)
+        if route.api_format == "openai_compatible":
+            path = "chat/completions"
+            payload: dict[str, object] = {
+                "model": route.models[0],
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": 0,
+            }
+        else:
+            path = "messages"
+            payload = {
+                "model": route.models[0],
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_prompt}],
+                "max_tokens": max_tokens,
+                "temperature": 0,
+                "thinking": {"type": "disabled"},
+            }
+        try:
+            response = await self._post(route, secret, path, payload)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as error:
+            raise ConflictError(
+                f"model provider rejected the completion (HTTP {error.response.status_code})"
+            ) from None
+        except httpx.HTTPError:
+            raise ConflictError("model provider completion failed") from None
+        text = self._completion_text(response.json(), route.api_format)
+        if not text:
+            raise ConflictError("model provider returned no visible completion text")
+        return text
+
+    @staticmethod
+    def _completion_text(payload: object, api_format: str) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        values = cast(dict[str, object], payload)
+        if api_format == "openai_compatible":
+            choices = values.get("choices")
+            if not isinstance(choices, list) or not choices:
+                return ""
+            first = cast(list[object], choices)[0]
+            if not isinstance(first, dict):
+                return ""
+            message = cast(dict[str, object], first).get("message")
+            if not isinstance(message, dict):
+                return ""
+            content = cast(dict[str, object], message).get("content")
+            if isinstance(content, str):
+                return content.strip()
+            return ""
+
+        content = values.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        return "\n".join(
+            text.strip()
+            for item in cast(list[object], content)
+            if isinstance(item, dict)
+            and isinstance((text := cast(dict[str, object], item).get("text")), str)
+            and text.strip()
+        )
+
     async def test(self, tenant_id: str, route_id: str) -> ModelConnectionTestResult:
         from time import monotonic
 

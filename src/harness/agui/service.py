@@ -384,7 +384,7 @@ class AguiRunService:
     ) -> None:
         assert self._title_generator is not None
         try:
-            title = await self._title_generator.generate(prompts)
+            title = await self._title_generator.generate(tenant_id, user_id, prompts)
             await self._bindings.update_title(
                 tenant_id,
                 user_id,

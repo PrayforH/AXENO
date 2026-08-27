@@ -2,7 +2,7 @@
  * Copy text in both secure HTTPS contexts and private-network HTTP deployments.
  *
  * The modern Clipboard API is intentionally unavailable on most non-localhost
- * HTTP origins. AXENO is also deployed on private IPs during acceptance, so
+ * HTTP origins. AXIS is also deployed on private IPs during acceptance, so
  * keep the user gesture and fall back to a temporary selected textarea.
  */
 export async function writeTextToClipboard(value: string): Promise<boolean> {
