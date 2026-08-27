@@ -255,24 +255,6 @@ def _requires_workspace_write(task: str) -> bool:
     )
 
 
-def _default_platform_mcp(catalog: CapabilityCatalog) -> tuple[McpCapability, ...]:
-    """Bind only the platform's reviewed public-search MCP by default.
-
-    Tenant/business MCPs can encode private data semantics and must remain an
-    explicit design-time choice. Tavily is the one platform-owned, read-only
-    public network capability that the task-driven Builder may safely suggest.
-    """
-
-    return tuple(
-        item
-        for item in catalog.mcp_servers
-        if item.reference == "tavily-readonly"
-        and item.owner_user_id is None
-        and item.enabled
-        and item.read_only
-    )
-
-
 def _runtime_and_route(
     catalog: CapabilityCatalog,
     request: CreateTaskDrivenDraftRequest,
@@ -372,10 +354,9 @@ def configure_task_driven_draft(
     if policy not in enabled_policies and enabled_policies:
         policy = sorted(enabled_policies)[0]
 
-    # The platform-owned public search connector is a reviewed default. Business
-    # MCPs still require an explicit design-time selection because their data
-    # semantics and tenant boundaries cannot be inferred from task wording.
-    selected_mcp = _default_platform_mcp(catalog)
+    # MCP access is opt-in. Even reviewed platform connectors can introduce
+    # external network dependencies that unrelated Agents must not inherit.
+    selected_mcp: tuple[McpCapability, ...] = ()
     execution_profile = _execution_profile(catalog, selected_mcp)
 
     sample = request.sample_input.strip() if request.sample_input else ""
@@ -428,12 +409,7 @@ def configure_task_driven_draft(
         if writes
         else "任务以分析和回答为主，保持最小只读工具权限"
     )
-    reasons.append(
-        "默认接入平台只读 Tavily 公网检索；凭据与网络边界仍需通过发布前预检"
-        if selected_mcp
-        else "平台只读 Tavily 当前不可用；业务 MCP 仍需在能力配置中明确选择"
-    )
-    reasons.append("租户与业务 MCP 不会按任务关键词自动绑定，避免误用专有数据源")
+    reasons.append("Tavily 与业务 MCP 均默认关闭，需在能力配置中明确选择后启用")
     reasons.extend(
         (
             "生成 TaskContract、五段式 System Prompt 和三类发布基础评测",

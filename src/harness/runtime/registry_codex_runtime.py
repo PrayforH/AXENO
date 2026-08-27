@@ -36,6 +36,7 @@ from harness.studio.model_configuration import ModelConfigurationService
 _CONTROL_PLANE_PROVIDER_ID = "agent_studio"
 _CONTROL_PLANE_API_KEY_ENV = "HARNESS_CODEX_PROVIDER_API_KEY"
 _TOML_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+_OPTIONAL_CODEX_MCP_SERVERS = frozenset({"tavily"})
 
 
 def _toml_string(value: str) -> str:
@@ -72,11 +73,12 @@ def _codex_mcp_configuration(
             raise ToolResolutionError(f"Codex MCP endpoint is invalid: {server_name}")
 
         prefix = f"mcp_servers.{_toml_key(server_name)}"
+        required = str(server_name not in _OPTIONAL_CODEX_MCP_SERVERS).lower()
         overrides.extend(
             (
                 f"{prefix}.url={_toml_string(url)}",
                 f"{prefix}.enabled=true",
-                f"{prefix}.required=true",
+                f"{prefix}.required={required}",
                 f'{prefix}.default_tools_approval_mode="prompt"',
             )
         )

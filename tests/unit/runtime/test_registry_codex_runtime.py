@@ -119,6 +119,7 @@ def test_codex_mcp_configuration_uses_env_headers_and_exact_tool_allowlist() -> 
     overrides, environment = _codex_mcp_configuration(resolved)
 
     assert 'mcp_servers.sentiment-query.url="https://mcp.example.test/mcp"' in overrides
+    assert "mcp_servers.sentiment-query.required=true" in overrides
     assert (
         "mcp_servers.sentiment-query.enabled_tools="
         '["search_risk_subjects","query_legal_entity_directory"]'
@@ -129,6 +130,31 @@ def test_codex_mcp_configuration_uses_env_headers_and_exact_tool_allowlist() -> 
     assert set(environment.values()) == {"Bearer private-token", "tenant-a"}
     assert all("private-token" not in override for override in overrides)
     assert any("env_http_headers.Authorization" in override for override in overrides)
+
+
+def test_codex_mcp_configuration_keeps_default_tavily_non_blocking() -> None:
+    resolved = ResolvedTools(
+        builtin_tools=(),
+        mcp_servers=MappingProxyType(
+            {
+                "tavily": cast(
+                    McpServerConfig,
+                    {
+                        "type": "http",
+                        "url": "https://mcp.tavily.com/mcp/",
+                        "headers": {"Authorization": "Bearer private-token"},
+                    },
+                )
+            }
+        ),
+        allowed_tools=("mcp__tavily__tavily_search",),
+        mcp_smokes=MappingProxyType({}),
+        sensitive_values=frozenset({"Bearer private-token"}),
+    )
+
+    overrides, _environment = _codex_mcp_configuration(resolved)
+
+    assert "mcp_servers.tavily.required=false" in overrides
 
 
 def test_codex_mcp_configuration_rejects_query_string_credentials() -> None:

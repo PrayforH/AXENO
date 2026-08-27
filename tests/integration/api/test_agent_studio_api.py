@@ -234,7 +234,7 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
     assert spec["model"]["routeId"] == "deepseek-v4-flash"
     assert spec["template"] == "operator"
     assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
-    assert spec["mcpServers"] == ["tavily-readonly"]
+    assert spec["mcpServers"] == []
     assert spec["name"].startswith("agent-")
     assert spec["displayName"] == "搜索最新互联网舆情，分析风险并生成可下载报告。"
     assert len(spec["evaluationCases"]) == 3
@@ -264,7 +264,7 @@ async def test_task_driven_builder_treats_office_assistant_as_writable() -> None
     assert spec["template"] == "operator"
     assert spec["permissionPolicy"] == "production-standard"
     assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
-    assert spec["mcpServers"] == ["tavily-readonly"]
+    assert spec["mcpServers"] == []
 
 
 @pytest.mark.asyncio
