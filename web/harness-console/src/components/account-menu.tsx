@@ -19,7 +19,6 @@ const RESOURCE_WORKSPACES: ReadonlyArray<{
   href: string;
   label: string;
 }> = [
-  { id: "files", href: "/studio/files", label: "我的文件" },
   { id: "capabilities", href: "/studio/capabilities", label: "MCP 能力" },
   { id: "knowledge", href: "/studio/knowledge", label: "知识库" },
   { id: "spaces", href: "/studio/spaces", label: "协作空间" },
@@ -76,8 +75,8 @@ export function AccountMenu() {
             <span>{ROLE_LABELS[membership.role]}</span>
             <code>{membership.tenant_id}</code>
           </div>
-          <nav className="account-workspaces" aria-label="文件、资源与协作">
-            <span className="account-section-label">文件、资源与协作</span>
+          <nav className="account-workspaces" aria-label="资源与协作">
+            <span className="account-section-label">资源与协作</span>
             {RESOURCE_WORKSPACES.map((workspace) => {
               const current = pathname.startsWith(workspace.href);
               return (

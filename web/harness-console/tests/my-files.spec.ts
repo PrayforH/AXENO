@@ -10,6 +10,14 @@ const account = readFileSync(
   join(process.cwd(), "src/components/account-menu.tsx"),
   "utf8",
 );
+const taskSidebar = readFileSync(
+  join(process.cwd(), "src/components/task-sidebar.tsx"),
+  "utf8",
+);
+const workspaceNavigation = readFileSync(
+  join(process.cwd(), "src/components/workspace-navigation.tsx"),
+  "utf8",
+);
 const route = readFileSync(
   join(process.cwd(), "src/app/api/harness/artifacts/route.ts"),
   "utf8",
@@ -25,9 +33,12 @@ describe("my files", () => {
     expect(files).toContain("download");
   });
 
-  it("keeps the entry under the account control and proxies downloads through authenticated routes", () => {
-    expect(account).toContain('href: "/studio/files"');
-    expect(account).toContain('label: "我的文件"');
+  it("keeps the entry below agents in the main navigation and proxies downloads through authenticated routes", () => {
+    expect(taskSidebar).toContain('visible={["agents", "files"]}');
+    expect(workspaceNavigation.indexOf('id: "files"')).toBeGreaterThan(
+      workspaceNavigation.indexOf('id: "agents"'),
+    );
+    expect(account).not.toContain('href: "/studio/files"');
     expect(route).toContain("listArtifacts(request)");
     expect(files).toContain("/api/harness/artifacts/${encodeURIComponent(file.artifact_id)}");
   });

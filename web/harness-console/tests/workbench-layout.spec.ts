@@ -190,12 +190,12 @@ describe("full-page agent workbench", () => {
     );
   });
 
-  it("keeps frequent work in the sidebar and moves resource governance to the account menu", () => {
+  it("keeps tasks, agents and files in the sidebar and moves resource governance to the account menu", () => {
     expect(taskSidebar).not.toContain("WorkspaceModeSwitcher");
     expect(studioSidebar).not.toContain("WorkspaceModeSwitcher");
-    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed visible={["agents"]} />');
-    expect(taskSidebar).toContain('visible={["agents"]}');
-    expect(studioSidebar).toContain('visible={["tasks", "agents"]}');
+    expect(taskSidebar).toContain('<WorkspaceNavigation active="tasks" collapsed visible={["agents", "files"]} />');
+    expect(taskSidebar).toContain('visible={["agents", "files"]}');
+    expect(studioSidebar).toContain('visible={["tasks", "agents", "files"]}');
     expect(studioSidebar).not.toContain('"capabilities", "knowledge", "spaces"]');
     expect(studioSidebar).not.toContain('"usage",');
     expect(studioSidebar).not.toContain('"data",');
@@ -203,6 +203,7 @@ describe("full-page agent workbench", () => {
     for (const [href, label] of [
       ["/", "任务"],
       ["/studio/agents", "智能体"],
+      ["/studio/files", "我的文件"],
       ["/studio/capabilities", "MCP 能力"],
       ["/studio/knowledge", "知识库"],
       ["/studio/spaces", "协作空间"],

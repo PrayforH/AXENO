@@ -52,9 +52,9 @@ describe("account settings", () => {
     expect(menu).toContain('<ProductIcon name="logout" />');
   });
 
-  it("groups files, MCP, knowledge and collaboration under the bottom account control", () => {
-    expect(menu).toContain('aria-label="文件、资源与协作"');
-    expect(menu).toContain('href: "/studio/files"');
+  it("groups MCP, knowledge and collaboration under the bottom account control", () => {
+    expect(menu).toContain('aria-label="资源与协作"');
+    expect(menu).not.toContain('href: "/studio/files"');
     expect(menu).toContain('href: "/studio/capabilities"');
     expect(menu).toContain('href: "/studio/knowledge"');
     expect(menu).toContain('href: "/studio/spaces"');
