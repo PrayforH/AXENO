@@ -437,6 +437,31 @@ describe("Studio typed API mapping", () => {
     } satisfies Partial<StudioApiError>);
   });
 
+  it("deletes a draft with revision protection and invalidates its cache", async () => {
+    const source = apiDraft();
+    const calls: Array<{ url: string; method: string }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET" });
+      if ((init?.method ?? "GET") === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      return Response.json(source);
+    });
+
+    await studioClient.getDraft(source.draftId, { maxAgeMs: 0 });
+    await studioClient.deleteDraft(source.draftId, source.revision);
+    await studioClient.getDraft(source.draftId);
+
+    expect(calls).toEqual([
+      { url: "/api/studio/drafts/draft-api", method: "GET" },
+      {
+        url: "/api/studio/drafts/draft-api?expectedRevision=3",
+        method: "DELETE",
+      },
+      { url: "/api/studio/drafts/draft-api", method: "GET" },
+    ]);
+  });
+
   it("publishes the exact server revision and preserves a version conflict", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       expect(init?.method).toBe("POST");

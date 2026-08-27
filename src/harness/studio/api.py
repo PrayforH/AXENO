@@ -1582,6 +1582,25 @@ async def replace_draft(
     return draft
 
 
+@router.delete("/drafts/{draft_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_draft(
+    draft_id: str,
+    actor: Annotated[StudioActor, Depends(require_studio_writer)],
+    service: Annotated[AgentStudioService, Depends(get_studio_service)],
+    expected_revision: Annotated[int, Query(alias="expectedRevision", ge=1)],
+) -> Response:
+    try:
+        await service.delete(
+            tenant_id=actor.tenant_id,
+            user_id=actor.user_id,
+            draft_id=draft_id,
+            expected_revision=expected_revision,
+        )
+    except (ConflictError, NotFoundError, PermissionDeniedError) as error:
+        raise _translate_domain_error(error) from error
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.post("/drafts/{draft_id}/validate", response_model=DraftValidationResult)
 async def validate_draft(
     draft_id: str,

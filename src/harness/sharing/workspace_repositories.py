@@ -16,6 +16,7 @@ from harness.sharing.models import (
     GroupMember,
     UserGroup,
     WorkspaceAgent,
+    WorkspaceAgentStatus,
 )
 
 
@@ -349,6 +350,15 @@ class AgentIdentityService:
             tenant_id, owner_user_id, name
         )
         if existing is not None:
+            if existing.status is WorkspaceAgentStatus.ARCHIVED:
+                await self._repository.update_agent(
+                    existing.model_copy(
+                        update={
+                            "status": WorkspaceAgentStatus.ACTIVE,
+                            "updated_at": self._clock(),
+                        }
+                    )
+                )
             return existing.agent_id
         now = self._clock()
         agent = WorkspaceAgent(
@@ -395,5 +405,31 @@ class AgentIdentityService:
         await self._repository.update_agent(
             agent.model_copy(
                 update={"current_version": version, "updated_at": self._clock()}
+            )
+        )
+
+    async def archive_personal_agent(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+    ) -> None:
+        agent = await self._repository.get_agent(tenant_id, agent_id)
+        if (
+            agent.scope is not AgentScope.PERSONAL
+            or agent.owner_user_id != owner_user_id
+            or agent.name != name
+        ):
+            raise NotFoundError(f"personal Agent not found: {agent_id}")
+        if agent.status is WorkspaceAgentStatus.ARCHIVED:
+            return
+        await self._repository.update_agent(
+            agent.model_copy(
+                update={
+                    "status": WorkspaceAgentStatus.ARCHIVED,
+                    "current_version": None,
+                    "updated_at": self._clock(),
+                }
             )
         )

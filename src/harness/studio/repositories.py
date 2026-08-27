@@ -24,6 +24,14 @@ class AgentDraftRepository(Protocol):
 
     async def replace(self, expected_revision: int, draft: AgentDraft) -> None: ...
 
+    async def delete(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        draft_id: str,
+        expected_revision: int,
+    ) -> None: ...
+
     async def get_by_agent(self, tenant_id: str, agent_id: str) -> AgentDraft | None:
         """The shared draft of a workspace Agent, if one exists."""
         ...
@@ -101,6 +109,25 @@ class InMemoryAgentDraftRepository:
             if draft.revision != expected_revision + 1:
                 raise ConflictError("Agent draft replacement must increment revision once")
             self._items[key] = draft
+
+    async def delete(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        draft_id: str,
+        expected_revision: int,
+    ) -> None:
+        key = (tenant_id, owner_user_id, draft_id)
+        async with self._lock:
+            current = self._items.get(key)
+            if current is None:
+                raise NotFoundError(f"Agent draft not found: {draft_id}")
+            if current.revision != expected_revision:
+                raise ConflictError(
+                    "Agent draft revision changed: "
+                    f"expected={expected_revision} actual={current.revision}"
+                )
+            del self._items[key]
 
     async def get_by_agent(self, tenant_id: str, agent_id: str) -> AgentDraft | None:
         for draft in self._items.values():

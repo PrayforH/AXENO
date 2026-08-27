@@ -26,6 +26,7 @@ from harness.core.errors import NotFoundError
 from harness.core.manifest import ToolDirectorySnapshot
 from harness.evals.models import EvalRunStatus
 from harness.quota.models import QuotaResource, ReplaceQuotaPolicyRequest
+from harness.sharing.models import WorkspaceAgentStatus
 from harness.studio.catalog import default_capability_catalog
 from harness.studio.mcp_discovery import (
     DiscoveredServer,
@@ -204,6 +205,108 @@ async def test_server_templates_keep_delegation_opt_in() -> None:
     assert "Bash" in specs["operator"]["builtinTools"]
     assert "Task" not in specs["orchestrator"]["builtinTools"]
     assert specs["orchestrator"]["subagents"] == []
+
+
+@pytest.mark.asyncio
+async def test_delete_personal_agent_hides_catalog_and_preserves_release_history() -> None:
+    application, container = app_and_container()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-delete-agent",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("delete-me"),
+        )
+        draft = created.json()
+        published = await client.post(
+            f"/v1/studio/drafts/{draft['draftId']}/publish",
+            headers=headers,
+            json={"expectedRevision": 1},
+        )
+        deleted = await client.delete(
+            f"/v1/studio/drafts/{draft['draftId']}",
+            headers=headers,
+            params={"expectedRevision": 2},
+        )
+        missing = await client.get(
+            f"/v1/studio/drafts/{draft['draftId']}", headers=headers
+        )
+        catalog = await client.get("/v1/agents", headers=headers)
+
+    assert created.status_code == 201, created.text
+    assert published.status_code == 200, published.text
+    assert deleted.status_code == 204, deleted.text
+    assert missing.status_code == 404
+    assert all(item["name"] != "delete-me" for item in catalog.json())
+    preserved = await container.agents.get_published(
+        "tenant-delete-agent", "builder-a", "delete-me", "0.1.0"
+    )
+    assert preserved.name == "delete-me"
+    identity = await container.workspace_agents.get_agent(
+        "tenant-delete-agent", draft["agentId"]
+    )
+    assert identity.status is WorkspaceAgentStatus.ARCHIVED
+    assert identity.current_version is None
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_requires_current_revision_and_no_subagent_dependents() -> None:
+    application = app()
+    headers = {
+        "Authorization": f"Bearer {SERVICE_TOKEN}",
+        "X-Tenant-ID": "tenant-delete-dependent",
+        "X-User-ID": "builder-a",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=application), base_url="http://test"
+    ) as client:
+        child = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json=draft_request("child-agent"),
+        )
+        stale = await client.delete(
+            f"/v1/studio/drafts/{child.json()['draftId']}",
+            headers=headers,
+            params={"expectedRevision": 2},
+        )
+        parent = await client.post(
+            "/v1/studio/drafts",
+            headers=headers,
+            json={**draft_request("lead-agent"), "template": "orchestrator"},
+        )
+        parent_spec = parent.json()["spec"]
+        parent_spec["builtinTools"].append("Task")
+        parent_spec["subagents"] = [
+            {
+                "alias": "child",
+                "ref": "child-agent@0.1.0",
+                "responsibility": "处理委派任务",
+            }
+        ]
+        updated = await client.put(
+            f"/v1/studio/drafts/{parent.json()['draftId']}",
+            headers=headers,
+            json={"expectedRevision": 1, "spec": parent_spec},
+        )
+        blocked = await client.delete(
+            f"/v1/studio/drafts/{child.json()['draftId']}",
+            headers=headers,
+            params={"expectedRevision": 1},
+        )
+
+    assert stale.status_code == 409
+    assert "revision changed" in stale.json()["error"]["message"]
+    assert updated.status_code == 200, updated.text
+    assert blocked.status_code == 409
+    assert "lead-agent" not in blocked.json()["error"]["message"]
+    assert "政策研究助手" in blocked.json()["error"]["message"]
 
 
 @pytest.mark.asyncio

@@ -300,6 +300,7 @@ export function AgentStudioWorkbench() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [importingBundle, setImportingBundle] = useState(false);
@@ -1120,6 +1121,56 @@ export function AgentStudioWorkbench() {
     }
   }
 
+  async function deleteCurrentDraft() {
+    if (!canEdit || !draft.id || deleting || saving) return;
+    const confirmed = await requestConfirmation({
+      title: `删除“${draft.displayName}”？`,
+      description: draft.publishedVersion
+        ? "草稿会立即移除，智能体也不再出现在新任务目录。已发布的不可变版本、已有任务和审计记录会保留。"
+        : "草稿会立即移除且无法恢复。已有任务和审计记录不会被删除。",
+      confirmLabel: "删除智能体",
+      cancelLabel: "取消",
+      tone: "danger",
+      context: (
+        <span>
+          {draft.name}@{draft.version}
+          {dirty ? " · 未保存修改也会丢弃" : ""}
+        </span>
+      ),
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await studioClient.deleteDraft(draft.id, draft.revision);
+      const remaining = await studioClient.listAccessibleDrafts();
+      setDrafts(remaining);
+      setDirty(false);
+      setConflict(false);
+      setVersionConflict(false);
+      setServerValidation(null);
+      setReleaseFeedbackOpen(false);
+      setPersonalVersions([]);
+      if (remaining.length > 0) {
+        const selected = await studioClient.getDraft(remaining[0].draftId, {
+          expectedRevision: remaining[0].revision,
+          maxAgeMs: 0,
+        });
+        setDraft(apiDraftToStudioDraft(selected));
+        setNotice(`已删除 ${draft.displayName}，并切换到 ${remaining[0].displayName}`);
+      } else {
+        setDraft({ ...DEFAULT_STUDIO_DRAFT, id: "", revision: 0 });
+        setActiveSection("identity");
+        setNewAgentOpen(true);
+        setNotice(`已删除 ${draft.displayName}，可以新建智能体`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "删除智能体失败");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function reloadAfterConflict() {
     if (!draft.id || conflictReloadingRef.current) return;
     const confirmed = await requestConfirmation({
@@ -1870,7 +1921,7 @@ export function AgentStudioWorkbench() {
               <div className={styles.actionMenuPopover}>
                 <header className={styles.actionMenuHeader}>
                   <strong>更多操作</strong>
-                  <small>导入与导出</small>
+                  <small>导入与导出 · 删除</small>
                 </header>
                 <input
                   ref={bundleInputRef}
@@ -1917,6 +1968,22 @@ export function AgentStudioWorkbench() {
                   }}
                 >
                   <span><strong>导出 NexAU ZIP</strong><small>生成可导入 NexAU 的 Agent 包</small></span>
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.actionMenuItem} ${styles.actionMenuDanger}`}
+                  data-icon="×"
+                  disabled={!canEdit || !draft.id || deleting || saving || Boolean(draft.spaceId)}
+                  title={draft.spaceId ? "协作空间智能体需在协作空间中管理" : undefined}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    void deleteCurrentDraft();
+                  }}
+                >
+                  <span>
+                    <strong>{deleting ? "正在删除智能体" : "删除智能体"}</strong>
+                    <small>{draft.spaceId ? "协作空间智能体不能在这里删除" : "保留历史版本、已有任务与审计记录"}</small>
+                  </span>
                 </button>
               </div>
             </details>

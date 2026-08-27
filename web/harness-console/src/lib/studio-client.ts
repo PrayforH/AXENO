@@ -1685,6 +1685,17 @@ export const studioClient = {
         spec: studioDraftToSpec(draft),
       }),
     }).then(rememberStudioDraft),
+  async deleteDraft(draftId: string, expectedRevision: number): Promise<void> {
+    const response = requireAuthenticatedResponse(
+      await fetch(
+        `/api/studio/drafts/${encodeURIComponent(draftId)}`
+          + `?expectedRevision=${expectedRevision}`,
+        { method: "DELETE", cache: "no-store" },
+      ),
+    );
+    if (!response.ok) throw await errorFrom(response);
+    forgetStudioDraft(draftId);
+  },
   validateDraft: (draftId: string) =>
     request<StudioValidation>(`drafts/${encodeURIComponent(draftId)}/validate`, {
       method: "POST",

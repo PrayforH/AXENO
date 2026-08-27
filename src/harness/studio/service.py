@@ -360,6 +360,67 @@ class AgentStudioService:
         await self._repository.add(draft)
         return TaskDrivenDraftResult(draft=draft, recommendation=recommendation)
 
+    async def delete(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_revision: int,
+    ) -> None:
+        draft = await self._repository.get(tenant_id, user_id, draft_id)
+        if draft.revision != expected_revision:
+            raise ConflictError(
+                "Agent draft revision changed: "
+                f"expected={expected_revision} actual={draft.revision}"
+            )
+        if draft.space_id is not None:
+            raise ConflictError("协作空间智能体不能从个人 Builder 删除")
+
+        dependents = sorted(
+            item.spec.display_name
+            for item in await self._repository.list_for_user(tenant_id, user_id)
+            if item.draft_id != draft_id
+            and any(
+                binding.ref.rsplit("@", 1)[0] == draft.spec.name
+                for binding in item.spec.subagents
+            )
+        )
+        if dependents:
+            raise ConflictError(
+                "智能体仍被其他草稿绑定为 Sub Agent，请先解除绑定："
+                + "、".join(dependents)
+            )
+
+        await self._repository.delete(
+            tenant_id,
+            user_id,
+            draft_id,
+            expected_revision,
+        )
+        if self._agent_ids is not None and draft.agent_id is not None:
+            await self._agent_ids.archive_personal_agent(
+                tenant_id,
+                user_id,
+                draft.agent_id,
+                draft.spec.name,
+            )
+        if self._audit is not None:
+            await self._audit.record(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="studio.draft.delete",
+                resource_type="agent_draft",
+                resource_id=draft_id,
+                outcome="success",
+                details={
+                    "agent_id": draft.agent_id or "",
+                    "name": draft.spec.name,
+                    "published_version": draft.published_version or "",
+                    "immutable_versions_preserved": True,
+                },
+            )
+
     async def _load_draft(self, tenant_id: str, user_id: str, draft_id: str) -> AgentDraft:
         """Owner-scoped draft, or a shared draft the user may view."""
         try:

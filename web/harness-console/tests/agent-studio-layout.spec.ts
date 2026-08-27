@@ -735,6 +735,14 @@ describe("Agent Studio management page", () => {
     expect(workbench).not.toContain("工单分诊助手");
   });
 
+  it("offers protected personal Agent deletion without erasing history", () => {
+    expect(workbench).toContain("studioClient.deleteDraft");
+    expect(workbench).toContain("删除智能体");
+    expect(workbench).toContain("已发布的不可变版本、已有任务和审计记录会保留");
+    expect(workbench).toContain("协作空间智能体不能在这里删除");
+    expect(styles).toContain(".actionMenuDanger");
+  });
+
   it("uses a quiet registry palette with no decorative gradient", () => {
     expect(styles).not.toContain("linear-gradient");
     expect(styles).not.toContain("radial-gradient");

@@ -776,6 +776,24 @@
   line-height: 1.4;
 }
 
+.actionMenuDanger {
+  margin-top: 4px;
+  border-top: 1px solid var(--studio-line);
+  border-radius: 0 0 8px 8px;
+  color: var(--studio-red);
+}
+
+.actionMenuDanger::before {
+  border-color: color-mix(in srgb, var(--studio-red) 34%, var(--studio-line));
+  color: var(--studio-red);
+  background: var(--studio-red-soft);
+}
+
+.actionMenuDanger:hover:not(:disabled) {
+  color: var(--studio-red);
+  background: var(--studio-red-soft);
+}
+
 .headerActions .headerActionButton {
   min-width: 0;
   min-height: 36px;

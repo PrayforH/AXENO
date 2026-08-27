@@ -92,6 +92,16 @@ class AgentIdentityProvider(Protocol):
         """
         ...
 
+    async def archive_personal_agent(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        agent_id: str,
+        name: str,
+    ) -> None:
+        """Hide a personal Agent while retaining immutable releases for history."""
+        ...
+
 
 class SessionRepository(Protocol):
     async def add(self, session: Session) -> None: ...

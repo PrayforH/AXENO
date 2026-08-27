@@ -2,7 +2,7 @@
 
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from harness.core.errors import ConflictError, NotFoundError
@@ -176,6 +176,39 @@ class PostgresAgentDraftRepository:
             await session.rollback()
             if actual_revision is None:
                 raise NotFoundError(f"Agent draft not found: {draft.draft_id}")
+            raise ConflictError(
+                "Agent draft revision changed: "
+                f"expected={expected_revision} actual={actual_revision}"
+            )
+
+    async def delete(
+        self,
+        tenant_id: str,
+        owner_user_id: str,
+        draft_id: str,
+        expected_revision: int,
+    ) -> None:
+        statement = delete(AgentDraftRow).where(
+            AgentDraftRow.tenant_id == tenant_id,
+            AgentDraftRow.owner_user_id == owner_user_id,
+            AgentDraftRow.draft_id == draft_id,
+            AgentDraftRow.revision == expected_revision,
+        )
+        async with self._sessions() as session:
+            result = await session.execute(statement)
+            if cast(CursorResult[Any], result).rowcount:
+                await session.commit()
+                return
+            actual_revision = await session.scalar(
+                select(AgentDraftRow.revision).where(
+                    AgentDraftRow.tenant_id == tenant_id,
+                    AgentDraftRow.owner_user_id == owner_user_id,
+                    AgentDraftRow.draft_id == draft_id,
+                )
+            )
+            await session.rollback()
+            if actual_revision is None:
+                raise NotFoundError(f"Agent draft not found: {draft_id}")
             raise ConflictError(
                 "Agent draft revision changed: "
                 f"expected={expected_revision} actual={actual_revision}"

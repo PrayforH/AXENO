@@ -15,7 +15,7 @@ from harness.api.dependencies import (
 )
 from harness.api.schemas import AgentCatalogItem, PublishAgentRequest
 from harness.core.models import AgentVersion
-from harness.sharing.models import WorkspaceAgent
+from harness.sharing.models import WorkspaceAgent, WorkspaceAgentStatus
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -86,6 +86,11 @@ async def list_agents(
         if f"{version.name}@{version.version}" in dependency_coordinates or _is_internal(version):
             continue
         workspace_agent = personal_by_name.get(version.name)
+        if (
+            workspace_agent is not None
+            and workspace_agent.status is WorkspaceAgentStatus.ARCHIVED
+        ):
+            continue
         personal.append(
             AgentCatalogItem.from_version(
                 version,
