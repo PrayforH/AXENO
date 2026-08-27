@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -22,6 +23,90 @@ from harness.studio.models import (
 )
 
 TaskRuntimePreference = Literal["auto", "codex-app-server", "claude-agent-sdk"]
+
+_DISPLAY_NAME_ROLE_SUFFIXES = (
+    "智能体",
+    "助手",
+    "专家",
+    "顾问",
+    "机器人",
+    "agent",
+    "assistant",
+)
+_DISPLAY_NAME_ACTION_PREFIX = re.compile(
+    r"^(?:搜索|搜集|收集|整理|汇总|分析|研究|生成|制作|撰写|输出|处理|查询|"
+    r"监测|监控|管理|检查|审查|提取|识别|规划|推荐|回答|给出)"
+)
+_DISPLAY_NAME_REQUEST_PREFIX = re.compile(
+    r"^(?:(?:请帮我|请|麻烦帮我|麻烦|帮我|我想要|我想做|我需要|我希望|"
+    r"希望创建|希望构建|希望有|需要|创建|构建|打造|设计|做一个|做一名|做|"
+    r"作为|你是|充当)\s*)+"
+)
+_AGENT_NAME_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("育儿", "婴儿", "孩子", "儿童", "喂养", "亲子"), "parenting-expert"),
+    (("备孕", "孕期", "孕早", "孕中", "孕晚", "产后"), "maternity-guide"),
+    (("舆情", "声誉", "负面新闻", "新闻监测"), "sentiment-analyst"),
+    (("投资", "股票", "证券", "基金", "财报"), "investment-assistant"),
+    (("办公", "office", "ppt", "powerpoint", "word"), "office-assistant"),
+    (("合同", "法务", "法律", "合规"), "contract-reviewer"),
+    (("企业主体", "工商", "企业信息"), "company-researcher"),
+    (("视频", "短片", "分镜"), "video-creator"),
+    (("数据", "表格", "excel", "csv"), "data-analyst"),
+    (("研究", "调研", "资料检索"), "research-assistant"),
+    (("客服", "售后", "客户支持"), "support-assistant"),
+)
+
+
+def summarize_agent_display_name(task: str) -> str:
+    """Derive a short product name from a task without discarding the full brief."""
+
+    normalized = re.sub(r"\s+", " ", task).strip()
+    first_clause = re.split(r"[\n，,。；;！？!?：:]", normalized, maxsplit=1)[0].strip()
+    candidate = _DISPLAY_NAME_REQUEST_PREFIX.sub("", first_clause).strip()
+    candidate = re.sub(r"^(?:一个|一名|一款|一套)\s*", "", candidate)
+    candidate = re.sub(r"^[“”'\"「」『』【】]+|[“”'\"「」『』【】]+$", "", candidate).strip()
+    if not candidate:
+        candidate = first_clause or "新智能体"
+
+    lowered = candidate.lower()
+    if lowered.endswith(_DISPLAY_NAME_ROLE_SUFFIXES):
+        return candidate[:24].rstrip("的、 ")
+
+    if re.search(r"[\u3400-\u9fff]", candidate):
+        candidate = _DISPLAY_NAME_ACTION_PREFIX.sub("", candidate).strip()
+        candidate = re.sub(r"^(?:最新|指定|公开|相关|所有|各类|各种)+", "", candidate)
+        candidate = re.sub(r"(公司|企业)的(?=公开|相关|全部)", r"\1", candidate)
+        candidate = candidate.rstrip("的、 ") or "业务"
+        return f"{candidate[:22].rstrip('的、 ')}助手"
+
+    words = candidate.split()
+    english_name = " ".join(words[:5]).strip() or "New"
+    if english_name.lower().endswith(_DISPLAY_NAME_ROLE_SUFFIXES):
+        return english_name[:100]
+    return f"{english_name} Agent"[:100]
+
+
+def summarize_agent_name(task: str, domain: str = "general") -> str:
+    """Derive a readable kebab-case Agent identity from business intent."""
+
+    lowered = task.lower()
+    for hints, name in _AGENT_NAME_RULES:
+        if any(hint in lowered for hint in hints):
+            return name
+
+    domain_slug = re.sub(r"[^a-z0-9]+", "-", domain.lower()).strip("-")
+    if domain_slug and domain_slug != "general":
+        return f"{domain_slug}-assistant"[:48].rstrip("-")
+
+    english_terms = [
+        term.lower()
+        for term in re.findall(r"[A-Za-z][A-Za-z0-9]+", task)
+        if term.lower()
+        not in {"the", "and", "for", "with", "from", "this", "that", "agent", "assistant"}
+    ]
+    if english_terms:
+        return f"{'-'.join(english_terms[:3])}-agent"[:48].rstrip("-")
+    return "general-assistant"
 
 
 class CreateTaskDrivenDraftRequest(StudioModel):

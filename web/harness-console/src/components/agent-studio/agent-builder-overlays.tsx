@@ -99,6 +99,7 @@ export function TryRunPanel({
   const [solidified, setSolidified] = useState<StudioSolidifiedAgentResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [solidifying, setSolidifying] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [error, setError] = useState("");
   const autoRunRef = useRef("");
   const terminal = useMemo(
@@ -111,6 +112,7 @@ export function TryRunPanel({
     setPrompt(initialPrompt);
     setResult(null);
     setSolidified(null);
+    setCollapsed(false);
     setError("");
     const key = `${draft.id}:${initialPrompt}`;
     if (autoStart && initialPrompt.trim() && autoRunRef.current !== key) {
@@ -195,8 +197,21 @@ export function TryRunPanel({
       ? "试跑失败"
       : result?.run.status ?? "未运行";
 
-  return <aside className={styles.tryPanel} aria-label="执行轨迹试跑">
-    <header><div><span>EXECUTION TRACE</span><h2>真实试跑与版本固化</h2></div><button type="button" onClick={onClose}>×</button></header>
+  return <aside className={`${styles.tryPanel} ${collapsed ? styles.tryPanelCollapsed : ""}`} aria-label="执行轨迹试跑">
+    <button
+      type="button"
+      className={styles.tryPanelToggle}
+      aria-label={collapsed ? "展开试跑面板" : "收起试跑面板"}
+      aria-expanded={!collapsed}
+      aria-controls="try-run-panel-body"
+      onClick={() => setCollapsed((value) => !value)}
+    >
+      <svg viewBox="0 0 12 20" aria-hidden="true">
+        <path d={collapsed ? "m9 3-6 7 6 7" : "m3 3 6 7-6 7"} />
+      </svg>
+    </button>
+    <div className={styles.tryPanelBody} id="try-run-panel-body" aria-hidden={collapsed || undefined}>
+    <header><div><span>EXECUTION TRACE</span><h2>真实试跑与版本固化</h2></div><button type="button" aria-label="关闭试跑面板" onClick={onClose}>×</button></header>
     <p><code>{draft.name}@r{result?.draftRevision ?? draft.revision}</code> · 计划、工具、修正、验证都来自真实运行事件；不会展示模型隐藏推理。</p>
     {recommendation && <section className={styles.recommendationStrip}>
       <div><span>CONTROL PLANE DECISION</span><strong>{recommendation.runtime}</strong><small>{recommendation.modelRouteId} / {recommendation.model}</small></div>
@@ -226,5 +241,6 @@ export function TryRunPanel({
       {result.approvals.length > 0 && <section><h3>审批 <small>{result.approvals.length}</small></h3>{result.approvals.map((item) => <div className={styles.approval} key={item.approval_id}><div><strong>{item.tool_name ?? "工具审批"}</strong><small>{item.reason}</small></div><em>{item.status}</em>{item.status === "pending" && <><button type="button" onClick={() => void decide(item.approval_id, "approved")}>批准</button><button type="button" onClick={() => void decide(item.approval_id, "rejected")}>拒绝</button></>}</div>)}</section>}
       {result.artifacts.length > 0 && <section><h3>产物 <small>{result.artifacts.length}</small></h3>{result.artifacts.map((item) => <a key={item.artifact_id} href={studioClient.tryRunArtifactHref(item.artifact_id)} download={item.name}><span>{item.name}</span><small>{item.media_type} · {item.size_bytes ?? 0} bytes</small></a>)}</section>}
     </div>}
+    </div>
   </aside>;
 }

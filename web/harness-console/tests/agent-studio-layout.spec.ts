@@ -27,6 +27,13 @@ const builderOverlays = readFileSync(
   ),
   "utf8",
 );
+const builderOverlayStyles = readFileSync(
+  join(
+    process.cwd(),
+    "src/components/agent-studio/agent-builder-overlays.module.css",
+  ),
+  "utf8",
+);
 const styles = readFileSync(
   join(process.cwd(), "src/components/agent-studio/agent-studio.module.css"),
   "utf8",
@@ -332,6 +339,10 @@ describe("Agent Studio management page", () => {
     expect(builderOverlays).toContain("studioClient.solidifyTryRun");
     expect(builderOverlays).toContain("required Eval Dataset");
     expect(workbench).toContain("onSolidified={(result) =>");
+    expect(builderOverlays).toContain('aria-label={collapsed ? "展开试跑面板" : "收起试跑面板"}');
+    expect(builderOverlays).toContain("setCollapsed((value) => !value)");
+    expect(builderOverlayStyles).toContain(".tryPanelToggle");
+    expect(builderOverlayStyles).toContain(".tryPanelCollapsed");
   });
 
   it("aligns the new-task action with workspace navigation columns", () => {

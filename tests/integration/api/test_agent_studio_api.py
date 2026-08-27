@@ -336,6 +336,14 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
                 "runtimePreference": "auto",
             },
         )
+        duplicate = await client.post(
+            "/v1/studio/drafts/from-task",
+            headers=headers,
+            json={
+                "task": "搜索最新互联网舆情，分析风险并生成可下载报告。",
+                "runtimePreference": "auto",
+            },
+        )
 
     assert created.status_code == 201, created.text
     payload = created.json()
@@ -346,11 +354,13 @@ async def test_task_driven_builder_compiles_codex_draft_from_tenant_capabilities
     assert spec["template"] == "operator"
     assert {"Write", "Edit", "Bash"} <= set(spec["builtinTools"])
     assert spec["mcpServers"] == []
-    assert spec["name"].startswith("agent-")
-    assert spec["displayName"] == "搜索最新互联网舆情，分析风险并生成可下载报告。"
+    assert spec["name"] == "sentiment-analyst"
+    assert spec["displayName"] == "互联网舆情助手"
     assert len(spec["evaluationCases"]) == 3
     assert recommendation["validation"]["ready"] is True
     assert recommendation["runtime"] == "codex-app-server"
+    assert duplicate.status_code == 201, duplicate.text
+    assert duplicate.json()["draft"]["spec"]["name"] == "sentiment-analyst-2"
 
 
 @pytest.mark.asyncio

@@ -48,7 +48,7 @@
 }
 
 .dialog > header,
-.tryPanel > header {
+.tryPanelBody > header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -96,7 +96,7 @@
 }
 
 .dialog > p,
-.tryPanel > p {
+.tryPanelBody > p {
   max-width: 65ch;
   margin: 16px 0 0;
   color: var(--overlay-muted);
@@ -108,7 +108,7 @@
   line-height: 1.55;
 }
 
-.tryPanel > label {
+.tryPanelBody > label {
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -315,14 +315,73 @@
   right: 0;
   width: min(720px, 100vw);
   height: 100dvh;
-  overflow: auto;
-  padding: 24px;
+  overflow: visible;
+  padding: 0;
   border-left: 1px solid var(--overlay-line);
   color: var(--overlay-ink);
   background:
     linear-gradient(180deg, var(--codex-glint, rgb(255 255 255 / 3%)), transparent 96px),
     var(--overlay-panel);
   box-shadow: -18px 0 60px rgb(0 0 0 / 28%);
+  transition: width 180ms ease, box-shadow 180ms ease;
+}
+
+.tryPanelBody {
+  width: min(720px, 100vw);
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+}
+
+.tryPanelToggle {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: -38px;
+  width: 38px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--overlay-line);
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  color: var(--overlay-muted);
+  background: var(--overlay-panel);
+  box-shadow: -8px 0 22px rgb(0 0 0 / 18%);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.tryPanelToggle:hover,
+.tryPanelToggle:focus-visible {
+  color: var(--overlay-accent);
+  background: var(--overlay-panel-subtle);
+  outline: none;
+}
+
+.tryPanelToggle:focus-visible {
+  box-shadow: 0 0 0 3px var(--overlay-accent-soft), -8px 0 22px rgb(0 0 0 / 18%);
+}
+
+.tryPanelToggle svg {
+  width: 12px;
+  height: 20px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.tryPanelCollapsed {
+  width: 0;
+  border-left: 0;
+  box-shadow: none;
+}
+
+.tryPanelCollapsed .tryPanelBody {
+  display: none;
 }
 
 .recommendationStrip {
@@ -369,11 +428,11 @@
   white-space: nowrap;
 }
 
-.tryPanel > label {
+.tryPanelBody > label {
   margin-top: 20px;
 }
 
-.tryPanel > label textarea {
+.tryPanelBody > label textarea {
   min-height: 110px;
 }
 
@@ -695,7 +754,24 @@
   }
 
   .tryPanel {
+    width: 100vw;
+  }
+
+  .tryPanelBody {
+    width: 100vw;
     padding: 20px;
+  }
+
+  .tryPanel:not(.tryPanelCollapsed) .tryPanelToggle {
+    top: 76px;
+    left: 0;
+    border-right: 1px solid var(--overlay-line);
+    border-left: 0;
+    border-radius: 0 12px 12px 0;
+  }
+
+  .tryPanelCollapsed {
+    width: 0;
   }
 
   .solidifyCallout {

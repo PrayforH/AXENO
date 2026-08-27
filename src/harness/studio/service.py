@@ -27,6 +27,8 @@ from harness.studio.agent_builder import (
     TaskDrivenDraftResult,
     build_agent_patch,
     configure_task_driven_draft,
+    summarize_agent_display_name,
+    summarize_agent_name,
 )
 from harness.studio.bundle_import import AgentBundleImportError, parse_agent_bundle
 from harness.studio.catalog_service import CapabilityCatalogService
@@ -287,6 +289,23 @@ class AgentStudioService:
             return None
         return await self._agent_ids.get_or_create_personal_agent_id(tenant_id, user_id, name)
 
+    async def _available_generated_name(
+        self,
+        tenant_id: str,
+        user_id: str,
+        base_name: str,
+    ) -> str:
+        existing = {
+            draft.spec.name
+            for draft in await self._repository.list_for_user(tenant_id, user_id)
+        }
+        if base_name not in existing:
+            return base_name
+        suffix = 2
+        while f"{base_name}-{suffix}" in existing:
+            suffix += 1
+        return f"{base_name}-{suffix}"
+
     async def create(
         self,
         *,
@@ -326,12 +345,12 @@ class AgentStudioService:
 
         now = self._clock()
         draft_id = self._id_generator()
-        first_line = request.task.strip().splitlines()[0].strip()
-        display_name = request.display_name or first_line[:36]
-        generated_suffix = hashlib.sha256(
-            f"{request.task.strip()}\0{draft_id}".encode()
-        ).hexdigest()[:10]
-        name = request.name or f"agent-{generated_suffix}"
+        display_name = request.display_name or summarize_agent_display_name(request.task)
+        name = request.name or await self._available_generated_name(
+            tenant_id,
+            user_id,
+            summarize_agent_name(request.task, request.domain),
+        )
         draft = AgentDraft(
             draftId=draft_id,
             tenantId=tenant_id,
