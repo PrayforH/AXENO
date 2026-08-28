@@ -80,6 +80,7 @@ def test_codex_manifest_keeps_runtime_when_converted_to_studio_spec() -> None:
     spec = studio_spec_from_manifest(ROOT / "agents" / "public-opinion-agent" / "agent.yaml")
 
     assert spec["runtime"] == "codex-app-server"
+    assert cast(dict[str, object], spec["model"])["reasoningEffort"] == "low"
 
 
 def test_archive_studio_spec_pins_internal_classifier() -> None:

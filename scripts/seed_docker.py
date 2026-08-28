@@ -178,6 +178,7 @@ def studio_spec_from_manifest(manifest_path: Path) -> dict[str, object]:
         "model": {
             "routeId": manifest.spec.model.route,
             "model": manifest.spec.model.model,
+            "reasoningEffort": labels.get("codex-reasoning-effort"),
             "fallbackRouteId": manifest.spec.model.fallback_route,
             "fallbackModel": manifest.spec.model.fallback_model,
             "requiredCapabilities": list(

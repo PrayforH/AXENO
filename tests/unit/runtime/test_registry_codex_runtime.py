@@ -187,6 +187,14 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
     snapshot = load_manifest("agents/helper-agent/agent.yaml")
     manifest = snapshot.manifest.model_copy(
         update={
+            "metadata": snapshot.manifest.metadata.model_copy(
+                update={
+                    "labels": {
+                        **snapshot.manifest.metadata.labels,
+                        "codex-reasoning-effort": "low",
+                    }
+                }
+            ),
             "spec": snapshot.manifest.spec.model_copy(
                 update={
                     "runtime": "codex-app-server",
@@ -319,6 +327,7 @@ async def test_control_plane_model_becomes_secret_safe_codex_provider(
     assert all("claude-control-plane-secret" not in value for value in options.config_overrides)
     assert "agents.enabled=true" in options.config_overrides
     assert "agents.max_concurrent_threads_per_session=4" in options.config_overrides
+    assert 'model_reasoning_effort="low"' in options.config_overrides
     assert "tool_output_token_limit=32000" in options.config_overrides
     thread_start = client.requests[0][1]
     assert thread_start["model"] == "gpt-control-plane"

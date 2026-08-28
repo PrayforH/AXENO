@@ -53,6 +53,10 @@ class ValidationStage(StrEnum):
 class DraftModelSelection(StudioModel):
     route_id: str = Field(alias="routeId", min_length=1)
     model: str = Field(min_length=1)
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = Field(
+        default=None,
+        alias="reasoningEffort",
+    )
     fallback_route_id: str | None = Field(default=None, alias="fallbackRouteId")
     fallback_model: str | None = Field(default=None, alias="fallbackModel")
     required_capabilities: tuple[str, ...] = Field(

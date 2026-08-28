@@ -697,6 +697,7 @@ def parse_agent_bundle(content: bytes) -> ParsedAgentBundle:
             model=DraftModelSelection(
                 routeId=model.route,
                 model=model.model,
+                reasoningEffort=labels.get("codex-reasoning-effort"),
                 fallbackRouteId=model.fallback_route,
                 fallbackModel=model.fallback_model,
                 requiredCapabilities=model.required_capabilities,

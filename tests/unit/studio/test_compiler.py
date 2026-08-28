@@ -114,6 +114,7 @@ def test_codex_runtime_compiles_and_round_trips_with_a_responses_route() -> None
                         update={
                             "route_id": responses_route.route_id,
                             "model": "deepseek-v4-flash",
+                            "reasoning_effort": "low",
                         }
                     ),
                     "mcp_servers": ("tavily-readonly",),
@@ -126,8 +127,10 @@ def test_codex_runtime_compiles_and_round_trips_with_a_responses_route() -> None
     imported = parse_agent_bundle(compiled.bundle)
 
     assert "runtime: codex-app-server" in compiled.manifest_yaml
+    assert "codex-reasoning-effort: low" in compiled.manifest_yaml
     assert imported.spec.runtime == "codex-app-server"
     assert imported.spec.model.route_id == responses_route.route_id
+    assert imported.spec.model.reasoning_effort == "low"
     assert imported.spec.mcp_servers == ("tavily-readonly",)
 
 

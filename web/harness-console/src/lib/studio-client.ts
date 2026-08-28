@@ -203,6 +203,7 @@ type ApiDraftSpec = {
   model: {
     routeId: string;
     model: string;
+    reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | null;
     fallbackRouteId: string | null;
     fallbackModel: string | null;
     requiredCapabilities: string[];
@@ -1247,6 +1248,7 @@ export function apiDraftToStudioDraft(source: ApiAgentDraft): StudioDraft {
     runtime: spec.runtime ?? "claude-agent-sdk",
     modelRoute: spec.model.routeId,
     model: spec.model.model,
+    reasoningEffort: spec.model.reasoningEffort ?? null,
     requiredCapabilities: spec.model.requiredCapabilities,
     systemPrompt: spec.systemPrompt,
     skills: spec.skills,
@@ -1293,6 +1295,7 @@ export function studioDraftToSpec(draft: StudioDraft): ApiDraftSpec {
     model: {
       routeId: draft.modelRoute,
       model: draft.model,
+      reasoningEffort: draft.reasoningEffort,
       fallbackRouteId: null,
       fallbackModel: null,
       requiredCapabilities: draft.requiredCapabilities,

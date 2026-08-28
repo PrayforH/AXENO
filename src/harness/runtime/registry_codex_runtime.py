@@ -37,6 +37,7 @@ _CONTROL_PLANE_PROVIDER_ID = "agent_studio"
 _CONTROL_PLANE_API_KEY_ENV = "HARNESS_CODEX_PROVIDER_API_KEY"
 _TOML_BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 _OPTIONAL_CODEX_MCP_SERVERS = frozenset({"tavily"})
+_CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 
 def _toml_string(value: str) -> str:
@@ -47,6 +48,21 @@ def _toml_string(value: str) -> str:
 
 def _toml_key(value: str) -> str:
     return value if _TOML_BARE_KEY.fullmatch(value) else _toml_string(value)
+
+
+def _codex_reasoning_configuration(snapshot: AgentManifestSnapshot) -> tuple[str, ...]:
+    """Apply an optional immutable per-Agent Codex reasoning budget."""
+
+    effort = snapshot.manifest.metadata.labels.get("codex-reasoning-effort")
+    if effort is None:
+        return ()
+    normalized = effort.strip().lower()
+    if normalized not in _CODEX_REASONING_EFFORTS:
+        raise ConflictError(
+            "published Agent has an invalid codex-reasoning-effort label: "
+            f"{effort}"
+        )
+    return (f"model_reasoning_effort={_toml_string(normalized)}",)
 
 
 def _codex_mcp_configuration(
@@ -217,6 +233,7 @@ class RegistryCodexRuntime:
             await self._tool_resolver.resolve(snapshot.manifest, context.identity),
         )
         mcp_config_overrides, mcp_environment = _codex_mcp_configuration(resolved_tools)
+        reasoning_config_overrides = _codex_reasoning_configuration(snapshot)
         limits = snapshot.manifest.spec.limits
         subagent_config_overrides = (
             "agents.enabled=true",
@@ -235,6 +252,7 @@ class RegistryCodexRuntime:
                 environment=environment,
                 config_overrides=(
                     *provider_config_overrides,
+                    *reasoning_config_overrides,
                     *mcp_config_overrides,
                     *subagent_config_overrides,
                     f"tool_output_token_limit={self._tool_output_token_limit}",

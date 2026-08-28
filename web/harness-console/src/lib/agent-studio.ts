@@ -123,6 +123,7 @@ export interface StudioDraft {
   runtime: AgentRuntime;
   modelRoute: string;
   model: string;
+  reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | null;
   requiredCapabilities: string[];
   systemPrompt: string;
   skills: StudioSkill[];
@@ -365,6 +366,7 @@ export const DEFAULT_STUDIO_DRAFT: StudioDraft = {
   runtime: "claude-agent-sdk",
   modelRoute: "deepseek-v4-pro",
   model: "deepseek-v4-pro",
+  reasoningEffort: null,
   requiredCapabilities: ["streaming", "tool_use"],
   systemPrompt: GENERAL_LEAD_SYSTEM_PROMPT,
   skills: [

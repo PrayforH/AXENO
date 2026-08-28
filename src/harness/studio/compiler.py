@@ -91,6 +91,15 @@ class AgentDraftCompiler:
         tools: list[dict[str, str]] = [{"builtin": name} for name in spec.builtin_tools]
         tools.extend({"python": f"bundle:tools/{tool.name}.py"} for tool in spec.python_tools)
         tools.extend({"mcp": reference} for reference in spec.mcp_servers)
+        labels = {
+            "domain": spec.domain,
+            "template": spec.template.value,
+            "display-name": spec.display_name,
+            "description": spec.description,
+            "evaluation-enabled": str(spec.evaluation_enabled).lower(),
+        }
+        if spec.model.reasoning_effort is not None:
+            labels["codex-reasoning-effort"] = spec.model.reasoning_effort
         manifest = AgentManifest.model_validate(
             {
                 "apiVersion": "harness/v1alpha1",
@@ -98,13 +107,7 @@ class AgentDraftCompiler:
                 "metadata": {
                     "name": spec.name,
                     "version": spec.version,
-                    "labels": {
-                        "domain": spec.domain,
-                        "template": spec.template.value,
-                        "display-name": spec.display_name,
-                        "description": spec.description,
-                        "evaluation-enabled": str(spec.evaluation_enabled).lower(),
-                    },
+                    "labels": labels,
                 },
                 "spec": {
                     "runtime": spec.runtime,

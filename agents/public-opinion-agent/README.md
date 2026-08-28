@@ -1,6 +1,6 @@
 # public-opinion-agent
 
-`public-opinion-agent@0.3.20` is the Codex edition of the evidence-backed Chinese
+`public-opinion-agent@0.3.21` is the Codex edition of the evidence-backed Chinese
 public-opinion Agent. Its Studio display name is `涉非舆情分析（Codex）`.
 
 This package was not emitted unchanged by `harness agent init`. It is the worked
@@ -27,6 +27,9 @@ Version notes:
 - `0.3.20`: artifact-naming release. Final reports use a safe name derived from the
   confirmed analysis subject or event instead of the fixed `public-opinion-report`
   basename. Existing 0.3.19 sessions remain immutable.
+- `0.3.21`: fast-start release. The Agent pins Codex reasoning effort to `low` and
+  requires an immediate first tool action when the task target is already clear;
+  report depth, long-run budgets and artifact naming remain unchanged.
 
 Validate and package:
 
@@ -37,5 +40,5 @@ uv run harness agent pack agents/public-opinion-agent/agent.yaml
 
 The published Codex Manifest pins `codex-deepseek-v4-flash`; the legacy Agent-wide
 Studio binding remains on the Claude-compatible `deepseek-v4-flash` route so 0.3.13 and
-0.3.20 can coexist. Existing Sessions stay pinned to their version and route snapshot;
+0.3.21 can coexist. Existing Sessions stay pinned to their version and route snapshot;
 create a new Session after a version change.
