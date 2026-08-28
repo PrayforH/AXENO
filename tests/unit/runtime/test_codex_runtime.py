@@ -36,12 +36,16 @@ class FakeClient:
         messages: list[CodexMessage],
         *,
         hang_turn: bool = False,
+        fail_start: bool = False,
         fail_resume: bool = False,
+        start_error_message: str = "required MCP server failed to initialize",
         resume_error_message: str = "thread metadata is unavailable",
     ) -> None:
         self.messages = messages
         self.hang_turn = hang_turn
+        self.fail_start = fail_start
         self.fail_resume = fail_resume
+        self.start_error_message = start_error_message
         self.resume_error_message = resume_error_message
         self.requests: list[tuple[str, dict[str, object]]] = []
         self.responses: list[tuple[int | str, object]] = []
@@ -62,6 +66,12 @@ class FakeClient:
                 method=method,
                 code=-32602,
                 message=self.resume_error_message,
+            )
+        if method == "thread/start" and self.fail_start:
+            raise CodexRpcRemoteError(
+                method=method,
+                code=-32603,
+                message=self.start_error_message,
             )
         if method == "turn/start" and self.hang_turn:
             await asyncio.Future[None]()
@@ -456,10 +466,27 @@ async def test_non_stale_resume_error_does_not_silently_start_new_thread(tmp_pat
     )
     runtime, process, _options = _runtime(tmp_path, client)
 
-    with pytest.raises(CodexRpcRemoteError):
+    with pytest.raises(RuntimeResultError, match="codex_thread_resume_failed") as raised:
         _ = [event async for event in runtime.execute(_context(tmp_path, thread_id="thread-old"))]
 
+    assert raised.value.error_code == "codex_thread_resume_failed"
+    assert raised.value.user_message == "Codex 会话恢复失败，请新建对话后重试。"
     assert [method for method, _params in client.requests] == ["thread/resume"]
+    assert process.closed is True
+
+
+@pytest.mark.asyncio
+async def test_thread_start_error_explains_required_mcp_failure(tmp_path: Path) -> None:
+    client = FakeClient([], fail_start=True)
+    runtime, process, _options = _runtime(tmp_path, client)
+
+    with pytest.raises(RuntimeResultError, match="codex_thread_start_failed") as raised:
+        _ = [event async for event in runtime.execute(_context(tmp_path))]
+
+    assert raised.value.error_code == "codex_thread_start_failed"
+    assert raised.value.user_message is not None
+    assert "MCP" in raised.value.user_message
+    assert [method for method, _params in client.requests] == ["thread/start"]
     assert process.closed is True
 
 

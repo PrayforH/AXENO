@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import shutil
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -32,6 +33,8 @@ from harness.runtime.codex_protocol import (
 _CODEX_ARCHIVED_HOME = ".codex-home"
 _CODEX_HOME_MARKER = ".harness-native-home"
 _CODEX_STABLE_HOME_ROOT = ".harness-codex-homes"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -245,6 +248,37 @@ class CodexAppServerRuntime:
                     "Codex 运行环境启动超时，请重试。"
                     f"尚未进入模型执行阶段（{error.method}）。"
                 ),
+            ) from error
+        except CodexRpcRemoteError as error:
+            # Keep the upstream diagnostic in service logs while exposing a
+            # stable, actionable message to users. In particular, required MCP
+            # discovery happens during thread/start, so an unavailable MCP
+            # server otherwise appears as a generic runtime failure.
+            logger.warning(
+                "codex control request rejected method=%s code=%s remote_message=%s",
+                error.method,
+                error.code,
+                error.remote_message,
+            )
+            if error.method == "thread/start":
+                raise RuntimeResultError(
+                    "codex_thread_start_failed",
+                    error_code="codex_thread_start_failed",
+                    user_message=(
+                        "Codex 新对话启动失败：智能体依赖的 MCP 服务可能无响应。"
+                        "请稍后重试；若持续失败，请检查 MCP 连接状态。"
+                    ),
+                ) from error
+            if error.method == "thread/resume":
+                raise RuntimeResultError(
+                    "codex_thread_resume_failed",
+                    error_code="codex_thread_resume_failed",
+                    user_message="Codex 会话恢复失败，请新建对话后重试。",
+                ) from error
+            raise RuntimeResultError(
+                "codex_control_request_failed",
+                error_code="codex_control_request_failed",
+                user_message="Codex 执行请求被运行时拒绝，请重试。",
             ) from error
 
     async def _execute(self, context: RuntimeContext) -> AsyncIterator[RuntimeEvent]:
