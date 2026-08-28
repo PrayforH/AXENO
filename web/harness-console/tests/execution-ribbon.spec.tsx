@@ -4,8 +4,12 @@ import {
   ActivitySummary,
   activeElapsedMs,
   formatResultPreview,
+  initialThinkProgress,
 } from "../src/components/activity-summary";
-import type { RunViewModel } from "../src/lib/run-view-model";
+import {
+  reduceRunViewModel,
+  type RunViewModel,
+} from "../src/lib/run-view-model";
 import { runActivitySchema } from "../src/lib/activity-schema";
 
 const activity = runActivitySchema.parse({
@@ -130,6 +134,81 @@ it("uses a browser-local elapsed anchor instead of subtracting server wall time"
       elapsedMs: 500,
     }),
   ).toBe(1_500);
+});
+
+it("shows a bounded Think summary until the first visible action", () => {
+  const pending = reduceRunViewModel(undefined, runActivitySchema.parse({
+    run_id: "run-think",
+    status: "running",
+    started_at: "2026-07-14T00:00:00Z",
+    metrics: {},
+    items: [
+      {
+        id: "running",
+        event_type: "run.running",
+        kind: "run",
+        status: "running",
+        title: "Agent 开始执行",
+        timestamp: "2026-07-14T00:00:00.400Z",
+        sequence: 1,
+        metadata: {},
+      },
+      {
+        id: "requesting",
+        event_type: "runtime.system",
+        kind: "analysis",
+        status: "running",
+        title: "模型正在处理",
+        timestamp: "2026-07-14T00:00:00.900Z",
+        sequence: 2,
+        metadata: { status: "requesting" },
+      },
+    ],
+  }));
+  const activeProgress = initialThinkProgress(pending, 20_000, false);
+
+  expect(activeProgress.active).toBe(true);
+  expect(activeProgress.elapsedMs).toBe(20_000);
+  expect(activeProgress.stages.map((stage) => stage.status)).toEqual([
+    "completed",
+    "completed",
+    "running",
+  ]);
+
+  const completed = reduceRunViewModel(pending, runActivitySchema.parse({
+    run_id: "run-think",
+    status: "running",
+    started_at: "2026-07-14T00:00:00Z",
+    metrics: {},
+    items: [
+      {
+        id: "first-text",
+        event_type: "message.delta",
+        kind: "analysis",
+        status: "succeeded",
+        title: "进展说明",
+        summary: "开始读取技能契约。",
+        timestamp: "2026-07-14T00:00:20Z",
+        sequence: 3,
+        metadata: {},
+      },
+    ],
+  }));
+  const completedProgress = initialThinkProgress(completed, 23_000, true);
+
+  expect(completedProgress.active).toBe(false);
+  expect(completedProgress.elapsedMs).toBe(20_000);
+  expect(completedProgress.stages.at(-1)?.status).toBe("completed");
+});
+
+it("renders Think as an independently collapsible audited stage summary", () => {
+  const html = renderToStaticMarkup(<ActivitySummary activity={activity} />);
+
+  expect(html).toContain("Think");
+  expect(html).toContain("阶段摘要，不展示模型内部隐式推理");
+  expect(html).toContain("准备隔离工作区与会话上下文");
+  expect(html).toContain('aria-label="Think 阶段摘要"');
+  expect(html).toContain('aria-expanded="false"');
 });
 
 afterEach(() => {
