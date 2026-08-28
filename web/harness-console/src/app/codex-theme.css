@@ -777,12 +777,12 @@ select:not([multiple]):not(.task-model-control select):not(.task-agent-version-s
 }
 
 .harness-composer-shell .aui-composer-cancel {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
-  margin: 3px;
-  flex-basis: 34px;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  margin: 0;
+  flex: 0 0 40px;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--codex-surface);
@@ -797,8 +797,8 @@ select:not([multiple]):not(.task-model-control select):not(.task-agent-version-s
 }
 
 .harness-composer-shell .aui-composer-cancel svg {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
 }
 
 .harness-composer-shell .aui-composer-cancel:focus-visible {

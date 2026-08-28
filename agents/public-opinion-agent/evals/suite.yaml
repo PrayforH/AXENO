@@ -38,6 +38,15 @@ cases:
       outputContains: [关键词, 地域, 排除, 北京]
       approvalRequired: false
       maxDurationSeconds: 120
+  - id: shorthand-disambiguation
+    tags: [query, terminology, public-opinion]
+    prompt: 只构造条件、不执行查询：分析“喜来鹿”的涉非舆情风险。请先解释本任务中“涉非”的业务含义，再给出规范化关键词。
+    expect:
+      terminalStatuses: [succeeded]
+      forbiddenTools: [Write, Edit, Bash]
+      outputContains: [喜来鹿, 非法集资]
+      approvalRequired: false
+      maxDurationSeconds: 120
   - id: html-report-artifact
     tags: [artifact, public-opinion]
     prompt: |

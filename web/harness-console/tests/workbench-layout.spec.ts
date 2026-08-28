@@ -102,7 +102,10 @@ describe("full-page agent workbench", () => {
 
   it("uses a neutral Codex-style stop control and reserves recovery UI for failures", () => {
     expect(codexStyles).toMatch(
-      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*width:\s*34px;[^}]*height:\s*34px;[^}]*border-radius:\s*999px;[^}]*background:\s*var\(--codex-ink-soft\);[^}]*box-shadow:\s*none;/s,
+      /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*width:\s*40px;[^}]*height:\s*40px;[^}]*margin:\s*0;[^}]*flex:\s*0 0 40px;[^}]*border-radius:\s*999px;[^}]*background:\s*var\(--codex-ink-soft\);[^}]*box-shadow:\s*none;/s,
+    );
+    expect(codexStyles).toMatch(
+      /\.harness-composer-shell \.aui-composer-cancel svg\s*\{[^}]*width:\s*20px;[^}]*height:\s*20px;/s,
     );
     expect(codexStyles).not.toMatch(
       /\.harness-composer-shell \.aui-composer-cancel\s*\{[^}]*background:\s*var\(--codex-accent\);/s,
