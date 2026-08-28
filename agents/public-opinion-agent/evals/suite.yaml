@@ -41,14 +41,14 @@ cases:
   - id: html-report-artifact
     tags: [artifact, public-opinion]
     prompt: |
-      基于以下用户提供的非随机样本生成一份可离线打开的中文 HTML 舆情报告。说明数据口径和限制，不要把样本情感占比写成全网占比：
+      以“门店服务与产品交付”为分析主题，基于以下用户提供的非随机样本生成一份可离线打开的中文 HTML 舆情报告。说明数据口径和限制，不要把样本情感占比写成全网占比：
       2026-07-18, 门店服务, 样本12, 负面样本4
       2026-07-19, 产品交付, 样本9, 负面样本2
       2026-07-20, 售后响应, 样本15, 负面样本6
     expect:
       terminalStatuses: [succeeded]
       requiredTools: [Write]
-      outputContains: [outputs/public-opinion-report.html]
+      outputContains: [outputs/门店服务与产品交付-舆情风险分析报告.html]
       approvalRequired: false
       maxDurationSeconds: 180
   - id: deep-report-contract

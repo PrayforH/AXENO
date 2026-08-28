@@ -2,12 +2,12 @@ apiVersion: harness/v1alpha1
 kind: Agent
 metadata:
   name: public-opinion-agent
-  version: 0.3.19
+  version: 0.3.20
   labels:
     domain: public-opinion
     template: orchestrator
     display-name: 涉非舆情分析（Codex）
-    description: Codex 0.3.19：恢复深度报告工作流，原生加载舆情技能，强制查询/风险/报告契约与交付自检；不使用知识库和公网搜索。
+    description: Codex 0.3.20：延续深度报告工作流，报告文件按分析主体或事件命名；不使用知识库和公网搜索。
     evaluation-enabled: "true"
 spec:
   runtime: codex-app-server
