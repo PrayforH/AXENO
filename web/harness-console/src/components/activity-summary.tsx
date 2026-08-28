@@ -112,21 +112,6 @@ interface ActionEntry {
   status: WorkStatus;
 }
 
-type ThinkStageStatus = "pending" | "running" | "completed";
-
-export interface ThinkStage {
-  id: "context" | "resources" | "first-action";
-  label: string;
-  status: ThinkStageStatus;
-}
-
-export interface InitialThinkProgress {
-  active: boolean;
-  reachedFirstAction: boolean;
-  elapsedMs: number;
-  stages: ThinkStage[];
-}
-
 type DisplayTimelineNode =
   | { kind: "commentary"; sequence: number; commentary: CommentaryNode }
   | { kind: "action"; sequence: number; action: ActionNode };
@@ -655,144 +640,6 @@ export function activeElapsedMs(
   );
 }
 
-const firstVisibleActionEvents = new Set([
-  "message.delta",
-  "tool.request",
-  "subagent.started",
-  "approval.requested",
-]);
-
-function elapsedUntil(view: RunViewModel, timestamp: string | undefined) {
-  if (!timestamp) return undefined;
-  const startedAt = Date.parse(view.startedAt);
-  const endedAt = Date.parse(timestamp);
-  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return undefined;
-  return Math.max(0, endedAt - startedAt);
-}
-
-export function initialThinkProgress(
-  view: RunViewModel,
-  elapsedMs: number,
-  responseStarted: boolean,
-): InitialThinkProgress {
-  const firstVisibleAction = view.items.find((item) =>
-    firstVisibleActionEvents.has(item.event_type),
-  );
-  const runActive =
-    view.phase === "queued" ||
-    view.phase === "running" ||
-    view.phase === "waiting_approval";
-  const active = runActive && !responseStarted && !firstVisibleAction;
-  const contextReady = view.items.some((item) =>
-    ["workspace.restored", "agent.assets.staged", "run.running"].includes(
-      item.event_type,
-    ),
-  );
-  const resourcesReady = view.items.some((item) =>
-    [
-      "model.route.selected",
-      "policy.resolved",
-      "tool.directory.loaded",
-      "runtime.system",
-    ].includes(item.event_type),
-  );
-  const reachedFirstAction = Boolean(firstVisibleAction || responseStarted);
-  const durationAtFirstAction = elapsedUntil(view, firstVisibleAction?.timestamp);
-
-  return {
-    active,
-    reachedFirstAction,
-    elapsedMs: durationAtFirstAction ?? elapsedMs,
-    stages: [
-      {
-        id: "context",
-        label: "准备隔离工作区与会话上下文",
-        status: contextReady ? "completed" : active ? "running" : "pending",
-      },
-      {
-        id: "resources",
-        label: "连接模型、技能与可用工具",
-        status: resourcesReady
-          ? "completed"
-          : contextReady && active
-            ? "running"
-            : "pending",
-      },
-      {
-        id: "first-action",
-        label: "理解任务并确定首个执行动作",
-        status: reachedFirstAction
-          ? "completed"
-          : resourcesReady && active
-            ? "running"
-            : "pending",
-      },
-    ],
-  };
-}
-
-function ThinkDisclosure({
-  progress,
-  runId,
-}: {
-  progress: InitialThinkProgress;
-  runId: string;
-}) {
-  const [manualDisclosure, setManualDisclosure] = useState<{
-    runId: string;
-    open: boolean;
-  } | null>(null);
-  useEffect(() => setManualDisclosure(null), [runId]);
-  const open = manualDisclosure?.runId === runId
-    ? manualDisclosure.open
-    : progress.active;
-
-  return (
-    <section
-      className={`think-disclosure ${progress.active ? "is-active" : "is-complete"}`}
-      data-open={open ? "true" : "false"}
-      aria-label="Think 阶段摘要"
-    >
-      <button
-        type="button"
-        className="think-disclosure-trigger"
-        aria-expanded={open}
-        onClick={() => setManualDisclosure({ runId, open: !open })}
-      >
-        <span className="think-glyph" aria-hidden="true"><i /></span>
-        <span className="think-title">Think</span>
-        <span className="think-state">
-          {progress.active
-            ? "正在确定首个动作"
-            : progress.reachedFirstAction
-              ? "首个动作已就绪"
-              : "准备阶段已结束"}
-        </span>
-        <span className="think-duration">{durationLabel(progress.elapsedMs)}</span>
-        <span className="think-chevron" aria-hidden="true" />
-      </button>
-      <div className="think-disclosure-body" hidden={!open}>
-        <p>阶段摘要，不展示模型内部隐式推理。</p>
-        <ol>
-          {progress.stages.map((stage) => (
-            <li key={stage.id} data-status={stage.status}>
-              <span aria-hidden="true" />
-              <strong>{stage.label}</strong>
-              <small>
-                {stage.status === "completed"
-                  ? "完成"
-                  : stage.status === "running"
-                    ? "进行中"
-                    : "等待"}
-              </small>
-            </li>
-          ))}
-        </ol>
-      </div>
-    </section>
-  );
-}
-
 export function ActivitySummary({
   activity,
   responseStarted = false,
@@ -868,7 +715,6 @@ export function ActivitySummary({
   const heading = activityHeading(view);
   const failure = view.phase === "failed" ? failureDetails(view) : null;
   const runDetails = useRunDetails();
-  const thinkProgress = initialThinkProgress(view, elapsed, responseStarted);
 
   function toggleDisclosure(_event: MouseEvent<HTMLButtonElement>) {
     const nextOpen = !open;
@@ -906,7 +752,6 @@ export function ActivitySummary({
           运行详情
         </button>
       ) : null}
-      <ThinkDisclosure progress={thinkProgress} runId={view.runId} />
       <div className="execution-tree" hidden={!open}>
         {failure ? (
           <section className="execution-failure-diagnostic" aria-label="失败定位">
